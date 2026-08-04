@@ -1,0 +1,119 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadConfig } from "./load.ts";
+import { ConfigError } from "./errors.ts";
+import { makeTestHome } from "./helpers/test-home.ts";
+
+test("loadConfig: a valid config loads projects and caps", () => {
+  const home = makeTestHome(`
+    [caps]
+    perTaskUsd = 2.5
+    perDayUsd = 20
+
+    [spending-app]
+    path = "/code/spending-app"
+    check = "bin/ci"
+
+    [other-app]
+    path = "/code/other-app"
+    check = "npm test"
+  `);
+
+  const config = loadConfig(home);
+
+  assert.deepEqual(config.caps, { perTaskUsd: 2.5, perDayUsd: 20 });
+  assert.deepEqual(config.projects["spending-app"], {
+    path: "/code/spending-app",
+    check: "bin/ci",
+  });
+  assert.deepEqual(config.projects["other-app"], {
+    path: "/code/other-app",
+    check: "npm test",
+  });
+});
+
+test("loadConfig: caps are optional", () => {
+  const home = makeTestHome(`
+    [spending-app]
+    path = "/code/spending-app"
+    check = "bin/ci"
+  `);
+
+  const config = loadConfig(home);
+  assert.deepEqual(config.caps, {});
+});
+
+test("loadConfig: a project may be registered without a check yet", () => {
+  const home = makeTestHome(`
+    [spending-app]
+    path = "/code/spending-app"
+  `);
+
+  const config = loadConfig(home);
+  assert.deepEqual(config.projects["spending-app"], { path: "/code/spending-app" });
+});
+
+test("loadConfig: no projects.toml at the given home fails with the exact path", () => {
+  const home = mkdtempSync(join(tmpdir(), "fabrica-config-test-empty-"));
+
+  assert.throws(
+    () => loadConfig(home),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "not-found");
+      assert.match(err.message, new RegExp(join(home, "projects.toml").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      return true;
+    }
+  );
+});
+
+test("loadConfig: invalid TOML syntax is refused as malformed", () => {
+  const home = makeTestHome(`this is not [valid toml`);
+
+  assert.throws(
+    () => loadConfig(home),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      return true;
+    }
+  );
+});
+
+test("loadConfig: a project table missing path is refused as malformed", () => {
+  const home = makeTestHome(`
+    [spending-app]
+    check = "bin/ci"
+  `);
+
+  assert.throws(
+    () => loadConfig(home),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.match(err.message, /spending-app/);
+      assert.match(err.message, /path/);
+      return true;
+    }
+  );
+});
+
+test("loadConfig: a non-numeric cap is refused as malformed", () => {
+  const home = makeTestHome(`
+    [caps]
+    perDayUsd = "twenty"
+  `);
+
+  assert.throws(
+    () => loadConfig(home),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.match(err.message, /perDayUsd/);
+      return true;
+    }
+  );
+});

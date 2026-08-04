@@ -4,7 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "tsx --test contract/*.test.ts"
+    "test": "tsx --test contract/*.test.ts src/**/*.test.ts"
+  },
+  "dependencies": {
+    "smol-toml": "^1.7.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
