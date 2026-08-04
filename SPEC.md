@@ -48,8 +48,12 @@ The whole tool in one command.
    first pass produces either QUESTIONS or a short PLAN:
    - If the task is materially ambiguous → print numbered questions and
      stop. The Client answers with `fabrica answer <id> "<text>"`, which
-     resumes at this step with answers appended to the brief. One
-     clarification round by default; `--just-go` skips this step.
+     resumes at this step with answers appended to the brief. The brief
+     is the task text plus any answers given to its questions, and it is
+     exactly what a brain receives as the `instructions` argument of
+     `Brain.work`: "brief" names the document, `instructions` names the
+     parameter carrying it. One clarification round by default;
+     `--just-go` skips this step.
    - Otherwise → proceed. The plan goes in the record, not to the screen.
 3. **Isolates.** Creates a disposable git worktree of the project on a
    fresh branch `fabrica/<id>`. The Client's checkout is never touched

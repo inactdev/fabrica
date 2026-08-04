@@ -113,4 +113,6 @@ a sketch of the shape.
 
 The one hard rule: no brain, model, or vendor name may appear anywhere
 under `src/` except inside `src/brain/adapters/`. That's not a style
-preference - a test enforces it on every build.
+preference - a test scans every build for a blocklist of the major
+names. The blocklist is not exhaustive, so a name outside it would slip
+past the scan; the rule still applies to every name, caught or not.
