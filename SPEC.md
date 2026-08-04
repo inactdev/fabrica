@@ -189,8 +189,8 @@ until living with the tool shows how common the problem actually is.
 
 ## Out of scope for v1 — explicitly
 
-Multiple attempts and judging; model selection or switching; spend
-tracking; a status dashboard beyond `fabrica status`; pushing or opening pull
+Multiple attempts and judging; model selection or switching; a status
+dashboard beyond `fabrica status`; pushing or opening pull
 requests; running more than one task per project at a time (parallel
 tasks across different projects: allowed, it falls out of isolation);
 voice anything; playground/self-experimentation. The event log is
