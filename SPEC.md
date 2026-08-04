@@ -1,0 +1,195 @@
+# SPEC — Fabrica, version one
+
+`fabrica` is the name of the workhorse: a terminal tool that takes a
+written task, does the work in isolation using a coding agent, verifies it,
+and delivers honestly. The name is disposable; rename freely.
+
+This spec is a hypothesis of the smallest useful version. Expect it to be
+edited after the first build attempt. CONTRACT.md is not a hypothesis:
+every invariant there must hold in this version and every future one.
+
+Version one contains **no strategies**. One task at a time, one attempt,
+ask-first. Fan-out, judging, model routing, self-experimentation: all
+deliberately absent. They arrive later as playbook entries; nothing in
+this design may make them hard to add (that is what the adapter seam and
+the event log are for).
+
+## Form
+
+- A command-line tool written in TypeScript, running on Node 20+.
+- Installed so that `fabrica` works from any directory.
+- No screens, no daemon in v1. Every command starts, does its job, exits.
+  (Long work runs detached; see `fabrica do`.)
+- Workers are invisible by default and watchable always. Every worker
+  streams its raw output to its transcript file live, so `fabrica watch` (or
+  your own tail of that file) shows exactly what a worker is doing right
+  now. Views never control: closing one touches nothing.
+- The coding agent that performs work inside the box is a subprocess
+  behind a small adapter interface (`runAgent(brief, workdir) →
+  transcript`). v1 ships one adapter: whichever terminal coding agent the
+  Client already uses daily, invoked in its non-interactive mode. The
+  adapter's exact invocation is discovered and verified during the build,
+  not assumed here. Nothing outside the adapter may know which agent is
+  in use. Adapters support warm sessions (adopted Aug 2026): every run
+  carries a session id, and a retry is a correction message into the
+  same session — naming exactly what failed — never a cold restart that
+  throws away what the worker just learned. The session id lands on the
+  receipt.
+
+## Commands
+
+### `fabrica do "<task text>" --project <path-or-name>`
+The whole tool in one command.
+
+1. **Registers** the task: new id (`YYYYMMDD-<slug>-<2 random chars>`),
+   task text saved verbatim, event logged.
+2. **Clarify-or-proceed (ask-first dial, v1 position: ask).** The agent's
+   first pass produces either QUESTIONS or a short PLAN:
+   - If the task is materially ambiguous → print numbered questions and
+     stop. The Client answers with `fabrica answer <id> "<text>"`, which
+     resumes at this step with answers appended to the brief. One
+     clarification round by default; `--just-go` skips this step.
+   - Otherwise → proceed. The plan goes in the record, not to the screen.
+3. **Isolates.** Creates a disposable git worktree of the project on a
+   fresh branch `fabrica/<id>`. The Client's checkout is never touched
+   (Contract 1).
+4. **Works.** Runs the agent adapter in the worktree with the brief.
+   Detached from the terminal: `fabrica do` prints the id and returns
+   immediately; work continues in the background. Full agent output
+   streams to the task's transcript file.
+5. **Verifies.** Runs the project's check command (see per-project config)
+   inside the worktree. Green → delivery. Red → one fix pass by the agent
+   with the failure output, then re-check. Still red → failure report
+   (Contract 2). The counts here (one fix pass) are code, not judgment
+   (Contract 3).
+6. **Delivers.** Writes `delivery.md` (block format below), prints it,
+   and leaves the branch in place for review. v1 never pushes, never
+   opens a pull request. The Client merges or discards by hand.
+7. **Nags for a verdict** on later `fabrica` invocations until one is recorded
+   (Contract 6).
+
+### `fabrica answer <id> "<text>"`
+Appends the Client's answers to the brief and resumes the task.
+
+### `fabrica verdict <id> <accept|fix|wrong> [-m "<note>"]`
+Records the Client's ruling (Contract 6). `fix` = right direction,
+needed correction. `wrong` = should not have been attempted this way.
+The note is free text and is the most valuable training signal captured.
+
+### `fabrica status`
+One line per open task: id, project, state
+(asking | working | checking | delivered | failed), age.
+
+### `fabrica log <id>`
+Prints the task's full event history; `--transcript` includes the raw
+agent output.
+
+### `fabrica watch <id>`
+Live view of a worker: streams the task's transcript to your terminal
+as it is being written — in any terminal, any window manager, or a
+herdr/tmux pane if that's where you run it. Stopping the watch (Ctrl-C)
+never stops the work. Watching is a window onto the worker, not the
+room the worker lives in.
+
+## The record
+
+Plain files, human-readable, at `~/.fabrica/` (path configurable):
+
+    ~/.fabrica/
+      events.jsonl            # append-only; every event, one JSON line:
+                              # {ts, task, event, detail}
+      tasks/<id>/
+        task.md               # verbatim task text + Q&A rounds
+        plan.md               # agent's plan (when it proceeded)
+        delivery.md           # the delivery block, or failure report
+        verdict               # accept|fix|wrong + note + ts
+        transcript.log        # raw agent session output
+      projects.toml           # per-project config (below)
+
+Files, not a database, in v1: the Client must be able to read, grep, and
+diff the record with bare hands, and later organs (learning, status,
+Amy) read the same files. `events.jsonl` is the single source of truth;
+everything else is a convenience view of it (Contract 5).
+
+## Per-project config
+
+`projects.toml`, one entry per project:
+
+    [spending-app]
+    path = "~/code/spending-app"
+    check = "bin/ci"        # the ONE command that must pass for green
+
+If `check` is missing for a project, `fabrica do` refuses the task and says
+exactly what to add. No check command, no verified work, no exceptions
+(Contract 2).
+
+## The delivery block
+
+`delivery.md`, exact required fields (Contract 4):
+
+    confidence: 0-100
+    did:        what was done, plainly
+    evidence:   the check command, its result, plus any extra proof
+                (commands + outcomes)
+    assumptions: every judgment call made where the brief was silent
+    gaps:       what was not done, or remains confusing
+    branch:     fabrica/<id> in <project path>
+    files:      files touched
+
+A delivery missing any field must not be presented. And one more check
+before presentation (adopted Aug 2026): the tool diffs the worktree
+branch itself and compares reality against the delivery's own claims — a
+delivery whose `files` list disagrees with the actual diff is malformed
+and gets rejected, exactly like a missing field. Claims are verified by
+code, never taken on faith.
+
+## The operator's skill
+
+The tool ships with a manual written for agents, not humans (a "skill"):
+what the tool is, the exact commands with examples, how to read the
+record, and the taboos — never do the work yourself, never touch the
+record by hand, pass the Client's numbers through verbatim, never
+announce state you didn't query. Whatever AI the Client talks through loads this first, so plain
+Client-talk drives the levers the same correct way whichever brain is
+doing the talking. Safety comes from the code;
+competence comes from the manual.
+
+## Catching off-the-books work
+
+The AI you talk to must never do work itself, and two nets enforce and
+measure that. **Prevention, where the harness allows it:** the skill
+folder ships a per-harness session setup that switches off file-editing
+tools for the session you talk to — real settings, not instructions —
+and narrows which terminal commands that session may run to the tool's
+own commands plus read-only ones. **Detection, always:** every time any
+tool command runs, the tool checks each registered project for changes
+that no task explains — code changed, nothing on the record — and logs
+an `unattributed-change` event with project, files, and time. Where the
+harness supports event hooks (Claude Code does), the session setup also
+logs every blocked edit attempt as an `edit-attempt-blocked` event.
+Both events are improvement signals, and both surface in Phase 4's live
+view. Deliberately small — one config folder plus one cheap check —
+until living with the tool shows how common the problem actually is.
+
+## Out of scope for v1 — explicitly
+
+Multiple attempts and judging; model selection or switching; spend
+tracking; a status dashboard beyond `fabrica status`; pushing or opening pull
+requests; running more than one task per project at a time (parallel
+tasks across different projects: allowed, it falls out of isolation);
+voice anything; playground/self-experimentation. The event log is
+designed so all of these can be added without reshaping the record.
+
+## Definition of done for the v1 build
+
+1. Every CONTRACT.md invariant has its named test, and all tests pass.
+2. On a real repository: `fabrica do` with a vague task produces questions;
+   `fabrica answer` resumes it.
+3. On a real repository: `fabrica do` with a clear small task produces a
+   verified branch and a complete delivery block, without touching the
+   Client's checkout.
+4. A task with a deliberately broken check produces a failure report,
+   never a "done."
+5. `fabrica verdict` records, and `fabrica status` / `fabrica log` reflect reality.
+6. The Client has run one real task of his own through it, end to end,
+   verdict included.

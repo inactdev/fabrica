@@ -1,0 +1,76 @@
+<svg width="680" height="744" viewBox="0 0 680 744" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>The factory loop, keyword-tagged, with containment and both feedback paths</title>
+<style>
+  text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .th { font-size: 13px; font-weight: 600; fill: #1f2937; }
+  .ts { font-size: 11px; fill: #4b5563; }
+  .box { stroke-width: 1; }
+  .purple { fill: #ede9fe; stroke: #7c3aed; }
+  .amber  { fill: #fef3c7; stroke: #d97706; }
+  .blue   { fill: #dbeafe; stroke: #2563eb; }
+  .teal   { fill: #ccfbf1; stroke: #0d9488; }
+  .rose   { fill: #ffe4e6; stroke: #e11d48; }
+  .gray   { fill: #f3f4f6; stroke: #6b7280; }
+  .conn { stroke: #9ca3af; stroke-width: 1; stroke-dasharray: 3 3; }
+  .arr  { stroke: #6b7280; stroke-width: 1.2; fill: none; }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#6b7280" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<rect class="box purple" x="60" y="57" width="150" height="28" rx="14"/><text class="th" x="135" y="75" text-anchor="middle">TASK</text>
+<line class="conn" x1="210" y1="71" x2="248" y2="71"/>
+<rect class="box gray" x="250" y="44" width="300" height="54" rx="8"/><text class="th" x="400" y="66" text-anchor="middle">You hand one in</text><text class="ts" x="400" y="86" text-anchor="middle">typed, or via the AI you talk to</text>
+<line class="arr" x1="400" y1="98" x2="400" y2="114" marker-end="url(#arrow)"/>
+
+<rect class="box amber" x="60" y="133" width="150" height="28" rx="14"/><text class="th" x="135" y="151" text-anchor="middle">QUESTIONS</text>
+<line class="conn" x1="210" y1="147" x2="248" y2="147"/>
+<rect class="box gray" x="250" y="120" width="300" height="54" rx="8"/><text class="th" x="400" y="142" text-anchor="middle">Asked only if unclear</text><text class="ts" x="400" y="162" text-anchor="middle">you answer; it resumes</text>
+<line class="arr" x1="400" y1="174" x2="400" y2="190" marker-end="url(#arrow)"/>
+
+<rect class="box blue" x="60" y="196" width="150" height="28" rx="14"/><text class="th" x="135" y="214" text-anchor="middle">PRODUCTION LINE</text>
+<line class="conn" x1="210" y1="210" x2="248" y2="210"/>
+<rect x="250" y="196" width="300" height="224" rx="12" fill="none" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 4"/>
+<text class="ts" x="266" y="218">a throwaway copy — broken down after</text>
+
+<rect class="box amber" x="60" y="243" width="150" height="28" rx="14"/><text class="th" x="135" y="261" text-anchor="middle">WORKER + MODEL</text>
+<line class="conn" x1="210" y1="257" x2="266" y2="257"/>
+<rect class="box amber" x="268" y="232" width="252" height="50" rx="8"/><text class="th" x="394" y="253" text-anchor="middle">The work happens here</text><text class="ts" x="394" y="272" text-anchor="middle">one worker, one model, boxed in</text>
+<line class="arr" x1="394" y1="282" x2="394" y2="300" marker-end="url(#arrow)"/>
+<text class="ts" x="536" y="298" text-anchor="end">retry — counted</text>
+
+<rect class="box amber" x="60" y="280" width="150" height="28" rx="14"/><text class="th" x="135" y="298" text-anchor="middle">RETRY</text>
+<line class="conn" x1="210" y1="294" x2="248" y2="294"/>
+
+<rect class="box teal" x="60" y="317" width="150" height="28" rx="14"/><text class="th" x="135" y="335" text-anchor="middle">CHECKS</text>
+<line class="conn" x1="210" y1="331" x2="266" y2="331"/>
+<rect class="box teal" x="268" y="306" width="252" height="50" rx="8"/><text class="th" x="394" y="327" text-anchor="middle">The project's tests decide</text><text class="ts" x="394" y="346" text-anchor="middle">run right here, in the copy</text>
+<path class="arr" d="M 520 331 L 542 331 L 542 257 L 524 257" marker-end="url(#arrow)"/>
+
+<line class="arr" x1="400" y1="420" x2="400" y2="436" marker-end="url(#arrow)"/>
+
+<rect class="box gray" x="60" y="455" width="150" height="28" rx="14"/><text class="th" x="135" y="473" text-anchor="middle">DELIVERY</text>
+<line class="conn" x1="210" y1="469" x2="248" y2="469"/>
+<rect class="box gray" x="250" y="442" width="300" height="54" rx="8"/><text class="th" x="400" y="464" text-anchor="middle">What leaves the workspace</text><text class="ts" x="400" y="484" text-anchor="middle">how sure · assumptions · gaps · proof</text>
+<line class="arr" x1="400" y1="496" x2="400" y2="512" marker-end="url(#arrow)"/>
+
+<rect class="box purple" x="60" y="531" width="150" height="28" rx="14"/><text class="th" x="135" y="549" text-anchor="middle">VERDICT</text>
+<line class="conn" x1="210" y1="545" x2="248" y2="545"/>
+<rect class="box purple" x="250" y="518" width="300" height="54" rx="8"/><text class="th" x="400" y="540" text-anchor="middle">You get the last word</text><text class="ts" x="400" y="560" text-anchor="middle">accept, fix, or wrong direction</text>
+<path class="arr" d="M 550 545 L 600 545 L 600 257 L 556 257" marker-end="url(#arrow)"/>
+<text class="ts" x="608" y="376">fix —</text>
+<text class="ts" x="608" y="394">note goes</text>
+<text class="ts" x="608" y="412">back in,</text>
+<text class="ts" x="608" y="430">counted</text>
+
+<rect class="box purple" x="60" y="583" width="150" height="28" rx="14"/><text class="th" x="135" y="601" text-anchor="middle">FIX</text>
+<line class="conn" x1="210" y1="597" x2="248" y2="597"/>
+
+<line class="arr" x1="400" y1="572" x2="400" y2="590" marker-end="url(#arrow)"/>
+<rect class="box teal" x="60" y="623" width="150" height="28" rx="14"/><text class="th" x="135" y="641" text-anchor="middle">RECORD</text>
+<line class="conn" x1="210" y1="637" x2="248" y2="637"/>
+<rect class="box teal" x="250" y="596" width="300" height="54" rx="8"/><text class="th" x="400" y="618" text-anchor="middle">Accept or wrong closes it</text><text class="ts" x="400" y="638" text-anchor="middle">wrong? the next task starts fresh</text>
+
+<rect class="box rose" x="60" y="678" width="90" height="26" rx="13"/><text class="ts" x="105" y="695" text-anchor="middle">CAPS</text>
+<text class="ts" x="166" y="695">dollar limits enforced by code, everywhere in this picture</text>
+<rect class="box teal" x="60" y="714" width="130" height="26" rx="13"/><text class="ts" x="125" y="731" text-anchor="middle">PROVING GROUND</text>
+<text class="ts" x="206" y="731">later: overnight training on the record + your old verdicts</text>
+</svg>
