@@ -47,15 +47,35 @@ export function loadConfig(home: string): FabricaConfig {
     throw new ConfigError("malformed", `${path} must contain a TOML table at its root.`);
   }
 
-  const { caps: rawCaps, ...rawProjects } = parsed as Record<string, unknown>;
-
-  const caps = parseCaps(rawCaps, path);
-  const projects: Record<string, ProjectConfig> = Object.create(null);
-  for (const [name, value] of Object.entries(rawProjects)) {
-    projects[name] = parseProject(name, value, path);
+  const { caps: rawCaps, projects: rawProjects, ...rest } = parsed as Record<string, unknown>;
+  const extra = Object.keys(rest);
+  if (extra.length > 0) {
+    const tables = extra.map((key) => `[${key}]`).join(", ");
+    const moved = extra.map((key) => `[projects.${key}]`).join(", ");
+    throw new ConfigError(
+      "malformed",
+      `${path}: unknown top-level table(s): ${tables}. Projects live under ` +
+        `[projects.<name>] and globals under [caps]. If ${tables} ${extra.length === 1 ? "is" : "are"} ` +
+        `a project from the old flat format, rename ${extra.length === 1 ? "it" : "them"} to ${moved}.`
+    );
   }
 
+  const caps = parseCaps(rawCaps, path);
+  const projects = parseProjects(rawProjects, path);
+
   return { caps, projects };
+}
+
+function parseProjects(value: unknown, path: string): Record<string, ProjectConfig> {
+  const projects: Record<string, ProjectConfig> = Object.create(null);
+  if (value === undefined) return projects;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ConfigError("malformed", `${path}: [projects] must be a table.`);
+  }
+  for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
+    projects[name] = parseProject(name, entry, path);
+  }
+  return projects;
 }
 
 function parseCaps(value: unknown, path: string): Caps {
@@ -86,7 +106,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new ConfigError(
       "malformed",
-      `${path}: [${name}] must be a table with at least a "path" field.`
+      `${path}: [projects.${name}] must be a table with at least a "path" field.`
     );
   }
   const { path: projectPath, check, ...rest } = value as Record<string, unknown>;
@@ -94,18 +114,18 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   if (extra.length > 0) {
     throw new ConfigError(
       "malformed",
-      `${path}: [${name}] has unknown field(s): ${extra.join(", ")}. ` +
+      `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
         `Only path and check are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
     throw new ConfigError(
       "malformed",
-      `${path}: [${name}] is missing a "path" field (a string).`
+      `${path}: [projects.${name}] is missing a "path" field (a string).`
     );
   }
   if (check !== undefined && typeof check !== "string") {
-    throw new ConfigError("malformed", `${path}: [${name}].check must be a string.`);
+    throw new ConfigError("malformed", `${path}: [projects.${name}].check must be a string.`);
   }
   const resolvedPath = expandLeadingTilde(projectPath);
   return check === undefined ? { path: resolvedPath } : { path: resolvedPath, check };

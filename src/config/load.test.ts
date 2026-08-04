@@ -13,11 +13,11 @@ test("loadConfig: a valid config loads projects and caps", () => {
     perTaskUsd = 2.5
     perDayUsd = 20
 
-    [spending-app]
+    [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
 
-    [other-app]
+    [projects.other-app]
     path = "~/inkling-umbrella/other-app"
     check = "npm test"
   `);
@@ -37,7 +37,7 @@ test("loadConfig: a valid config loads projects and caps", () => {
 
 test("loadConfig: caps are optional", () => {
   const home = makeTestHome(`
-    [spending-app]
+    [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
@@ -48,7 +48,7 @@ test("loadConfig: caps are optional", () => {
 
 test("loadConfig: a project may be registered without a check yet", () => {
   const home = makeTestHome(`
-    [spending-app]
+    [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
   `);
 
@@ -58,9 +58,46 @@ test("loadConfig: a project may be registered without a check yet", () => {
   });
 });
 
-test("loadConfig: a leading ~/ in a project path expands to the home directory", () => {
+test("loadConfig: a project named caps loads correctly, distinct from the [caps] table", () => {
+  const home = makeTestHome(`
+    [caps]
+    perTaskUsd = 5
+
+    [projects.caps]
+    path = "~/inkling-umbrella/caps"
+    check = "bin/ci"
+  `);
+
+  const config = loadConfig(home);
+  assert.deepEqual(config.caps, { perTaskUsd: 5 });
+  assert.deepEqual(config.projects["caps"], {
+    path: join(homedir(), "inkling-umbrella/caps"),
+    check: "bin/ci",
+  });
+});
+
+test("loadConfig: an unknown top-level table is refused with conversion instructions", () => {
   const home = makeTestHome(`
     [spending-app]
+    path = "~/inkling-umbrella/spending-app"
+    check = "bin/ci"
+  `);
+
+  assert.throws(
+    () => loadConfig(home),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.match(err.message, /\[spending-app\]/, "must name the stale table");
+      assert.match(err.message, /\[projects\.spending-app\]/, "must show where it belongs now");
+      return true;
+    }
+  );
+});
+
+test("loadConfig: a leading ~/ in a project path expands to the home directory", () => {
+  const home = makeTestHome(`
+    [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
@@ -74,7 +111,7 @@ test("loadConfig: a leading ~/ in a project path expands to the home directory",
 
 test("loadConfig: a bare ~ project path is the home directory itself", () => {
   const home = makeTestHome(`
-    [home-app]
+    [projects.home-app]
     path = "~"
     check = "bin/ci"
   `);
@@ -85,11 +122,11 @@ test("loadConfig: a bare ~ project path is the home directory itself", () => {
 
 test("loadConfig: a ~ anywhere but the start is left verbatim", () => {
   const home = makeTestHome(`
-    [tilde-app]
+    [projects.tilde-app]
     path = "/srv/back~ups/tilde-app"
     check = "bin/ci"
 
-    [nested-app]
+    [projects.nested-app]
     path = "/srv/~/nested-app"
     check = "bin/ci"
   `);
@@ -128,7 +165,7 @@ test("loadConfig: invalid TOML syntax is refused as malformed", () => {
 
 test("loadConfig: a project table missing path is refused as malformed", () => {
   const home = makeTestHome(`
-    [spending-app]
+    [projects.spending-app]
     check = "bin/ci"
   `);
 

@@ -114,10 +114,15 @@ everything else is a convenience view of it (Contract 5).
 ## Config
 
 `projects.toml` in the record home holds two things: the project registry
-and the caps. One entry per project:
+and the caps, each under its own top-level table. Projects live under
+`[projects.<name>]`; the caps get their own table, in dollars (Contract 10):
 
-    [spending-app]
-    path = "~/inkling-umbrella/spending-app"
+    [caps]
+    perTaskUsd = 2.5
+    perDayUsd  = 20
+
+    [projects.spending-app]
+    path  = "~/inkling-umbrella/spending-app"
     check = "bin/ci"        # the ONE command that must pass for green
 
 A leading `~` in `path` expands to your home directory when the config
@@ -130,14 +135,11 @@ exactly what to add. No check command, no verified work, no exceptions
 (Contract 2). A task naming a project with no entry at all is refused the
 same way, naming the project and the entry to add.
 
-The caps are one reserved table, in dollars (Contract 10):
-
-    [caps]
-    perTaskUsd = 2.5
-    perDayUsd = 20
-
-`caps` is the one table name that is not a project, so no project may be
-named `caps`. Zero is a legal cap, not an absent one.
+Every top-level table is either `[caps]` or `[projects.<name>]`; anything
+else is refused with exact instructions to move it under `[projects.<name>]`.
+Because projects and caps no longer share a namespace, a project may be
+named `caps` — `[projects.caps]` is a project like any other. Zero is a
+legal cap, not an absent one.
 
 ## The delivery block
 

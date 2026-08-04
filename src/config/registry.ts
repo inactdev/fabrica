@@ -21,7 +21,7 @@ export function requireProject(config: FabricaConfig, name: string): CheckedProj
     throw new ConfigError(
       "unregistered-project",
       `Project "${name}" is not registered. Add it to projects.toml:\n\n` +
-        `  [${name}]\n` +
+        `  [projects.${name}]\n` +
         `  path = "/path/to/${name}"\n` +
         `  check = "<the one command that must pass>"\n`
     );
@@ -32,7 +32,7 @@ export function requireProject(config: FabricaConfig, name: string): CheckedProj
       "missing-check",
       `Project "${name}" has no check command. No check command, no ` +
         `verified work, no exceptions. Add one to projects.toml:\n\n` +
-        `  [${name}]\n` +
+        `  [projects.${name}]\n` +
         `  check = "<the one command that must pass>"\n`
     );
   }
