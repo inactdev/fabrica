@@ -6,6 +6,7 @@
 // default, and it does so by passing it in like any other caller.
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import * as TOML from "smol-toml";
 import { ConfigError } from "./errors.ts";
@@ -106,7 +107,21 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   if (check !== undefined && typeof check !== "string") {
     throw new ConfigError("malformed", `${path}: [${name}].check must be a string.`);
   }
-  return check === undefined ? { path: projectPath } : { path: projectPath, check };
+  const resolvedPath = expandLeadingTilde(projectPath);
+  return check === undefined ? { path: resolvedPath } : { path: resolvedPath, check };
+}
+
+/**
+ * Expands a leading `~` to the OS home directory so a path written the way
+ * SPEC.md prints it (`~/inkling-umbrella/spending-app`) works as-is.
+ * Deliberately narrow: only a bare `~` or a `~/` prefix. `~user` is not
+ * supported, and a `~` anywhere else is a literal character in a directory
+ * name, so it is left alone.
+ */
+function expandLeadingTilde(value: string): string {
+  if (value === "~") return homedir();
+  if (value.startsWith("~/")) return join(homedir(), value.slice(2));
+  return value;
 }
 
 function requireCapUsd(value: unknown, label: string): number {

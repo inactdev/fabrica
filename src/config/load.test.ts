@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./load.ts";
 import { ConfigError } from "./errors.ts";
@@ -26,11 +26,11 @@ test("loadConfig: a valid config loads projects and caps", () => {
 
   assert.deepEqual(config.caps, { perTaskUsd: 2.5, perDayUsd: 20 });
   assert.deepEqual(config.projects["spending-app"], {
-    path: "~/inkling-umbrella/spending-app",
+    path: join(homedir(), "inkling-umbrella/spending-app"),
     check: "bin/ci",
   });
   assert.deepEqual(config.projects["other-app"], {
-    path: "~/inkling-umbrella/other-app",
+    path: join(homedir(), "inkling-umbrella/other-app"),
     check: "npm test",
   });
 });
@@ -53,7 +53,50 @@ test("loadConfig: a project may be registered without a check yet", () => {
   `);
 
   const config = loadConfig(home);
-  assert.deepEqual(config.projects["spending-app"], { path: "~/inkling-umbrella/spending-app" });
+  assert.deepEqual(config.projects["spending-app"], {
+    path: join(homedir(), "inkling-umbrella/spending-app"),
+  });
+});
+
+test("loadConfig: a leading ~/ in a project path expands to the home directory", () => {
+  const home = makeTestHome(`
+    [spending-app]
+    path = "~/inkling-umbrella/spending-app"
+    check = "bin/ci"
+  `);
+
+  const config = loadConfig(home);
+  assert.equal(
+    config.projects["spending-app"].path,
+    join(homedir(), "inkling-umbrella/spending-app")
+  );
+});
+
+test("loadConfig: a bare ~ project path is the home directory itself", () => {
+  const home = makeTestHome(`
+    [home-app]
+    path = "~"
+    check = "bin/ci"
+  `);
+
+  const config = loadConfig(home);
+  assert.equal(config.projects["home-app"].path, homedir());
+});
+
+test("loadConfig: a ~ anywhere but the start is left verbatim", () => {
+  const home = makeTestHome(`
+    [tilde-app]
+    path = "/srv/back~ups/tilde-app"
+    check = "bin/ci"
+
+    [nested-app]
+    path = "/srv/~/nested-app"
+    check = "bin/ci"
+  `);
+
+  const config = loadConfig(home);
+  assert.equal(config.projects["tilde-app"].path, "/srv/back~ups/tilde-app");
+  assert.equal(config.projects["nested-app"].path, "/srv/~/nested-app");
 });
 
 test("loadConfig: no projects.toml at the given home fails with the exact path", () => {

@@ -11,6 +11,8 @@ export interface Caps {
  * project may be registered before its check command is decided — but
  * required before any task on it is allowed to proceed (rule 2). */
 export interface ProjectConfig {
+  /** As written in projects.toml, except a leading `~` the loader has
+   * already expanded to the home directory. */
   path: string;
   check?: string;
 }

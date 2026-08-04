@@ -3,6 +3,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "./load.ts";
 import { requireProject } from "./registry.ts";
 import { ConfigError } from "./errors.ts";
@@ -17,7 +19,10 @@ test("requireProject: a registered project with a check command resolves", () =>
   const config = loadConfig(home);
 
   const project = requireProject(config, "spending-app");
-  assert.deepEqual(project, { path: "~/inkling-umbrella/spending-app", check: "bin/ci" });
+  assert.deepEqual(project, {
+    path: join(homedir(), "inkling-umbrella/spending-app"),
+    check: "bin/ci",
+  });
 });
 
 test("requireProject: an unregistered project is refused, naming it and what to add", () => {
@@ -96,7 +101,10 @@ test("requireProject: a project literally named __proto__ still resolves", () =>
   const config = loadConfig(home);
 
   const project = requireProject(config, "__proto__");
-  assert.deepEqual(project, { path: "~/inkling-umbrella/proto-app", check: "bin/ci" });
+  assert.deepEqual(project, {
+    path: join(homedir(), "inkling-umbrella/proto-app"),
+    check: "bin/ci",
+  });
 });
 
 test("requireProject: a blank check command counts as missing", () => {

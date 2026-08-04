@@ -120,6 +120,11 @@ and the caps. One entry per project:
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"        # the ONE command that must pass for green
 
+A leading `~` in `path` expands to your home directory when the config
+loads, so the example above works exactly as printed. Only a leading `~`
+or `~/`; `~user` is not supported, and a `~` elsewhere in the path is a
+literal character.
+
 If `check` is missing for a project, `fabrica do` refuses the task and says
 exactly what to add. No check command, no verified work, no exceptions
 (Contract 2). A task naming a project with no entry at all is refused the
