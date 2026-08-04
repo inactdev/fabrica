@@ -71,9 +71,9 @@ export interface FabricaTask {
 }
 
 export interface FabricaEvent {
-  ts: string;
-  task: string;
-  event: string;
+  occurredAt: string;
+  taskId: string;
+  name: string;
 }
 
 export interface Fabrica {

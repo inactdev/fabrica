@@ -16,7 +16,7 @@ test("rule 5: every lifecycle step is on the record, in order", async () => {
   const fabrica = createFabrica({ home: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
 
   const task = await fabrica.do("small change", { project, brain: fakeBrain() });
-  const events = (await fabrica.events(task.id)).map((e) => e.event);
+  const events = (await fabrica.events(task.id)).map((e) => e.name);
 
   const expectedOrder = ["task-received", "work-started", "check-run", "delivered"];
   let cursor = -1;
