@@ -65,7 +65,7 @@ export function registerTask(
 
   const id = claimTaskId(taskText, now, (candidate) => claimDir(home, candidate));
   writeTaskFile(home, id, "task.md", taskText);
-  appendEvent(home, { task: id, event: "task-received" });
+  appendEvent(home, { taskId: id, name: "task-received" });
 
   return { id, dir: taskDir(home, id) };
 }

@@ -11,55 +11,55 @@ import { makeTestHome } from "./helpers/test-home.ts";
 test("appendEvent: writes one JSON line per call, in call order", () => {
   const home = makeTestHome();
 
-  appendEvent(home, { task: "t1", event: "task-received" });
-  appendEvent(home, { task: "t1", event: "work-started" });
+  appendEvent(home, { taskId: "t1", name: "task-received" });
+  appendEvent(home, { taskId: "t1", name: "work-started" });
 
   const lines = readFileSync(recordPath(home), "utf8").trim().split("\n");
   assert.equal(lines.length, 2);
-  assert.equal(JSON.parse(lines[0]).event, "task-received");
-  assert.equal(JSON.parse(lines[1]).event, "work-started");
+  assert.equal(JSON.parse(lines[0]).name, "task-received");
+  assert.equal(JSON.parse(lines[1]).name, "work-started");
 });
 
-test("appendEvent: stamps ts and preserves task/event/detail", () => {
+test("appendEvent: stamps occurredAt and preserves taskId/name/details", () => {
   const home = makeTestHome();
   const before = new Date().toISOString();
 
-  const record = appendEvent(home, { task: "t1", event: "check-run", detail: { attempt: 1 } });
+  const record = appendEvent(home, { taskId: "t1", name: "check-run", details: { attempt: 1 } });
 
-  assert.equal(record.task, "t1");
-  assert.equal(record.event, "check-run");
-  assert.deepEqual(record.detail, { attempt: 1 });
-  assert.ok(record.ts >= before, "ts should be stamped at write time");
+  assert.equal(record.taskId, "t1");
+  assert.equal(record.name, "check-run");
+  assert.deepEqual(record.details, { attempt: 1 });
+  assert.ok(record.occurredAt >= before, "occurredAt should be stamped at write time");
 });
 
-test("appendEvent: a caller-smuggled ts never overrides the record's own stamp", () => {
+test("appendEvent: a caller-smuggled occurredAt never overrides the record's own stamp", () => {
   const home = makeTestHome();
   const before = new Date().toISOString();
 
-  const replayed = { ts: "1999-01-01T00:00:00.000Z", task: "t1", event: "task-received" };
+  const replayed = { occurredAt: "1999-01-01T00:00:00.000Z", taskId: "t1", name: "task-received" };
   const record = appendEvent(home, replayed);
 
-  assert.ok(record.ts >= before, "ts must be stamped by the record, not taken from the caller");
+  assert.ok(record.occurredAt >= before, "occurredAt must be stamped by the record, not taken from the caller");
   const line = readFileSync(recordPath(home), "utf8").trim();
-  assert.ok(line.startsWith('{"ts":'), "ts must stay the first key in the serialized line");
-  assert.equal(JSON.parse(line).ts, record.ts);
+  assert.ok(line.startsWith('{"occurredAt":'), "occurredAt must stay the first key in the serialized line");
+  assert.equal(JSON.parse(line).occurredAt, record.occurredAt);
 });
 
-test("appendEvent: omits detail entirely when not given, rather than writing null/undefined", () => {
+test("appendEvent: omits details entirely when not given, rather than writing null/undefined", () => {
   const home = makeTestHome();
-  appendEvent(home, { task: "t1", event: "task-received" });
+  appendEvent(home, { taskId: "t1", name: "task-received" });
 
   const line = readFileSync(recordPath(home), "utf8").trim();
-  assert.ok(!("detail" in JSON.parse(line)));
+  assert.ok(!("details" in JSON.parse(line)));
 });
 
-test("appendEvent: never rewrites a prior line, even for the same task+event repeated", () => {
+test("appendEvent: never rewrites a prior line, even for the same taskId+name repeated", () => {
   const home = makeTestHome();
 
-  const first = appendEvent(home, { task: "t1", event: "task-received" });
+  const first = appendEvent(home, { taskId: "t1", name: "task-received" });
   const firstSnapshot = readFileSync(recordPath(home), "utf8");
 
-  appendEvent(home, { task: "t1", event: "task-received" }); // same task+event again
+  appendEvent(home, { taskId: "t1", name: "task-received" }); // same taskId+name again
   const secondSnapshot = readFileSync(recordPath(home), "utf8");
 
   assert.ok(
@@ -72,13 +72,13 @@ test("appendEvent: never rewrites a prior line, even for the same task+event rep
 test("appendEvent: mutating the returned record does not reach the file on disk", () => {
   const home = makeTestHome();
 
-  const record = appendEvent(home, { task: "t1", event: "task-received" });
-  (record as { event: string }).event = "tampered";
-  record.detail = "tampered";
+  const record = appendEvent(home, { taskId: "t1", name: "task-received" });
+  (record as { name: string }).name = "tampered";
+  record.details = "tampered";
 
   const [onDisk] = readEvents(home);
-  assert.equal(onDisk.event, "task-received");
-  assert.equal(onDisk.detail, undefined);
+  assert.equal(onDisk.name, "task-received");
+  assert.equal(onDisk.details, undefined);
 });
 
 test("the record module exposes no update or delete path for events.jsonl", async () => {
@@ -121,9 +121,9 @@ test("appendEvent: concurrent appends from separate OS processes never tear or i
   const parsed = lines.map((line) => JSON.parse(line));
   const seen = new Set<string>();
   for (const event of parsed) {
-    assert.equal(event.task, "concurrent-task");
-    assert.equal(event.event, "concurrent-write");
-    seen.add(`${event.detail.label}-${event.detail.i}`);
+    assert.equal(event.taskId, "concurrent-task");
+    assert.equal(event.name, "concurrent-write");
+    seen.add(`${event.details.label}-${event.details.i}`);
   }
 
   const expected = new Set<string>();

@@ -25,8 +25,8 @@ test("registerTask: logs task-received on the record for that task id", () => {
 
   const events = readEventsForTask(home, id);
   assert.equal(events.length, 1);
-  assert.equal(events[0].event, "task-received");
-  assert.equal(events[0].task, id);
+  assert.equal(events[0].name, "task-received");
+  assert.equal(events[0].taskId, id);
 });
 
 test("registerTask: two tasks registered in the same second never collide", () => {

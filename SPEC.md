@@ -97,7 +97,7 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
 
     ~/.fabrica/
       events.jsonl            # append-only; every event, one JSON line:
-                              # {ts, task, event, detail}
+                              # {occurredAt, taskId, name, details}
       tasks/<id>/
         task.md               # verbatim task text + Q&A rounds
         plan.md               # agent's plan (when it proceeded)

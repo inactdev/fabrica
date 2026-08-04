@@ -15,42 +15,42 @@ test("readEvents: an unwritten record reads as empty, not an error", () => {
 
 test("readEvents: returns every event in write order", () => {
   const home = makeTestHome();
-  appendEvent(home, { task: "t1", event: "task-received" });
-  appendEvent(home, { task: "t2", event: "task-received" });
-  appendEvent(home, { task: "t1", event: "work-started" });
+  appendEvent(home, { taskId: "t1", name: "task-received" });
+  appendEvent(home, { taskId: "t2", name: "task-received" });
+  appendEvent(home, { taskId: "t1", name: "work-started" });
 
-  const events = readEvents(home).map((e) => `${e.task}:${e.event}`);
+  const events = readEvents(home).map((e) => `${e.taskId}:${e.name}`);
   assert.deepEqual(events, ["t1:task-received", "t2:task-received", "t1:work-started"]);
 });
 
 test("readEventsForTask: filters to just the one task, order preserved", () => {
   const home = makeTestHome();
-  appendEvent(home, { task: "t1", event: "task-received" });
-  appendEvent(home, { task: "t2", event: "task-received" });
-  appendEvent(home, { task: "t1", event: "work-started" });
-  appendEvent(home, { task: "t1", event: "delivered" });
+  appendEvent(home, { taskId: "t1", name: "task-received" });
+  appendEvent(home, { taskId: "t2", name: "task-received" });
+  appendEvent(home, { taskId: "t1", name: "work-started" });
+  appendEvent(home, { taskId: "t1", name: "delivered" });
 
-  const events = readEventsForTask(home, "t1").map((e) => e.event);
+  const events = readEventsForTask(home, "t1").map((e) => e.name);
   assert.deepEqual(events, ["task-received", "work-started", "delivered"]);
 });
 
 test("readEventsForTask: an unknown task id reads as empty, not an error", () => {
   const home = makeTestHome();
-  appendEvent(home, { task: "t1", event: "task-received" });
+  appendEvent(home, { taskId: "t1", name: "task-received" });
   assert.deepEqual(readEventsForTask(home, "ghost"), []);
 });
 
 test("readEvents: mutating one call's result never affects the next call's result", () => {
   const home = makeTestHome();
-  appendEvent(home, { task: "t1", event: "task-received" });
+  appendEvent(home, { taskId: "t1", name: "task-received" });
 
   const first = readEvents(home);
-  first.push({ ts: "fake", task: "t1", event: "forged" });
-  first[0].event = "tampered";
+  first.push({ occurredAt: "fake", taskId: "t1", name: "forged" });
+  first[0].name = "tampered";
 
   const second = readEvents(home);
   assert.equal(second.length, 1);
-  assert.equal(second[0].event, "task-received");
+  assert.equal(second[0].name, "task-received");
 });
 
 test("readEvents: a reader polling during concurrent writers never throws or sees a torn line", async () => {

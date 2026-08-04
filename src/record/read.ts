@@ -24,5 +24,5 @@ export function readEvents(home: string): RecordEvent[] {
 
 /** Every event for one task, in the order they were recorded. */
 export function readEventsForTask(home: string, taskId: string): RecordEvent[] {
-  return readEvents(home).filter((event) => event.task === taskId);
+  return readEvents(home).filter((event) => event.taskId === taskId);
 }

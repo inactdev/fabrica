@@ -6,14 +6,14 @@
 
 /** One line of events.jsonl (rule 5: "It writes everything down."). */
 export interface RecordEvent {
-  ts: string;
-  task: string;
-  event: string;
-  detail?: unknown;
+  occurredAt: string;
+  taskId: string;
+  name: string;
+  details?: unknown;
 }
 
-/** Input to appendEvent: `ts` is stamped by the record, never the caller. */
-export type NewRecordEvent = Omit<RecordEvent, "ts">;
+/** Input to appendEvent: `occurredAt` is stamped by the record, never the caller. */
+export type NewRecordEvent = Omit<RecordEvent, "occurredAt">;
 
 /** The five files a task folder holds (SPEC.md "The record"). */
 export type TaskFile = "task.md" | "plan.md" | "delivery.md" | "verdict" | "transcript.log";

@@ -37,6 +37,6 @@ test("rule 6: the verdict lands on the record", async () => {
   const task = await fabrica.do("small change", { project, brain: fakeBrain() });
   await fabrica.verdict(task.id, "fix", "right direction, wrong button spot");
 
-  const events = (await fabrica.events(task.id)).map((e) => e.event);
+  const events = (await fabrica.events(task.id)).map((e) => e.name);
   assert.ok(events.includes("verdict-recorded"), "verdict not on the record — rules 5+6 broken");
 });
