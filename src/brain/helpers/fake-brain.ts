@@ -9,17 +9,27 @@ import type { Brain, BrainWorkResult } from "../types.ts";
 
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
-  /** Every brief passed to work(), grouped by the session id it landed
-   * on - proof that same-session calls accumulate instead of restarting. */
+  /** Every set of instructions passed to work(), grouped by the session
+   * id it landed on - proof that same-session calls accumulate instead
+   * of restarting. */
   readonly historyBySession: ReadonlyMap<string, string[]>;
+  /** The effort value requested on each call, in call order (undefined
+   * where none was passed) - proof that a value is recorded as
+   * requested even when this fake, like any adapter, does not
+   * recognize it and ignores it rather than failing. */
+  readonly effortsRequested: readonly (string | undefined)[];
 }
 
 export function fakeBrain(
-  opts: { onWork?: (brief: string, workdir: string) => void; gateChanges?: string } = {}
+  opts: {
+    onWork?: (instructions: string, workdir: string, effort?: string) => void;
+    gateChanges?: string;
+  } = {}
 ): FakeBrainHandle {
   let calls = 0;
   let nextSessionId = 0;
   const historyBySession = new Map<string, string[]>();
+  const effortsRequested: (string | undefined)[] = [];
 
   return {
     name: "fake",
@@ -30,17 +40,21 @@ export function fakeBrain(
     get historyBySession() {
       return historyBySession;
     },
-    async work(brief, workdir, workOpts) {
+    get effortsRequested() {
+      return effortsRequested;
+    },
+    async work(instructions, workdir, workOpts) {
       calls += 1;
-      opts.onWork?.(brief, workdir);
+      effortsRequested.push(workOpts?.effort);
+      opts.onWork?.(instructions, workdir, workOpts?.effort);
 
       const session = workOpts?.session ?? `fake-session-${++nextSessionId}`;
-      const briefs = historyBySession.get(session) ?? [];
-      briefs.push(brief);
-      historyBySession.set(session, briefs);
+      const history = historyBySession.get(session) ?? [];
+      history.push(instructions);
+      historyBySession.set(session, history);
 
       const result: BrainWorkResult = {
-        transcript: `fake brain saw ${briefs.length} brief(s) on session ${session}: ${briefs.join(" | ")}`,
+        transcript: `fake brain saw ${history.length} instruction(s) on session ${session}: ${history.join(" | ")}`,
         session,
       };
       if (opts.gateChanges !== undefined) result.gateChanges = opts.gateChanges;

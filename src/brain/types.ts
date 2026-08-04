@@ -9,6 +9,12 @@
  * (SPEC.md, adopted Aug 2026). */
 export interface BrainWorkOptions {
   session?: string;
+  /** Free-form effort hint (e.g. "low", "high", or a tool's own
+   * vocabulary) - deliberately not a closed union, so callers never
+   * couple to one adapter's vocabulary. An adapter that does not
+   * recognize the value must ignore it, not fail; the value is still
+   * recorded as requested regardless of whether the adapter used it. */
+  effort?: string;
 }
 
 export interface BrainWorkResult {
@@ -27,5 +33,5 @@ export interface BrainWorkResult {
 export interface Brain {
   name: string;
   model: string;
-  work(brief: string, workdir: string, opts?: BrainWorkOptions): Promise<BrainWorkResult>;
+  work(instructions: string, workdir: string, opts?: BrainWorkOptions): Promise<BrainWorkResult>;
 }
