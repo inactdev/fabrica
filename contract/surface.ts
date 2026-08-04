@@ -49,6 +49,7 @@ export interface Receipt {
   durationMs: number;
   costUsd: number | null;
   session: string | null;
+  effort: string | null;
   gate: GateResult | null;
   outcome: "delivered" | "failed" | "discarded-protected-path";
 }
