@@ -57,7 +57,7 @@ The whole tool in one command.
    Detached from the terminal: `fabrica do` prints the id and returns
    immediately; work continues in the background. Full agent output
    streams to the task's transcript file.
-5. **Verifies.** Runs the project's check command (see per-project config)
+5. **Verifies.** Runs the project's check command (see Config below)
    inside the worktree. Green → delivery. Red → one fix pass by the agent
    with the failure output, then re-check. Still red → failure report
    (Contract 2). The counts here (one fix pass) are code, not judgment
@@ -104,16 +104,17 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
         delivery.md           # the delivery block, or failure report
         verdict               # accept|fix|wrong + note + ts
         transcript.log        # raw agent session output
-      projects.toml           # per-project config (below)
+      projects.toml           # project registry + caps (below)
 
 Files, not a database, in v1: the Client must be able to read, grep, and
 diff the record with bare hands, and later organs (learning, status,
 Amy) read the same files. `events.jsonl` is the single source of truth;
 everything else is a convenience view of it (Contract 5).
 
-## Per-project config
+## Config
 
-`projects.toml`, one entry per project:
+`projects.toml` in the record home holds two things: the project registry
+and the caps. One entry per project:
 
     [spending-app]
     path = "~/code/spending-app"
@@ -121,7 +122,17 @@ everything else is a convenience view of it (Contract 5).
 
 If `check` is missing for a project, `fabrica do` refuses the task and says
 exactly what to add. No check command, no verified work, no exceptions
-(Contract 2).
+(Contract 2). A task naming a project with no entry at all is refused the
+same way, naming the project and the entry to add.
+
+The caps are one reserved table, in dollars (Contract 10):
+
+    [caps]
+    perTaskUsd = 2.5
+    perDayUsd = 20
+
+`caps` is the one table name that is not a project, so no project may be
+named `caps`. Zero is a legal cap, not an absent one.
 
 ## The delivery block
 
