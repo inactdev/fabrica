@@ -11,19 +11,19 @@ import { makeTestHome } from "./helpers/test-home.ts";
 test("requireProject: a registered project with a check command resolves", () => {
   const home = makeTestHome(`
     [spending-app]
-    path = "/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
   const config = loadConfig(home);
 
   const project = requireProject(config, "spending-app");
-  assert.deepEqual(project, { path: "/code/spending-app", check: "bin/ci" });
+  assert.deepEqual(project, { path: "~/inkling-umbrella/spending-app", check: "bin/ci" });
 });
 
 test("requireProject: an unregistered project is refused, naming it and what to add", () => {
   const home = makeTestHome(`
     [spending-app]
-    path = "/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
   const config = loadConfig(home);
@@ -45,7 +45,7 @@ test("requireProject: an unregistered project is refused, naming it and what to 
 test("requireProject: a project whose check command is missing is refused", () => {
   const home = makeTestHome(`
     [spending-app]
-    path = "/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
   `);
   const config = loadConfig(home);
 
@@ -70,7 +70,7 @@ test("requireProject: a project whose check command is missing is refused", () =
 test("requireProject: a name that collides with Object.prototype is unregistered", () => {
   const home = makeTestHome(`
     [spending-app]
-    path = "/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
   const config = loadConfig(home);
@@ -90,19 +90,19 @@ test("requireProject: a name that collides with Object.prototype is unregistered
 test("requireProject: a project literally named __proto__ still resolves", () => {
   const home = makeTestHome(`
     ["__proto__"]
-    path = "/code/proto-app"
+    path = "~/inkling-umbrella/proto-app"
     check = "bin/ci"
   `);
   const config = loadConfig(home);
 
   const project = requireProject(config, "__proto__");
-  assert.deepEqual(project, { path: "/code/proto-app", check: "bin/ci" });
+  assert.deepEqual(project, { path: "~/inkling-umbrella/proto-app", check: "bin/ci" });
 });
 
 test("requireProject: a blank check command counts as missing", () => {
   const home = makeTestHome(`
     [spending-app]
-    path = "/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
     check = "   "
   `);
   const config = loadConfig(home);

@@ -14,11 +14,11 @@ test("loadConfig: a valid config loads projects and caps", () => {
     perDayUsd = 20
 
     [spending-app]
-    path = "/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
 
     [other-app]
-    path = "/code/other-app"
+    path = "~/inkling-umbrella/other-app"
     check = "npm test"
   `);
 
@@ -26,11 +26,11 @@ test("loadConfig: a valid config loads projects and caps", () => {
 
   assert.deepEqual(config.caps, { perTaskUsd: 2.5, perDayUsd: 20 });
   assert.deepEqual(config.projects["spending-app"], {
-    path: "/code/spending-app",
+    path: "~/inkling-umbrella/spending-app",
     check: "bin/ci",
   });
   assert.deepEqual(config.projects["other-app"], {
-    path: "/code/other-app",
+    path: "~/inkling-umbrella/other-app",
     check: "npm test",
   });
 });
@@ -38,7 +38,7 @@ test("loadConfig: a valid config loads projects and caps", () => {
 test("loadConfig: caps are optional", () => {
   const home = makeTestHome(`
     [spending-app]
-    path = "/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
 
@@ -49,11 +49,11 @@ test("loadConfig: caps are optional", () => {
 test("loadConfig: a project may be registered without a check yet", () => {
   const home = makeTestHome(`
     [spending-app]
-    path = "/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
   `);
 
   const config = loadConfig(home);
-  assert.deepEqual(config.projects["spending-app"], { path: "/code/spending-app" });
+  assert.deepEqual(config.projects["spending-app"], { path: "~/inkling-umbrella/spending-app" });
 });
 
 test("loadConfig: no projects.toml at the given home fails with the exact path", () => {

@@ -117,7 +117,7 @@ everything else is a convenience view of it (Contract 5).
 and the caps. One entry per project:
 
     [spending-app]
-    path = "~/code/spending-app"
+    path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"        # the ONE command that must pass for green
 
 If `check` is missing for a project, `fabrica do` refuses the task and says
