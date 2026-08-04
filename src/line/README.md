@@ -95,8 +95,9 @@ what it should be. Every refusal is a `LineError` with a `code`; here is
 what triggers each one and what to do about it.
 
 - **`invalid-id`** - the task id isn't safe to use as a path segment and
-  branch name (empty, contains `/`, contains `..`, or has characters
-  outside letters/digits/`.`/`_`/`-`). Use a plain id - the SPEC's own
+  branch name (empty, contains `/` or `..`, starts with anything other
+  than a letter or digit, or has characters outside
+  letters/digits/`.`/`_`/`-`). Use a plain id - the SPEC's own
   `YYYYMMDD-<slug>-<2 random chars>` format always qualifies.
 - **`home-not-found`** - the record `home` you passed doesn't exist on
   disk. Create it first, or pass the record home you actually mean.
