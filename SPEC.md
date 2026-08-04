@@ -57,7 +57,7 @@ The whole tool in one command.
    Detached from the terminal: `fabrica do` prints the id and returns
    immediately; work continues in the background. Full agent output
    streams to the task's transcript file.
-5. **Verifies.** Runs the project's check command (see per-project config)
+5. **Verifies.** Runs the project's check command (see Config below)
    inside the worktree. Green → delivery. Red → one fix pass by the agent
    with the failure output, then re-check. Still red → failure report
    (Contract 2). The counts here (one fix pass) are code, not judgment
@@ -104,24 +104,42 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
         delivery.md           # the delivery block, or failure report
         verdict               # accept|fix|wrong + note + ts
         transcript.log        # raw agent session output
-      projects.toml           # per-project config (below)
+      projects.toml           # project registry + caps (below)
 
 Files, not a database, in v1: the Client must be able to read, grep, and
 diff the record with bare hands, and later organs (learning, status,
 Amy) read the same files. `events.jsonl` is the single source of truth;
 everything else is a convenience view of it (Contract 5).
 
-## Per-project config
+## Config
 
-`projects.toml`, one entry per project:
+`projects.toml` in the record home holds two things: the project registry
+and the caps, each under its own top-level table. Projects live under
+`[projects.<name>]`; the caps get their own table, in dollars (Contract 10):
 
-    [spending-app]
-    path = "~/code/spending-app"
+    [caps]
+    perTaskUsd = 2.5
+    perDayUsd  = 20
+
+    [projects.spending-app]
+    path  = "~/inkling-umbrella/spending-app"
     check = "bin/ci"        # the ONE command that must pass for green
+
+A leading `~` in `path` expands to your home directory when the config
+loads, so the example above works exactly as printed. Only a leading `~`
+or `~/`; `~user` is not supported, and a `~` elsewhere in the path is a
+literal character.
 
 If `check` is missing for a project, `fabrica do` refuses the task and says
 exactly what to add. No check command, no verified work, no exceptions
-(Contract 2).
+(Contract 2). A task naming a project with no entry at all is refused the
+same way, naming the project and the entry to add.
+
+Every top-level table is either `[caps]` or `[projects.<name>]`; anything
+else is refused with exact instructions to move it under `[projects.<name>]`.
+Because projects and caps no longer share a namespace, a project may be
+named `caps` — `[projects.caps]` is a project like any other. Zero is a
+legal cap, not an absent one.
 
 ## The delivery block
 
@@ -173,8 +191,8 @@ until living with the tool shows how common the problem actually is.
 
 ## Out of scope for v1 — explicitly
 
-Multiple attempts and judging; model selection or switching; spend
-tracking; a status dashboard beyond `fabrica status`; pushing or opening pull
+Multiple attempts and judging; model selection or switching; a status
+dashboard beyond `fabrica status`; pushing or opening pull
 requests; running more than one task per project at a time (parallel
 tasks across different projects: allowed, it falls out of isolation);
 voice anything; playground/self-experimentation. The event log is
