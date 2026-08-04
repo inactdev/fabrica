@@ -10,6 +10,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Use LANGUAGE.md's vocabulary (Client, Factory, ProductionLine, Foreman, Worker, task, checks, delivery, verdict, caps) in code and messages — don't invent synonyms.
 - `contract/surface.ts` declares the seams Phase 1 must implement (`createFabrica`, `Delivery`, etc.); read it before adding a module that will eventually back one of those seams.
 - `src/record/` (issue #3) is the append-only event log (`events.jsonl`) plus per-task folders; its structural append-only proof spawns real `tsx` child processes (see `src/record/helpers/concurrent-append-worker.ts`) rather than interleaving async calls in one process, since only genuine OS-level concurrency can prove a write can't be torn. Reuse that pattern for any other append-only file (e.g. `transcript.log`).
+- On macOS, `os.tmpdir()` resolves through a `/var` -> `/private/var` symlink. Any code or test that computes a path under a temp dir and later compares it against a `realpathSync`'d value (as `src/line` does for its worktree paths) must compare against the realpath'd form on both sides, or the comparison spuriously fails.
+- `src/line/` (ProductionLine: cutting/tearing down the throwaway git worktree per task) is the reference example for path-safety code: never delete or write to a path without first proving via `git worktree list` that it's the exact throwaway path expected, not a live checkout.
 
 ## Maintaining this file
 

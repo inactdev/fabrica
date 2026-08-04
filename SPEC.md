@@ -104,6 +104,8 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
         delivery.md           # the delivery block, or failure report
         verdict               # accept|fix|wrong + note + ts
         transcript.log        # raw agent session output
+        worktree/             # the ProductionLine while the task runs;
+                              # removed at teardown (the branch stays)
       projects.toml           # project registry + caps (below)
 
 Files, not a database, in v1: the Client must be able to read, grep, and
