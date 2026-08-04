@@ -25,8 +25,9 @@ the event log are for).
   your own tail of that file) shows exactly what a worker is doing right
   now. Views never control: closing one touches nothing.
 - The coding agent that performs work inside the box is a subprocess
-  behind a small adapter interface (`runAgent(brief, workdir) →
-  transcript`). v1 ships one adapter: whichever terminal coding agent the
+  behind a small adapter interface: the `Brain` seam, whose ratified
+  shape lives in `contract/surface.ts` and whose src-side home is
+  `src/brain/`. v1 ships one adapter: whichever terminal coding agent the
   Client already uses daily, invoked in its non-interactive mode. The
   adapter's exact invocation is discovered and verified during the build,
   not assumed here. Nothing outside the adapter may know which agent is
