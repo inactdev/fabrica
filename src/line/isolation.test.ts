@@ -1,0 +1,134 @@
+// Adversarial coverage for CONTRACT rule 1 ("It never touches your
+// stuff"), the worst-failure-mode rule in the whole contract. The
+// contract's own rule1.isolation.test.ts proves this end to end through
+// createFabrica, which still throws NotBuiltError until issue #7 wires the
+// loop together — so these tests prove the same invariant directly against
+// cutLine/tearDownLine, plus scenarios the contract test doesn't reach:
+// a failed run, a dirty teardown, and two lines cut at once.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { cutLine } from "./cut.ts";
+import { tearDownLine } from "./teardown.ts";
+import { fingerprint, makeFixtureHome, makeFixtureProject } from "./helpers/fixture.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+test("checkout is untouched after a successful run: cut, work, commit, teardown", () => {
+  const project = makeFixtureProject();
+  const home = makeFixtureHome();
+  const before = fingerprint(project);
+
+  const line = cutLine({ project, id: "task-success", home });
+  try {
+    const original = readFileSync(join(line.workdir, "app.txt"), "utf8");
+    writeFileSync(join(line.workdir, "app.txt"), original + "one more line\n");
+    execFileSync("git", ["add", "-A"], { cwd: line.workdir });
+    execFileSync(
+      "git",
+      ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "work"],
+      { cwd: line.workdir }
+    );
+  } finally {
+    tearDownLine(line);
+  }
+
+  assert.equal(fingerprint(project), before);
+  assert.equal(existsSync(line.workdir), false);
+});
+
+test("checkout is untouched after a failed run", () => {
+  const project = makeFixtureProject();
+  const home = makeFixtureHome();
+  const before = fingerprint(project);
+
+  const line = cutLine({ project, id: "task-failure", home });
+  assert.throws(() => {
+    try {
+      writeFileSync(join(line.workdir, "app.txt"), "a change made right before blowing up\n");
+      throw new Error("simulated worker failure");
+    } finally {
+      tearDownLine(line);
+    }
+  }, /simulated worker failure/);
+
+  assert.equal(fingerprint(project), before);
+  assert.equal(existsSync(line.workdir), false);
+});
+
+test("checkout is untouched after teardown of a dirty worktree", () => {
+  const project = makeFixtureProject();
+  const home = makeFixtureHome();
+  const before = fingerprint(project);
+
+  const line = cutLine({ project, id: "task-dirty-e2e", home });
+  writeFileSync(join(line.workdir, "app.txt"), "uncommitted worker scratch\n");
+  writeFileSync(join(line.workdir, "scratch.txt"), "never staged, never committed\n");
+  execFileSync("git", ["add", "scratch.txt"], { cwd: line.workdir });
+
+  tearDownLine(line);
+
+  assert.equal(fingerprint(project), before);
+  assert.equal(existsSync(line.workdir), false);
+});
+
+test("two ProductionLines cut from the same project at once do not collide", async () => {
+  const project = makeFixtureProject();
+  const home = makeFixtureHome();
+  const before = fingerprint(project);
+
+  const [a, b] = await Promise.all([
+    runCutInSubprocess(project, "task-concurrent-a", home),
+    runCutInSubprocess(project, "task-concurrent-b", home),
+  ]);
+
+  assert.equal(a.code, 0, `subprocess A failed: ${a.stderr}`);
+  assert.equal(b.code, 0, `subprocess B failed: ${b.stderr}`);
+
+  const lineA = JSON.parse(a.stdout);
+  const lineB = JSON.parse(b.stdout);
+
+  assert.notEqual(lineA.workdir, lineB.workdir);
+  assert.notEqual(lineA.branch, lineB.branch);
+  assert.ok(existsSync(lineA.workdir));
+  assert.ok(existsSync(lineB.workdir));
+  assert.equal(fingerprint(project), before);
+
+  tearDownLine(lineA);
+  tearDownLine(lineB);
+  assert.equal(existsSync(lineA.workdir), false);
+  assert.equal(existsSync(lineB.workdir), false);
+  assert.equal(fingerprint(project), before);
+});
+
+function resolveTsxBin(): string {
+  let dir = here;
+  for (let i = 0; i < 8; i++) {
+    const candidate = join(dir, "node_modules", ".bin", "tsx");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error("could not find node_modules/.bin/tsx above " + here);
+}
+
+function runCutInSubprocess(
+  project: string,
+  id: string,
+  home: string
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolvePromise) => {
+    const helper = join(here, "helpers", "cut-in-subprocess.ts");
+    const child = spawn(resolveTsxBin(), [helper, project, id, home]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (code) => resolvePromise({ code, stdout, stderr }));
+  });
+}
