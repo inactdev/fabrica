@@ -95,6 +95,33 @@ test("loadConfig: an unknown top-level table is refused with conversion instruct
   );
 });
 
+test("loadConfig: an unknown top-level key that is not a table is not called a table", () => {
+  const home = makeTestHome(`
+    home = "/srv/x"
+    stamped = 2024-01-01T00:00:00Z
+
+    [projects.spending-app]
+    path = "~/inkling-umbrella/spending-app"
+    check = "bin/ci"
+  `);
+
+  assert.throws(
+    () => loadConfig(home),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.match(err.message, /unknown top-level key\(s\): home, stamped/);
+      assert.doesNotMatch(err.message, /\[home\]/, "a string value is not a table");
+      assert.doesNotMatch(
+        err.message,
+        /\[projects\.home\]/,
+        "must not advise a rename that parseProject would then reject"
+      );
+      return true;
+    }
+  );
+});
+
 test("loadConfig: a leading ~/ in a project path expands to the home directory", () => {
   const home = makeTestHome(`
     [projects.spending-app]
@@ -145,6 +172,11 @@ test("loadConfig: no projects.toml at the given home fails with the exact path",
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "not-found");
       assert.match(err.message, new RegExp(join(home, "projects.toml").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      assert.match(
+        err.message,
+        /\[projects\.<name>\]/,
+        "must instruct the nested format, not the old flat one"
+      );
       return true;
     }
   );

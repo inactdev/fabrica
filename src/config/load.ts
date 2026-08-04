@@ -27,7 +27,7 @@ export function loadConfig(home: string): FabricaConfig {
       throw new ConfigError(
         "not-found",
         `No projects.toml found at ${path}. Create one with a [caps] table ` +
-          `and one table per registered project.`
+          `and one [projects.<name>] table per registered project.`
       );
     }
     throw err;
@@ -43,20 +43,32 @@ export function loadConfig(home: string): FabricaConfig {
     );
   }
 
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (!isTable(parsed)) {
     throw new ConfigError("malformed", `${path} must contain a TOML table at its root.`);
   }
 
-  const { caps: rawCaps, projects: rawProjects, ...rest } = parsed as Record<string, unknown>;
+  const { caps: rawCaps, projects: rawProjects, ...rest } = parsed;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
-    const tables = extra.map((key) => `[${key}]`).join(", ");
-    const moved = extra.map((key) => `[projects.${key}]`).join(", ");
+    const staleTables = extra.filter((key) => isTable(rest[key]));
+    const looseKeys = extra.filter((key) => !isTable(rest[key]));
+    const sentences: string[] = [];
+    if (staleTables.length > 0) {
+      const named = staleTables.map((key) => `[${key}]`).join(", ");
+      const moved = staleTables.map((key) => `[projects.${key}]`).join(", ");
+      const one = staleTables.length === 1;
+      sentences.push(
+        `unknown top-level table(s): ${named}. If ${named} ${one ? "is" : "are"} ` +
+          `a project from the old flat format, rename ${one ? "it" : "them"} to ${moved}.`
+      );
+    }
+    if (looseKeys.length > 0) {
+      sentences.push(`unknown top-level key(s): ${looseKeys.join(", ")}.`);
+    }
     throw new ConfigError(
       "malformed",
-      `${path}: unknown top-level table(s): ${tables}. Projects live under ` +
-        `[projects.<name>] and globals under [caps]. If ${tables} ${extra.length === 1 ? "is" : "are"} ` +
-        `a project from the old flat format, rename ${extra.length === 1 ? "it" : "them"} to ${moved}.`
+      `${path}: ${sentences.join(" ")} Projects live under [projects.<name>] ` +
+        `and globals under [caps].`
     );
   }
 
@@ -66,13 +78,27 @@ export function loadConfig(home: string): FabricaConfig {
   return { caps, projects };
 }
 
+/**
+ * A TOML table, as opposed to every other TOML value type. Arrays and
+ * datetimes are `typeof "object"` too, so neither a bare `typeof` check nor
+ * an `Array.isArray` guard alone tells a table from a value.
+ */
+function isTable(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !(value instanceof Date)
+  );
+}
+
 function parseProjects(value: unknown, path: string): Record<string, ProjectConfig> {
   const projects: Record<string, ProjectConfig> = Object.create(null);
   if (value === undefined) return projects;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isTable(value)) {
     throw new ConfigError("malformed", `${path}: [projects] must be a table.`);
   }
-  for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
+  for (const [name, entry] of Object.entries(value)) {
     projects[name] = parseProject(name, entry, path);
   }
   return projects;
@@ -80,10 +106,10 @@ function parseProjects(value: unknown, path: string): Record<string, ProjectConf
 
 function parseCaps(value: unknown, path: string): Caps {
   if (value === undefined) return {};
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isTable(value)) {
     throw new ConfigError("malformed", `${path}: [caps] must be a table.`);
   }
-  const { perTaskUsd, perDayUsd, ...rest } = value as Record<string, unknown>;
+  const { perTaskUsd, perDayUsd, ...rest } = value;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     throw new ConfigError(
@@ -103,13 +129,13 @@ function parseCaps(value: unknown, path: string): Caps {
 }
 
 function parseProject(name: string, value: unknown, path: string): ProjectConfig {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isTable(value)) {
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] must be a table with at least a "path" field.`
     );
   }
-  const { path: projectPath, check, ...rest } = value as Record<string, unknown>;
+  const { path: projectPath, check, ...rest } = value;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     throw new ConfigError(
