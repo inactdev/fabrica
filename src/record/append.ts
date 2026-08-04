@@ -21,7 +21,8 @@ export function recordPath(home: string): string {
 
 /** Appends one event and returns the stamped record actually written. */
 export function appendEvent(home: string, input: NewRecordEvent): RecordEvent {
-  const record: RecordEvent = { ts: new Date().toISOString(), ...input };
+  const record: RecordEvent = { ts: "", ...input };
+  record.ts = new Date().toISOString();
   const line = `${JSON.stringify(record)}\n`;
 
   mkdirSync(home, { recursive: true });

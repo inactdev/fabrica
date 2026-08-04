@@ -35,7 +35,7 @@ test("registerTask: two tasks registered in the same second never collide", () =
 
   const ids = new Set<string>();
   for (let i = 0; i < 40; i++) {
-    const { id } = registerTask(home, `task number ${i}`, { now });
+    const { id } = registerTask(home, "the very same task text", { now });
     ids.add(id);
   }
 

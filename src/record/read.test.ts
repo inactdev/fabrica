@@ -61,8 +61,13 @@ test("readEvents: a reader polling during concurrent writers never throws or see
   const child = spawn(tsxBin, [workerPath, home, "t1", "500", "writer"]);
   let done = false;
   let exitCode: number | null = null;
+  let spawnError: Error | null = null;
   child.on("exit", (code) => {
     exitCode = code;
+    done = true;
+  });
+  child.on("error", (err) => {
+    spawnError = err;
     done = true;
   });
 
@@ -76,6 +81,7 @@ test("readEvents: a reader polling during concurrent writers never throws or see
     await yieldToEventLoop();
   }
 
+  assert.equal(spawnError, null);
   assert.equal(exitCode, 0);
   assert.equal(readEvents(home).length, 500);
   assert.ok(pollCount > 0, "sanity: the poll loop must actually have run at least once");

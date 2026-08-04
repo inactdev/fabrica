@@ -32,6 +32,19 @@ test("appendEvent: stamps ts and preserves task/event/detail", () => {
   assert.ok(record.ts >= before, "ts should be stamped at write time");
 });
 
+test("appendEvent: a caller-smuggled ts never overrides the record's own stamp", () => {
+  const home = makeTestHome();
+  const before = new Date().toISOString();
+
+  const replayed = { ts: "1999-01-01T00:00:00.000Z", task: "t1", event: "task-received" };
+  const record = appendEvent(home, replayed);
+
+  assert.ok(record.ts >= before, "ts must be stamped by the record, not taken from the caller");
+  const line = readFileSync(recordPath(home), "utf8").trim();
+  assert.ok(line.startsWith('{"ts":'), "ts must stay the first key in the serialized line");
+  assert.equal(JSON.parse(line).ts, record.ts);
+});
+
 test("appendEvent: omits detail entirely when not given, rather than writing null/undefined", () => {
   const home = makeTestHome();
   appendEvent(home, { task: "t1", event: "task-received" });
