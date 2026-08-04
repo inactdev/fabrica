@@ -71,8 +71,15 @@ each one is used for, and what breaks if one ever holds the wrong value
 - **`branch`** - `fabrica/<id>`. The one thing that outlives teardown;
   it's what you hand the Client to review.
 - **`project`** - the resolved root of your real checkout that this
-  line was cut from. `tearDownLine` only ever reads this, to look up
-  git's own worktree registry - never to write into it.
+  line was cut from. Your working files there are never touched - but
+  git's own worktree bookkeeping under `project/.git/worktrees/<name>`
+  is not: `cutLine` creates it and `tearDownLine` removes it, because
+  that bookkeeping is how a linked worktree exists at all, not
+  something layered on top. That's expected, and it's still rule-1
+  compliant - `contract/helpers/fixture.ts`'s `fingerprint()`
+  deliberately skips `.git` when it proves your checkout is unchanged
+  byte for byte, for exactly this reason: rule 1 protects your working
+  files, not git's own bookkeeping about them.
 - **`workdir`** - the throwaway worktree path itself,
   `<home>/tasks/<id>/worktree`.
 - **`home`** - the resolved record home this line's task folder lives
@@ -95,10 +102,12 @@ what it should be. Every refusal is a `LineError` with a `code`; here is
 what triggers each one and what to do about it.
 
 - **`invalid-id`** - the task id isn't safe to use as a path segment and
-  branch name (empty, contains `/` or `..`, starts with anything other
-  than a letter or digit, or has characters outside
-  letters/digits/`.`/`_`/`-`). Use a plain id - the SPEC's own
-  `YYYYMMDD-<slug>-<2 random chars>` format always qualifies.
+  branch name. The full rule: it must start with a letter or digit, every
+  character after that must be a letter, digit, `.`, `_`, or `-`, and
+  `..` may never appear anywhere in it. An id starting with `-` or `.`
+  (`-foo`, `.foo`) fails the first part of that rule, even though `-`
+  and `.` are otherwise allowed later in the id. Use a plain id - the
+  SPEC's own `YYYYMMDD-<slug>-<2 random chars>` format always qualifies.
 - **`home-not-found`** - the record `home` you passed doesn't exist on
   disk. Create it first, or pass the record home you actually mean.
 - **`not-a-repo`** - `project` doesn't exist, isn't inside a git
