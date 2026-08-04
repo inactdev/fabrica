@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "tsx --test contract/*.test.ts src/**/*.test.ts"
+    "test": "tsx --test $(find contract src -name '*.test.ts' | sort)"
   },
   "dependencies": {
     "smol-toml": "^1.7.1"

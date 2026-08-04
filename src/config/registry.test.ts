@@ -67,6 +67,38 @@ test("requireProject: a project whose check command is missing is refused", () =
   );
 });
 
+test("requireProject: a name that collides with Object.prototype is unregistered", () => {
+  const home = makeTestHome(`
+    [spending-app]
+    path = "/code/spending-app"
+    check = "bin/ci"
+  `);
+  const config = loadConfig(home);
+
+  for (const name of ["toString", "constructor", "valueOf", "__proto__"]) {
+    assert.throws(
+      () => requireProject(config, name),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "unregistered-project", `${name} must read as unregistered`);
+        return true;
+      }
+    );
+  }
+});
+
+test("requireProject: a project literally named __proto__ still resolves", () => {
+  const home = makeTestHome(`
+    ["__proto__"]
+    path = "/code/proto-app"
+    check = "bin/ci"
+  `);
+  const config = loadConfig(home);
+
+  const project = requireProject(config, "__proto__");
+  assert.deepEqual(project, { path: "/code/proto-app", check: "bin/ci" });
+});
+
 test("requireProject: a blank check command counts as missing", () => {
   const home = makeTestHome(`
     [spending-app]

@@ -49,7 +49,7 @@ export function loadConfig(home: string): FabricaConfig {
   const { caps: rawCaps, ...rawProjects } = parsed as Record<string, unknown>;
 
   const caps = parseCaps(rawCaps, path);
-  const projects: Record<string, ProjectConfig> = {};
+  const projects: Record<string, ProjectConfig> = Object.create(null);
   for (const [name, value] of Object.entries(rawProjects)) {
     projects[name] = parseProject(name, value, path);
   }
@@ -73,10 +73,10 @@ function parseCaps(value: unknown, path: string): Caps {
   }
   const caps: Caps = {};
   if (perTaskUsd !== undefined) {
-    caps.perTaskUsd = requireNumber(perTaskUsd, `${path}: [caps].perTaskUsd`);
+    caps.perTaskUsd = requireCapUsd(perTaskUsd, `${path}: [caps].perTaskUsd`);
   }
   if (perDayUsd !== undefined) {
-    caps.perDayUsd = requireNumber(perDayUsd, `${path}: [caps].perDayUsd`);
+    caps.perDayUsd = requireCapUsd(perDayUsd, `${path}: [caps].perDayUsd`);
   }
   return caps;
 }
@@ -109,9 +109,18 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   return check === undefined ? { path: projectPath } : { path: projectPath, check };
 }
 
-function requireNumber(value: unknown, label: string): number {
-  if (typeof value !== "number" || Number.isNaN(value)) {
-    throw new ConfigError("malformed", `${label} must be a number.`);
+function requireCapUsd(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new ConfigError(
+      "malformed",
+      `${label} must be a finite number of dollars (for example 2.5).`
+    );
+  }
+  if (value < 0) {
+    throw new ConfigError(
+      "malformed",
+      `${label} must be zero or more dollars, not ${value}.`
+    );
   }
   return value;
 }

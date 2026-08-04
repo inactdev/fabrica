@@ -16,7 +16,7 @@ export interface CheckedProjectConfig extends ProjectConfig {
  * message ready to show the Client verbatim.
  */
 export function requireProject(config: FabricaConfig, name: string): CheckedProjectConfig {
-  const project = config.projects[name];
+  const project = Object.hasOwn(config.projects, name) ? config.projects[name] : undefined;
   if (!project) {
     throw new ConfigError(
       "unregistered-project",

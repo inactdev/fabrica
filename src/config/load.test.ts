@@ -101,6 +101,51 @@ test("loadConfig: a project table missing path is refused as malformed", () => {
   );
 });
 
+test("loadConfig: a zero cap is a legal cap, not an absent one", () => {
+  const home = makeTestHome(`
+    [caps]
+    perTaskUsd = 0
+    perDayUsd = 0
+  `);
+
+  const config = loadConfig(home);
+  assert.deepEqual(config.caps, { perTaskUsd: 0, perDayUsd: 0 });
+});
+
+test("loadConfig: a negative cap is refused as malformed", () => {
+  const home = makeTestHome(`
+    [caps]
+    perTaskUsd = -5
+  `);
+
+  assert.throws(
+    () => loadConfig(home),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.match(err.message, /perTaskUsd/);
+      return true;
+    }
+  );
+});
+
+test("loadConfig: a non-finite cap is refused as malformed", () => {
+  const home = makeTestHome(`
+    [caps]
+    perDayUsd = inf
+  `);
+
+  assert.throws(
+    () => loadConfig(home),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.match(err.message, /perDayUsd/);
+      return true;
+    }
+  );
+});
+
 test("loadConfig: a non-numeric cap is refused as malformed", () => {
   const home = makeTestHome(`
     [caps]
