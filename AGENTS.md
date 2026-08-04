@@ -9,6 +9,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - The record home (`~/.fabrica` by default) is never hardcoded past the outermost CLI layer — every function that touches it takes `home: string` as an explicit parameter, so parallel workers/tests never share state. Tests use throwaway temp dirs (`mkdtempSync`), never the real home.
 - Use LANGUAGE.md's vocabulary (Client, Factory, ProductionLine, Foreman, Worker, task, checks, delivery, verdict, caps) in code and messages — don't invent synonyms.
 - `contract/surface.ts` declares the seams Phase 1 must implement (`createFabrica`, `Delivery`, etc.); read it before adding a module that will eventually back one of those seams.
+- `src/record/` (issue #3) is the append-only event log (`events.jsonl`) plus per-task folders; its structural append-only proof spawns real `tsx` child processes (see `src/record/helpers/concurrent-append-worker.ts`) rather than interleaving async calls in one process, since only genuine OS-level concurrency can prove a write can't be torn. Reuse that pattern for any other append-only file (e.g. `transcript.log`).
 
 ## Maintaining this file
 
