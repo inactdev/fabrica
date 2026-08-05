@@ -1,5 +1,5 @@
-// Assembles the Foreman: the object contract/surface.ts's createFabrica
-// hands back once every seam is wired. Matches the shape of Fabrica in
+// Assembles the Foreman: the object contract/surface.ts's createForeman
+// hands back once every seam is wired. Matches the shape of Foreman in
 // contract/surface.ts structurally — declared locally, like every other
 // type in this module, because src/ stays independent of contract/.
 
@@ -19,7 +19,7 @@ import type { Delivery, FabricaTask, Receipt } from "./types.ts";
 export interface ForemanOptions {
   recordHome: string;
   /** Rule 10: hard dollar limits. Accepted for shape compatibility with
-   * contract/surface.ts's createFabrica; not enforced here — that's issue
+   * contract/surface.ts's createForeman; not enforced here — that's issue
    * #11's job, not this loop's. */
   caps?: { perTaskUsd?: number; perDayUsd?: number };
 }

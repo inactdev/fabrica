@@ -1,11 +1,10 @@
 // Adversarial coverage for CONTRACT rule 1 ("It never touches your
 // stuff"), the worst-failure-mode rule in the whole contract. The
 // contract's own rule1.isolation.test.ts proves this end to end through
-// createFabrica, which still throws NotBuiltError until issue #7 wires the
-// loop together — so these tests prove the same invariant directly against
-// createProductionLine/destroyProductionLine, plus scenarios the contract
-// test doesn't reach: a failed run, destroying a dirty line, and two lines
-// created at once.
+// createForeman (src/foreman/, issue #7) — so these tests prove the same
+// invariant directly against createProductionLine/destroyProductionLine,
+// plus scenarios the contract test doesn't reach: a failed run, destroying
+// a dirty line, and two lines created at once.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -1,6 +1,6 @@
 // The shapes the Foreman produces. Matched by hand to contract/surface.ts's
-// Fabrica-facing types (GateResult, Receipt, Delivery, FabricaTask) so a
-// real Fabrica satisfies both with no reshaping — declared locally rather
+// Foreman-facing types (GateResult, Receipt, Delivery, FabricaTask) so a
+// real Foreman satisfies both with no reshaping — declared locally rather
 // than imported because src/ modules stay independent of contract/ (see
 // AGENTS.md; src/record/types.ts sets the same precedent for FabricaEvent).
 

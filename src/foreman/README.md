@@ -1,6 +1,6 @@
 # The Foreman
 
-`src/foreman/` is the real implementation behind `createFabrica` in
+`src/foreman/` is the real implementation behind `createForeman` in
 `contract/surface.ts` (issue #7, "the loop: `fabrica do`"). It is the
 delegator LANGUAGE.md calls the Foreman: it registers a task, cuts a
 ProductionLine, runs a Worker for a counted number of attempts, verifies
@@ -12,19 +12,19 @@ never decides anything a model should decide instead.
 ## `createForeman({ recordHome, caps? })`
 
 ```ts
-const fabrica = createForeman({ recordHome: "/Users/ari/.fabrica" });
+const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
 ```
 
 - **`recordHome`** — where the record lives (`src/record/README.md`). Every
   task this Foreman touches reads and writes under here; nothing in this
   module ever falls back to a fixed default path.
 - **`caps`** — `{ perTaskUsd?, perDayUsd? }`. Accepted so this factory's
-  shape matches `contract/surface.ts`'s `createFabrica` exactly. Not
+  shape matches `contract/surface.ts`'s `createForeman` exactly. Not
   enforced here: CONTRACT rule 10 ("It cannot outspend you") is issue
   #11's job, not this loop's. Passing it today has no effect; omitting it
   has no effect either.
 
-The return value satisfies `Fabrica`: `do`, `deliveryOf`, `receiptsOf`,
+The return value satisfies `Foreman`: `do`, `deliveryOf`, `receiptsOf`,
 `status`, `events`, `recordPath`, and a `verdict` stub (see "What's
 deliberately still a stub" below).
 
@@ -244,4 +244,4 @@ doesn't write that event or interpret one; that's left to whoever builds
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |
-| `fabrica.ts` | `createForeman` — assembles the above into the `Fabrica` shape. |
+| `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape. |
