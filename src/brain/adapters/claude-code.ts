@@ -158,6 +158,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         exitCode: number | null;
       }>((resolve, reject) => {
         const child = spawn(bin, args, { cwd: workdir });
+        child.stdin.end();
         let stdout = "";
         let stderr = "";
         child.stdout.setEncoding("utf8");
