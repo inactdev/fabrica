@@ -11,9 +11,9 @@ import { runCheck } from "./check.ts";
 import type { GateResult, Receipt } from "./types.ts";
 
 export interface AttemptLoopResult {
-  /** One per attempt actually run, in order. The last entry's `outcome`
-   * is provisional ("failed") — the caller fixes it up once the final
-   * outcome, including rule 9's gate-change check, is known. */
+  /** One per attempt actually run, in order. Each entry's `outcome`
+   * reflects its own check result; the caller overwrites the last entry
+   * only if rule 9's gate-change check forces discarded-protected-path. */
   receipts: Receipt[];
   lastGate: GateResult;
   /** The most recent gateChanges declaration seen, if any attempt gave one. */
@@ -64,7 +64,7 @@ export async function runAttempts(opts: {
       session: session ?? null,
       reasoningEffort: null,
       checks: gate,
-      outcome: "failed",
+      outcome: gate.green ? "delivered" : "failed",
     });
 
     if (gate.green && stopEarlyOnGreen) break;

@@ -70,9 +70,17 @@ test("doTask with explicit attempts runs exactly that many even once green", asy
   const recordHome = freshHome();
   const brain = fakeBrain();
 
-  await doTask(recordHome, "counted attempts", { project, attempts: 4, brain });
+  const task = await doTask(recordHome, "counted attempts", { project, attempts: 4, brain });
 
   assert.equal(brain.calls, 4);
+
+  // Every receipt's outcome reflects its own check result, so all four
+  // green attempts read "delivered", not just the final one.
+  const receipts = receiptsOf(recordHome, task.id);
+  assert.deepEqual(
+    receipts.map((r) => r.outcome),
+    ["delivered", "delivered", "delivered", "delivered"]
+  );
 });
 
 test("doTask refuses when the project has no check command at all", async () => {

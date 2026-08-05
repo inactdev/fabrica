@@ -6,20 +6,24 @@
 import { execFileSync } from "node:child_process";
 
 export function listTouchedFiles(workdir: string): string[] {
-  const raw = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+  // -z gives NUL-separated, never-quoted paths — without it, git C-quotes
+  // paths with quotes, backslashes, or (by default) non-ASCII bytes.
+  const raw = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], {
     cwd: workdir,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   const files: string[] = [];
-  for (const line of raw.split("\n")) {
-    if (line.length === 0) continue;
-    // Porcelain format: two status chars, a space, then the path (a
-    // rename entry reads "old -> new"; keep the new path).
-    const path = line.slice(3);
-    const arrow = path.indexOf(" -> ");
-    files.push(arrow === -1 ? path : path.slice(arrow + 4));
+  const entries = raw.split("\0");
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.length === 0) continue;
+    // Each entry is two status chars, a space, then the path. A rename or
+    // copy entry's new path comes first, with the old path as the next
+    // NUL-separated field; keep the new path and skip the old.
+    files.push(entry.slice(3));
+    if ("RC".includes(entry[0]) || "RC".includes(entry[1])) i++;
   }
   return files;
 }

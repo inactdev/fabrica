@@ -92,8 +92,9 @@ export async function doTask(
         ? "done"
         : "failure-report";
 
-    receipts[receipts.length - 1].outcome =
-      outcome === "done" ? "delivered" : outcome === "failure-report" ? "failed" : "discarded-protected-path";
+    if (outcome === "discarded-protected-path") {
+      receipts[receipts.length - 1].outcome = "discarded-protected-path";
+    }
 
     const delivery = buildDelivery(outcome, {
       taskText,
