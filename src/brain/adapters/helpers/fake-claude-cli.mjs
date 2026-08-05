@@ -1,0 +1,71 @@
+#!/usr/bin/env node
+// A stand-in for the real `claude` binary, used only by
+// claude-code.test.ts's fast unit tests. It does not talk to any model -
+// it prints back canned `--output-format stream-json` lines chosen by
+// the scenario name in `brief` (the string right after `-p`), so those
+// tests can prove the adapter's argument-building, transcript-mapping,
+// and error-mapping logic deterministically, without the cost or
+// flakiness of a real call. The real binary is proven separately in
+// claude-code.test.ts's real-binary test - this file is not that proof.
+
+const args = process.argv.slice(2);
+const brief = args[args[0] === "-p" ? 1 : args.indexOf("-p") + 1];
+
+function line(obj) {
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+const resultLine = (overrides) => ({
+  type: "result",
+  is_error: false,
+  session_id: "fake-session-123",
+  total_cost_usd: 0.0421,
+  duration_ms: 1234,
+  usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 5, cache_creation_input_tokens: 1 },
+  result: "done",
+  ...overrides,
+});
+
+switch (brief) {
+  case "ECHO_ARGS": {
+    line({ type: "assistant", message: { content: [{ type: "text", text: JSON.stringify(args) }] } });
+    line(resultLine({}));
+    break;
+  }
+  case "SUCCESS_WITH_TOOLS": {
+    line({ type: "system", subtype: "init" }); // noise the adapter must skip
+    line({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "checking the file first" },
+          { type: "tool_use", name: "Bash", input: { command: "cat hello.txt" } },
+        ],
+      },
+    });
+    line({
+      type: "user",
+      message: { content: [{ type: "tool_result", content: "hello from spike", is_error: false }] },
+    });
+    line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
+    line(resultLine({}));
+    break;
+  }
+  case "FAIL_EXIT_NONZERO_NO_JSON": {
+    process.stderr.write("No conversation found with session ID: bogus\n");
+    process.exit(1);
+    break;
+  }
+  case "FAIL_EXIT_NONZERO_WITH_JSON": {
+    line(resultLine({ is_error: true, api_error_status: 404, result: "model not found", total_cost_usd: 0 }));
+    process.exit(1);
+    break;
+  }
+  case "SUCCESS_NO_RESULT_LINE": {
+    line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
+    break;
+  }
+  default: {
+    line(resultLine({}));
+  }
+}

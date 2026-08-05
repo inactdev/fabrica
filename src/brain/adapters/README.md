@@ -56,6 +56,13 @@ unless he deliberately opens one behind a cap that can be zero. So the
 CLI family comes first - issue #6 builds the first CLI adapter - and
 direct API adapters arrive later, behind that deliberate switch.
 
+## Written adapters
+
+- **`claude-code.ts`** - the Client's own daily coding agent, driven
+  through the `claude` CLI's non-interactive mode. The first CLI
+  adapter (issue #6). See [`claude-code.md`](./claude-code.md) for what
+  was verified against the real binary and why each flag is there.
+
 ## Candidate CLI adapters
 
 From ROADMAP.md's parking lot and issue #23 ("Second and third brain
