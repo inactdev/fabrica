@@ -1,11 +1,12 @@
-// Assembles the Foreman: the object contract/surface.ts's createForeman
-// hands back once every seam is wired. Matches the shape of Foreman in
-// contract/surface.ts structurally — declared locally, like every other
-// type in this module, because src/ stays independent of contract/.
+// Assembles the Fabrica: the object src/index.ts's createFabrica hands
+// back once every seam is wired, satisfying contract/surface.ts's Fabrica
+// interface. This module (the Foreman) is only the delegator inside it —
+// it queues, routes, and counts, per LANGUAGE.md — but the object it
+// builds here is the whole factory's public promise, so its shape is
+// imported as a type from contract/surface.ts rather than declared again
+// here (issue #45).
 
 import { recordPath as eventsPath } from "../record/index.ts";
-import type { FabricaEvent } from "../record/index.ts";
-import type { Brain } from "../brain/index.ts";
 import { doTask } from "./do.ts";
 import { ForemanError } from "./errors.ts";
 import {
@@ -14,27 +15,17 @@ import {
   receiptsOf as lookupReceipts,
   statusOf as lookupStatus,
 } from "./queries.ts";
-import type { Delivery, FabricaTask, Receipt } from "./types.ts";
+import type { Fabrica } from "../../contract/surface.ts";
 
-export interface ForemanOptions {
+export interface FabricaOptions {
   recordHome: string;
   /** Rule 10: hard dollar limits. Accepted for shape compatibility with
-   * contract/surface.ts's createForeman; not enforced here — that's issue
-   * #11's job, not this loop's. */
+   * contract/surface.ts's Fabrica; not enforced here — that's issue #11's
+   * job, not this loop's. */
   caps?: { perTaskUsd?: number; perDayUsd?: number };
 }
 
-export interface Foreman {
-  do(taskText: string, opts: { project: string; attempts?: number; brain?: Brain }): Promise<FabricaTask>;
-  deliveryOf(taskId: string): Promise<Delivery | null>;
-  receiptsOf(taskId: string): Promise<Receipt[]>;
-  verdict(taskId: string, ruling: "accept" | "fix" | "wrong", note?: string): Promise<void>;
-  status(): Promise<FabricaTask[]>;
-  events(taskId: string): Promise<FabricaEvent[]>;
-  recordPath(): string;
-}
-
-export function createForeman(opts: ForemanOptions): Foreman {
+export function createFabrica(opts: FabricaOptions): Fabrica {
   const { recordHome } = opts;
 
   return {

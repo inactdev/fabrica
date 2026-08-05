@@ -15,7 +15,7 @@ import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
 import { listTouchedFiles } from "./files.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
-import type { Delivery, FabricaTask } from "./types.ts";
+import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with the
  * failure output, then re-check — a ceiling of 2 worker runs. */

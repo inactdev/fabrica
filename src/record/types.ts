@@ -4,35 +4,11 @@
 // (request.md, answers.md, brief.md, plan.md, delivery.md, verdict,
 // transcript.log) is a convenience view of it.
 
-/**
- * Every event name Fabrica is known to emit. Standardised with
- * `contract/surface.ts`'s `FabricaEventName` so the two never drift into
- * two different closed sets for the same thing; declared locally here
- * (rather than imported) because src/ modules stay independent of
- * contract/ — see AGENTS.md.
- */
-export type FabricaEventName =
-  | "task-received"
-  | "questions-asked"
-  | "answers-given"
-  | "work-started"
-  | "check-run"
-  | "delivered"
-  | "verdict-recorded"
-  | "cap-refused"
-  | "cap-stopped"
-  | "unattributed-change"
-  | "edit-attempt-blocked"
-  | "heartbeat"
-  | "concurrent-write";
-
-/** One line of events.jsonl (rule 5: "It writes everything down."). */
-export interface FabricaEvent {
-  occurredAt: string;
-  taskId: string;
-  name: FabricaEventName;
-  details?: unknown;
-}
+// FabricaEvent/FabricaEventName are declared once in contract/surface.ts
+// (issue #45) and imported here as a type only - erased at compile time,
+// so this creates no runtime dependency on contract/.
+import type { FabricaEvent, FabricaEventName } from "../../contract/surface.ts";
+export type { FabricaEvent, FabricaEventName };
 
 /** Input to appendEvent: `occurredAt` is stamped by the record, never the caller. */
 export type NewFabricaEvent = Omit<FabricaEvent, "occurredAt">;

@@ -28,7 +28,7 @@ A line of `events.jsonl` looks like this:
 
 ### `FabricaEvent` and `NewFabricaEvent`
 
-The type is called `FabricaEvent`, matching `contract/surface.ts`'s type of the same name — the two used to be named differently (`RecordEvent` here, `FabricaEvent` there) for the identical shape, which is exactly the two-names-for-one-thing confusion this module now avoids. It's declared locally rather than imported from `contract/`, because `src/` modules stay independent of `contract/` (see AGENTS.md) — the two declarations are kept in sync by hand.
+`FabricaEvent` is declared once, in `contract/surface.ts`, and imported here as a type only (issue #45) — `import type` is erased at compile time, so this creates no runtime dependency on `contract/`. There used to be a second, hand-written copy here (`RecordEvent`, later renamed `FabricaEvent` to match) kept in sync with the contract's by hand; that duplication bought nothing; declaring it once makes drift impossible instead of merely detected.
 
 `appendEvent(recordHome, input)` takes a `NewFabricaEvent`: a `FabricaEvent` with `occurredAt` removed from the type. That is deliberate — the record decides when an event happened, not the caller. The type only omits the field; nothing in JavaScript stops a caller from handing over an object that still has one, for example by replaying an event it read earlier. `appendEvent` overwrites `occurredAt` unconditionally regardless of what came in, so a stale or forged timestamp never reaches the file.
 

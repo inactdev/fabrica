@@ -4,7 +4,7 @@
 // (CONTRACT rule 4) is issue #9's job; validateDelivery still throws
 // NotBuiltError, and do() never calls it.
 
-import type { Delivery, GateResult } from "./types.ts";
+import type { Delivery, GateResult } from "../../contract/surface.ts";
 
 export function buildDelivery(
   outcome: Delivery["outcome"],
