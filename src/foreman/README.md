@@ -57,9 +57,17 @@ return early" below.
 5. **Checks for an undeclared gate change** (`gate-changes.ts`) — CONTRACT
    rule 9. If the check script changed and nothing declared it, the whole
    attempt is discarded regardless of whether the check went green.
-6. **Writes the delivery** (`delivery.ts`): `delivery.md` for a human to
-   read, and the same structured `Delivery` object on the `"delivered"`
-   event for `deliveryOf` to read back exactly.
+6. **Commits, builds, and validates the delivery**: any changes still
+   sitting uncommitted in the worktree are committed onto the
+   ProductionLine's branch (`commit.ts`) before that worktree is
+   destroyed - see `src/delivery/README.md`'s "files-list-vs-teardown
+   decision" for why. `delivery.ts` builds the `Delivery` object from the
+   branch's own diff, and `src/delivery`'s `validateDelivery` /
+   `validateDeliveryFiles` (CONTRACT rule 4, issue #9) prove it's
+   complete and its `files` field is true before anything downstream
+   sees it. `delivery.md` is written for a human to read; the same
+   structured `Delivery` object lands on the `"delivered"` event for
+   `deliveryOf` to read back exactly.
 7. **Destroys the ProductionLine** in every case — success, failure, or a
    thrown error — via a single `finally`.
 
@@ -241,7 +249,8 @@ doesn't write that event or interpret one; that's left to whoever builds
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Snapshots and compares `check.sh`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. |
-| `files.ts` | Lists files a Worker touched (`git status --porcelain`), for the delivery's `files` field. |
+| `files.ts` | Lists files still uncommitted in a worktree (`git status --porcelain`) - used only to decide whether there's anything left to commit before teardown. |
+| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |

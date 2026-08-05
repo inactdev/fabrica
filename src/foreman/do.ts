@@ -13,8 +13,10 @@ import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
 import { resolveCheckCommand } from "./resolve-check.ts";
 import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
 import { listTouchedFiles } from "./files.ts";
+import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
+import { diffFiles, validateDelivery, validateDeliveryFiles } from "../delivery/index.ts";
 import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with the
@@ -112,14 +114,34 @@ export async function doTask(
       receipts[receipts.length - 1].outcome = "discarded-protected-path";
     }
 
+    // A worker's edits live only as uncommitted changes in this throwaway
+    // worktree, and destroyProductionLine (below, in `finally`) force-
+    // removes it. Left alone, that is PR #43's flagged tension: the
+    // delivery's `files` field could name real work that is about to
+    // vanish, while `branch` points at a branch with nothing ever
+    // committed to it. Committing here, before teardown, resolves it by
+    // construction rather than by validating around it: `files` is then
+    // read back from the branch's own diff (diffFiles), so it and `branch`
+    // describe the same surviving reality, and the Client's `git merge`
+    // has something to merge.
+    if (listTouchedFiles(line.workdir).length > 0) {
+      commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+    }
+
     const delivery = buildDelivery(outcome, {
       taskText,
       attempts: receipts.length,
       lastGate,
       branch: line.branch,
-      files: listTouchedFiles(line.workdir),
+      files: diffFiles(line.project, line.branch),
       declaredGateChanges,
     });
+
+    // Never present a malformed delivery as done (rule 4), and never trust
+    // the files list on faith (rule 4's diff check) — prove the Foreman's
+    // own output before anyone else has to.
+    validateDelivery(delivery);
+    validateDeliveryFiles(delivery, line.project);
 
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
     appendEvent(recordHome, {

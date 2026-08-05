@@ -1,8 +1,7 @@
 // Builds the Delivery block (SPEC.md "The delivery block") and its
-// delivery.md rendering. Structural completeness only — every field the
-// interface requires is always filled — actual field-content *validation*
-// (CONTRACT rule 4) is issue #9's job; validateDelivery still throws
-// NotBuiltError, and do() never calls it.
+// delivery.md rendering. This module only assembles the object — do.ts
+// calls src/delivery's validateDelivery/validateDeliveryFiles on the
+// result before treating it as real (CONTRACT rule 4, issue #9).
 
 import type { Delivery, GateResult } from "../../contract/surface.ts";
 

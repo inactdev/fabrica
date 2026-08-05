@@ -1,7 +1,10 @@
-// Lists the files a worker actually touched inside a ProductionLine, for
-// the delivery's `files` field. `git status --porcelain` in one call
-// covers staged, unstaged, and untracked files — everything a worker
-// could have done to the worktree without committing.
+// Lists the files still uncommitted in a ProductionLine's workdir.
+// `git status --porcelain` in one call covers staged, unstaged, and
+// untracked files — everything a worker could have done to the worktree
+// without committing. do.ts uses this only to decide whether there's
+// anything left to commit before teardown; the delivery's `files` field
+// itself comes from src/delivery's diffFiles, reading the branch's actual
+// commit rather than the worktree (see src/delivery/README.md).
 
 import { execFileSync } from "node:child_process";
 
