@@ -39,8 +39,9 @@ does happens inside it.
   commands, edit anything in there - the folder gets destroyed after,
   and edits to its files never land in the original project. That is a
   guarantee about project state, not process containment: a real
-  adapter's process is not sandboxed to `workdir` (see
-  `adapters/claude-code.md` for what that means in practice).
+  adapter's process is not sandboxed to `workdir` (see the reference CLI
+  adapter's own doc file under `adapters/` for what that means in
+  practice).
 - By the time the returned promise resolves, the brain is expected to
   have actually done the work described in `brief` inside `workdir` -
   not planned it, not described it back. Fabrica checks the result next
