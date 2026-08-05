@@ -2,10 +2,11 @@
 // changed." Reads straight from the project's own git history — never the
 // throwaway ProductionLine workdir — so it works before OR after that
 // worktree is destroyed: `destroyProductionLine` only removes the linked
-// worktree, never the branch or its commits (src/line/teardown.ts). Both
-// the foreman loop (building a delivery's `files` field) and
-// validate-files.ts (re-checking one) call this same function, so there is
-// exactly one definition of "what a branch touched" to ever disagree with.
+// worktree, never the branch or its commits (src/line/teardown.ts). The
+// foreman loop (src/foreman/do.ts) builds a delivery's `files` field from
+// this function, so there is exactly one definition of "what a branch
+// touched" — `files` IS this diff, which is why nothing re-checks it
+// (see README.md's "Why there's no check against the branch's real diff").
 
 import { execFileSync } from "node:child_process";
 import { DeliveryError } from "./errors.ts";
@@ -39,9 +40,8 @@ export function diffFiles(project: string, branch: string, base?: string): strin
   // `base`, when given, is the fork point recorded at the moment the
   // ProductionLine was cut (baseCommitOf above) — immune to the Client's
   // own checkout wandering to another branch mid-task. When omitted, fall
-  // back to merge-base against the project's current HEAD: callers with a
-  // bare delivery and no ProductionLine (the contract rule 4 test) have
-  // nothing to pin from.
+  // back to merge-base against the project's current HEAD, for a caller
+  // with a branch but no ProductionLine to pin a base from.
   try {
     const forkPoint =
       base ??

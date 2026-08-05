@@ -102,7 +102,7 @@ baseCommitOf(line.workdir);
 `git rev-parse HEAD` in a workdir - the foreman loop calls this on a
 fresh ProductionLine's worktree, before any worker attempt runs, to
 record the exact commit the line was cut from, and passes it back in as
-`diffFiles`'s `base` when building and validating the delivery.
+`diffFiles`'s `base` when building the delivery's `files` field.
 
 ## The files-list-vs-teardown decision
 
