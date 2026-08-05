@@ -1,7 +1,7 @@
 // Builds the Delivery block (SPEC.md "The delivery block") and its
 // delivery.md rendering. This module only assembles the object — do.ts
-// calls src/delivery's validateDelivery/validateDeliveryFiles on the
-// result before treating it as real (CONTRACT rule 4, issue #9).
+// calls src/delivery's validateDelivery on the result before treating it
+// as real (CONTRACT rule 4, issue #9).
 
 import type { Delivery, GateResult } from "../../contract/surface.ts";
 

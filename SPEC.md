@@ -188,12 +188,7 @@ legal cap, not an absent one.
     branch:     fabrica/<id> in <project path>
     files:      files touched
 
-A delivery missing any field must not be presented. And one more check
-before presentation (adopted Aug 2026): the tool diffs the worktree
-branch itself and compares reality against the delivery's own claims — a
-delivery whose `files` list disagrees with the actual diff is malformed
-and gets rejected, exactly like a missing field. Claims are verified by
-code, never taken on faith.
+A delivery missing any field must not be presented.
 
 ## The operator's skill
 

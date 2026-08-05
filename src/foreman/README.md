@@ -80,11 +80,15 @@ return early" below.
    "destroyed." `delivery.ts` builds the `Delivery` object from the
    branch's own diff (pinned to the commit the line was cut from, via
    `src/delivery`'s `baseCommitOf`), and `src/delivery`'s
-   `validateDelivery` / `validateDeliveryFiles` (CONTRACT rule 4, issue
-   #9) prove it's complete and its `files` field is true before anything
-   downstream sees it. `delivery.md` is written for a human to read; the
-   same structured `Delivery` object lands on the `"delivered"` event
-   for `deliveryOf` to read back exactly.
+   `validateDelivery` (CONTRACT rule 4, issue #9) proves it's complete
+   before anything downstream sees it - structural only (required
+   fields, right types); it does not separately re-check `files` against
+   the diff, because `files` is already read straight from that diff
+   above, not a claim to weigh against it (see `src/delivery/README.md`'s
+   "Why there's no check against the branch's real diff"). `delivery.md`
+   is written for a human to read; the same structured `Delivery` object
+   lands on the `"delivered"` event for `deliveryOf` to read back
+   exactly.
 7. **Destroys the ProductionLine** in every case — success, failure, or a
    thrown error — via a single `finally`.
 

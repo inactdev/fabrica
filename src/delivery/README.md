@@ -5,10 +5,9 @@ at the end of a task - confidence, what happened, evidence, and so on
 (`contract/surface.ts`'s `Delivery` type). This module is what stands
 between a `Delivery` object and the Client actually seeing it: CONTRACT
 rule 4, "it never guesses silently." A delivery that's missing a required
-field, or whose `files` list doesn't match what its branch actually
-contains, is malformed and must never be presented as done.
+field is malformed and must never be presented as done.
 
-## `validateDelivery(value, project?, base?)`
+## `validateDelivery(value)`
 
 ```ts
 validateDelivery({
@@ -35,41 +34,33 @@ answers - "there were no gaps" - not missing data; only an absent or
 wrong-typed field counts as malformed. Same for `files: []`: a task that
 touched nothing is a real outcome, not an incomplete one.
 
-Called with one argument, this never touches the filesystem or git - it
-works on a delivery that's nothing but a plain object, the same way the
-CONTRACT rule 4 test constructs most of its cases by hand. That is also
-exactly why it *cannot* check whether `files` is actually true on its
-own: proving that needs a real git repository to diff against, which a
-bare object never has.
+Structural only, and deliberately so: it takes `unknown` and never
+touches the filesystem or git, so it works the same way on a delivery
+that's nothing but a plain object (the CONTRACT rule 4 test constructs
+its cases by hand) as on one the Foreman built.
 
-Pass `project` (the second, optional argument - the Client's real
-checkout, same as `validateDeliveryFiles` below takes) and this also
-proves the `files` claim, by delegating to `validateDeliveryFiles`
-internally - there's exactly one place that logic lives, called either
-directly or through here. Omit `project` and that check is skipped
-entirely, not silently passed: nothing about `files` is claimed either
-way. `base`, the third optional argument, is passed straight through to
-`validateDeliveryFiles` - see `diffFiles` below for what it pins.
+### Why there's no check against the branch's real diff
 
-## `validateDeliveryFiles(delivery, project, base?)`
+An earlier version of this function took an optional `project` argument
+and, when given, also diffed `delivery.branch` and rejected a `files`
+list that disagreed with it - "claims verified by code, not taken on
+faith," matching the reasoning `diffFiles` still exists for. Client
+ruling removed it (issue #9 follow-up), because the premise didn't hold
+for `files` specifically: `do.ts` builds `files` *from* the real diff
+(`diffFiles`, below) in the first place - it is ground truth handed to
+the Client, never a Worker's separate claim laundered through a
+`Delivery` object. Comparing a value to the exact diff it was read from
+compares the diff to itself, and cannot fail. Even a hypothetical Worker
+that supplied its own `files` list and got it wrong wouldn't hide
+anything - the Client would still see the real diff either way, since
+that's what `files` *is*. All such a check could ever have revealed is
+"a Worker misreports," a signal about the Worker with no consumer today.
 
-```ts
-validateDeliveryFiles(delivery, "/Users/ari/inkling-umbrella/spending-app");
-```
-
-Diffs `delivery.branch` against its fork point inside `project`'s own git
-history (via `diffFiles`, below) and compares the result to
-`delivery.files`. Any disagreement - a file the delivery claims but the
-branch never touched, or one the branch touched but the delivery left
-out - throws a `DeliveryError` (`code: "files-mismatch"`) naming both
-lists, so the mismatch is visible, not just "invalid."
-
-This is "claims verified by code, not taken on faith": nothing about the
-`files` field is ever trusted just because a `Delivery` object says so.
-
-`project` is the Client's real checkout, not the throwaway ProductionLine
-workdir - see `diffFiles` below for why that distinction is what makes
-this work even after the task's worktree is gone.
+The principle is still sound, and stays applied where a claim actually
+exists to distrust: CONTRACT rule 9 never trusts a Worker's word about
+whether the checks changed - `gate-changes.ts` snapshots the gate before
+and after and compares, rather than reading a declaration. See "Rule 9
+and this module" below.
 
 ## `diffFiles(project, branch, base?)`
 
@@ -83,19 +74,17 @@ changed": `git diff --name-only` between a fork point and `branch`. It
 reads from `project`'s own git history, never a ProductionLine's
 `workdir` - which matters because `destroyProductionLine`
 (`src/line/teardown.ts`) removes the *worktree* but never the branch or
-its commits, so this still works after that worktree is gone. Both
-`src/foreman/do.ts` (building a delivery's `files` field) and
-`validateDeliveryFiles` above (re-checking one) call this same function,
-so there is exactly one definition of "what a branch touched" that the
-two could ever disagree about.
+its commits, so this still works after that worktree is gone.
+`src/foreman/do.ts` is this function's only caller: it's how `files`
+gets built in the first place, not a second check run against it.
 
-The fork point is `base` when given - the foreman loop records it with
-`baseCommitOf` (below) the moment the ProductionLine is cut, so the
-files list can't drift if the Client's own checkout moves to a different
-branch while the task is still running. When `base` is omitted, the fork
-point falls back to `git merge-base` against `project`'s current `HEAD` -
-a caller holding nothing but a bare delivery (the CONTRACT rule 4 test)
-has no ProductionLine to pin a base from.
+The fork point is `base` when given - `do.ts`, this function's one
+caller, always passes it, recorded by `baseCommitOf` (below) the moment
+the ProductionLine is cut, so the files list can't drift if the Client's
+own checkout moves to a different branch while the task is still
+running. `base` stays optional on the function itself, falling back to
+`git merge-base` against `project`'s current `HEAD`, for any future
+caller with a branch but no ProductionLine to pin a base from.
 
 A branch that can't be diffed at all - a fabricated or missing branch
 name, most likely - throws a `DeliveryError` (`code:
@@ -131,14 +120,15 @@ The fix is in `src/foreman/do.ts`, not in this module: it commits
 whatever a Worker left in the worktree, on the ProductionLine's own
 branch, before teardown runs (`commit.ts`'s `commitWorktreeChanges`).
 `files` is then read back from that commit via `diffFiles`, so it and
-`branch` describe the exact same surviving reality - the mismatch this
-module exists to catch stops being possible in the one caller that
-matters, by construction, rather than by validating around it. This
-is a genuine behavior change (a new commit `do()` makes that it didn't
-before), not a validation-only fix, chosen because `src/line/README.md`
-already documented "the branch is what the Client reviews and merges
-by hand" as the design intent - a commit was always the missing half of
-that promise, not a new decision this module invented.
+`branch` describe the exact same surviving reality, by construction -
+which is also why nothing in this module needs to check `files` against
+the diff separately (see "Why there's no check against the branch's
+real diff" above): there's nothing left for a check like that to catch.
+This is a genuine behavior change (a new commit `do()` makes that it
+didn't before), chosen because `src/line/README.md` already documented
+"the branch is what the Client reviews and merges by hand" as the design
+intent - a commit was always the missing half of that promise, not a
+new decision this module invented.
 
 The one outcome handled differently is `discarded-protected-path`: rule
 9 discards the work, so nothing may land on the branch and `files`
@@ -153,8 +143,6 @@ fork point - see "Rule 9 and this module" below.
 
 - **`malformed`** - `validateDelivery` rejected the object; the message
   names the field.
-- **`files-mismatch`** - `validateDeliveryFiles` found the `files` list
-  disagrees with the branch's real diff; the message shows both lists.
 - **`branch-unreadable`** - `diffFiles` couldn't diff the branch at all
   (most likely a fabricated or missing branch name); the message names
   the branch and project and carries git's own stderr.

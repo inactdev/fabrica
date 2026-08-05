@@ -1,20 +1,25 @@
 // CONTRACT rule 4, "it never guesses silently": a Delivery missing any
 // required field is malformed and must never be presented to the Client as
-// done. The required-field checks below work on a bare `unknown` — no
-// filesystem or git access — so they run the same way on a delivery that
-// was only ever typed out by hand (as the contract test does) as on one
-// the Foreman built.
+// done. Structural only — required fields, right types — on a bare
+// `unknown`, so it runs the same way on a delivery that was only ever
+// typed out by hand (as the contract test does) as on one the Foreman
+// built.
 //
-// Checking the `files` field against the branch's real diff needs a live
-// repo to check against, which a bare object never has — so that check
-// only runs when a caller passes `project`, the second, optional
-// argument. Omit it and this function is structure-only; pass it and it
-// also proves the `files` claim (delegating to validate-files.ts's
-// validateDeliveryFiles, so there is exactly one place that logic lives).
+// This used to also verify `files` against the branch's real diff
+// (`validateDeliveryFiles`, since removed). Client ruling: `files` is
+// already computed by do.ts straight from the real diff (`diffFiles`) —
+// it is ground truth handed to the Client, never a Worker's separate
+// claim laundered through a Delivery object. Comparing that value to the
+// diff it was itself read from compares the diff to itself and cannot
+// fail; even a misreporting Worker couldn't hide anything, since the
+// Client sees the real diff either way. "Claims verified by code, never
+// taken on faith" is sound and stays applied where a claim actually
+// exists to distrust: CONTRACT rule 9 never trusts a Worker's word about
+// whether the checks changed — it snapshots the gate before and after and
+// compares (src/foreman/gate-changes.ts).
 
 import type { Delivery } from "../../contract/surface.ts";
 import { DeliveryError } from "./errors.ts";
-import { validateDeliveryFiles } from "./validate-files.ts";
 
 const OUTCOMES: ReadonlySet<Delivery["outcome"]> = new Set([
   "done",
@@ -27,7 +32,7 @@ const OUTCOMES: ReadonlySet<Delivery["outcome"]> = new Set([
 // and type are checked here, not content.
 const REQUIRED_STRING_FIELDS = ["summary", "evidence", "assumptions", "gaps", "branch", "gateChanges"] as const;
 
-export function validateDelivery(value: unknown, project?: string, base?: string): asserts value is Delivery {
+export function validateDelivery(value: unknown): asserts value is Delivery {
   if (typeof value !== "object" || value === null) {
     throw new DeliveryError("malformed", "delivery is not an object");
   }
@@ -52,9 +57,5 @@ export function validateDelivery(value: unknown, project?: string, base?: string
 
   if (!Array.isArray(d.files) || d.files.some((file) => typeof file !== "string")) {
     throw new DeliveryError("malformed", 'delivery is missing required field "files"');
-  }
-
-  if (project !== undefined) {
-    validateDeliveryFiles(value as Delivery, project, base);
   }
 }

@@ -189,11 +189,11 @@ export async function doTask(
       discardedPatchSaved,
     });
 
-    // Never present a malformed delivery as done (rule 4), and never trust
-    // the files list on faith (rule 4's diff check, run because `project`
-    // is passed) — prove the Foreman's own output before anyone else has
-    // to.
-    validateDelivery(delivery, line.project, baseCommit);
+    // Never present a malformed delivery as done (rule 4) — prove the
+    // Foreman's own output before anyone else has to. `files` above is
+    // already read straight from the real diff, not a separate claim, so
+    // there is nothing left to verify it against (src/delivery/README.md).
+    validateDelivery(delivery);
 
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
     appendEvent(recordHome, {
