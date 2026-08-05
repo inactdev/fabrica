@@ -8,13 +8,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFabrica } from "../src/index.ts";
+import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
 test("rule 10: a task beyond the daily cap is refused, numbers shown", async () => {
   const project = makeFixtureRepo("exit 0");
-  const foreman = createFabrica({
+  const foreman = createForeman({
     recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")),
     caps: { perDayUsd: 0 },
   });
@@ -28,7 +28,7 @@ test("rule 10: a task beyond the daily cap is refused, numbers shown", async () 
 
 test("rule 10: every receipt carries the money field", async () => {
   const project = makeFixtureRepo("exit 0");
-  const foreman = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
 
   const task = await foreman.do("small change", { project, brain: fakeBrain() });
   const receipts = await foreman.receiptsOf(task.id);

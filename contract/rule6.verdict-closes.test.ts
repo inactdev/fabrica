@@ -7,13 +7,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFabrica } from "../src/index.ts";
+import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
 test("rule 6: a delivered task stays open until a verdict is recorded", async () => {
   const project = makeFixtureRepo("exit 0");
-  const foreman = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
 
   const task = await foreman.do("small change", { project, brain: fakeBrain() });
 
@@ -32,7 +32,7 @@ test("rule 6: a delivered task stays open until a verdict is recorded", async ()
 
 test("rule 6: the verdict lands on the record", async () => {
   const project = makeFixtureRepo("exit 0");
-  const foreman = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
 
   const task = await foreman.do("small change", { project, brain: fakeBrain() });
   await foreman.verdict(task.id, "fix", "right direction, wrong button spot");

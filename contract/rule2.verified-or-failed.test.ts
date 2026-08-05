@@ -7,14 +7,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFabrica } from "../src/index.ts";
+import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
 test("rule 2: a red check can only ever produce a failure report", async () => {
   const project = makeFixtureRepo("exit 1"); // this project's check ALWAYS fails
 
-  const foreman = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
   const task = await foreman.do("any change at all", { project, brain: fakeBrain() });
 
   const delivery = await foreman.deliveryOf(task.id);
@@ -26,7 +26,7 @@ test("rule 2: a red check can only ever produce a failure report", async () => {
 test("rule 2: a green gate is recorded before anything is called done", async () => {
   const project = makeFixtureRepo("exit 0");
 
-  const foreman = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
   const task = await foreman.do("any change at all", { project, brain: fakeBrain() });
 
   const receipts = await foreman.receiptsOf(task.id);

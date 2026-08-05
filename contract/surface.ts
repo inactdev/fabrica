@@ -135,14 +135,7 @@ export interface FabricaEvent {
   details?: unknown;
 }
 
-/**
- * The whole factory's client-facing promise (LANGUAGE.md's "Factory" /
- * Fabrica, the name). Foreman is only the delegator inside — it queues,
- * routes, and counts, but never thinks — and it is src/'s job (not
- * contract's) to wire one of those together and hand back something that
- * satisfies this interface. See src/index.ts's createFabrica.
- */
-export interface Fabrica {
+export interface Foreman {
   do(
     taskText: string,
     opts: { project: string; attempts?: number; brain?: Brain }

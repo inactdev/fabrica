@@ -4,9 +4,9 @@
 // directly — so internal restructuring never touches the ratified
 // contract tests' imports.
 
-export { createFabrica } from "./foreman/index.ts";
-export type { FabricaOptions } from "./foreman/index.ts";
-export type { Fabrica } from "../contract/surface.ts";
+export { createForeman } from "./foreman/index.ts";
+export type { ForemanOptions } from "./foreman/index.ts";
+export type { Foreman } from "../contract/surface.ts";
 export { ForemanError } from "./foreman/index.ts";
 export type { ForemanErrorCode } from "./foreman/index.ts";
 export { DEFAULT_ATTEMPTS } from "./foreman/index.ts";

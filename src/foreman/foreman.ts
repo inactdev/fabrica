@@ -1,10 +1,8 @@
-// Assembles the Fabrica: the object src/index.ts's createFabrica hands
-// back once every seam is wired, satisfying contract/surface.ts's Fabrica
-// interface. This module (the Foreman) is only the delegator inside it —
-// it queues, routes, and counts, per LANGUAGE.md — but the object it
-// builds here is the whole factory's public promise, so its shape is
-// imported as a type from contract/surface.ts rather than declared again
-// here (issue #45).
+// Assembles the Foreman: the object src/index.ts's createForeman hands
+// back once every seam is wired, satisfying contract/surface.ts's Foreman
+// interface — declared once there and imported here as a type (issue
+// #45) rather than redeclared, since `import type` is erased at compile
+// time and creates no runtime dependency on contract/.
 
 import { recordPath as eventsPath } from "../record/index.ts";
 import { doTask } from "./do.ts";
@@ -15,17 +13,17 @@ import {
   receiptsOf as lookupReceipts,
   statusOf as lookupStatus,
 } from "./queries.ts";
-import type { Fabrica } from "../../contract/surface.ts";
+import type { Foreman } from "../../contract/surface.ts";
 
-export interface FabricaOptions {
+export interface ForemanOptions {
   recordHome: string;
   /** Rule 10: hard dollar limits. Accepted for shape compatibility with
-   * contract/surface.ts's Fabrica; not enforced here — that's issue #11's
+   * contract/surface.ts's Foreman; not enforced here — that's issue #11's
    * job, not this loop's. */
   caps?: { perTaskUsd?: number; perDayUsd?: number };
 }
 
-export function createFabrica(opts: FabricaOptions): Fabrica {
+export function createForeman(opts: ForemanOptions): Foreman {
   const { recordHome } = opts;
 
   return {

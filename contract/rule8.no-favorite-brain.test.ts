@@ -9,7 +9,7 @@ import { mkdtempSync, existsSync, readdirSync, readFileSync, statSync } from "no
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createFabrica } from "../src/index.ts";
+import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
@@ -17,7 +17,7 @@ test("rule 8: the whole lifecycle runs on a completely fake brain", async () => 
   const project = makeFixtureRepo("exit 0");
   const brain = fakeBrain();
 
-  const foreman = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
   const task = await foreman.do("small change", { project, brain });
 
   assert.ok(brain.calls >= 1, "the plugged-in brain was never used");

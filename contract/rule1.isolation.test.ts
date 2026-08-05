@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFabrica } from "../src/index.ts";
+import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo, fingerprint } from "./helpers/fixture.ts";
 
@@ -15,7 +15,7 @@ test("rule 1: the Client's checkout is untouched, byte for byte", async () => {
   const project = makeFixtureRepo("exit 0");
   const before = fingerprint(project);
 
-  const foreman = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
   await foreman.do("append one line to app.txt", { project, brain: fakeBrain() });
 
   const after = fingerprint(project);
