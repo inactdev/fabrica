@@ -16,8 +16,8 @@ for (const attempts of [1, 3, 5]) {
     const project = makeFixtureRepo("exit 0");
     const brain = fakeBrain();
 
-    const fabrica = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
-    await fabrica.do("same task, counted attempts", { project, attempts, brain });
+    const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+    await foreman.do("same task, counted attempts", { project, attempts, brain });
 
     assert.equal(brain.calls, attempts, `asked for ${attempts}, worker ran ${brain.calls} times — rule 3 broken`);
   });

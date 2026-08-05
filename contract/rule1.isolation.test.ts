@@ -15,8 +15,8 @@ test("rule 1: the Client's checkout is untouched, byte for byte", async () => {
   const project = makeFixtureRepo("exit 0");
   const before = fingerprint(project);
 
-  const fabrica = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
-  await fabrica.do("append one line to app.txt", { project, brain: fakeBrain() });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  await foreman.do("append one line to app.txt", { project, brain: fakeBrain() });
 
   const after = fingerprint(project);
   assert.equal(after, before, "original checkout changed — rule 1 broken");

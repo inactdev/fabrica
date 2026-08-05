@@ -75,7 +75,7 @@ that project's configured check command (see below) — it never treats
 
 ### `attempts`
 
-Example: `fabrica.do("fix the flaky test", { project, attempts: 3, brain })`.
+Example: `foreman.do("fix the flaky test", { project, attempts: 3, brain })`.
 
 Omit it and the default is 2 — SPEC.md's step 5: one attempt, and on red
 one fix pass with the failure output, then re-check. Still red after
@@ -159,7 +159,7 @@ the transcript. This module's `do()` does not do that — it runs the
 whole loop to completion before resolving.
 
 That's deliberate, not a shortcut taken by accident: every contract test
-calls `await fabrica.do(...)` and immediately inspects `deliveryOf` and
+calls `await foreman.do(...)` and immediately inspects `deliveryOf` and
 `receiptsOf`, which only makes sense if the delivery already exists by
 the time the promise resolves. "Detached" is a property of the CLI a
 Client types at — spawning the loop in a background process and

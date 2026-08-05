@@ -17,11 +17,11 @@ test("rule 8: the whole lifecycle runs on a completely fake brain", async () => 
   const project = makeFixtureRepo("exit 0");
   const brain = fakeBrain();
 
-  const fabrica = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
-  const task = await fabrica.do("small change", { project, brain });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const task = await foreman.do("small change", { project, brain });
 
   assert.ok(brain.calls >= 1, "the plugged-in brain was never used");
-  assert.ok(await fabrica.deliveryOf(task.id), "no delivery from a fake-brained run");
+  assert.ok(await foreman.deliveryOf(task.id), "no delivery from a fake-brained run");
 });
 
 test("rule 8: no brain-specific code outside the adapter directory", () => {

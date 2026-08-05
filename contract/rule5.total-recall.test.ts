@@ -14,10 +14,10 @@ import { makeFixtureRepo } from "./helpers/fixture.ts";
 
 test("rule 5: every lifecycle step is on the record, in order", async () => {
   const project = makeFixtureRepo("exit 0");
-  const fabrica = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
 
-  const task = await fabrica.do("small change", { project, brain: fakeBrain() });
-  const events = (await fabrica.events(task.id)).map((e) => e.name);
+  const task = await foreman.do("small change", { project, brain: fakeBrain() });
+  const events = (await foreman.events(task.id)).map((e) => e.name);
 
   const expectedOrder: FabricaEventName[] = ["task-received", "work-started", "check-run", "delivered"];
   let cursor = -1;
@@ -30,13 +30,13 @@ test("rule 5: every lifecycle step is on the record, in order", async () => {
 
 test("rule 5: the record is append-only across tasks", async () => {
   const project = makeFixtureRepo("exit 0");
-  const fabrica = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
 
-  await fabrica.do("first task", { project, brain: fakeBrain() });
-  const firstSnapshot = readFileSync(fabrica.recordPath(), "utf8");
+  await foreman.do("first task", { project, brain: fakeBrain() });
+  const firstSnapshot = readFileSync(foreman.recordPath(), "utf8");
 
-  await fabrica.do("second task", { project, brain: fakeBrain() });
-  const secondSnapshot = readFileSync(fabrica.recordPath(), "utf8");
+  await foreman.do("second task", { project, brain: fakeBrain() });
+  const secondSnapshot = readFileSync(foreman.recordPath(), "utf8");
 
   assert.ok(
     secondSnapshot.startsWith(firstSnapshot),
