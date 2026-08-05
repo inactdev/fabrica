@@ -26,13 +26,52 @@ export async function runContained(
     );
   }
 
+  // Resolved for the same reason workdir is: a read-only mount has to
+  // land at its real, physical path (macOS's /var -> /private/var
+  // symlink is exactly the trap here - a worktree's .git pointer file
+  // records the physical path, so mounting the unresolved one leaves
+  // git looking in a place nothing is actually mounted).
+  const readOnlyMounts = (opts.readOnlyMounts ?? []).map((path) => {
+    try {
+      return realpathSync(path);
+    } catch (err) {
+      throw new ContainmentError(
+        "invalid-path",
+        `read-only mount "${path}" does not resolve to a real, existing path: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  });
+
+  let homeDir: string | undefined;
+  if (opts.homeDir !== undefined) {
+    try {
+      homeDir = realpathSync(opts.homeDir);
+    } catch (err) {
+      throw new ContainmentError(
+        "invalid-path",
+        `homeDir "${opts.homeDir}" does not resolve to a real, existing path: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   const user =
     typeof process.getuid === "function" && typeof process.getgid === "function"
       ? `${process.getuid()}:${process.getgid()}`
       : undefined;
 
   const dockerArgs = [
-    ...buildDockerArgs({ workdir, network: opts.network, env: opts.env, image: opts.image, user }),
+    ...buildDockerArgs({
+      workdir,
+      network: opts.network,
+      env: opts.env,
+      image: opts.image,
+      user,
+      readOnlyMounts,
+      memory: opts.memory,
+      cpus: opts.cpus,
+      pidsLimit: opts.pidsLimit,
+      homeDir,
+    }),
     command,
     ...args,
   ];

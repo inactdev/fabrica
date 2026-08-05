@@ -90,6 +90,31 @@ a description of a mechanism - it's real and verified on the real
 machine; see that README for what was tried before (macOS's
 `sandbox-exec`, replaced), what broke, and what's actually proven.
 
+Two things a real coding-agent Worker needs would otherwise break under
+that same containment, both closed:
+
+- **Git.** `workdir` is a git worktree, whose `.git` names the real
+  project's shared history by an absolute host path outside `workdir` -
+  mounting only `workdir` leaves git unable to find its own repository
+  at all. `work()` resolves that real path itself
+  (`resolveCommonGitDir`, `src/line/worktree-git.ts`) and mounts it
+  back in, read-only. Verified live: `git status`/`git log` work
+  normally; `git commit` fails with "Read-only file system" - a
+  deliberate result, not a bug, since it structurally prevents a
+  contained Worker from committing its own work at all (merges and
+  commits happen outside the Worker) - see
+  `../../containment/README.md`'s "Git under containment" for the full
+  reasoning and the design that was tried and rejected first.
+- **Warm sessions.** Every call is a fresh, throwaway container, so
+  without something persisted across calls, a second attempt's
+  `--resume` would find no session at all. `work()` derives a per-task
+  home directory from `workdir` (`` `${workdir}.fabrica-session` ``,
+  created on demand) and mounts it as the container's `$HOME` on every
+  call for that `workdir` - see `../../containment/README.md`'s
+  "Session persistence" for what's verified and the one honest gap
+  (nothing yet deletes that directory when the task's line is torn
+  down).
+
 One real thing still doesn't work end to end: authentication. The
 host's installed `claude` binary is a native macOS executable and can
 never run inside a Linux container - verified via `file` on it. What
@@ -143,6 +168,14 @@ use: one task gets one `ProductionLine` worktree for its whole life
 runs in the same `workdir` by construction. It would only bite a caller
 that tried to resume a session against a workdir other than the one
 that started it - not something this adapter does.
+
+That verification predates containment, where a second constraint joins
+it: the session data itself lives under `$HOME`, and every contained
+call is its own fresh, throwaway container. "Process containment" above
+covers the fix - a per-`workdir` home directory, mounted on every call
+for that task - without which this whole section would describe
+behavior that stopped being true the moment `work()` started running
+through Docker.
 
 ## `opts.reasoningEffort` and `--effort`
 
@@ -223,12 +256,13 @@ doesn't currently have - not from guessing.
 Every failure this file raises is a `ClaudeCodeError` with a `code`:
 
 - **`spawn-failed`** - `../../containment/`'s `runContained` threw a
-  `ContainmentError` (`docker` itself couldn't be launched, or `workdir`
-  doesn't resolve to a real path) - this adapter catches that one type
-  and re-wraps it rather than confusing it with a tool-level failure. A
-  wrong `binPath` that simply doesn't exist *inside* the container is
-  different: Docker starts fine and the command fails with a normal
-  non-zero exit, which surfaces as `cli-error` below, not this.
+  `ContainmentError` (`docker` itself couldn't be launched, or `workdir`/
+  the resolved git dir/the session `homeDir` doesn't resolve to a real
+  path) - this adapter catches that one type and re-wraps it rather
+  than confusing it with a tool-level failure. A wrong `binPath` that
+  simply doesn't exist *inside* the container is different: Docker
+  starts fine and the command fails with a normal non-zero exit, which
+  surfaces as `cli-error` below, not this.
 - **`cli-error`** - the binary ran but the call failed. Two real shapes
   were verified, and this adapter reads whichever one shows up:
   - Exit code 1, **no** JSON on stdout at all, a one-line plain-text

@@ -27,6 +27,39 @@ export interface RunContainedOptions {
    * can run in a small stock image; an adapter whose command is a
    * specific tool needs an image that actually has that tool installed. */
   image: string;
+  /** Extra host paths made visible read-only, each at its own resolved
+   * absolute path rather than remapped under `/workdir`. Exists for the
+   * one case that needs it: a ProductionLine workdir is a git worktree,
+   * whose `.git` pointer file names the real project's shared `.git` by
+   * absolute host path - mounting that path back in, read-only, is what
+   * lets git work inside the container at all (`git status`, `git log`,
+   * `git diff`), without giving the contained process anywhere to write
+   * a commit (verified live: `git commit` fails with "Read-only file
+   * system" - a feature, not a limitation, since merges and commits are
+   * meant to happen outside the Worker). Omit when the command needs
+   * nothing outside `workdir`. */
+  readOnlyMounts?: string[];
+  /** Memory limit passed to `docker run --memory` (Docker's own syntax,
+   * e.g. `"2g"`). Defaults to `DEFAULT_MEMORY` so a runaway process hits
+   * a wall instead of the host machine. */
+  memory?: string;
+  /** CPU limit passed to `docker run --cpus`. Defaults to
+   * `DEFAULT_CPUS`, for the same reason `memory` has a default. */
+  cpus?: string;
+  /** Process/thread count limit passed to `docker run --pids-limit`.
+   * Defaults to `DEFAULT_PIDS_LIMIT` - stops a fork bomb outright rather
+   * than merely slowing one down. */
+  pidsLimit?: number;
+  /** A host path mounted read-write as the container's `HOME` (at a
+   * fixed internal path, with `HOME` set to match) - persists whatever a
+   * tool writes there across multiple calls that share the same
+   * `homeDir`, while staying isolated from the real host's home
+   * directory and from other tasks' own `homeDir`s. Necessary for any
+   * `--user`-run container too: verified live that a UID with no
+   * matching `/etc/passwd` entry (the normal case here) otherwise
+   * resolves `HOME` to `/`, which is not writable and not a home
+   * directory at all. Omit for no persisted home - `HOME` stays `/`. */
+  homeDir?: string;
 }
 
 export interface ContainedRunResult {

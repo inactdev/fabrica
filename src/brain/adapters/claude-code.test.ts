@@ -213,6 +213,26 @@ test("claudeCodeAdapter confines the spawned process to workdir", async (t) => {
   assert.equal(result.transcript[0].text, "READ_BLOCKED");
 });
 
+// Proves the session-persistence fix (issue #44 review, ask-user finding
+// "session-resume-broken"): a warm --resume needs the CLI's own session
+// state to survive between attempts, even though every runContained
+// call is its own fresh, throwaway container. work() derives a per-task
+// session directory from workdir alone and mounts it as $HOME across
+// calls - a second call for the SAME workdir must see what the first
+// one left there.
+test("claudeCodeAdapter persists $HOME across separate work() calls for the same workdir", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+
+  const workdir = makeFakeCliWorkdir();
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
+
+  const first = await brain.work("SESSION_MARKER", workdir);
+  assert.equal(first.transcript[0].text, "SEEN:", "first call must see no prior session state");
+
+  const second = await brain.work("SESSION_MARKER", workdir);
+  assert.equal(second.transcript[0].text, "SEEN:call;", "second call must see the first call's own session state");
+});
+
 // Capability spike (issue #6, updated for issue #44): the tests above
 // prove the adapter's own logic against a controllable fake; this test
 // proves the real thing - now necessarily the containerized real CLI,

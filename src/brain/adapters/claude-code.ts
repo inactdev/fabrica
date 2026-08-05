@@ -7,8 +7,10 @@
 // real-binary test for the live proof and claude-code.md for what
 // each discovery means.
 
+import { mkdirSync } from "node:fs";
 import type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
+import { LineError, resolveCommonGitDir } from "../../line/index.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
 
@@ -171,18 +173,47 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions): Promise<BrainWorkResult> {
       const args = buildArgs(brief, opts, workOpts);
 
+      // workdir is a ProductionLine worktree, so git needs its real
+      // project's shared .git mounted back in (read-only) to work at
+      // all inside the container - see src/line/worktree-git.ts and
+      // this file's "Process containment" section for why. Falls back
+      // to no git access when workdir isn't a worktree at all (test
+      // fixtures that skip git entirely), rather than failing a call
+      // over a directory shape only real ProductionLine workdirs have.
+      let readOnlyMounts: string[] | undefined;
+      try {
+        readOnlyMounts = [resolveCommonGitDir(workdir)];
+      } catch (err) {
+        if (!(err instanceof LineError)) throw err;
+      }
+
+      // A sibling of workdir, named from workdir's own path rather than
+      // assumed to sit under some recordHome/tasks/<id>/ layout, so this
+      // needs nothing beyond what work() already has. Persists this
+      // task's $HOME (session state under it, for a warm --resume)
+      // across every runContained call for this same task, without
+      // which a fresh --rm container each call would never find the
+      // last one's session (SPEC.md: a retry is a correction into the
+      // same session, never a cold restart) - see this file's "Process
+      // containment" section.
+      const sessionDir = `${workdir}.fabrica-session`;
+      mkdirSync(sessionDir, { recursive: true });
+
       let stdout: string;
       let stderr: string;
       let exitCode: number | null;
       try {
         // Network is deliberately allowed - not left open by accident -
         // because the CLI has to reach its own API to do anything at
-        // all; workdir is what's actually confined.
+        // all; workdir is what's actually confined, plus read-only git
+        // access to the real project's history via readOnlyMounts.
         ({ stdout, stderr, exitCode } = await runContained(bin, args, {
           workdir,
           network: "allowed",
           image,
           env: opts.env,
+          readOnlyMounts,
+          homeDir: sessionDir,
         }));
       } catch (err) {
         if (err instanceof ContainmentError) {

@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -146,4 +146,79 @@ test("runContained: the host's environment never leaks in - only the explicit en
   } finally {
     delete process.env.FABRICA_TEST_WOULD_BE_LEAKED;
   }
+});
+
+test("runContained: readOnlyMounts are visible read-only at their own path, not remapped under /workdir", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+  // Resolved, same reason workdir is elsewhere in this file: the mount
+  // target is this exact path, not a fixed rewrite like /workdir is, so
+  // an unresolved macOS /var -> /private/var path here would have the
+  // command look in a different place than what actually got mounted.
+  const readOnlyDir = realpathSync(mkdtempSync(join(tmpdir(), "fabrica-containment-readonly-")));
+  writeFileSync(join(readOnlyDir, "shared.txt"), "read me\n");
+
+  const read = await runContained("cat", [join(readOnlyDir, "shared.txt")], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    readOnlyMounts: [readOnlyDir],
+  });
+  assert.equal(read.exitCode, 0);
+  assert.equal(read.stdout, "read me\n");
+
+  const write = await runContained("sh", ["-c", `echo no > ${join(readOnlyDir, "hack.txt")}`], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    readOnlyMounts: [readOnlyDir],
+  });
+  assert.notEqual(write.exitCode, 0, "a readOnlyMounts path must not be writable");
+  assert.equal(existsSync(join(readOnlyDir, "hack.txt")), false);
+});
+
+test("runContained: resource caps are genuinely enforced, not just documented", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+
+  const memory = await runContained(
+    "sh",
+    ["-c", "cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes"],
+    { workdir, network: "denied", image: IMAGE, memory: "256m" }
+  );
+  assert.equal(memory.exitCode, 0);
+  assert.equal(memory.stdout.trim(), String(256 * 1024 * 1024), "the cgroup must reflect the requested memory cap");
+
+  const forkBomb = await runContained(
+    "sh",
+    ["-c", "for i in $(seq 1 20); do sleep 5 & done; wait"],
+    { workdir, network: "denied", image: IMAGE, pidsLimit: 5 }
+  );
+  assert.notEqual(forkBomb.exitCode, 0, "forking past pidsLimit must fail, not silently succeed");
+  assert.match(forkBomb.stderr, /can't fork|resource temporarily unavailable/i);
+});
+
+test("runContained: homeDir persists across separate calls, and is writable under --user", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+  const homeDir = mkdtempSync(join(tmpdir(), "fabrica-containment-home-"));
+
+  const write = await runContained("sh", ["-c", 'echo "warm state" > "$HOME/state.txt"'], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    homeDir,
+  });
+  assert.equal(write.exitCode, 0);
+
+  // A second, entirely separate --rm container - the whole point of
+  // homeDir is that state survives even though nothing else does.
+  const read = await runContained("sh", ["-c", 'cat "$HOME/state.txt"'], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    homeDir,
+  });
+  assert.equal(read.exitCode, 0);
+  assert.equal(read.stdout, "warm state\n");
 });

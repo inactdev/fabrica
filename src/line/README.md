@@ -181,3 +181,35 @@ exists on disk but was never a registered worktree — the spoofed and
 tampered cases above — still throws `unsafe-teardown` exactly as before;
 only a path that legitimately once was this line and now isn't anywhere
 reads as "already destroyed."
+
+## `resolveCommonGitDir(workdir)`
+
+Finds the real project's shared `.git` — the object database, refs, and
+config every worktree of that project points back to — from a
+`ProductionLine` workdir alone, no `ProductionLine` object needed. Built
+for issue #44 (containment): `git worktree add` always leaves
+`<workdir>/.git` as a one-line pointer file, `gitdir: <project>/.git/
+worktrees/<taskId>` — a real, absolute host path outside `workdir`
+entirely. This function reads that pointer, then reads *its* own
+`commondir` file (a path relative to the worktree-internal directory) to
+resolve the actual shared `.git`, and returns it `realpathSync`'d.
+
+The reason this takes `workdir` alone, not a `ProductionLine`: it exists
+to be called from the reference CLI adapter's own `work(brief, workdir,
+opts)` (`src/brain/adapters/`), and `contract/surface.ts`'s `Brain`
+interface has no room to also pass `project` or `taskId` through —
+`workdir`'s own pointer file already names them, so nothing else is
+needed.
+
+Throws `LineError("not-a-worktree")` when `<workdir>/.git` isn't a
+worktree pointer file at all (a plain directory with no `.git`, or one
+that's already a real `.git` directory rather than a worktree's) —
+callers that don't know in advance whether `workdir` is a genuine
+`ProductionLine` worktree should catch this specific code rather than
+assume it always resolves.
+
+What it's *for*: mounting the result read-only into a container lets
+git work at all inside one, without exposing write access to the
+Client's real repository — see `../containment/README.md`'s "Git under
+containment" for what that unlocks and why a commit attempt still fails
+(deliberately) even with this mounted in.
