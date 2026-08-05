@@ -1,5 +1,5 @@
 // Fabrica's single public entry point (issue #45). contract/*.test.ts, and
-// any future CLI (issue #47), import the real implementation from here
+// the CLI (src/cli/, issue #47), import the real implementation from here
 // rather than reaching into src/foreman or any other internal module
 // directly — so internal restructuring never touches the ratified
 // contract tests' imports.
