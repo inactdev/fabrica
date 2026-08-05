@@ -53,12 +53,12 @@ switch (brief) {
   }
   case "FAIL_EXIT_NONZERO_NO_JSON": {
     process.stderr.write("No conversation found with session ID: bogus\n");
-    process.exit(1);
+    process.exitCode = 1;
     break;
   }
   case "FAIL_EXIT_NONZERO_WITH_JSON": {
     line(resultLine({ is_error: true, api_error_status: 404, result: "model not found", total_cost_usd: 0 }));
-    process.exit(1);
+    process.exitCode = 1;
     break;
   }
   case "SUCCESS_NO_RESULT_LINE": {
