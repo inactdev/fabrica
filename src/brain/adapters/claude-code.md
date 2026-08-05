@@ -57,10 +57,17 @@ still work; nothing that changes `workdir` does.
 That would make the adapter unable to do the one thing `Brain.work()`
 promises: that the work is genuinely done inside `workdir` by the time
 it resolves. `--permission-mode bypassPermissions` removes the
-approval step entirely, which is safe here specifically because
-`workdir` is always a throwaway `ProductionLine` worktree, never the
-Client's real checkout (CONTRACT rule 1, `src/line/README.md`) - there
-is nothing in it that matters if the worker makes a mess.
+approval step entirely - and the cost of that must be stated plainly:
+for the duration of a call, the worker has the full access of the OS
+account this adapter runs as. `Bash`/`Write`/`Edit` are **not** scoped
+to `workdir`. The `ProductionLine` worktree protects the Client's real
+project files from modification (CONTRACT rule 1,
+`src/line/README.md`), but it provides no process-level containment - a
+worker could in principle reach the real checkout, the home directory,
+or the network. This is an accepted, documented v1 risk: tolerable
+right now only because runs are small and attended, and real
+containment is tracked as separate follow-up work that must land before
+anything runs unattended.
 
 ### Why `--output-format stream-json --verbose`, not `json`
 

@@ -36,8 +36,11 @@ does happens inside it.
   actually receives.
 - `workdir` is a throwaway copy of the project, never the Client's real
   checkout (CONTRACT rule 1). The brain is free to make a mess, run
-  commands, edit anything in there - the folder gets destroyed after, and
-  nothing it does can reach the original.
+  commands, edit anything in there - the folder gets destroyed after,
+  and edits to its files never land in the original project. That is a
+  guarantee about project state, not process containment: a real
+  adapter's process is not sandboxed to `workdir` (see
+  `adapters/claude-code.md` for what that means in practice).
 - By the time the returned promise resolves, the brain is expected to
   have actually done the work described in `brief` inside `workdir` -
   not planned it, not described it back. Fabrica checks the result next

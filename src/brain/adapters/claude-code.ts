@@ -71,12 +71,18 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
     "--output-format",
     "stream-json",
     "--verbose",
-    // workdir is always a throwaway ProductionLine worktree, never the
-    // Client's real checkout (CONTRACT rule 1) - so it's always safe to
-    // let the worker act in it without a human approving each write.
     // Without this, every Write/Edit/Bash mutation is silently
     // permission-denied in non-interactive mode (verified: there is no
-    // TTY to answer the prompt, so the tool can only refuse).
+    // TTY to answer the prompt, so the tool can only refuse). The cost:
+    // for the duration of a call the worker has the full access of the
+    // OS account this process runs as - Bash/Write/Edit are NOT scoped
+    // to workdir. The ProductionLine worktree protects the Client's
+    // real project files from modification (CONTRACT rule 1), but it
+    // provides no process-level containment - a worker could in
+    // principle reach the real checkout, the home directory, or the
+    // network. Accepted, documented v1 risk: tolerable only because
+    // runs are small and attended; real containment is separate
+    // follow-up work that must land before anything runs unattended.
     "--permission-mode",
     "bypassPermissions",
   ];
