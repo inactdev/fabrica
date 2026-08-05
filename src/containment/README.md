@@ -137,10 +137,13 @@ const result = await runContained("echo", ["hi"], {
   is "not the network unless deliberately allowed," and a required
   field is what makes every call site actually state that choice.
 - **`env`** - the exact environment variables the contained process
-  receives, as `-e KEY=VALUE` flags. Omit it and the container gets only
-  what its own image defines - Docker's own default behavior already
-  matches "the worker has what it needs," not the caller's whole
-  environment.
+  receives. Passed as name-only `-e KEY` flags, with the values riding
+  docker's own process environment instead of its command line (verified
+  live: docker resolves a bare `-e KEY` from its own environment) - so a
+  value, e.g. a credential, never appears in host `ps` listings of the
+  docker command. Omit it and the container gets only what its own image
+  defines - Docker's own default behavior already matches "the worker
+  has what it needs," not the caller's whole environment.
 - **`image`** - the Docker image the command runs inside, required with
   no default for the same reason `network` has none: a generic command
   (`sh`, `cat`) can run in any small stock image, but a caller whose
@@ -238,7 +241,10 @@ exists. A real, non-urgent, documented cleanup gap - not a silent one.
 ## Errors: `ContainmentError`
 
 - **`invalid-path`** - `workdir`, a `readOnlyMounts` entry, or `homeDir`
-  doesn't resolve to a real, existing path.
+  doesn't resolve to a real, existing path - or resolves to one
+  containing a comma, which docker's `--mount` flag cannot represent
+  (refused here with a clear message rather than surfacing docker's own
+  confusing parse error).
 - **`spawn-failed`** - `docker` itself couldn't be launched (not
   installed, daemon down in a way that prevents even starting the CLI).
   Distinct from the *contained command* failing to run, or the daemon

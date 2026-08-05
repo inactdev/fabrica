@@ -203,8 +203,10 @@ needed.
 
 Throws `LineError("not-a-worktree")` when `<workdir>/.git` isn't a
 worktree pointer file at all (a plain directory with no `.git`, or one
-that's already a real `.git` directory rather than a worktree's) —
-callers that don't know in advance whether `workdir` is a genuine
+that's already a real `.git` directory rather than a worktree's), and
+also when the pointer chain is broken - the pointer parses but the
+shared `.git` it ultimately names no longer exists on disk. Callers
+that don't know in advance whether `workdir` is a genuine
 `ProductionLine` worktree should catch this specific code rather than
 assume it always resolves.
 

@@ -76,7 +76,7 @@ adapters"):
 - **pi** - the fourth candidate named in issue #23.
 
 None of these has a written adapter yet. Before any of them gets one,
-its adapter has to nail down three things that nothing else in Fabrica
+its adapter has to nail down four things that nothing else in Fabrica
 knows, and issue #6's rule for finding them out is not optional:
 *"discover exact flags and auth behavior on the real machine, never
 guess."* Concretely, for each candidate:
@@ -94,16 +94,25 @@ guess."* Concretely, for each candidate:
    pass on the next invocation; others resume from a local state
    directory instead. Whichever it is, that's what `opts.session` and
    the returned `session` map onto.
+4. **How it runs contained.** An adapter's tool runs inside a Docker
+   container via `../../containment/` (see `../README.md` on why each
+   adapter wires that in itself), so the candidate needs a container
+   image carrying the tool's own Linux build, and a headless way for
+   its credential to reach a fresh container. See
+   [`claude-code.md`](./claude-code.md), "Process containment," for how
+   the reference adapter answers both.
 
 None of that is guessed here - it's verified against each real binary
 when that candidate's adapter is actually written.
 
 ## A sketch of the shape
 
-Illustrative only: a generic CLI adapter, showing where the three
-answers above plug in. The tool name and flags are placeholders, not a
-real command - see the candidates above for what has to be verified
-before this becomes real code.
+Illustrative only: a generic CLI adapter, showing where the first three
+answers above plug in (the fourth, containment, lives inside what
+`runNonInteractively` would really be - a `runContained` call; see the
+reference adapter for the real shape). The tool name and flags are
+placeholders, not a real command - see the candidates above for what
+has to be verified before this becomes real code.
 
 ```ts
 import type { Brain } from "../types.ts";
