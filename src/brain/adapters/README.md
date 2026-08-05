@@ -53,8 +53,9 @@ This is not a menu to build all at once. ROADMAP.md is explicit: brains
 come from the Client's existing subscriptions first, through their
 officially approved harnesses, and per-token API pipes stay closed
 unless he deliberately opens one behind a cap that can be zero. So the
-CLI family comes first - issue #6 builds the first CLI adapter - and
-direct API adapters arrive later, behind that deliberate switch.
+CLI family comes first - issue #6 built the first CLI adapter, listed
+below - and direct API adapters arrive later, behind that deliberate
+switch.
 
 ## Written adapters
 
