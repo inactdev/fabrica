@@ -215,3 +215,16 @@ git work at all inside one, without exposing write access to the
 Client's real repository — see `../containment/README.md`'s "Git under
 containment" for what that unlocks and why a commit attempt still fails
 (deliberately) even with this mounted in.
+
+## `writeSanitizedGitConfig(commonGitDir)`
+
+The companion to the mount above: the shared `.git`'s `config` is the
+one file in it that can carry a credential (a remote URL can embed
+one), so the real config must never be visible inside a container.
+This writes a throwaway copy with every `[remote "..."]` section
+stripped - keeping `[core]` and the rest, since git refuses to detect
+a repository with no config at all - into its own temp directory, and
+returns the copy's path for the caller to shadow-mount over the real
+config's path and delete after the call (the reference CLI adapter
+does both). Throws the same `LineError("not-a-worktree")` when the
+config can't be read at all.

@@ -158,8 +158,8 @@ test("runContained: the host's environment never leaks in - only the explicit en
     });
     assert.equal(allowlisted.exitCode, 0);
     // The allowlist's own value won, not the host's - proving the value
-    // rode docker's own environment (the name-only `-e KEY` mechanism),
-    // since both were set and only one can come out.
+    // rode the throwaway --env-file, never the host's environment, since
+    // both were set and only one can come out.
     assert.equal(allowlisted.stdout, "explicitly allowlisted\n");
 
     // A key the host doesn't have at all still arrives, comma and all -
@@ -175,6 +175,38 @@ test("runContained: the host's environment never leaks in - only the explicit en
   } finally {
     delete process.env.FABRICA_TEST_WOULD_BE_LEAKED;
   }
+});
+
+test("runContained: an env value containing a newline is refused, not silently truncated and injected", async () => {
+  const { workdir } = makeFixture();
+
+  // Docker's --env-file format has no escaping: a newline in a value
+  // would truncate it there and hand the remaining lines to the
+  // container as extra variables. A typed refusal, never corruption.
+  await assert.rejects(
+    runContained("sh", ["-c", "true"], {
+      workdir,
+      network: "denied",
+      image: IMAGE,
+      env: { FABRICA_TEST_MULTILINE: "line one\nINJECTED_KEY=injected value" },
+    }),
+    (err: unknown) =>
+      err instanceof ContainmentError &&
+      err.code === "invalid-path" &&
+      err.message.includes("FABRICA_TEST_MULTILINE") &&
+      err.message.includes("newline")
+  );
+
+  await assert.rejects(
+    runContained("sh", ["-c", "true"], {
+      workdir,
+      network: "denied",
+      image: IMAGE,
+      env: { "BAD=KEY": "value" },
+    }),
+    (err: unknown) =>
+      err instanceof ContainmentError && err.code === "invalid-path" && err.message.includes("BAD=KEY")
+  );
 });
 
 test("runContained: readOnlyMounts are visible read-only at their own path, not remapped under /workdir", async (t) => {

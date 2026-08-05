@@ -102,9 +102,17 @@ that same containment, both closed:
   normally; `git commit` fails with "Read-only file system" - a
   deliberate result, not a bug, since it structurally prevents a
   contained Worker from committing its own work at all (merges and
-  commits happen outside the Worker) - see
-  `../../containment/README.md`'s "Git under containment" for the full
-  reasoning and the design that was tried and rejected first.
+  commits happen outside the Worker). One file in that mount is never
+  the real one: the shared `.git`'s `config` can carry a remote URL
+  with an embedded push credential, so `work()` shadow-mounts a
+  throwaway sanitized copy (`writeSanitizedGitConfig`, remote sections
+  stripped, deleted again after the call) over the real config's path -
+  the Worker keeps history, reflogs, and the object database
+  (read-only context on a project it already has fully checked out),
+  but no remote URL or credential is readable inside the container.
+  See `../../containment/README.md`'s "Git under containment" for the
+  full reasoning, the exact read-boundary, and the design that was
+  tried and rejected first.
 - **Warm sessions.** Every call is a fresh, throwaway container, so
   without something persisted across calls, a second attempt's
   `--resume` would find no session at all. `work()` derives a per-task

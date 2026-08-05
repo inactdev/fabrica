@@ -67,6 +67,21 @@ test("buildDockerArgs mounts readOnlyMounts entries read-only at their own path,
   assert.ok(args.includes("type=bind,source=/Users/ari/project/.git,target=/Users/ari/project/.git,readonly"));
 });
 
+test("buildDockerArgs mounts a { source, target } entry's source at its target - the shadow-mount form", () => {
+  const args = buildDockerArgs({
+    workdir: "/w",
+    network: "denied",
+    image: "alpine",
+    readOnlyMounts: [
+      "/Users/ari/project/.git",
+      { source: "/tmp/sanitized/config", target: "/Users/ari/project/.git/config" },
+    ],
+  });
+
+  assert.ok(args.includes("type=bind,source=/Users/ari/project/.git,target=/Users/ari/project/.git,readonly"));
+  assert.ok(args.includes("type=bind,source=/tmp/sanitized/config,target=/Users/ari/project/.git/config,readonly"));
+});
+
 test("buildDockerArgs applies resource cap defaults, overridable per call", () => {
   const defaults = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine" });
   assert.equal(defaults[defaults.indexOf("--memory") + 1], DEFAULT_MEMORY);

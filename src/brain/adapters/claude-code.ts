@@ -7,10 +7,12 @@
 // real-binary test for the live proof and claude-code.md for what
 // each discovery means.
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
-import { LineError, resolveCommonGitDir } from "../../line/index.ts";
+import type { ReadOnlyMount } from "../../containment/index.ts";
+import { LineError, resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
 
@@ -176,13 +178,22 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       // workdir is a ProductionLine worktree, so git needs its real
       // project's shared .git mounted back in (read-only) to work at
       // all inside the container - see src/line/worktree-git.ts and
-      // this file's "Process containment" section for why. Falls back
+      // this file's "Process containment" section for why. The shared
+      // .git's own `config` is the one file in it that can carry a
+      // credential (a remote URL can embed one), so a sanitized
+      // throwaway copy with every [remote "..."] section stripped is
+      // shadow-mounted over the real one - status/log/diff still work,
+      // but no remote URL is readable inside the container. Falls back
       // to no git access when workdir isn't a worktree at all (test
       // fixtures that skip git entirely), rather than failing a call
       // over a directory shape only real ProductionLine workdirs have.
-      let readOnlyMounts: string[] | undefined;
+      let readOnlyMounts: ReadOnlyMount[] | undefined;
+      let sanitizedConfigDir: string | undefined;
       try {
-        readOnlyMounts = [resolveCommonGitDir(workdir)];
+        const commonGitDir = resolveCommonGitDir(workdir);
+        const sanitizedConfig = writeSanitizedGitConfig(commonGitDir);
+        sanitizedConfigDir = dirname(sanitizedConfig);
+        readOnlyMounts = [commonGitDir, { source: sanitizedConfig, target: join(commonGitDir, "config") }];
       } catch (err) {
         if (!(err instanceof LineError)) throw err;
       }
@@ -223,6 +234,8 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
           );
         }
         throw err;
+      } finally {
+        if (sanitizedConfigDir !== undefined) rmSync(sanitizedConfigDir, { recursive: true, force: true });
       }
 
       const lines = parseLines(stdout);

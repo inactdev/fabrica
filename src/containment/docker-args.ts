@@ -2,6 +2,8 @@
 // flag here was chosen by running it against the real Docker daemon on
 // the real machine, not guessed - see README.md for what was verified.
 
+import type { ReadOnlyMount } from "./types.ts";
+
 // Conservative caps a runaway process can't talk its way past - chosen
 // to comfortably run a real coding-agent workload (installs, builds,
 // test runs) while still hitting a wall well short of the host itself.
@@ -20,7 +22,7 @@ export function buildDockerArgs(opts: {
   envFile?: string;
   image: string;
   user?: string;
-  readOnlyMounts?: string[];
+  readOnlyMounts?: ReadOnlyMount[];
   memory?: string;
   cpus?: string;
   pidsLimit?: number;
@@ -33,9 +35,14 @@ export function buildDockerArgs(opts: {
   // Each extra path is mounted read-only at its own resolved path, not
   // remapped - a git worktree's .git pointer file names the project's
   // real .git by absolute host path, so that path has to exist at the
-  // same location inside the container for git to find it at all.
-  for (const path of opts.readOnlyMounts ?? []) {
-    args.push("--mount", `type=bind,source=${path},target=${path},readonly`);
+  // same location inside the container for git to find it at all. A
+  // { source, target } entry mounts different content at target - the
+  // shadow-a-sanitized-file-over-a-mounted-directory's-sub-path case,
+  // which Docker layers correctly (verified live).
+  for (const mount of opts.readOnlyMounts ?? []) {
+    const source = typeof mount === "string" ? mount : mount.source;
+    const target = typeof mount === "string" ? mount : mount.target;
+    args.push("--mount", `type=bind,source=${source},target=${target},readonly`);
   }
 
   // Run as the invoking host user, not root: on native Linux, files a

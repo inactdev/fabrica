@@ -156,8 +156,11 @@ const result = await runContained("echo", ["hi"], {
   installed, and this module won't guess which one that is.
 - **`readOnlyMounts`** - extra host paths made visible read-only, each
   at its own resolved absolute path (not remapped under `/workdir`).
-  See "Git under containment" below for the one case this exists for.
-  Omit when the command needs nothing outside `workdir`.
+  A `{ source, target }` entry mounts `source`'s content at `target`
+  instead - the shadow-mount form, for the one case where what's
+  visible at a path must differ from what the host has there. See "Git
+  under containment" below for the two cases this exists for. Omit when
+  the command needs nothing outside `workdir`.
 - **`memory`**, **`cpus`**, **`pidsLimit`** - override the resource cap
   defaults (`DEFAULT_MEMORY` = `"2g"`, `DEFAULT_CPUS` = `"2"`,
   `DEFAULT_PIDS_LIMIT` = `512`). These are always applied - there's no
@@ -199,6 +202,34 @@ Two designs were tried; the second is what shipped:
   live: `git status` and `git log` work normally, reading the project's
   real history; `git commit` fails with `fatal: ... Read-only file
   system`.
+
+One file in that mount gets special treatment: the shared `.git`'s own
+`config`, the one file in a git directory that can carry a credential
+(a remote URL like `https://user:token@host/repo.git`, or a
+credential-helper setting). Mounting it as-is would hand that
+credential to a Worker that also has network allowed - enough to push
+to the Client's remote directly, sidestepping the read-only-commit
+enforcement below. So the real `config` is never visible inside the
+container: `src/line/worktree-git.ts`'s `writeSanitizedGitConfig`
+produces a throwaway copy with every `[remote "..."]` section (header
+and body) stripped, and the caller shadow-mounts that copy over the
+real config's path (a `{ source, target }` entry in `readOnlyMounts` -
+Docker layers a file mount over an already-mounted directory's
+sub-path correctly, verified live). Stripping only the remote sections
+is deliberate: excluding `config` entirely breaks git's repository
+detection outright (`fatal: not a git repository: (null)`, verified
+live), while the sanitized copy keeps `[core]` and the rest, so
+`git status`/`log`/`diff` still work and `git config --get
+remote.origin.url` returns nothing inside the container.
+
+Stated plainly, what a Worker can and cannot read from `.git` under
+this design: it **can** read commit history, reflogs, and dangling or
+unreferenced objects - all inherently readable once the object
+database is mounted at all, and no more than added context on a
+project whose every file it already has checked out in `workdir`. It
+**cannot** read remote URLs or any credential embedded in one - the
+one thing in `.git` whose exposure would grant new reach (a push
+credential), removed via the sanitized config.
 
 That last result is a feature, not a limitation. It enforces the
 Client's architecture in the filesystem itself: merges and commits are
@@ -249,7 +280,11 @@ exists. A real, non-urgent, documented cleanup gap - not a silent one.
   doesn't resolve to a real, existing path - or resolves to one
   containing a comma, which docker's `--mount` flag cannot represent
   (refused here with a clear message rather than surfacing docker's own
-  confusing parse error).
+  confusing parse error). Also raised for an `env` key containing `=`
+  or a newline, or an `env` value containing a newline - the same class
+  of unrepresentable input, since the `--env-file` format has no
+  escaping and a newlined value would be silently truncated with its
+  remaining lines injected as extra variables.
 - **`spawn-failed`** - `docker` itself couldn't be launched (not
   installed, daemon down in a way that prevents even starting the CLI).
   Distinct from the *contained command* failing to run, or the daemon

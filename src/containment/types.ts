@@ -3,6 +3,15 @@
 // one either; it's plumbing `src/brain/adapters/` calls into, not a new
 // model in the loop.
 
+/** One entry of `readOnlyMounts`. A plain string mounts that host path
+ * at the same path inside the container. The `{ source, target }` form
+ * exists for the one case where the mounted content must differ from
+ * what's at that path on the host: shadow-mounting a sanitized copy of
+ * a file (the `source`) over a sub-path of an already-mounted directory
+ * (the `target`) - verified live that Docker layers a file mount over a
+ * directory mount's sub-path correctly. */
+export type ReadOnlyMount = string | { source: string; target: string };
+
 export interface RunContainedOptions {
   /** The ProductionLine workdir. Bind-mounted as the container's own
    * `/workdir` (also its working directory) - reads and writes are
@@ -36,9 +45,13 @@ export interface RunContainedOptions {
    * `git diff`), without giving the contained process anywhere to write
    * a commit (verified live: `git commit` fails with "Read-only file
    * system" - a feature, not a limitation, since merges and commits are
-   * meant to happen outside the Worker). Omit when the command needs
-   * nothing outside `workdir`. */
-  readOnlyMounts?: string[];
+   * meant to happen outside the Worker). A `{ source, target }` entry
+   * mounts `source`'s content at `target` instead - used to shadow a
+   * sanitized copy of the shared .git's `config` over the real one, so
+   * a remote URL (which can embed a credential) is never readable from
+   * inside the container. Omit when the command needs nothing outside
+   * `workdir`. */
+  readOnlyMounts?: ReadOnlyMount[];
   /** Memory limit passed to `docker run --memory` (Docker's own syntax,
    * e.g. `"2g"`). Defaults to `DEFAULT_MEMORY` so a runaway process hits
    * a wall instead of the host machine. */

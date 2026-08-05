@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDockerArgs } from "./docker-args.ts";
 import { ContainmentError } from "./errors.ts";
-import type { ContainedRunResult, RunContainedOptions } from "./types.ts";
+import type { ContainedRunResult, ReadOnlyMount, RunContainedOptions } from "./types.ts";
 
 export async function runContained(
   command: string,
@@ -28,20 +28,26 @@ export async function runContained(
     );
   }
 
-  // Resolved for the same reason workdir is: a read-only mount has to
-  // land at its real, physical path (macOS's /var -> /private/var
-  // symlink is exactly the trap here - a worktree's .git pointer file
-  // records the physical path, so mounting the unresolved one leaves
-  // git looking in a place nothing is actually mounted).
-  const readOnlyMounts = (opts.readOnlyMounts ?? []).map((path) => {
+  // Sources resolved for the same reason workdir is: a read-only mount
+  // has to come from its real, physical path (macOS's /var ->
+  // /private/var symlink is exactly the trap here - a worktree's .git
+  // pointer file records the physical path, so mounting the unresolved
+  // one leaves git looking in a place nothing is actually mounted). A
+  // { source, target } entry's target is kept as given - it's a
+  // container-side path, chosen by the caller to shadow an
+  // already-mounted location.
+  const readOnlyMounts: ReadOnlyMount[] = (opts.readOnlyMounts ?? []).map((mount) => {
+    const sourcePath = typeof mount === "string" ? mount : mount.source;
+    let resolved: string;
     try {
-      return realpathSync(path);
+      resolved = realpathSync(sourcePath);
     } catch (err) {
       throw new ContainmentError(
         "invalid-path",
-        `read-only mount "${path}" does not resolve to a real, existing path: ${err instanceof Error ? err.message : String(err)}`
+        `read-only mount "${sourcePath}" does not resolve to a real, existing path: ${err instanceof Error ? err.message : String(err)}`
       );
     }
+    return typeof mount === "string" ? resolved : { source: resolved, target: mount.target };
   });
 
   let homeDir: string | undefined;
@@ -59,7 +65,10 @@ export async function runContained(
   // Docker's long `--mount` form CSV-parses its value, and a comma in a
   // source path can't be escaped - refuse it here with a clear message
   // instead of surfacing docker's own confusing parse error.
-  for (const path of [workdir, ...readOnlyMounts, ...(homeDir === undefined ? [] : [homeDir])]) {
+  const mountPaths = readOnlyMounts.flatMap((mount) =>
+    typeof mount === "string" ? [mount] : [mount.source, mount.target]
+  );
+  for (const path of [workdir, ...mountPaths, ...(homeDir === undefined ? [] : [homeDir])]) {
     if (path.includes(",")) {
       throw new ContainmentError(
         "invalid-path",
@@ -83,6 +92,24 @@ export async function runContained(
   let envFileDir: string | undefined;
   let envFile: string | undefined;
   if (opts.env !== undefined && Object.keys(opts.env).length > 0) {
+    // The --env-file format has no escaping at all: a newline in a value
+    // silently truncates it and injects the remainder as extra variables,
+    // and '=' or a newline in a key corrupts the line itself. Refused
+    // here with a typed error, same as the comma-in---mount case above.
+    for (const [key, value] of Object.entries(opts.env)) {
+      if (key.includes("=") || key.includes("\n")) {
+        throw new ContainmentError(
+          "invalid-path",
+          `env variable "${key}" contains "=" or a newline in its name, which docker's --env-file format cannot represent`
+        );
+      }
+      if (value.includes("\n")) {
+        throw new ContainmentError(
+          "invalid-path",
+          `env variable "${key}" has a value containing a newline, which docker's --env-file format cannot represent - it would be silently truncated and its remaining lines injected as extra variables`
+        );
+      }
+    }
     envFileDir = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-containment-env-"));
     envFile = join(envFileDir, "env");
     writeFileSync(envFile, `${Object.entries(opts.env).map(([key, value]) => `${key}=${value}`).join("\n")}\n`);
