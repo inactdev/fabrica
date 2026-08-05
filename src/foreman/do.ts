@@ -14,9 +14,10 @@ import { resolveCheckCommand } from "./resolve-check.ts";
 import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
 import { listTouchedFiles } from "./files.ts";
 import { commitWorktreeChanges } from "./commit.ts";
+import { captureDiscardedPatch } from "./discard.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
-import { diffFiles, validateDelivery } from "../delivery/index.ts";
+import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with the
@@ -73,6 +74,12 @@ export async function doTask(
   const line = createProductionLine({ project: opts.project, taskId, recordHome });
 
   try {
+    // Pin the diff's fork point to the exact commit the ProductionLine was
+    // cut from, before any worker attempt runs — so the delivery's `files`
+    // list can't drift if the Client's own checkout moves to a different
+    // branch while the task is still running.
+    const baseCommit = baseCommitOf(line.workdir);
+
     const check = resolveCheckCommand(recordHome, line.project);
     requireCheckCommand(line.workdir, check);
     const protectedPathApplies = check === DEFAULT_CHECK_COMMAND;
@@ -124,8 +131,32 @@ export async function doTask(
     // read back from the branch's own diff (diffFiles), so it and `branch`
     // describe the same surviving reality, and the Client's `git merge`
     // has something to merge.
+    //
+    // The one exception is discarded-protected-path. Rule 5 keeps EVIDENCE
+    // (the delivery, outcome, receipts, and transcript stay on the record
+    // regardless of outcome) while rule 9 discards the WORK — different
+    // things, not in conflict. Committing tampered code onto a durable,
+    // mergeable branch would turn "thrown away, no matter how good the
+    // result looks" into "thrown away, but here it is anyway, one click
+    // from merging." Skipping the commit means `files` (read from the
+    // branch's diff) comes back empty, which is honest — nothing is handed
+    // over on the branch. But "discarded" must not mean "destroyed": an
+    // undeclared gate change is often a declaration mistake, and the work
+    // behind it may be entirely good, so the uncommitted diff is captured
+    // to the record as discarded.patch instead — never committed. The
+    // ratified rule 9 tests (contract/rule9.no-self-grading.test.ts) pass
+    // either way — they assert on delivery.outcome and delivery.gateChanges,
+    // never on what survives on the branch or in the record — so this is a
+    // deliberate product decision the contract does not force, not
+    // something derived from a failing test.
+    let discardedPatchSaved = false;
     if (listTouchedFiles(line.workdir).length > 0) {
-      commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+      if (outcome === "discarded-protected-path") {
+        writeTaskFile(recordHome, taskId, "discarded.patch", captureDiscardedPatch(line.workdir));
+        discardedPatchSaved = true;
+      } else {
+        commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+      }
     }
 
     const delivery = buildDelivery(outcome, {
@@ -133,15 +164,17 @@ export async function doTask(
       attempts: receipts.length,
       lastGate,
       branch: line.branch,
-      files: diffFiles(line.project, line.branch),
+      files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
+      taskId,
+      discardedPatchSaved,
     });
 
     // Never present a malformed delivery as done (rule 4), and never trust
     // the files list on faith (rule 4's diff check, run because `project`
     // is passed) — prove the Foreman's own output before anyone else has
     // to.
-    validateDelivery(delivery, line.project);
+    validateDelivery(delivery, line.project, baseCommit);
 
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
     appendEvent(recordHome, {

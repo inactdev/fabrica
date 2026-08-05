@@ -14,11 +14,13 @@ export type { FabricaEvent, FabricaEventName };
 export type NewFabricaEvent = Omit<FabricaEvent, "occurredAt">;
 
 /**
- * The seven files a task folder holds (SPEC.md "The record"). `request.md`
+ * The files a task folder holds (SPEC.md "The record"). `request.md`
  * is the Client's words verbatim, written once and never appended to;
  * `answers.md` holds one section per clarification round; `brief.md` is
  * assembled from request plus every answer, and is the document a Worker
- * actually receives.
+ * actually receives. `discarded.patch` exists only for a
+ * discarded-protected-path outcome: it holds the diff rule 9 kept off the
+ * branch, so a declaration mistake doesn't destroy the work behind it.
  */
 export type TaskFile =
   | "request.md"
@@ -27,4 +29,5 @@ export type TaskFile =
   | "plan.md"
   | "delivery.md"
   | "verdict"
-  | "transcript.log";
+  | "transcript.log"
+  | "discarded.patch";

@@ -61,13 +61,21 @@ return early" below.
    sitting uncommitted in the worktree are committed onto the
    ProductionLine's branch (`commit.ts`) before that worktree is
    destroyed - see `src/delivery/README.md`'s "files-list-vs-teardown
-   decision" for why. `delivery.ts` builds the `Delivery` object from the
-   branch's own diff, and `src/delivery`'s `validateDelivery` /
-   `validateDeliveryFiles` (CONTRACT rule 4, issue #9) prove it's
-   complete and its `files` field is true before anything downstream
-   sees it. `delivery.md` is written for a human to read; the same
-   structured `Delivery` object lands on the `"delivered"` event for
-   `deliveryOf` to read back exactly.
+   decision" for why. The one exception is a
+   `discarded-protected-path` outcome: rule 9 discards the work, so
+   nothing is committed and the branch stays empty; instead the
+   worktree's uncommitted diff is captured (`discard.ts`) and saved to
+   the task's record folder as `discarded.patch`, and the delivery's
+   `gaps` field says where it landed and how to run the task again with
+   the gate change declared - "discarded" means "kept off the branch,"
+   not "destroyed." `delivery.ts` builds the `Delivery` object from the
+   branch's own diff (pinned to the commit the line was cut from, via
+   `src/delivery`'s `baseCommitOf`), and `src/delivery`'s
+   `validateDelivery` / `validateDeliveryFiles` (CONTRACT rule 4, issue
+   #9) prove it's complete and its `files` field is true before anything
+   downstream sees it. `delivery.md` is written for a human to read; the
+   same structured `Delivery` object lands on the `"delivered"` event
+   for `deliveryOf` to read back exactly.
 7. **Destroys the ProductionLine** in every case — success, failure, or a
    thrown error — via a single `finally`.
 
@@ -250,7 +258,8 @@ doesn't write that event or interpret one; that's left to whoever builds
 | `gate-changes.ts` | Snapshots and compares `check.sh`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. |
 | `files.ts` | Lists files still uncommitted in a worktree (`git status --porcelain`) - used only to decide whether there's anything left to commit before teardown. |
-| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown. |
+| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown. Skipped for a `discarded-protected-path` outcome - rule 9 keeps discarded work off the branch. |
+| `discard.ts` | Captures a worktree's uncommitted changes as a unified diff, without committing - the source of `discarded.patch` on a `discarded-protected-path` outcome. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |

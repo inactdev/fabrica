@@ -14,6 +14,8 @@ export function buildDelivery(
     branch: string;
     files: string[];
     declaredGateChanges: string | undefined;
+    taskId: string;
+    discardedPatchSaved: boolean;
   }
 ): Delivery {
   const summary =
@@ -21,17 +23,27 @@ export function buildDelivery(
       ? `Completed: ${ctx.taskText}`
       : outcome === "failure-report"
         ? `The project's check did not pass after ${ctx.attempts} attempt(s).`
-        : "Discarded: the worker changed the project's checks without declaring it.";
+        : "The project's checks changed without a declared gate change (rule 9) - held back, not delivered.";
 
   const evidence =
     outcome === "discarded-protected-path"
-      ? `check.sh changed without a declared gate change (rule 9). Last check: ${ctx.lastGate.output}`
+      ? "check.sh no longer matches what the ProductionLine started with, and no gateChanges " +
+        `declaration came with it. Last check: ${ctx.lastGate.output}`
       : ctx.lastGate.output;
 
   const gaps =
     outcome === "failure-report"
       ? "The project's check did not pass; see evidence for the failure output."
-      : "";
+      : outcome === "discarded-protected-path"
+        ? "files is intentionally empty: nothing is handed over on the branch while a change to the " +
+          "project's checks is undeclared. This is usually a declaration mistake, not cheating, and " +
+          "the work itself was not deleted." +
+          (ctx.discardedPatchSaved
+            ? ` The full diff was saved to tasks/${ctx.taskId}/discarded.patch - read it, declare ` +
+              "the gate change via gateChanges, run the task again, and git apply picks the patch " +
+              "back up."
+            : "")
+        : "";
 
   return {
     outcome,

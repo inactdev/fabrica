@@ -8,7 +8,7 @@ rule 4, "it never guesses silently." A delivery that's missing a required
 field, or whose `files` list doesn't match what its branch actually
 contains, is malformed and must never be presented as done.
 
-## `validateDelivery(value, project?)`
+## `validateDelivery(value, project?, base?)`
 
 ```ts
 validateDelivery({
@@ -48,9 +48,10 @@ proves the `files` claim, by delegating to `validateDeliveryFiles`
 internally - there's exactly one place that logic lives, called either
 directly or through here. Omit `project` and that check is skipped
 entirely, not silently passed: nothing about `files` is claimed either
-way.
+way. `base`, the third optional argument, is passed straight through to
+`validateDeliveryFiles` - see `diffFiles` below for what it pins.
 
-## `validateDeliveryFiles(delivery, project)`
+## `validateDeliveryFiles(delivery, project, base?)`
 
 ```ts
 validateDeliveryFiles(delivery, "/Users/ari/inkling-umbrella/spending-app");
@@ -70,7 +71,7 @@ This is "claims verified by code, not taken on faith": nothing about the
 workdir - see `diffFiles` below for why that distinction is what makes
 this work even after the task's worktree is gone.
 
-## `diffFiles(project, branch)`
+## `diffFiles(project, branch, base?)`
 
 ```ts
 diffFiles(project, "fabrica/20260803-export-ab");
@@ -78,16 +79,41 @@ diffFiles(project, "fabrica/20260803-export-ab");
 ```
 
 The one function that turns "a branch" into "the files it actually
-changed": `git merge-base` to find where `branch` forked from `project`'s
-current `HEAD`, then `git diff --name-only` between the two. It reads
-from `project`'s own git history, never a ProductionLine's `workdir` -
-which matters because `destroyProductionLine`
+changed": `git diff --name-only` between a fork point and `branch`. It
+reads from `project`'s own git history, never a ProductionLine's
+`workdir` - which matters because `destroyProductionLine`
 (`src/line/teardown.ts`) removes the *worktree* but never the branch or
 its commits, so this still works after that worktree is gone. Both
 `src/foreman/do.ts` (building a delivery's `files` field) and
 `validateDeliveryFiles` above (re-checking one) call this same function,
 so there is exactly one definition of "what a branch touched" that the
 two could ever disagree about.
+
+The fork point is `base` when given - the foreman loop records it with
+`baseCommitOf` (below) the moment the ProductionLine is cut, so the
+files list can't drift if the Client's own checkout moves to a different
+branch while the task is still running. When `base` is omitted, the fork
+point falls back to `git merge-base` against `project`'s current `HEAD` -
+a caller holding nothing but a bare delivery (the CONTRACT rule 4 test)
+has no ProductionLine to pin a base from.
+
+A branch that can't be diffed at all - a fabricated or missing branch
+name, most likely - throws a `DeliveryError` (`code:
+"branch-unreadable"`) carrying git's own stderr, never a raw
+child-process exception: a branch a delivery merely claims to exist is
+an untrusted claim like any other.
+
+## `baseCommitOf(workdir)`
+
+```ts
+baseCommitOf(line.workdir);
+// -> "3f9c2ab..."
+```
+
+`git rev-parse HEAD` in a workdir - the foreman loop calls this on a
+fresh ProductionLine's worktree, before any worker attempt runs, to
+record the exact commit the line was cut from, and passes it back in as
+`diffFiles`'s `base` when building and validating the delivery.
 
 ## The files-list-vs-teardown decision
 
@@ -114,6 +140,12 @@ already documented "the branch is what the Client reviews and merges
 by hand" as the design intent - a commit was always the missing half of
 that promise, not a new decision this module invented.
 
+The one outcome that commit is skipped for is
+`discarded-protected-path`: rule 9 discards the work, so nothing lands
+on the branch and `files` honestly comes back empty. The uncommitted
+diff is captured to the task's record folder as `discarded.patch`
+instead (`src/foreman/discard.ts`) - see "Rule 9 and this module" below.
+
 ## Errors
 
 `DeliveryError` carries a `code`:
@@ -122,6 +154,9 @@ that promise, not a new decision this module invented.
   names the field.
 - **`files-mismatch`** - `validateDeliveryFiles` found the `files` list
   disagrees with the branch's real diff; the message shows both lists.
+- **`branch-unreadable`** - `diffFiles` couldn't diff the branch at all
+  (most likely a fabricated or missing branch name); the message names
+  the branch and project and carries git's own stderr.
 
 ## Rule 9 and this module
 
@@ -133,3 +168,14 @@ re-check that: `gateChanges` is validated the same as any other required
 string field (present, right type), and an empty string is a legitimate
 "the gate was untouched," not a violation. Duplicating rule 9's detection
 here would just be a second place for it to disagree with the first.
+
+What a discarded outcome means for this module's checks: `do.ts` skips
+the commit-before-teardown for `discarded-protected-path`, so the branch
+carries nothing and `files` is genuinely empty - rule 5 keeps the
+EVIDENCE (delivery, receipts, transcript stay on the record) while rule
+9 discards the WORK, and committing discarded work onto a mergeable
+branch would blur exactly that line. Because a declaration mistake
+shouldn't destroy good work, the worktree's uncommitted diff is saved to
+the task's record folder as `discarded.patch` (never committed), and the
+delivery's `gaps` field says where it landed and how to run the task
+again with the gate change declared.

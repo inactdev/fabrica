@@ -11,9 +11,9 @@ import type { Delivery } from "../../contract/surface.ts";
 import { DeliveryError } from "./errors.ts";
 import { diffFiles } from "./diff-files.ts";
 
-export function validateDeliveryFiles(delivery: Delivery, project: string): void {
+export function validateDeliveryFiles(delivery: Delivery, project: string, base?: string): void {
   const declared = [...delivery.files].sort();
-  const actual = diffFiles(project, delivery.branch).sort();
+  const actual = diffFiles(project, delivery.branch, base).sort();
 
   const agree = declared.length === actual.length && declared.every((file, i) => file === actual[i]);
   if (!agree) {

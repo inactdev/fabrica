@@ -27,7 +27,7 @@ const OUTCOMES: ReadonlySet<Delivery["outcome"]> = new Set([
 // and type are checked here, not content.
 const REQUIRED_STRING_FIELDS = ["summary", "evidence", "assumptions", "gaps", "branch", "gateChanges"] as const;
 
-export function validateDelivery(value: unknown, project?: string): asserts value is Delivery {
+export function validateDelivery(value: unknown, project?: string, base?: string): asserts value is Delivery {
   if (typeof value !== "object" || value === null) {
     throw new DeliveryError("malformed", "delivery is not an object");
   }
@@ -55,6 +55,6 @@ export function validateDelivery(value: unknown, project?: string): asserts valu
   }
 
   if (project !== undefined) {
-    validateDeliveryFiles(value as Delivery, project);
+    validateDeliveryFiles(value as Delivery, project, base);
   }
 }
