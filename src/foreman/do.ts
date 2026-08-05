@@ -5,7 +5,7 @@
 // leans on (why check.sh, why attempts behaves the way it does, why the
 // promise doesn't resolve early).
 
-import { appendEvent, registerTask, writeTaskFile } from "../record/index.ts";
+import { appendEvent, appendTaskFile, registerTask, writeTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
@@ -36,6 +36,12 @@ export async function doTask(
   }
 
   const explicitAttempts = opts.attempts !== undefined;
+  if (explicitAttempts && (!Number.isInteger(opts.attempts) || opts.attempts! < 1)) {
+    throw new ForemanError(
+      "invalid-attempts",
+      `fabrica do: attempts must be a positive integer, got ${opts.attempts}.`
+    );
+  }
   const totalAttempts = opts.attempts ?? DEFAULT_ATTEMPTS;
 
   const { id: taskId } = registerTask(recordHome, taskText);
@@ -66,6 +72,14 @@ export async function doTask(
       stopEarlyOnGreen: !explicitAttempts,
       onCheckRun: (attempt, gate) => {
         appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, green: gate.green } });
+      },
+      onTranscript: (transcript) => {
+        appendTaskFile(
+          recordHome,
+          taskId,
+          "transcript.log",
+          transcript.map((entry) => JSON.stringify(entry) + "\n").join("")
+        );
       },
     });
 

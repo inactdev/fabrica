@@ -6,7 +6,7 @@
 import { execFileSync } from "node:child_process";
 
 export function listTouchedFiles(workdir: string): string[] {
-  const raw = execFileSync("git", ["status", "--porcelain"], {
+  const raw = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
     cwd: workdir,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],

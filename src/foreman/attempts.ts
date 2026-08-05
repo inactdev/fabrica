@@ -6,7 +6,7 @@
 // run in full regardless of how early a check goes green: a number given
 // is a number honored, not a ceiling the code is free to cut short.
 
-import type { Brain } from "../brain/index.ts";
+import type { Brain, TranscriptEntry } from "../brain/index.ts";
 import { runCheck } from "./check.ts";
 import type { GateResult, Receipt } from "./types.ts";
 
@@ -29,8 +29,9 @@ export async function runAttempts(opts: {
   totalAttempts: number;
   stopEarlyOnGreen: boolean;
   onCheckRun?: (attempt: number, gate: GateResult) => void;
+  onTranscript?: (transcript: TranscriptEntry[]) => void;
 }): Promise<AttemptLoopResult> {
-  const { brain, brief, workdir, taskId, check, totalAttempts, stopEarlyOnGreen, onCheckRun } = opts;
+  const { brain, brief, workdir, taskId, check, totalAttempts, stopEarlyOnGreen, onCheckRun, onTranscript } = opts;
 
   const receipts: Receipt[] = [];
   let session: string | undefined;
@@ -44,6 +45,7 @@ export async function runAttempts(opts: {
     const thisBrief = lastGate && !lastGate.green ? correctionBrief(brief, lastGate) : brief;
     const workResult = await brain.work(thisBrief, workdir, session ? { session } : undefined);
     session = workResult.session ?? session;
+    if (workResult.transcript.length > 0) onTranscript?.(workResult.transcript);
     if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
 
     const durationMs = Date.now() - t0;

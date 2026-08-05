@@ -37,6 +37,9 @@ export function runCheck(workdir: string, check: string): GateResult {
       cwd: workdir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      // A verbose-but-passing check must never be misread as red just
+      // because its output outgrew node's default 1MB buffer.
+      maxBuffer: 64 * 1024 * 1024,
     });
     return { green: true, output: `${check} -> exit 0${output ? `\n${output}` : ""}` };
   } catch (err) {
