@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { doTask } from "./do.ts";
 import { ForemanError } from "./errors.ts";
 import { deliveryOf, receiptsOf } from "./queries.ts";
+import { readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 
@@ -35,6 +36,26 @@ test("doTask on a green project delivers after exactly one attempt", async () =>
   assert.equal(receipts[0].outcome, "delivered");
   assert.equal(receipts[0].checks?.green, true);
   assert.equal(Object.hasOwn(receipts[0], "costUsd"), true);
+});
+
+test("doTask writes brief.md verbatim from the request, for every task", async () => {
+  const recordHome = freshHome();
+  const taskText = "small change, worth checking brief.md holds exactly this text";
+
+  const delivered = await doTask(recordHome, taskText, {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  assert.equal(readTaskFile(recordHome, delivered.id, "brief.md"), taskText);
+
+  // Verbatim regardless of how the task ends — a failed task is still
+  // evidence of what a Worker was actually given.
+  const failed = await doTask(recordHome, taskText, {
+    project: makeFixtureRepo("exit 1"),
+    brain: fakeBrain(),
+  });
+  assert.equal(failed.state, "failed");
+  assert.equal(readTaskFile(recordHome, failed.id, "brief.md"), taskText);
 });
 
 test("doTask on an always-red project runs the default fix pass, then reports failure", async () => {

@@ -45,11 +45,19 @@ export async function doTask(
   const totalAttempts = opts.attempts ?? DEFAULT_ATTEMPTS;
 
   const { id: taskId } = registerTask(recordHome, taskText);
-  // v1's ask-first dial always proceeds straight to work (SPEC.md step 2):
-  // Brain has no way yet to signal "I have questions" back through the
-  // seam, and building the resumable clarify round is issue #8's job.
-  // brief.md is written now, verbatim from the request, so #8 only has to
-  // append answers and re-derive it from here — never reshape this path.
+  // Ownership split: registerTask (src/record) writes request.md as part
+  // of registration — the record owns what the Client said. The Foreman
+  // writes brief.md here, afterwards — the Foreman owns what a Worker is
+  // actually given.
+  //
+  // brief.md is the record of what was actually handed to a Worker, not a
+  // cache of request.md: once issue #19 primes per-project lessons into
+  // it, a brief will contain material that cannot be reconstructed later
+  // from request.md + answers.md alone, because lessons change over time.
+  // Storing it now is evidence, not a convenience. Today it is
+  // byte-identical to request.md — v1 never asks a clarifying question
+  // (issue #8) or primes lessons (issue #19) — and that sameness is
+  // expected to end the moment either one lands.
   writeTaskFile(recordHome, taskId, "brief.md", taskText);
 
   const line = createProductionLine({ project: opts.project, taskId, recordHome });
