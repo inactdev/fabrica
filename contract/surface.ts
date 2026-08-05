@@ -17,11 +17,13 @@ export interface Brain {
   name: string;
   model: string;
   work(
-    brief: string,
+    instructions: string,
     workdir: string,
     opts?: {
       /** Warm sessions: pass a prior session id to continue that worker's context — a retry is a correction, never a cold restart. */
       session?: string;
+      /** Free-form effort hint (e.g. "low", "high", or a tool's own vocabulary). An adapter that does not recognize the value must ignore it, not fail - and the value is recorded as requested regardless. */
+      effort?: string;
     }
   ): Promise<{
     transcript: string;
@@ -47,6 +49,7 @@ export interface Receipt {
   durationMs: number;
   costUsd: number | null;
   session: string | null;
+  effort: string | null;
   gate: GateResult | null;
   outcome: "delivered" | "failed" | "discarded-protected-path";
 }

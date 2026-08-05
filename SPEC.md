@@ -25,8 +25,9 @@ the event log are for).
   your own tail of that file) shows exactly what a worker is doing right
   now. Views never control: closing one touches nothing.
 - The coding agent that performs work inside the box is a subprocess
-  behind a small adapter interface (`runAgent(brief, workdir) →
-  transcript`). v1 ships one adapter: whichever terminal coding agent the
+  behind a small adapter interface: the `Brain` seam, whose ratified
+  shape lives in `contract/surface.ts` and whose src-side home is
+  `src/brain/`. v1 ships one adapter: whichever terminal coding agent the
   Client already uses daily, invoked in its non-interactive mode. The
   adapter's exact invocation is discovered and verified during the build,
   not assumed here. Nothing outside the adapter may know which agent is
@@ -47,8 +48,12 @@ The whole tool in one command.
    first pass produces either QUESTIONS or a short PLAN:
    - If the task is materially ambiguous → print numbered questions and
      stop. The Client answers with `fabrica answer <id> "<text>"`, which
-     resumes at this step with answers appended to the brief. One
-     clarification round by default; `--just-go` skips this step.
+     resumes at this step with answers appended to the brief. The brief
+     is the task text plus any answers given to its questions, and it is
+     exactly what a brain receives as the `instructions` argument of
+     `Brain.work`: "brief" names the document, `instructions` names the
+     parameter carrying it. One clarification round by default;
+     `--just-go` skips this step.
    - Otherwise → proceed. The plan goes in the record, not to the screen.
 3. **Isolates.** Creates a disposable git worktree of the project on a
    fresh branch `fabrica/<id>`. The Client's checkout is never touched
