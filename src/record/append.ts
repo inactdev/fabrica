@@ -15,27 +15,27 @@
 import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { RecordError } from "./errors.ts";
-import type { NewRecordEvent, RecordEvent } from "./types.ts";
+import type { NewFabricaEvent, FabricaEvent } from "./types.ts";
 
 /** Absolute path of the append-only event record. */
-export function recordPath(home: string): string {
-  return join(home, "events.jsonl");
+export function recordPath(recordHome: string): string {
+  return join(recordHome, "events.jsonl");
 }
 
 /** Appends one event and returns the stamped record actually written. */
-export function appendEvent(home: string, input: NewRecordEvent): RecordEvent {
-  const record: RecordEvent = { occurredAt: "", ...input };
+export function appendEvent(recordHome: string, input: NewFabricaEvent): FabricaEvent {
+  const record: FabricaEvent = { occurredAt: "", ...input };
   record.occurredAt = new Date().toISOString();
   const line = Buffer.from(`${JSON.stringify(record)}\n`, "utf8");
 
-  mkdirSync(home, { recursive: true });
-  const fd = openSync(recordPath(home), "a");
+  mkdirSync(recordHome, { recursive: true });
+  const fd = openSync(recordPath(recordHome), "a");
   try {
     const written = writeSync(fd, line);
     if (written !== line.byteLength) {
       throw new RecordError(
         "short-write",
-        `The record at ${recordPath(home)} accepted only ${written} of ` +
+        `The record at ${recordPath(recordHome)} accepted only ${written} of ` +
           `${line.byteLength} bytes for this event (is the disk full?). ` +
           `The event was not fully written.`,
       );

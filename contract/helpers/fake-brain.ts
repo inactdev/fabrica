@@ -4,6 +4,7 @@
 // e.g. touching protected paths (rule 9) or doing nothing at all.
 
 import type { Brain } from "../surface.ts";
+import type { TranscriptEntry } from "../surface.ts";
 
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
@@ -22,8 +23,11 @@ export function fakeBrain(
     async work(brief: string, workdir: string) {
       calls += 1;
       opts.onWork?.(workdir);
+      const transcript: TranscriptEntry[] = [
+        { occurredAt: new Date().toISOString(), kind: "text", text: `fake brain saw: ${brief}` },
+      ];
       return {
-        transcript: `fake brain saw: ${brief}`,
+        transcript,
         session: "fake-session",
         ...(opts.gateChanges ? { gateChanges: opts.gateChanges } : {}),
       };

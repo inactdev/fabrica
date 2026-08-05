@@ -8,7 +8,7 @@ import { ConfigError } from "./errors.ts";
 import { makeTestHome } from "./helpers/test-home.ts";
 
 test("loadConfig: a valid config loads projects and caps", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [caps]
     perTaskUsd = 2.5
     perDayUsd = 20
@@ -22,7 +22,7 @@ test("loadConfig: a valid config loads projects and caps", () => {
     check = "npm test"
   `);
 
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
 
   assert.deepEqual(config.caps, { perTaskUsd: 2.5, perDayUsd: 20 });
   assert.deepEqual(config.projects["spending-app"], {
@@ -36,30 +36,30 @@ test("loadConfig: a valid config loads projects and caps", () => {
 });
 
 test("loadConfig: caps are optional", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
 
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
   assert.deepEqual(config.caps, {});
 });
 
 test("loadConfig: a project may be registered without a check yet", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
   `);
 
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
   assert.deepEqual(config.projects["spending-app"], {
     path: join(homedir(), "inkling-umbrella/spending-app"),
   });
 });
 
 test("loadConfig: a project named caps loads correctly, distinct from the [caps] table", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [caps]
     perTaskUsd = 5
 
@@ -68,7 +68,7 @@ test("loadConfig: a project named caps loads correctly, distinct from the [caps]
     check = "bin/ci"
   `);
 
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
   assert.deepEqual(config.caps, { perTaskUsd: 5 });
   assert.deepEqual(config.projects["caps"], {
     path: join(homedir(), "inkling-umbrella/caps"),
@@ -77,14 +77,14 @@ test("loadConfig: a project named caps loads correctly, distinct from the [caps]
 });
 
 test("loadConfig: an unknown top-level table is refused with conversion instructions", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
 
   assert.throws(
-    () => loadConfig(home),
+    () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "malformed");
@@ -96,7 +96,7 @@ test("loadConfig: an unknown top-level table is refused with conversion instruct
 });
 
 test("loadConfig: an unknown top-level key that is not a table is not called a table", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     home = "/srv/x"
     stamped = 2024-01-01T00:00:00Z
 
@@ -106,7 +106,7 @@ test("loadConfig: an unknown top-level key that is not a table is not called a t
   `);
 
   assert.throws(
-    () => loadConfig(home),
+    () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "malformed");
@@ -123,13 +123,13 @@ test("loadConfig: an unknown top-level key that is not a table is not called a t
 });
 
 test("loadConfig: a leading ~/ in a project path expands to the home directory", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
 
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
   assert.equal(
     config.projects["spending-app"].path,
     join(homedir(), "inkling-umbrella/spending-app")
@@ -137,18 +137,18 @@ test("loadConfig: a leading ~/ in a project path expands to the home directory",
 });
 
 test("loadConfig: a bare ~ project path is the home directory itself", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.home-app]
     path = "~"
     check = "bin/ci"
   `);
 
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
   assert.equal(config.projects["home-app"].path, homedir());
 });
 
 test("loadConfig: a ~ anywhere but the start is left verbatim", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.tilde-app]
     path = "/srv/back~ups/tilde-app"
     check = "bin/ci"
@@ -158,20 +158,20 @@ test("loadConfig: a ~ anywhere but the start is left verbatim", () => {
     check = "bin/ci"
   `);
 
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
   assert.equal(config.projects["tilde-app"].path, "/srv/back~ups/tilde-app");
   assert.equal(config.projects["nested-app"].path, "/srv/~/nested-app");
 });
 
 test("loadConfig: no projects.toml at the given home fails with the exact path", () => {
-  const home = mkdtempSync(join(tmpdir(), "fabrica-config-test-empty-"));
+  const recordHome = mkdtempSync(join(tmpdir(), "fabrica-config-test-empty-"));
 
   assert.throws(
-    () => loadConfig(home),
+    () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "not-found");
-      assert.match(err.message, new RegExp(join(home, "projects.toml").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      assert.match(err.message, new RegExp(join(recordHome, "projects.toml").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
       assert.match(
         err.message,
         /\[projects\.<name>\]/,
@@ -183,10 +183,10 @@ test("loadConfig: no projects.toml at the given home fails with the exact path",
 });
 
 test("loadConfig: invalid TOML syntax is refused as malformed", () => {
-  const home = makeTestHome(`this is not [valid toml`);
+  const recordHome = makeTestHome(`this is not [valid toml`);
 
   assert.throws(
-    () => loadConfig(home),
+    () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "malformed");
@@ -196,13 +196,13 @@ test("loadConfig: invalid TOML syntax is refused as malformed", () => {
 });
 
 test("loadConfig: a project table missing path is refused as malformed", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     check = "bin/ci"
   `);
 
   assert.throws(
-    () => loadConfig(home),
+    () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "malformed");
@@ -214,24 +214,24 @@ test("loadConfig: a project table missing path is refused as malformed", () => {
 });
 
 test("loadConfig: a zero cap is a legal cap, not an absent one", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [caps]
     perTaskUsd = 0
     perDayUsd = 0
   `);
 
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
   assert.deepEqual(config.caps, { perTaskUsd: 0, perDayUsd: 0 });
 });
 
 test("loadConfig: a negative cap is refused as malformed", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [caps]
     perTaskUsd = -5
   `);
 
   assert.throws(
-    () => loadConfig(home),
+    () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "malformed");
@@ -242,13 +242,13 @@ test("loadConfig: a negative cap is refused as malformed", () => {
 });
 
 test("loadConfig: a non-finite cap is refused as malformed", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [caps]
     perDayUsd = inf
   `);
 
   assert.throws(
-    () => loadConfig(home),
+    () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "malformed");
@@ -259,13 +259,13 @@ test("loadConfig: a non-finite cap is refused as malformed", () => {
 });
 
 test("loadConfig: a non-numeric cap is refused as malformed", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [caps]
     perDayUsd = "twenty"
   `);
 
   assert.throws(
-    () => loadConfig(home),
+    () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.equal(err.code, "malformed");

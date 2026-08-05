@@ -15,7 +15,7 @@ import { makeFixtureRepo } from "./helpers/fixture.ts";
 test("rule 10: a task beyond the daily cap is refused, numbers shown", async () => {
   const project = makeFixtureRepo("exit 0");
   const fabrica = createFabrica({
-    home: mkdtempSync(join(tmpdir(), "fabrica-home-")),
+    recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")),
     caps: { perDayUsd: 0 },
   });
 
@@ -28,7 +28,7 @@ test("rule 10: a task beyond the daily cap is refused, numbers shown", async () 
 
 test("rule 10: every receipt carries the money field", async () => {
   const project = makeFixtureRepo("exit 0");
-  const fabrica = createFabrica({ home: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
 
   const task = await fabrica.do("small change", { project, brain: fakeBrain() });
   const receipts = await fabrica.receiptsOf(task.id);

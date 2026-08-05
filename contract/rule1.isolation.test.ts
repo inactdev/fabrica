@@ -15,7 +15,7 @@ test("rule 1: the Client's checkout is untouched, byte for byte", async () => {
   const project = makeFixtureRepo("exit 0");
   const before = fingerprint(project);
 
-  const fabrica = createFabrica({ home: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
   await fabrica.do("append one line to app.txt", { project, brain: fakeBrain() });
 
   const after = fingerprint(project);

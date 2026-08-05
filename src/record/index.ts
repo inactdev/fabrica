@@ -11,4 +11,4 @@ export {
 export { generateCandidateId, claimTaskId, TASK_ID_PATTERN } from "./ids.ts";
 export { RecordError } from "./errors.ts";
 export type { RecordErrorCode } from "./errors.ts";
-export type { RecordEvent, NewRecordEvent, TaskFile } from "./types.ts";
+export type { FabricaEvent, NewFabricaEvent, FabricaEventName, TaskFile } from "./types.ts";

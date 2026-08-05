@@ -3,8 +3,9 @@
 // contract's own rule1.isolation.test.ts proves this end to end through
 // createFabrica, which still throws NotBuiltError until issue #7 wires the
 // loop together — so these tests prove the same invariant directly against
-// cutLine/tearDownLine, plus scenarios the contract test doesn't reach:
-// a failed run, a dirty teardown, and two lines cut at once.
+// createProductionLine/destroyProductionLine, plus scenarios the contract
+// test doesn't reach: a failed run, a dirty teardown, and two lines cut at
+// once.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -12,18 +13,18 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { cutLine } from "./cut.ts";
-import { tearDownLine } from "./teardown.ts";
+import { createProductionLine } from "./cut.ts";
+import { destroyProductionLine } from "./teardown.ts";
 import { fingerprint, makeFixtureHome, makeFixtureProject } from "./helpers/fixture.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-test("checkout is untouched after a successful run: cut, work, commit, teardown", () => {
+test("checkout is untouched after a successful run: create, work, commit, destroy", () => {
   const project = makeFixtureProject();
-  const home = makeFixtureHome();
+  const recordHome = makeFixtureHome();
   const before = fingerprint(project);
 
-  const line = cutLine({ project, id: "task-success", home });
+  const line = createProductionLine({ project, taskId: "task-success", recordHome });
   try {
     const original = readFileSync(join(line.workdir, "app.txt"), "utf8");
     writeFileSync(join(line.workdir, "app.txt"), original + "one more line\n");
@@ -34,7 +35,7 @@ test("checkout is untouched after a successful run: cut, work, commit, teardown"
       { cwd: line.workdir }
     );
   } finally {
-    tearDownLine(line);
+    destroyProductionLine(line);
   }
 
   assert.equal(fingerprint(project), before);
@@ -43,16 +44,16 @@ test("checkout is untouched after a successful run: cut, work, commit, teardown"
 
 test("checkout is untouched after a failed run", () => {
   const project = makeFixtureProject();
-  const home = makeFixtureHome();
+  const recordHome = makeFixtureHome();
   const before = fingerprint(project);
 
-  const line = cutLine({ project, id: "task-failure", home });
+  const line = createProductionLine({ project, taskId: "task-failure", recordHome });
   assert.throws(() => {
     try {
       writeFileSync(join(line.workdir, "app.txt"), "a change made right before blowing up\n");
       throw new Error("simulated worker failure");
     } finally {
-      tearDownLine(line);
+      destroyProductionLine(line);
     }
   }, /simulated worker failure/);
 
@@ -62,28 +63,28 @@ test("checkout is untouched after a failed run", () => {
 
 test("checkout is untouched after teardown of a dirty worktree", () => {
   const project = makeFixtureProject();
-  const home = makeFixtureHome();
+  const recordHome = makeFixtureHome();
   const before = fingerprint(project);
 
-  const line = cutLine({ project, id: "task-dirty-e2e", home });
+  const line = createProductionLine({ project, taskId: "task-dirty-e2e", recordHome });
   writeFileSync(join(line.workdir, "app.txt"), "uncommitted worker scratch\n");
   writeFileSync(join(line.workdir, "scratch.txt"), "never staged, never committed\n");
   execFileSync("git", ["add", "scratch.txt"], { cwd: line.workdir });
 
-  tearDownLine(line);
+  destroyProductionLine(line);
 
   assert.equal(fingerprint(project), before);
   assert.equal(existsSync(line.workdir), false);
 });
 
-test("two ProductionLines cut from the same project at once do not collide", async () => {
+test("two ProductionLines created from the same project at once do not collide", async () => {
   const project = makeFixtureProject();
-  const home = makeFixtureHome();
+  const recordHome = makeFixtureHome();
   const before = fingerprint(project);
 
   const [a, b] = await Promise.all([
-    runCutInSubprocess(project, "task-concurrent-a", home),
-    runCutInSubprocess(project, "task-concurrent-b", home),
+    runCreateInSubprocess(project, "task-concurrent-a", recordHome),
+    runCreateInSubprocess(project, "task-concurrent-b", recordHome),
   ]);
 
   assert.equal(a.code, 0, `subprocess A failed: ${a.stderr}`);
@@ -98,8 +99,8 @@ test("two ProductionLines cut from the same project at once do not collide", asy
   assert.ok(existsSync(lineB.workdir));
   assert.equal(fingerprint(project), before);
 
-  tearDownLine(lineA);
-  tearDownLine(lineB);
+  destroyProductionLine(lineA);
+  destroyProductionLine(lineB);
   assert.equal(existsSync(lineA.workdir), false);
   assert.equal(existsSync(lineB.workdir), false);
   assert.equal(fingerprint(project), before);
@@ -117,14 +118,14 @@ function resolveTsxBin(): string {
   throw new Error("could not find node_modules/.bin/tsx above " + here);
 }
 
-function runCutInSubprocess(
+function runCreateInSubprocess(
   project: string,
-  id: string,
-  home: string
+  taskId: string,
+  recordHome: string
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolvePromise) => {
     const helper = join(here, "helpers", "cut-in-subprocess.ts");
-    const child = spawn(resolveTsxBin(), [helper, project, id, home]);
+    const child = spawn(resolveTsxBin(), [helper, project, taskId, recordHome]);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));

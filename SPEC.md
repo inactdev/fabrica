@@ -20,10 +20,13 @@ the event log are for).
 - Installed so that `fabrica` works from any directory.
 - No screens, no daemon in v1. Every command starts, does its job, exits.
   (Long work runs detached; see `fabrica do`.)
-- Workers are invisible by default and watchable always. Every worker
-  streams its raw output to its transcript file live, so `fabrica watch` (or
-  your own tail of that file) shows exactly what a worker is doing right
-  now. Views never control: closing one touches nothing.
+- Workers are invisible by default and watchable always. Every worker's
+  transcript is a sequence of structured entries — each with its own
+  timestamp, a kind, and its text — appended to its transcript file live
+  as they land; the live text stream `fabrica watch` (or your own tail
+  of that file) shows is rendered from those entries, so it shows
+  exactly what a worker is doing right now. Views never control: closing
+  one touches nothing.
 - The coding agent that performs work inside the box is a subprocess
   behind a small adapter interface: the `Brain` seam, whose ratified
   shape lives in `contract/surface.ts` and whose src-side home is
@@ -48,12 +51,13 @@ The whole tool in one command.
    first pass produces either QUESTIONS or a short PLAN:
    - If the task is materially ambiguous → print numbered questions and
      stop. The Client answers with `fabrica answer <id> "<text>"`, which
-     resumes at this step with answers appended to the brief. The brief
-     is the task text plus any answers given to its questions, and it is
-     exactly what a brain receives as the `instructions` argument of
-     `Brain.work`: "brief" names the document, `instructions` names the
-     parameter carrying it. One clarification round by default;
-     `--just-go` skips this step.
+     appends a round to `answers.md` and re-derives `brief.md`, then
+     resumes at this step. The brief is the Client's original request
+     plus every answer given so far, assembled into the one document a
+     Worker actually receives — it is exactly what a brain gets as the
+     `brief` argument of `Brain.work`. See "The record" below for how
+     the request and its answers are kept apart on disk. One
+     clarification round by default; `--just-go` skips this step.
    - Otherwise → proceed. The plan goes in the record, not to the screen.
 3. **Isolates.** Creates a disposable git worktree of the project on a
    fresh branch `fabrica/<id>`. The Client's checkout is never touched
@@ -74,7 +78,9 @@ The whole tool in one command.
    (Contract 6).
 
 ### `fabrica answer <id> "<text>"`
-Appends the Client's answers to the brief and resumes the task.
+Appends a clarification round to `answers.md` and re-derives `brief.md`
+from `request.md` plus every answer so far, then resumes the task. Never
+writes into `request.md` — the Client's original words stay verbatim.
 
 ### `fabrica verdict <id> <accept|fix|wrong> [-m "<note>"]`
 Records the Client's ruling (Contract 6). `fix` = right direction,
@@ -104,19 +110,40 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
       events.jsonl            # append-only; every event, one JSON line:
                               # {occurredAt, taskId, name, details}
       tasks/<id>/
-        task.md               # verbatim task text + Q&A rounds
+        request.md           # the Client's words, verbatim; written once,
+                              # never appended to
+        answers.md            # one section per clarification round: the
+                              # question asked, the answer given
+        brief.md              # assembled from request.md plus every answer
+                              # so far — what a Worker actually receives as
+                              # Brain.work's `brief` argument
         plan.md               # agent's plan (when it proceeded)
         delivery.md           # the delivery block, or failure report
-        verdict               # accept|fix|wrong + note + ts
-        transcript.log        # raw agent session output
+        verdict               # accept|fix|wrong + note + occurredAt
+        transcript.log        # the worker's structured transcript entries,
+                              # one JSON line each; `fabrica watch` renders
+                              # the live stream from them
         worktree/             # the ProductionLine while the task runs;
-                              # removed at teardown (the branch stays)
+                              # removed when it is destroyed (the branch stays)
       projects.toml           # project registry + caps (below)
 
 Files, not a database, in v1: the Client must be able to read, grep, and
 diff the record with bare hands, and later organs (learning, status,
 Amy) read the same files. `events.jsonl` is the single source of truth;
-everything else is a convenience view of it (Contract 5).
+everything else, including `brief.md`, is a convenience view of it
+(Contract 5) — `brief.md` could be derived on every read instead of
+written to disk, but writing it keeps the record readable with bare
+hands, which this section requires of everything under the record home.
+
+Keeping `request.md` and `answers.md` apart, rather than appending
+answers onto the request as earlier drafts of this spec did, preserves a
+fact worth keeping: whether a task needed clarification at all, and how
+much. That signal feeds Contract rule 4's assumptions field (sharper
+when it's visible which parts of the brief were original versus added
+because the Worker had to ask), Phase 5's re-attempt-and-grade work
+(#30-#33), and later confidence calibration (#33), all of which want to
+compare outcomes against how ambiguous the original request was —
+information a single merged file destroys.
 
 ## Config
 
@@ -153,7 +180,7 @@ legal cap, not an absent one.
 `delivery.md`, exact required fields (Contract 4):
 
     confidence: 0-100
-    did:        what was done, plainly
+    summary:    what was done, plainly
     evidence:   the check command, its result, plus any extra proof
                 (commands + outcomes)
     assumptions: every judgment call made where the brief was silent

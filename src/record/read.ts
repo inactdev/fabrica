@@ -4,13 +4,13 @@
 
 import { readFileSync } from "node:fs";
 import { recordPath } from "./append.ts";
-import type { RecordEvent } from "./types.ts";
+import type { FabricaEvent } from "./types.ts";
 
-/** Every event ever recorded at this home, oldest first. */
-export function readEvents(home: string): RecordEvent[] {
+/** Every event ever recorded at this record home, oldest first. */
+export function readEvents(recordHome: string): FabricaEvent[] {
   let text: string;
   try {
-    text = readFileSync(recordPath(home), "utf8");
+    text = readFileSync(recordPath(recordHome), "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
@@ -19,10 +19,10 @@ export function readEvents(home: string): RecordEvent[] {
   return text
     .split("\n")
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as RecordEvent);
+    .map((line) => JSON.parse(line) as FabricaEvent);
 }
 
 /** Every event for one task, in the order they were recorded. */
-export function readEventsForTask(home: string, taskId: string): RecordEvent[] {
-  return readEvents(home).filter((event) => event.taskId === taskId);
+export function readEventsForTask(recordHome: string, taskId: string): FabricaEvent[] {
+  return readEvents(recordHome).filter((event) => event.taskId === taskId);
 }

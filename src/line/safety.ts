@@ -11,11 +11,11 @@ import { LineError } from "./errors.ts";
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 /** Task ids become path segments and branch names — both must be inert. */
-export function assertSafeId(id: string): void {
-  if (!SAFE_ID.test(id) || id.includes("..")) {
+export function assertSafeId(taskId: string): void {
+  if (!SAFE_ID.test(taskId) || taskId.includes("..")) {
     throw new LineError(
       "invalid-id",
-      `"${id}" is not a safe task id: it must start with a letter or digit, ` +
+      `"${taskId}" is not a safe task id: it must start with a letter or digit, ` +
         `contain only letters, digits, ".", "_" or "-", and never contain "..".`
     );
   }

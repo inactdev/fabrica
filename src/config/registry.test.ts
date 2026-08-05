@@ -11,12 +11,12 @@ import { ConfigError } from "./errors.ts";
 import { makeTestHome } from "./helpers/test-home.ts";
 
 test("requireProject: a registered project with a check command resolves", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
 
   const project = requireProject(config, "spending-app");
   assert.deepEqual(project, {
@@ -26,12 +26,12 @@ test("requireProject: a registered project with a check command resolves", () =>
 });
 
 test("requireProject: an unregistered project is refused, naming it and what to add", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
 
   assert.throws(
     () => requireProject(config, "ghost-app"),
@@ -48,11 +48,11 @@ test("requireProject: an unregistered project is refused, naming it and what to 
 });
 
 test("requireProject: a project whose check command is missing is refused", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
   `);
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
 
   assert.throws(
     () => requireProject(config, "spending-app"),
@@ -73,12 +73,12 @@ test("requireProject: a project whose check command is missing is refused", () =
 });
 
 test("requireProject: a name that collides with Object.prototype is unregistered", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
   `);
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
 
   for (const name of ["toString", "constructor", "valueOf", "__proto__"]) {
     assert.throws(
@@ -93,12 +93,12 @@ test("requireProject: a name that collides with Object.prototype is unregistered
 });
 
 test("requireProject: a project literally named __proto__ still resolves", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.__proto__]
     path = "~/inkling-umbrella/proto-app"
     check = "bin/ci"
   `);
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
 
   const project = requireProject(config, "__proto__");
   assert.deepEqual(project, {
@@ -108,7 +108,7 @@ test("requireProject: a project literally named __proto__ still resolves", () =>
 });
 
 test("requireProject: a project literally named caps resolves, distinct from the [caps] table", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [caps]
     perTaskUsd = 5
 
@@ -116,7 +116,7 @@ test("requireProject: a project literally named caps resolves, distinct from the
     path = "~/inkling-umbrella/caps"
     check = "bin/ci"
   `);
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
 
   const project = requireProject(config, "caps");
   assert.deepEqual(project, {
@@ -126,12 +126,12 @@ test("requireProject: a project literally named caps resolves, distinct from the
 });
 
 test("requireProject: a blank check command counts as missing", () => {
-  const home = makeTestHome(`
+  const recordHome = makeTestHome(`
     [projects.spending-app]
     path = "~/inkling-umbrella/spending-app"
     check = "   "
   `);
-  const config = loadConfig(home);
+  const config = loadConfig(recordHome);
 
   assert.throws(
     () => requireProject(config, "spending-app"),
