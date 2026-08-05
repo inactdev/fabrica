@@ -247,6 +247,15 @@ test("claude-code adapter: real binary does real work in a real worktree (capabi
     t.skip("Docker is not available on this machine");
     return;
   }
+  // This guard probes auth as the image's own default user with the
+  // image's own $HOME - not the `--user <host-uid>` / bind-mounted
+  // homeDir combination work() actually runs with. That's equivalent as
+  // long as the credential gap is closed via an env-provided token
+  // (which reaches both the same way); if it is ever closed by baking
+  // auth into the image itself, this guard would report logged-in while
+  // work()'s contained run still finds no credential, and must be
+  // realigned with work()'s real runtime conditions then - see
+  // claude-code.md, "Process containment".
   try {
     const status = JSON.parse(
       execFileSync("docker", ["run", "--rm", "fabrica-claude-code:latest", "claude", "auth", "status"], {

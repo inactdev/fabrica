@@ -52,5 +52,15 @@ export function resolveCommonGitDir(workdir: string): string {
     );
   }
 
-  return realpathSync(resolve(worktreeGitDir, commondir));
+  const commonGitDir = resolve(worktreeGitDir, commondir);
+  try {
+    return realpathSync(commonGitDir);
+  } catch (err) {
+    throw new LineError(
+      "not-a-worktree",
+      `"${commonGitDir}" (the shared .git this worktree points to) does not resolve to a real, existing path: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
 }

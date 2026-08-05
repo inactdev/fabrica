@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { createProductionLine, destroyProductionLine, LineError } from "./index.ts";
@@ -34,6 +34,19 @@ test("resolveCommonGitDir refuses a directory that isn't a git worktree", () => 
 
   assert.throws(
     () => resolveCommonGitDir(notAWorktree),
+    (err: unknown) => err instanceof LineError && err.code === "not-a-worktree"
+  );
+});
+
+test("resolveCommonGitDir refuses a worktree whose commondir names a since-deleted directory", () => {
+  const workdir = makeFixtureHome();
+  const worktreeGitDir = join(workdir, "worktree-git-dir");
+  mkdirSync(worktreeGitDir);
+  writeFileSync(join(workdir, ".git"), `gitdir: ${worktreeGitDir}\n`);
+  writeFileSync(join(worktreeGitDir, "commondir"), join(workdir, "since-deleted-project", ".git") + "\n");
+
+  assert.throws(
+    () => resolveCommonGitDir(workdir),
     (err: unknown) => err instanceof LineError && err.code === "not-a-worktree"
   );
 });

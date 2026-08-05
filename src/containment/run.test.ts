@@ -97,6 +97,21 @@ test("runContained: a nonexistent workdir is refused with a typed error, not a r
   );
 });
 
+test("runContained: a path containing a comma is refused with a clear typed error, not a raw docker parse failure", async () => {
+  const base = mkdtempSync(join(tmpdir(), "fabrica-containment-comma-"));
+  const commaDir = join(base, "with,comma");
+  mkdirSync(commaDir);
+
+  await assert.rejects(
+    runContained("sh", ["-c", "true"], { workdir: commaDir, network: "denied", image: IMAGE }),
+    (err: unknown) =>
+      err instanceof ContainmentError &&
+      err.code === "invalid-path" &&
+      err.message.includes("with,comma") &&
+      err.message.includes("comma")
+  );
+});
+
 test("runContained: network is denied by default", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const { workdir } = makeFixture();
@@ -142,7 +157,21 @@ test("runContained: the host's environment never leaks in - only the explicit en
       env: { FABRICA_TEST_WOULD_BE_LEAKED: "explicitly allowlisted" },
     });
     assert.equal(allowlisted.exitCode, 0);
+    // The allowlist's own value won, not the host's - proving the value
+    // rode docker's own environment (the name-only `-e KEY` mechanism),
+    // since both were set and only one can come out.
     assert.equal(allowlisted.stdout, "explicitly allowlisted\n");
+
+    // A key the host doesn't have at all still arrives, comma and all -
+    // the value travels as an environment value, never argv or CSV.
+    const injected = await runContained("sh", ["-c", 'echo "${FABRICA_TEST_ONLY_ALLOWLISTED-unset}"'], {
+      workdir,
+      network: "denied",
+      image: IMAGE,
+      env: { FABRICA_TEST_ONLY_ALLOWLISTED: "reaches the container, commas included" },
+    });
+    assert.equal(injected.exitCode, 0);
+    assert.equal(injected.stdout, "reaches the container, commas included\n");
   } finally {
     delete process.env.FABRICA_TEST_WOULD_BE_LEAKED;
   }

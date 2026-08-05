@@ -37,7 +37,7 @@ test("buildDockerArgs adds --network none when denied, omits it when allowed", (
   assert.ok(!allowed.includes("--network"));
 });
 
-test("buildDockerArgs passes only the explicit env allowlist as -e flags", () => {
+test("buildDockerArgs passes the env allowlist as name-only -e flags, never values", () => {
   const args = buildDockerArgs({
     workdir: "/w",
     network: "denied",
@@ -47,7 +47,11 @@ test("buildDockerArgs passes only the explicit env allowlist as -e flags", () =>
 
   assert.deepEqual(
     args.filter((_, i) => args[i - 1] === "-e"),
-    ["FOO=bar", "BAZ=qux"]
+    ["FOO", "BAZ"]
+  );
+  assert.ok(
+    !args.some((a) => a.includes("bar") || a.includes("qux")),
+    "an env value must never appear in the docker argument list"
   );
 });
 

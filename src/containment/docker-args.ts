@@ -51,8 +51,12 @@ export function buildDockerArgs(opts: {
   // Docker never auto-inherits the host's environment into a container
   // (verified), so nothing needs filtering here - only what's listed
   // reaches the container, exactly "the worker has what it needs."
-  for (const [key, value] of Object.entries(opts.env ?? {})) {
-    args.push("-e", `${key}=${value}`);
+  // Name-only `-e KEY`, never `-e KEY=value`: docker resolves a bare
+  // key from its own process environment (runContained supplies the
+  // values there when it spawns docker), so a value - e.g. a credential
+  // - never appears in host `ps` listings of the docker command line.
+  for (const key of Object.keys(opts.env ?? {})) {
+    args.push("-e", key);
   }
 
   // Persists whatever a tool writes under $HOME (e.g. session state for

@@ -54,6 +54,18 @@ export async function runContained(
     }
   }
 
+  // Docker's long `--mount` form CSV-parses its value, and a comma in a
+  // source path can't be escaped - refuse it here with a clear message
+  // instead of surfacing docker's own confusing parse error.
+  for (const path of [workdir, ...readOnlyMounts, ...(homeDir === undefined ? [] : [homeDir])]) {
+    if (path.includes(",")) {
+      throw new ContainmentError(
+        "invalid-path",
+        `"${path}" contains a comma, which docker's --mount flag cannot represent - use a comma-free path`
+      );
+    }
+  }
+
   const user =
     typeof process.getuid === "function" && typeof process.getgid === "function"
       ? `${process.getuid()}:${process.getgid()}`
@@ -77,7 +89,11 @@ export async function runContained(
   ];
 
   return new Promise<ContainedRunResult>((resolve, reject) => {
-    const child = spawn("docker", dockerArgs);
+    // The env allowlist's values ride docker's own process environment,
+    // matching docker-args.ts's name-only `-e KEY` flags - verified
+    // live: docker reads a bare `-e KEY` from its own environment and
+    // passes the value into the container.
+    const child = spawn("docker", dockerArgs, { env: { ...process.env, ...opts.env } });
     child.stdin.end();
     let stdout = "";
     let stderr = "";
