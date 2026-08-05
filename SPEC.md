@@ -110,7 +110,7 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
       events.jsonl            # append-only; every event, one JSON line:
                               # {occurredAt, taskId, name, details}
       tasks/<id>/
-        request.md           # the Client's words, verbatim; written once,
+        request.md            # the Client's words, verbatim; written once,
                               # never appended to
         answers.md            # one section per clarification round: the
                               # question asked, the answer given
