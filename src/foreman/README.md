@@ -63,12 +63,21 @@ return early" below.
    destroyed - see `src/delivery/README.md`'s "files-list-vs-teardown
    decision" for why. The one exception is a
    `discarded-protected-path` outcome: rule 9 discards the work, so
-   nothing is committed and the branch stays empty; instead the
-   worktree's uncommitted diff is captured (`discard.ts`) and saved to
-   the task's record folder as `discarded.patch`, and the delivery's
-   `gaps` field says where it landed and how to run the task again with
-   the gate change declared - "discarded" means "kept off the branch,"
-   not "destroyed." `delivery.ts` builds the `Delivery` object from the
+   everything changed since the line's fork point - a Worker's own
+   commits included, since a Worker has full git access inside the
+   worktree - is captured as one diff (`discard.ts`'s
+   `captureDiscardedPatch(workdir, baseCommit)`) and saved to the task's
+   record folder as `discarded.patch`, and then the branch ref itself is
+   forced back to the exact commit the line was cut from (`git
+   update-ref`, run against the project - `branch -f` refuses while the
+   worktree still has the branch checked out). Skipping Fabrica's own
+   commit alone would leave a loophole: a Worker that ran `git commit`
+   itself would have its tampered work sitting on the mergeable branch
+   anyway. Moving the ref closes it - the branch provably lands back at
+   its fork point no matter who committed. The delivery's `gaps` field
+   says where the patch landed and how to run the task again with the
+   gate change declared - "discarded" means "kept off the branch," not
+   "destroyed." `delivery.ts` builds the `Delivery` object from the
    branch's own diff (pinned to the commit the line was cut from, via
    `src/delivery`'s `baseCommitOf`), and `src/delivery`'s
    `validateDelivery` / `validateDeliveryFiles` (CONTRACT rule 4, issue
@@ -259,7 +268,7 @@ doesn't write that event or interpret one; that's left to whoever builds
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. |
 | `files.ts` | Lists files still uncommitted in a worktree (`git status --porcelain`) - used only to decide whether there's anything left to commit before teardown. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown. Skipped for a `discarded-protected-path` outcome - rule 9 keeps discarded work off the branch. |
-| `discard.ts` | Captures a worktree's uncommitted changes as a unified diff, without committing - the source of `discarded.patch` on a `discarded-protected-path` outcome. |
+| `discard.ts` | `captureDiscardedPatch(workdir, baseCommit)`: captures everything changed since the line's fork point - a worker's own commits and uncommitted edits alike, `--binary` so binary files survive - as one `git apply`-able diff, without committing. The source of `discarded.patch` on a `discarded-protected-path` outcome. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |

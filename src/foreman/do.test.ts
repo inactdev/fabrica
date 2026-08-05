@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -171,6 +172,71 @@ test("doTask rejects when no brain is provided", async () => {
     () => doTask(recordHome, "small change", { project }),
     (err: unknown) => err instanceof ForemanError && err.code === "no-brain"
   );
+});
+
+test("doTask on an undeclared gate change resets the branch to its fork point and saves the work as a patch", async () => {
+  const project = makeFixtureRepo("exit 1");
+  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      writeFileSync(join(workdir, "check.sh"), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(workdir, "feature.txt"), "possibly good work\n");
+    },
+  });
+
+  const task = await doTask(recordHome, "make it pass", { project, brain });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "discarded-protected-path");
+  assert.deepEqual(delivery?.files, [], "a discarded attempt hands nothing over on the branch");
+  const branchTip = execSync(`git rev-parse fabrica/${task.id}`, {
+    cwd: project,
+    encoding: "utf8",
+  }).trim();
+  assert.equal(branchTip, baseCommit, "the branch must land back at its exact fork point");
+
+  const patch = readTaskFile(recordHome, task.id, "discarded.patch");
+  assert.ok(patch, "the discarded work must be preserved as a patch on the record");
+  assert.match(patch, /feature\.txt/);
+  assert.match(patch, /check\.sh/);
+  assert.match(delivery?.gaps ?? "", /discarded\.patch/);
+});
+
+test("doTask discards an undeclared gate change even when the worker commits it itself", async () => {
+  const project = makeFixtureRepo("exit 1");
+  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      writeFileSync(join(workdir, "check.sh"), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(workdir, "feature.txt"), "committed by the worker\n");
+      execSync("git add -A && git -c user.email=w@w -c user.name=w commit -qm worker-commit", {
+        cwd: workdir,
+        shell: "/bin/bash",
+      });
+    },
+  });
+
+  const task = await doTask(recordHome, "make it pass", { project, brain });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "discarded-protected-path");
+  assert.deepEqual(
+    delivery?.files,
+    [],
+    "a worker's own commit must not smuggle discarded work into the delivery"
+  );
+  const branchTip = execSync(`git rev-parse fabrica/${task.id}`, {
+    cwd: project,
+    encoding: "utf8",
+  }).trim();
+  assert.equal(branchTip, baseCommit, "the worker's own commits must not survive on the branch");
+
+  const patch = readTaskFile(recordHome, task.id, "discarded.patch");
+  assert.ok(patch, "the committed-then-discarded work must still be preserved as a patch");
+  assert.match(patch, /feature\.txt/);
+  assert.match(patch, /exit 0/, "the tampered check content must be captured in the patch");
 });
 
 test("doTask records files touched by the worker in the delivery", async () => {

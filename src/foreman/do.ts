@@ -5,6 +5,7 @@
 // leans on (why check.sh, why attempts behaves the way it does, why the
 // promise doesn't resolve early).
 
+import { execFileSync } from "node:child_process";
 import { appendEvent, appendTaskFile, registerTask, writeTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
@@ -138,25 +139,43 @@ export async function doTask(
     // things, not in conflict. Committing tampered code onto a durable,
     // mergeable branch would turn "thrown away, no matter how good the
     // result looks" into "thrown away, but here it is anyway, one click
-    // from merging." Skipping the commit means `files` (read from the
+    // from merging." Emptying the branch means `files` (read from the
     // branch's diff) comes back empty, which is honest — nothing is handed
     // over on the branch. But "discarded" must not mean "destroyed": an
     // undeclared gate change is often a declaration mistake, and the work
-    // behind it may be entirely good, so the uncommitted diff is captured
-    // to the record as discarded.patch instead — never committed. The
-    // ratified rule 9 tests (contract/rule9.no-self-grading.test.ts) pass
-    // either way — they assert on delivery.outcome and delivery.gateChanges,
-    // never on what survives on the branch or in the record — so this is a
-    // deliberate product decision the contract does not force, not
-    // something derived from a failing test.
+    // behind it may be entirely good, so everything changed since the fork
+    // point is captured to the record as discarded.patch instead — never
+    // committed. The ratified rule 9 tests
+    // (contract/rule9.no-self-grading.test.ts) pass either way — they
+    // assert on delivery.outcome and delivery.gateChanges, never on what
+    // survives on the branch or in the record — so this is a deliberate
+    // product decision the contract does not force, not something derived
+    // from a failing test.
     let discardedPatchSaved = false;
-    if (listTouchedFiles(line.workdir).length > 0) {
-      if (outcome === "discarded-protected-path") {
-        writeTaskFile(recordHome, taskId, "discarded.patch", captureDiscardedPatch(line.workdir));
+    if (outcome === "discarded-protected-path") {
+      const patch = captureDiscardedPatch(line.workdir, baseCommit);
+      if (patch.length > 0) {
+        writeTaskFile(recordHome, taskId, "discarded.patch", patch);
         discardedPatchSaved = true;
-      } else {
-        commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
       }
+      // Rule 9 says the attempt is thrown away automatically, no matter
+      // how good the result looks — and a branch a Worker committed to
+      // itself (it has full git access inside the worktree) is exactly as
+      // mergeable as one Fabrica committed to. So the branch ref itself is
+      // forced back to the exact commit the line was cut from; merely
+      // skipping Fabrica's own commit step (the previous fix) stopped
+      // Fabrica from adding a commit but did nothing about a Worker
+      // committing directly. update-ref rather than `branch -f` because
+      // git refuses to force-move a branch checked out in a worktree, and
+      // this one still is until teardown. After this, diffFiles below
+      // naturally reports an empty files list — branch and baseCommit are
+      // the same commit.
+      execFileSync("git", ["update-ref", `refs/heads/${line.branch}`, baseCommit], {
+        cwd: line.project,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } else if (listTouchedFiles(line.workdir).length > 0) {
+      commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
     }
 
     const delivery = buildDelivery(outcome, {

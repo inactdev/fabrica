@@ -61,7 +61,7 @@ Each task gets `tasks/<id>/`, holding:
 | `delivery.md` | The delivery block, or a failure report | The Foreman, once, after checks run. |
 | `verdict` | The Client's ruling (`accept` / `fix` / `wrong`) plus their note and a timestamp | `fabrica verdict`, once. |
 | `transcript.log` | The worker's transcript entries, one JSON line each (see `src/brain/README.md`'s `TranscriptEntry`) | The Foreman, one append per attempt as the loop runs. |
-| `discarded.patch` | Only on a `discarded-protected-path` outcome: the unified diff of the work rule 9 kept off the branch, so a declaration mistake doesn't destroy it | The Foreman, once, before teardown; absent when the worktree had nothing uncommitted. |
+| `discarded.patch` | Only on a `discarded-protected-path` outcome: the unified diff (against the line's fork point, `--binary`) of the work rule 9 kept off the branch, so a declaration mistake doesn't destroy it | The Foreman, once, before teardown; absent when nothing changed since the fork point. |
 
 `registerTask` writes `request.md` and appends the matching `task-received` event to `events.jsonl` in the same call, so the file and the record can't drift apart. `src/foreman/` (issue #7) now writes `brief.md`, `transcript.log`, and `delivery.md` the same way; the remaining files exist for the modules that write them later in the loop to reuse the pattern.
 

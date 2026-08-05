@@ -140,11 +140,12 @@ already documented "the branch is what the Client reviews and merges
 by hand" as the design intent - a commit was always the missing half of
 that promise, not a new decision this module invented.
 
-The one outcome that commit is skipped for is
-`discarded-protected-path`: rule 9 discards the work, so nothing lands
-on the branch and `files` honestly comes back empty. The uncommitted
-diff is captured to the task's record folder as `discarded.patch`
-instead (`src/foreman/discard.ts`) - see "Rule 9 and this module" below.
+The one outcome handled differently is `discarded-protected-path`: rule
+9 discards the work, so nothing may land on the branch and `files`
+honestly comes back empty. Everything changed since the fork point is
+captured to the task's record folder as `discarded.patch` instead
+(`src/foreman/discard.ts`), and the branch ref is forced back to the
+fork point - see "Rule 9 and this module" below.
 
 ## Errors
 
@@ -169,13 +170,20 @@ string field (present, right type), and an empty string is a legitimate
 "the gate was untouched," not a violation. Duplicating rule 9's detection
 here would just be a second place for it to disagree with the first.
 
-What a discarded outcome means for this module's checks: `do.ts` skips
-the commit-before-teardown for `discarded-protected-path`, so the branch
-carries nothing and `files` is genuinely empty - rule 5 keeps the
-EVIDENCE (delivery, receipts, transcript stay on the record) while rule
-9 discards the WORK, and committing discarded work onto a mergeable
-branch would blur exactly that line. Because a declaration mistake
-shouldn't destroy good work, the worktree's uncommitted diff is saved to
-the task's record folder as `discarded.patch` (never committed), and the
-delivery's `gaps` field says where it landed and how to run the task
-again with the gate change declared.
+What a discarded outcome means for this module's checks: for
+`discarded-protected-path`, `do.ts` skips the commit-before-teardown
+AND forces the ProductionLine's branch ref back to the exact commit the
+line was cut from - rule 5 keeps the EVIDENCE (delivery, receipts,
+transcript stay on the record) while rule 9 discards the WORK, and
+leaving discarded work reachable on a mergeable branch would blur
+exactly that line. The ref move matters because a Worker has full git
+access inside the worktree and may have committed its own changes;
+merely skipping Fabrica's commit would leave those on the branch tip.
+With the branch back at the fork point, `diffFiles(project, branch,
+base)` naturally reports an empty `files` list - no special-casing.
+Because a declaration mistake shouldn't destroy good work, everything
+changed since the fork point (commits and uncommitted edits alike,
+`--binary` so it stays `git apply`-able) is first saved to the task's
+record folder as `discarded.patch`, and the delivery's `gaps` field says
+where it landed and how to run the task again with the gate change
+declared.
