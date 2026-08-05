@@ -1,4 +1,6 @@
-# Fabrica - Phase 1, in progress
+<img width="1280" height="720" alt="fabrica" src="https://github.com/user-attachments/assets/9d506471-80ae-4791-b019-bb46180ec450" />
+
+# Fábrica - Phase 1, in progress
 
 ![The loop](loop.svg)
 
