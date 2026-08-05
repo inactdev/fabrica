@@ -13,6 +13,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { ContainmentError } from "./errors.ts";
 import { runContained } from "./run.ts";
 
 function sandboxAvailable(): boolean {
@@ -91,6 +92,18 @@ test("runContained: reads work inside workdir and outside the home dir, but not 
   // isn't just denying everything, only the home dir minus workdir.
   const readSystemFile = await runContained("/bin/cat", ["/private/etc/hosts"], { workdir, homeDir, network: "denied" });
   assert.equal(readSystemFile.exitCode, 0);
+});
+
+test("runContained: a nonexistent workdir is refused with a typed error, not a raw ENOENT", async (t) => {
+  if (process.platform !== "darwin") return t.skip("runContained only implements macOS's sandbox-exec");
+  const { homeDir } = makeFixture();
+  const missing = join(homeDir, "does-not-exist");
+
+  await assert.rejects(
+    runContained("/bin/sh", ["-c", "true"], { workdir: missing, homeDir, network: "denied" }),
+    (err: unknown) =>
+      err instanceof ContainmentError && err.code === "invalid-path" && err.message.includes("workdir")
+  );
 });
 
 test("runContained: network is denied by default", async (t) => {

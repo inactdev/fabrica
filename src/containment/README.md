@@ -122,6 +122,9 @@ reshaping how it reads the result.
   `process.platform !== "darwin"`. This module only implements macOS's
   Seatbelt; it does not silently no-op or fall back to running
   uncontained on another OS.
+- **`invalid-path`** - `workdir` or `homeDir` doesn't resolve to a real,
+  existing path, so no profile could be built around it. The message
+  names which of the two failed and why.
 - **`spawn-failed`** - `sandbox-exec` itself couldn't be launched (not
   installed, or some other OS-level failure starting it). Distinct from
   the *contained command* failing, which just comes back as a normal

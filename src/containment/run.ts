@@ -13,6 +13,21 @@ import { ContainmentError } from "./errors.ts";
 import { buildProfile } from "./profile.ts";
 import type { ContainedRunResult, RunContainedOptions } from "./types.ts";
 
+// Both paths the sandbox profile is built around must resolve to real,
+// existing paths (macOS's /var -> /private/var symlink makes the raw
+// path unusable in a profile). A path that doesn't exist is refused
+// with a typed error, like every other refusal from this module.
+function resolveExistingPath(label: "workdir" | "homeDir", path: string): string {
+  try {
+    return realpathSync(path);
+  } catch (err) {
+    throw new ContainmentError(
+      "invalid-path",
+      `${label} "${path}" does not resolve to a real, existing path: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 export async function runContained(
   command: string,
   args: string[],
@@ -25,8 +40,8 @@ export async function runContained(
     );
   }
 
-  const workdir = realpathSync(opts.workdir);
-  const homeDir = realpathSync(opts.homeDir);
+  const workdir = resolveExistingPath("workdir", opts.workdir);
+  const homeDir = resolveExistingPath("homeDir", opts.homeDir);
   const profile = buildProfile({ workdir, homeDir, network: opts.network });
 
   // The profile is written to its own throwaway temp dir per call, not
