@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFabrica } from "./surface.ts";
+import { createForeman } from "./surface.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
@@ -23,10 +23,10 @@ test("rule 9: an UNDECLARED edit to the project's checks is discarded", async ()
     },
   });
 
-  const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
-  const task = await fabrica.do("make the build green", { project, brain: cheat });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const task = await foreman.do("make the build green", { project, brain: cheat });
 
-  const delivery = await fabrica.deliveryOf(task.id);
+  const delivery = await foreman.deliveryOf(task.id);
   assert.ok(delivery, "no delivery record at all");
   assert.equal(
     delivery.outcome,
@@ -34,7 +34,7 @@ test("rule 9: an UNDECLARED edit to the project's checks is discarded", async ()
     "a silent gate edit was not discarded — rule 9 broken"
   );
 
-  const receipts = await fabrica.receiptsOf(task.id);
+  const receipts = await foreman.receiptsOf(task.id);
   assert.ok(
     receipts.some((r) => r.outcome === "discarded-protected-path"),
     "the discard is not on the receipt — rules 5+9 broken"
@@ -51,10 +51,10 @@ test("rule 9: a DECLARED gate change is delivered, declaration attached", async 
     gateChanges: "check.sh: the brief changes the pass condition",
   });
 
-  const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
-  const task = await fabrica.do("change what green means", { project, brain: honest });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const task = await foreman.do("change what green means", { project, brain: honest });
 
-  const delivery = await fabrica.deliveryOf(task.id);
+  const delivery = await foreman.deliveryOf(task.id);
   assert.ok(delivery, "no delivery record at all");
   assert.notEqual(
     delivery.outcome,

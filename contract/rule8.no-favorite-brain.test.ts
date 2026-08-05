@@ -9,7 +9,7 @@ import { mkdtempSync, existsSync, readdirSync, readFileSync, statSync } from "no
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createFabrica } from "./surface.ts";
+import { createForeman } from "./surface.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
@@ -17,11 +17,11 @@ test("rule 8: the whole lifecycle runs on a completely fake brain", async () => 
   const project = makeFixtureRepo("exit 0");
   const brain = fakeBrain();
 
-  const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
-  const task = await fabrica.do("small change", { project, brain });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const task = await foreman.do("small change", { project, brain });
 
   assert.ok(brain.calls >= 1, "the plugged-in brain was never used");
-  assert.ok(await fabrica.deliveryOf(task.id), "no delivery from a fake-brained run");
+  assert.ok(await foreman.deliveryOf(task.id), "no delivery from a fake-brained run");
 });
 
 test("rule 8: no brain-specific code outside the adapter directory", () => {

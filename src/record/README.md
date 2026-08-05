@@ -56,13 +56,13 @@ Each task gets `tasks/<id>/`, holding:
 | --- | --- | --- |
 | `request.md` | The Client's original task text, verbatim | `registerTask`, once, at registration; never appended to or overwritten again. |
 | `answers.md` | Every clarification round: question asked, answer given | Whatever handles `fabrica answer`, one round appended per call. |
-| `brief.md` | `request.md` plus every answer in `answers.md`, assembled — what a Worker actually receives | Re-derived and rewritten by `fabrica answer` each time a round is added. |
+| `brief.md` | `request.md` plus every answer in `answers.md`, assembled — what a Worker actually receives | The Foreman, at registration, verbatim from the request (no answers exist yet); re-derived and rewritten by `fabrica answer` each time a round is added. |
 | `plan.md` | The agent's plan, on the runs where it proceeds straight to work instead of asking questions | The worker, once. |
 | `delivery.md` | The delivery block, or a failure report | The Foreman, once, after checks run. |
 | `verdict` | The Client's ruling (`accept` / `fix` / `wrong`) plus their note and a timestamp | `fabrica verdict`, once. |
-| `transcript.log` | The worker's transcript entries, one JSON line each (see `src/brain/README.md`'s `TranscriptEntry`) | The worker, streamed live as it runs. |
+| `transcript.log` | The worker's transcript entries, one JSON line each (see `src/brain/README.md`'s `TranscriptEntry`) | The Foreman, one append per attempt as the loop runs. |
 
-`registerTask` writes `request.md` and appends the matching `task-received` event to `events.jsonl` in the same call, so the file and the record can't drift apart. The other six files exist for the modules that write them later in the loop to reuse the same pattern.
+`registerTask` writes `request.md` and appends the matching `task-received` event to `events.jsonl` in the same call, so the file and the record can't drift apart. `src/foreman/` (issue #7) now writes `brief.md`, `transcript.log`, and `delivery.md` the same way; the remaining files exist for the modules that write them later in the loop to reuse the pattern.
 
 ## Why there is no edit and no delete
 

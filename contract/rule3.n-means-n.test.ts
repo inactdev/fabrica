@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFabrica } from "./surface.ts";
+import { createForeman } from "./surface.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
@@ -16,8 +16,8 @@ for (const attempts of [1, 3, 5]) {
     const project = makeFixtureRepo("exit 0");
     const brain = fakeBrain();
 
-    const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
-    await fabrica.do("same task, counted attempts", { project, attempts, brain });
+    const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+    await foreman.do("same task, counted attempts", { project, attempts, brain });
 
     assert.equal(brain.calls, attempts, `asked for ${attempts}, worker ran ${brain.calls} times — rule 3 broken`);
   });

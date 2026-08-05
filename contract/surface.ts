@@ -1,9 +1,12 @@
 // contract/surface.ts — the shapes of fabrica's seams.
 //
-// Phase 0 declares these; Phase 1 must implement them. Every factory here
-// throws NotBuiltError until the tool exists. That is what makes the
-// contract tests red today — on purpose. When Phase 1 replaces these
-// throws with a real implementation, the same tests become the judge.
+// Phase 0 declares these; Phase 1 implements them. createForeman (issue
+// #7) now delegates to src/foreman, which wires src/record, src/line,
+// src/brain, and src/config together into the loop. validateDelivery
+// (CONTRACT rule 4) is still unbuilt — that's issue #9's job — so it
+// keeps throwing NotBuiltError below.
+
+import { createForeman as createForemanImpl } from "../src/foreman/index.ts";
 
 export class NotBuiltError extends Error {
   constructor(phase = "Phase 1") {
@@ -120,7 +123,7 @@ export interface FabricaEvent {
   details?: unknown;
 }
 
-export interface Fabrica {
+export interface Foreman {
   do(
     taskText: string,
     opts: { project: string; attempts?: number; brain?: Brain }
@@ -138,13 +141,12 @@ export interface Fabrica {
   recordPath(): string;
 }
 
-/** Phase 1 replaces this throw with the real tool. */
-export function createFabrica(_opts: {
+export function createForeman(opts: {
   recordHome: string;
   /** Rule 10: hard dollar limits, enforced by code. */
   caps?: { perTaskUsd?: number; perDayUsd?: number };
-}): Fabrica {
-  throw new NotBuiltError();
+}): Foreman {
+  return createForemanImpl(opts);
 }
 
 /** Phase 1 replaces this throw with the real delivery validator (rule 4). */
