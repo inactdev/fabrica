@@ -4,7 +4,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateDelivery } from "./surface.ts";
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { validateDelivery } from "../src/index.ts";
+import { makeFixtureRepo } from "./helpers/fixture.ts";
 
 const complete = {
   outcome: "done",
@@ -33,3 +37,19 @@ for (const missing of ["confidence", "assumptions", "gaps", "evidence"] as const
     );
   });
 }
+
+test("rule 4: a delivery whose files list disagrees with the actual diff is rejected", () => {
+  const project = makeFixtureRepo();
+  const workdir = join(project, "..", "wt-rule4-files-" + Math.random().toString(36).slice(2));
+  execFileSync("git", ["worktree", "add", "-b", "feature-mismatch", workdir, "HEAD"], { cwd: project });
+  writeFileSync(join(workdir, "app.txt"), "changed\n");
+  execFileSync("git", ["add", "-A"], { cwd: workdir });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "work"], { cwd: workdir });
+
+  const mismatched = { ...complete, branch: "feature-mismatch", files: ["a-file-nobody-touched.txt"] };
+  assert.throws(
+    () => validateDelivery(mismatched, project),
+    /files/,
+    "delivery whose files list disagreed with the actual diff was not rejected — rule 4 broken"
+  );
+});

@@ -8,7 +8,7 @@ rule 4, "it never guesses silently." A delivery that's missing a required
 field, or whose `files` list doesn't match what its branch actually
 contains, is malformed and must never be presented as done.
 
-## `validateDelivery(value)`
+## `validateDelivery(value, project?)`
 
 ```ts
 validateDelivery({
@@ -35,12 +35,20 @@ answers - "there were no gaps" - not missing data; only an absent or
 wrong-typed field counts as malformed. Same for `files: []`: a task that
 touched nothing is a real outcome, not an incomplete one.
 
-This function takes `unknown` and never touches the filesystem or git -
-it works on a delivery that's nothing but a plain object, the same way
-the CONTRACT rule 4 test constructs one by hand. That is also exactly why
-it *cannot* check whether `files` is actually true: proving that needs a
-real git repository to diff against, which a bare object never has.
-That's `validateDeliveryFiles`'s job, not this function's.
+Called with one argument, this never touches the filesystem or git - it
+works on a delivery that's nothing but a plain object, the same way the
+CONTRACT rule 4 test constructs most of its cases by hand. That is also
+exactly why it *cannot* check whether `files` is actually true on its
+own: proving that needs a real git repository to diff against, which a
+bare object never has.
+
+Pass `project` (the second, optional argument - the Client's real
+checkout, same as `validateDeliveryFiles` below takes) and this also
+proves the `files` claim, by delegating to `validateDeliveryFiles`
+internally - there's exactly one place that logic lives, called either
+directly or through here. Omit `project` and that check is skipped
+entirely, not silently passed: nothing about `files` is claimed either
+way.
 
 ## `validateDeliveryFiles(delivery, project)`
 

@@ -16,7 +16,7 @@ import { listTouchedFiles } from "./files.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
-import { diffFiles, validateDelivery, validateDeliveryFiles } from "../delivery/index.ts";
+import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with the
@@ -138,10 +138,10 @@ export async function doTask(
     });
 
     // Never present a malformed delivery as done (rule 4), and never trust
-    // the files list on faith (rule 4's diff check) — prove the Foreman's
-    // own output before anyone else has to.
-    validateDelivery(delivery);
-    validateDeliveryFiles(delivery, line.project);
+    // the files list on faith (rule 4's diff check, run because `project`
+    // is passed) — prove the Foreman's own output before anyone else has
+    // to.
+    validateDelivery(delivery, line.project);
 
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
     appendEvent(recordHome, {
