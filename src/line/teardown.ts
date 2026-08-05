@@ -17,7 +17,7 @@ export function destroyProductionLine(line: ProductionLine): void {
   if (line.workdir !== expected) {
     throw new LineError(
       "unsafe-teardown",
-      `Refusing to tear down ${line.workdir}: it does not match the expected ` +
+      `Refusing to destroy ${line.workdir}: it does not match the expected ` +
         `ProductionLine path ${expected} for task ${line.taskId}.`
     );
   }
@@ -28,7 +28,7 @@ export function destroyProductionLine(line: ProductionLine): void {
   } catch {
     throw new LineError(
       "unsafe-teardown",
-      `Refusing to tear down ${line.workdir}: project path ${line.project} does not exist.`
+      `Refusing to destroy ${line.workdir}: project path ${line.project} does not exist.`
     );
   }
 

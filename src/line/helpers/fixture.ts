@@ -1,7 +1,7 @@
-// Throwaway fixtures for ProductionLine tests: a project to cut lines from
+// Throwaway fixtures for ProductionLine tests: a project to create lines from
 // (reusing contract/helpers/fixture.ts's own repo builder and fingerprint,
 // so our tests prove the exact same byte-for-byte invariant rule 1 does)
-// plus a fresh record home to cut them into.
+// plus a fresh record home to create them in.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
