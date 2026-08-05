@@ -11,3 +11,15 @@ export { ForemanError } from "./foreman/index.ts";
 export type { ForemanErrorCode } from "./foreman/index.ts";
 export { DEFAULT_ATTEMPTS } from "./foreman/index.ts";
 export { DEFAULT_CHECK_COMMAND } from "./foreman/index.ts";
+
+// The brain socket: a CLI never picks an adapter by name (CONTRACT rule
+// 8) - it asks for whichever one v1 wires in by default.
+export { defaultBrainAdapter } from "./brain/index.ts";
+export type { Brain } from "../contract/surface.ts";
+
+// Config: the record home's project registry and caps (SPEC.md
+// "Config"), needed by the CLI to resolve `--project <path-or-name>`
+// before it ever calls createForeman.
+export { loadConfig, projectsTomlPath, requireProject } from "./config/index.ts";
+export { ConfigError } from "./config/index.ts";
+export type { ConfigErrorCode, Caps, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";

@@ -3,16 +3,19 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "bin": {
+    "fabrica": "./src/cli/bin.mjs"
+  },
   "scripts": {
     "test": "npm run typecheck && tsx --test $(find contract src -name '*.test.ts' | sort)",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "smol-toml": "^1.7.1"
+    "smol-toml": "^1.7.1",
+    "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
-    "tsx": "^4.19.0",
     "typescript": "^5.5.0"
   }
 }
