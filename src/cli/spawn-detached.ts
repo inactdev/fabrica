@@ -67,13 +67,15 @@ export async function spawnDetachedTask(opts: SpawnDetachedTaskOptions): Promise
     });
   });
 
+  const watchCancel = new AbortController();
   try {
     const taskId = await Promise.race([
-      watchForTaskId({ recordHome, taskText, timeoutMs }),
+      watchForTaskId({ recordHome, taskText, timeoutMs, signal: watchCancel.signal }),
       spawnFailure,
     ]);
     return { taskId };
   } finally {
+    watchCancel.abort();
     child.removeAllListeners("error");
     child.unref();
   }

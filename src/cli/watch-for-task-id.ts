@@ -26,6 +26,9 @@ import { CliError } from "./errors.ts";
 export interface WatchForTaskIdOptions {
   recordHome: string;
   taskText: string;
+  /** Aborting releases the FSWatcher and timers; the returned promise
+   * never settles after an abort. */
+  signal?: AbortSignal;
   /** How long to wait before giving up. Registration is a handful of
    * synchronous fs calls with no network or Worker involved, so even a
    * slow disk should clear this in well under a second; generous
@@ -37,7 +40,7 @@ export interface WatchForTaskIdOptions {
  * exactly `taskText` in it. Rejects with CliError("registration-timeout")
  * if nothing matches before `timeoutMs`. */
 export function watchForTaskId(opts: WatchForTaskIdOptions): Promise<string> {
-  const { recordHome, taskText, timeoutMs = 15_000 } = opts;
+  const { recordHome, taskText, signal, timeoutMs = 15_000 } = opts;
   const tasksDir = join(recordHome, "tasks");
   mkdirSync(tasksDir, { recursive: true });
 
@@ -53,7 +56,22 @@ export function watchForTaskId(opts: WatchForTaskIdOptions): Promise<string> {
       watcher?.close();
       if (pollHandle) clearInterval(pollHandle);
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      signal?.removeEventListener("abort", onAbort);
     };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        settled = true;
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
 
     const settle = (fn: () => void) => {
       if (settled) return;
@@ -78,7 +96,6 @@ export function watchForTaskId(opts: WatchForTaskIdOptions): Promise<string> {
         } catch {
           continue; // directory claimed, request.md not written yet - retry next tick
         }
-        seen.add(id);
         if (content === taskText) {
           settle(() => resolveTaskId(id));
           return;

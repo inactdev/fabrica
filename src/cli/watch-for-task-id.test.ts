@@ -73,3 +73,48 @@ test("watchForTaskId: tolerates a directory claimed before request.md is written
   const taskId = await promise;
   assert.equal(taskId, partialId);
 });
+
+test("watchForTaskId: tolerates request.md read before its content finishes landing", async () => {
+  const recordHome = tempRecordHome();
+  const taskText = "fix the flaky test";
+  const tasksDir = join(recordHome, "tasks");
+  mkdirSync(tasksDir, { recursive: true });
+
+  const promise = watchForTaskId({ recordHome, taskText, timeoutMs: 5_000 });
+
+  // Simulate the partial-read window: request.md exists but is still
+  // empty when a check lands, then fills with the real content.
+  const partialId = "20260805-fix-the-flaky-test-zz";
+  setTimeout(() => {
+    mkdirSync(join(tasksDir, partialId));
+    writeFileSync(join(tasksDir, partialId, "request.md"), "");
+  }, 50);
+  setTimeout(() => writeFileSync(join(tasksDir, partialId, "request.md"), taskText), 200);
+
+  const taskId = await promise;
+  assert.equal(taskId, partialId);
+});
+
+test("watchForTaskId: an abort releases the watch and the promise never settles", async () => {
+  const recordHome = tempRecordHome();
+  const taskText = "fix the flaky test";
+  const controller = new AbortController();
+
+  const promise = watchForTaskId({
+    recordHome,
+    taskText,
+    timeoutMs: 1_000,
+    signal: controller.signal,
+  });
+  controller.abort();
+  registerTask(recordHome, taskText);
+
+  const outcome = await Promise.race([
+    promise.then(
+      () => "resolved",
+      () => "rejected"
+    ),
+    new Promise((r) => setTimeout(() => r("still-pending"), 1_500)),
+  ]);
+  assert.equal(outcome, "still-pending");
+});
