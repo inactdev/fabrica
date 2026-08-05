@@ -14,7 +14,7 @@ real file in a real throwaway worktree and checks it exists.
 
 ## `claudeCodeAdapter(opts?)`
 
-Call this once to get a `Brain`. Four optional fields:
+Call this once to get a `Brain`. Five optional fields:
 
 - **`model`** - the value passed straight to `claude --model`, e.g.
   `"claude-opus-5"` or the alias `"sonnet"`. Leave it out and the call
