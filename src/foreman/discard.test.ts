@@ -43,6 +43,19 @@ test("captureDiscardedPatch covers worker commits, uncommitted edits, and binary
   execFileSync("git", ["apply", "--check"], { cwd: fresh, input: patch });
 });
 
+test("captureDiscardedPatch survives a patch larger than Node's default 1 MiB maxBuffer", () => {
+  const repo = makeFixtureRepo();
+  const baseCommit = headOf(repo);
+  writeFileSync(join(repo, "big.txt"), "x".repeat(3 * 1024 * 1024) + "\n");
+
+  const patch = captureDiscardedPatch(repo, baseCommit);
+
+  assert.ok(patch.length > 1024 * 1024, "fixture patch too small to exceed the default buffer");
+  assert.ok(patch.includes("big.txt"), "the oversized file is missing from the patch");
+  const fresh = makeFixtureRepo();
+  execFileSync("git", ["apply", "--check"], { cwd: fresh, input: patch });
+});
+
 test("captureDiscardedPatch returns an empty string when nothing changed since the base commit", () => {
   const repo = makeFixtureRepo();
   assert.equal(captureDiscardedPatch(repo, headOf(repo)), "");

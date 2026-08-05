@@ -2,7 +2,8 @@
 // per-task folders it is the single source of truth for.
 // SPEC.md "The record": events.jsonl is authoritative; everything else
 // (request.md, answers.md, brief.md, plan.md, delivery.md, verdict,
-// transcript.log) is a convenience view of it.
+// transcript.log) is a convenience view of it - except discarded.patch,
+// whose content exists only in the task folder, never in the event log.
 
 // FabricaEvent/FabricaEventName are declared once in contract/surface.ts
 // (issue #45) and imported here as a type only - erased at compile time,

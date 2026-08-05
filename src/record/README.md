@@ -7,7 +7,7 @@
 The record has two parts:
 
 - **`events.jsonl`** — one JSON object per line, appended as things happen. This is the single source of truth (SPEC.md "The record"). Nothing in Fabrica may reconstruct a task's history from anywhere else.
-- **`tasks/<id>/`** — a folder of files per task (below), for humans and other tools to read without parsing JSON lines. Every one of them is derived from `events.jsonl`, never an independent record of its own.
+- **`tasks/<id>/`** — a folder of files per task (below), for humans and other tools to read without parsing JSON lines. Every one of them is derived from `events.jsonl`, never an independent record of its own - with one exception: `discarded.patch` (present only on a `discarded-protected-path` outcome) holds content that exists nowhere in the event log; the log records that the discard happened, but the patch itself lives only in the task folder, and only the delivery's gaps text points at it.
 
 This module exists because of CONTRACT rule 5, "It writes everything down": every step of a task — received, worked, checked, delivered, ruled on — lands here in order, and none of it can be changed or erased afterward.
 

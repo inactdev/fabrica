@@ -56,6 +56,24 @@ test("a non-numeric confidence is rejected", () => {
   assert.throws(() => validateDelivery({ ...complete, confidence: "85" }), /confidence/);
 });
 
+test('an absent field is reported as "missing", a wrong-typed one as the wrong type', () => {
+  const absent: Record<string, unknown> = { ...complete };
+  delete absent.confidence;
+  assert.throws(() => validateDelivery(absent), /missing required field "confidence"/);
+  assert.throws(
+    () => validateDelivery({ ...complete, confidence: "85" }),
+    /"confidence" field is not a finite number/
+  );
+  assert.throws(
+    () => validateDelivery({ ...complete, summary: 42 }),
+    /"summary" field is not a string/
+  );
+  assert.throws(
+    () => validateDelivery({ ...complete, files: "app.txt" }),
+    /"files" field is not an array of strings/
+  );
+});
+
 test("a files array with a non-string entry is rejected", () => {
   assert.throws(() => validateDelivery({ ...complete, files: ["app.txt", 42] }), /files/);
 });

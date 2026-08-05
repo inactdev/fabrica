@@ -38,24 +38,39 @@ export function validateDelivery(value: unknown): asserts value is Delivery {
   }
   const d = value as Record<string, unknown>;
 
-  if (typeof d.outcome !== "string" || !OUTCOMES.has(d.outcome as Delivery["outcome"])) {
+  if (d.outcome === undefined) {
     throw new DeliveryError(
       "malformed",
       'delivery is missing required field "outcome" (must be "done", "failure-report", or "discarded-protected-path")'
     );
   }
+  if (typeof d.outcome !== "string" || !OUTCOMES.has(d.outcome as Delivery["outcome"])) {
+    throw new DeliveryError(
+      "malformed",
+      `delivery's "outcome" field is invalid (must be "done", "failure-report", or "discarded-protected-path")`
+    );
+  }
 
-  if (typeof d.confidence !== "number" || !Number.isFinite(d.confidence)) {
+  if (d.confidence === undefined) {
     throw new DeliveryError("malformed", 'delivery is missing required field "confidence"');
+  }
+  if (typeof d.confidence !== "number" || !Number.isFinite(d.confidence)) {
+    throw new DeliveryError("malformed", `delivery's "confidence" field is not a finite number`);
   }
 
   for (const field of REQUIRED_STRING_FIELDS) {
-    if (typeof d[field] !== "string") {
+    if (d[field] === undefined) {
       throw new DeliveryError("malformed", `delivery is missing required field "${field}"`);
+    }
+    if (typeof d[field] !== "string") {
+      throw new DeliveryError("malformed", `delivery's "${field}" field is not a string`);
     }
   }
 
-  if (!Array.isArray(d.files) || d.files.some((file) => typeof file !== "string")) {
+  if (d.files === undefined) {
     throw new DeliveryError("malformed", 'delivery is missing required field "files"');
+  }
+  if (!Array.isArray(d.files) || d.files.some((file) => typeof file !== "string")) {
+    throw new DeliveryError("malformed", `delivery's "files" field is not an array of strings`);
   }
 }

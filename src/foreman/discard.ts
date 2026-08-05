@@ -20,9 +20,15 @@ export function captureDiscardedPatch(workdir: string, baseCommit: string): stri
   // --binary makes the patch self-contained for binary files too, so
   // `git apply` can restore everything; without it a binary file appears
   // only as a "Binary files ... differ" stub and its content is lost.
+  // Node's default maxBuffer is only 1 MiB, and a --binary patch easily
+  // exceeds it (base85 inflates binary content; lockfiles/assets are
+  // common). Overflowing would throw here, before do.ts's branch reset
+  // runs - leaving a Worker's self-committed work on the mergeable
+  // branch, the exact rule-9 loophole the reset exists to close.
   return execFileSync("git", ["diff", "--binary", baseCommit], {
     cwd: workdir,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 100 * 1024 * 1024,
   });
 }

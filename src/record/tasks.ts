@@ -1,8 +1,11 @@
 // Per-task folders: tasks/<id>/ holding request.md, answers.md, brief.md,
-// plan.md, delivery.md, verdict, transcript.log (SPEC.md "The record").
-// These are a convenience view of events.jsonl, not a second source of
-// truth — registerTask logs the "task-received" event itself so the two
-// never drift apart.
+// plan.md, delivery.md, verdict, transcript.log, and - only on a
+// discarded-protected-path outcome - discarded.patch (SPEC.md "The
+// record"). All but discarded.patch are a convenience view of
+// events.jsonl, not a second source of truth — registerTask logs the
+// "task-received" event itself so the two never drift apart.
+// discarded.patch is the one exception: its content exists only here,
+// never in the event log (only the delivery's gaps text points at it).
 //
 // Id collisions: claimTaskId (ids.ts) hands out candidates; claiming a
 // directory with mkdir (no `recursive`) is what actually decides
