@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { LineError } from "./errors.ts";
-import type { ProductionLine } from "./types.ts";
+import type { ProductionLine } from "../../contract/surface.ts";
 import { assertSafeId, describeGitError, requireRepoRoot } from "./safety.ts";
 
 export function createProductionLine(opts: { project: string; taskId: string; recordHome: string }): ProductionLine {

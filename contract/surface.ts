@@ -16,6 +16,23 @@ export class NotBuiltError extends Error {
 }
 
 /**
+ * A created, live ProductionLine: a linked git worktree of `project`
+ * (CONTRACT rule 1, "it never touches your stuff" — `contract/
+ * rule1.isolation.test.ts` exists solely to prove this shape holds).
+ */
+export interface ProductionLine {
+  taskId: string;
+  /** `fabrica/<taskId>` — left intact after the line is destroyed, for the Client to review. */
+  branch: string;
+  /** Resolved root of the Client's own checkout. Never written to. */
+  project: string;
+  /** The throwaway worktree — every Worker and check runs here. */
+  workdir: string;
+  /** Resolved record home the workdir was created under (`recordHome/tasks/<taskId>/worktree`). */
+  recordHome: string;
+}
+
+/**
  * One piece of a worker's transcript. Structured rather than a single
  * string so a live view (Phase 4, #26) can render and expand entries
  * individually, instead of parsing one blob back apart. `kind` is

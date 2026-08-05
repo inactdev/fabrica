@@ -79,6 +79,12 @@ require a clean tree first.
 
 ## The `ProductionLine` fields
 
+`ProductionLine` is declared once, in `contract/surface.ts` (issue #45)
+- it is CONTRACT rule 1's central shape, so it lives with the contract
+types like `Delivery` and `Receipt` do, not as a local `types.ts` here -
+and this module imports it as a type only, which `import type` erases
+at compile time so it creates no runtime dependency on `contract/`.
+
 `ProductionLine` is what `createProductionLine` hands back - you never
 construct one by hand, so no field is ever "left out." What matters
 instead is what each one is used for, and what breaks if one ever holds

@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { LineError } from "./errors.ts";
-import type { ProductionLine } from "./types.ts";
+import type { ProductionLine } from "../../contract/surface.ts";
 import { describeGitError, isKnownWorktree, requireLinkedWorktree } from "./safety.ts";
 
 /** What actually happened. `already-destroyed` is the idempotent case
