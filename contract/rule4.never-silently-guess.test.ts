@@ -7,9 +7,9 @@ import assert from "node:assert/strict";
 import { validateDelivery } from "./surface.ts";
 
 const complete = {
-  kind: "done",
+  outcome: "done",
   confidence: 85,
-  did: "added the export button",
+  summary: "added the export button",
   evidence: "./check.sh -> exit 0",
   assumptions: "dates are year-month-day",
   gaps: "no tests for empty lists",

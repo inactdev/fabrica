@@ -12,12 +12,12 @@ import * as TOML from "smol-toml";
 import { ConfigError } from "./errors.ts";
 import type { Caps, FabricaConfig, ProjectConfig } from "./types.ts";
 
-export function projectsTomlPath(home: string): string {
-  return join(home, "projects.toml");
+export function projectsTomlPath(recordHome: string): string {
+  return join(recordHome, "projects.toml");
 }
 
-export function loadConfig(home: string): FabricaConfig {
-  const path = projectsTomlPath(home);
+export function loadConfig(recordHome: string): FabricaConfig {
+  const path = projectsTomlPath(recordHome);
 
   let text: string;
   try {

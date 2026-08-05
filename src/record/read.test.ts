@@ -9,56 +9,56 @@ import { readEvents, readEventsForTask } from "./read.ts";
 import { makeTestHome } from "./helpers/test-home.ts";
 
 test("readEvents: an unwritten record reads as empty, not an error", () => {
-  const home = makeTestHome();
-  assert.deepEqual(readEvents(home), []);
+  const recordHome = makeTestHome();
+  assert.deepEqual(readEvents(recordHome), []);
 });
 
 test("readEvents: returns every event in write order", () => {
-  const home = makeTestHome();
-  appendEvent(home, { taskId: "t1", name: "task-received" });
-  appendEvent(home, { taskId: "t2", name: "task-received" });
-  appendEvent(home, { taskId: "t1", name: "work-started" });
+  const recordHome = makeTestHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t2", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started" });
 
-  const events = readEvents(home).map((e) => `${e.taskId}:${e.name}`);
+  const events = readEvents(recordHome).map((e) => `${e.taskId}:${e.name}`);
   assert.deepEqual(events, ["t1:task-received", "t2:task-received", "t1:work-started"]);
 });
 
 test("readEventsForTask: filters to just the one task, order preserved", () => {
-  const home = makeTestHome();
-  appendEvent(home, { taskId: "t1", name: "task-received" });
-  appendEvent(home, { taskId: "t2", name: "task-received" });
-  appendEvent(home, { taskId: "t1", name: "work-started" });
-  appendEvent(home, { taskId: "t1", name: "delivered" });
+  const recordHome = makeTestHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t2", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started" });
+  appendEvent(recordHome, { taskId: "t1", name: "delivered" });
 
-  const events = readEventsForTask(home, "t1").map((e) => e.name);
+  const events = readEventsForTask(recordHome, "t1").map((e) => e.name);
   assert.deepEqual(events, ["task-received", "work-started", "delivered"]);
 });
 
 test("readEventsForTask: an unknown task id reads as empty, not an error", () => {
-  const home = makeTestHome();
-  appendEvent(home, { taskId: "t1", name: "task-received" });
-  assert.deepEqual(readEventsForTask(home, "ghost"), []);
+  const recordHome = makeTestHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  assert.deepEqual(readEventsForTask(recordHome, "ghost"), []);
 });
 
 test("readEvents: mutating one call's result never affects the next call's result", () => {
-  const home = makeTestHome();
-  appendEvent(home, { taskId: "t1", name: "task-received" });
+  const recordHome = makeTestHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
 
-  const first = readEvents(home);
-  first.push({ occurredAt: "fake", taskId: "t1", name: "forged" });
-  first[0].name = "tampered";
+  const first = readEvents(recordHome);
+  first.push({ occurredAt: "fake", taskId: "t1", name: "delivered" });
+  first[0].name = "verdict-recorded";
 
-  const second = readEvents(home);
+  const second = readEvents(recordHome);
   assert.equal(second.length, 1);
   assert.equal(second[0].name, "task-received");
 });
 
 test("readEvents: a reader polling during concurrent writers never throws or sees a torn line", async () => {
-  const home = makeTestHome();
+  const recordHome = makeTestHome();
   const workerPath = fileURLToPath(new URL("./helpers/concurrent-append-worker.ts", import.meta.url));
   const tsxBin = join(process.cwd(), "node_modules", ".bin", "tsx");
 
-  const child = spawn(tsxBin, [workerPath, home, "t1", "500", "writer"]);
+  const child = spawn(tsxBin, [workerPath, recordHome, "t1", "500", "writer"]);
   let done = false;
   let exitCode: number | null = null;
   let spawnError: Error | null = null;
@@ -74,7 +74,7 @@ test("readEvents: a reader polling during concurrent writers never throws or see
   let pollCount = 0;
   let lastLen = 0;
   while (!done) {
-    const events = readEvents(home); // must never throw, even mid-write
+    const events = readEvents(recordHome); // must never throw, even mid-write
     assert.ok(events.length >= lastLen, "event count must never appear to shrink while reading");
     lastLen = events.length;
     pollCount += 1;
@@ -83,6 +83,6 @@ test("readEvents: a reader polling during concurrent writers never throws or see
 
   assert.equal(spawnError, null);
   assert.equal(exitCode, 0);
-  assert.equal(readEvents(home).length, 500);
+  assert.equal(readEvents(recordHome).length, 500);
   assert.ok(pollCount > 0, "sanity: the poll loop must actually have run at least once");
 });

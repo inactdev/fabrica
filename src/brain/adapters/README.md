@@ -15,9 +15,9 @@ genuinely different shapes behind it.
 **CLI adapters** wrap a coding agent that already runs as its own
 program. That tool does the agent work itself - reading files, editing
 them, running commands inside `workdir`. The adapter's job is narrow:
-build the right command line, hand over `instructions`, stream the
-tool's output into `transcript`, and translate that tool's own notion of
-a resumable run into `session`.
+build the right command line, hand over `brief`, stream the tool's
+output into `transcript`, and translate that tool's own notion of a
+resumable run into `session`.
 
 **Direct API adapters** talk straight to a model's API instead. There is
 no agent program on the other end - the API only returns text and
@@ -77,8 +77,8 @@ guess."* Concretely, for each candidate:
    coding agents ship an interactive chat mode and a separate scriptable
    one; the adapter has to invoke the scriptable one, with whatever
    flags that specific binary's current version actually takes.
-2. **How `instructions` goes in and `transcript` comes out.** Some tools
-   take the prompt as an argument, some on stdin, some from a file; some
+2. **How `brief` goes in and `transcript` comes out.** Some tools take
+   the prompt as an argument, some on stdin, some from a file; some
    print plain text, some emit structured output (Grok Build's headless
    mode is JSON) that has to be reduced to a transcript string.
 3. **How it represents a resumable run.** Some tools hand back an id you
@@ -103,16 +103,21 @@ export function terminalToolAdapter(): Brain {
   return {
     name: "terminal-tool",
     model: "whatever model that tool reports itself as using",
-    async work(instructions, workdir, opts) {
+    async work(brief, workdir, opts) {
       // Real flag names come from verifying the live binary (issue #6).
       const args = opts?.session
-        ? ["--resume", opts.session, "--prompt", instructions]
-        : ["--prompt", instructions];
-      if (opts?.effort) args.push("--effort", opts.effort); // ignored if the tool doesn't support it
+        ? ["--resume", opts.session, "--prompt", brief]
+        : ["--prompt", brief];
+      if (opts?.reasoningEffort) args.push("--effort", opts.reasoningEffort); // ignored if the tool doesn't support it
 
       const { output, resumeId } = await runNonInteractively(args, { cwd: workdir });
 
-      return { transcript: output, session: resumeId };
+      // A text-only tool's output becomes one entry; a tool with its own
+      // structured output maps each piece to its own entry instead.
+      return {
+        transcript: [{ occurredAt: new Date().toISOString(), kind: "text", text: output }],
+        session: resumeId,
+      };
     },
   };
 }

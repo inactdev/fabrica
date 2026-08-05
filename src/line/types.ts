@@ -1,17 +1,17 @@
-// The shape of a cut ProductionLine.
+// The shape of a created ProductionLine.
 // LANGUAGE.md: "ProductionLine — one task's disposable lane: a throwaway
 // copy of the project where the Worker and the checks run as stations.
-// Built for one task, torn down after."
+// Built for one task, destroyed after."
 
-/** A cut, live ProductionLine: a linked git worktree of `project`. */
+/** A created, live ProductionLine: a linked git worktree of `project`. */
 export interface ProductionLine {
-  id: string;
-  /** `fabrica/<id>` — left intact after teardown for the Client to review. */
+  taskId: string;
+  /** `fabrica/<taskId>` — left intact after the line is destroyed, for the Client to review. */
   branch: string;
   /** Resolved root of the Client's own checkout. Never written to. */
   project: string;
   /** The throwaway worktree — every Worker and check runs here. */
   workdir: string;
-  /** Resolved record home the workdir was cut under (`home/tasks/<id>/worktree`). */
-  home: string;
+  /** Resolved record home the workdir was created under (`recordHome/tasks/<taskId>/worktree`). */
+  recordHome: string;
 }

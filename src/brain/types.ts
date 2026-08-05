@@ -14,11 +14,26 @@ export interface BrainWorkOptions {
    * couple to one adapter's vocabulary. An adapter that does not
    * recognize the value must ignore it, not fail; the value is still
    * recorded as requested regardless of whether the adapter used it. */
-  effort?: string;
+  reasoningEffort?: string;
+}
+
+/** One piece of a worker's transcript. Structured rather than a single
+ * string so a live view (Phase 4, #26) can render and expand entries
+ * individually. `kind` is deliberately free-form, not a closed union -
+ * an adapter reports whatever kind of chunk its own tool emits (e.g.
+ * "stdout", "tool-call", "reasoning"). */
+export interface TranscriptEntry {
+  occurredAt: string;
+  kind: string;
+  text: string;
 }
 
 export interface BrainWorkResult {
-  transcript: string;
+  /** The live stream `fabrica watch` renders is derived from these
+   * entries, in order. Adapters whose tool already emits structured
+   * output map it directly; text-only adapters wrap each chunk as one
+   * entry. */
+  transcript: TranscriptEntry[];
   /** Open declaration of any ratified-test or check-setting changes made,
    * and why (rule 9). Omitted = gate untouched. Carried through this seam
    * faithfully; validating it is issue #9's job. */
@@ -33,5 +48,5 @@ export interface BrainWorkResult {
 export interface Brain {
   name: string;
   model: string;
-  work(instructions: string, workdir: string, opts?: BrainWorkOptions): Promise<BrainWorkResult>;
+  work(brief: string, workdir: string, opts?: BrainWorkOptions): Promise<BrainWorkResult>;
 }

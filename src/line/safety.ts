@@ -1,4 +1,4 @@
-// Guards shared by cut and teardown: refuse rather than guess whenever a
+// Guards shared by createProductionLine and destroyProductionLine: refuse rather than guess whenever a
 // path is not exactly what it should be. The incident this module is
 // designed against was a script that wrote to a live path resolved from a
 // throwaway copy — every check here exists to make that class of mistake
@@ -11,11 +11,11 @@ import { LineError } from "./errors.ts";
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 /** Task ids become path segments and branch names — both must be inert. */
-export function assertSafeId(id: string): void {
-  if (!SAFE_ID.test(id) || id.includes("..")) {
+export function assertSafeId(taskId: string): void {
+  if (!SAFE_ID.test(taskId) || taskId.includes("..")) {
     throw new LineError(
       "invalid-id",
-      `"${id}" is not a safe task id: it must start with a letter or digit, ` +
+      `"${taskId}" is not a safe task id: it must start with a letter or digit, ` +
         `contain only letters, digits, ".", "_" or "-", and never contain "..".`
     );
   }
@@ -90,7 +90,7 @@ function normalize(path: string): string {
 
 /**
  * Confirms `workdir` is a *linked* worktree — never the main one — that git
- * itself has registered for `project`. Teardown only ever acts on a path
+ * itself has registered for `project`. destroyProductionLine only ever acts on a path
  * that passes this check; it never deletes a path on say-so alone.
  */
 export function requireLinkedWorktree(project: string, workdir: string): WorktreeEntry {
@@ -105,7 +105,7 @@ export function requireLinkedWorktree(project: string, workdir: string): Worktre
   if (normalize(main.path) === workdirNormalized) {
     throw new LineError(
       "unsafe-teardown",
-      `Refusing to tear down ${workdir}: it is the project's own checkout, not a ProductionLine.`
+      `Refusing to destroy ${workdir}: it is the project's own checkout, not a ProductionLine.`
     );
   }
 
@@ -113,7 +113,7 @@ export function requireLinkedWorktree(project: string, workdir: string): Worktre
   if (!match) {
     throw new LineError(
       "unsafe-teardown",
-      `Refusing to tear down ${workdir}: git does not have it registered as a ` +
+      `Refusing to destroy ${workdir}: git does not have it registered as a ` +
         `linked worktree of ${project}.`
     );
   }

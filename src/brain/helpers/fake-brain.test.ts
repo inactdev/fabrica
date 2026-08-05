@@ -14,45 +14,46 @@ test("fakeBrain: counts every call to work()", async () => {
 test("fakeBrain: a call with no session starts a fresh one each time (cold)", async () => {
   const brain = fakeBrain();
 
-  const first = await brain.work("instructions one", "/workdir");
-  const second = await brain.work("instructions two", "/workdir");
+  const first = await brain.work("brief one", "/workdir");
+  const second = await brain.work("brief two", "/workdir");
 
   assert.notEqual(first.session, second.session);
-  assert.deepEqual(brain.historyBySession.get(first.session!), ["instructions one"]);
-  assert.deepEqual(brain.historyBySession.get(second.session!), ["instructions two"]);
+  assert.deepEqual(brain.historyBySession.get(first.session!), ["brief one"]);
+  assert.deepEqual(brain.historyBySession.get(second.session!), ["brief two"]);
 });
 
 test("fakeBrain: a retry passing the prior session continues it (warm), never restarts", async () => {
   const brain = fakeBrain();
 
-  const first = await brain.work("initial instructions", "/workdir");
+  const first = await brain.work("initial brief", "/workdir");
   const retry = await brain.work("correction: fix the failing check", "/workdir", {
     session: first.session,
   });
 
   assert.equal(retry.session, first.session);
   assert.deepEqual(brain.historyBySession.get(first.session!), [
-    "initial instructions",
+    "initial brief",
     "correction: fix the failing check",
   ]);
-  assert.match(retry.transcript, /2 instruction\(s\)/);
+  assert.equal(retry.transcript.length, 1);
+  assert.match(retry.transcript[0].text, /2 brief\(s\)/);
 });
 
-test("fakeBrain: passes instructions and workdir through to onWork", async () => {
-  const seen: Array<{ instructions: string; workdir: string }> = [];
+test("fakeBrain: passes brief and workdir through to onWork", async () => {
+  const seen: Array<{ brief: string; workdir: string }> = [];
   const brain = fakeBrain({
-    onWork: (instructions, workdir) => seen.push({ instructions, workdir }),
+    onWork: (brief, workdir) => seen.push({ brief, workdir }),
   });
 
-  await brain.work("the instructions", "/some/workdir");
+  await brain.work("the brief", "/some/workdir");
 
-  assert.deepEqual(seen, [{ instructions: "the instructions", workdir: "/some/workdir" }]);
+  assert.deepEqual(seen, [{ brief: "the brief", workdir: "/some/workdir" }]);
 });
 
 test("fakeBrain: gateChanges is omitted by default - the gate is untouched", async () => {
   const brain = fakeBrain();
 
-  const result = await brain.work("instructions", "/workdir");
+  const result = await brain.work("brief", "/workdir");
 
   assert.equal(result.gateChanges, undefined);
   assert.equal("gateChanges" in result, false);
@@ -61,7 +62,7 @@ test("fakeBrain: gateChanges is omitted by default - the gate is untouched", asy
 test("fakeBrain: gateChanges is carried through faithfully when configured", async () => {
   const brain = fakeBrain({ gateChanges: "loosened contract/rule2.check.test.ts because X" });
 
-  const result = await brain.work("instructions", "/workdir");
+  const result = await brain.work("brief", "/workdir");
 
   assert.equal(result.gateChanges, "loosened contract/rule2.check.test.ts because X");
 });
@@ -73,28 +74,28 @@ test("fakeBrain: name and model identify it as the fake, matching the Brain shap
   assert.equal(brain.model, "fake-1");
 });
 
-test("fakeBrain: an effort value it does not recognize is ignored, not a failure", async () => {
+test("fakeBrain: a reasoningEffort value it does not recognize is ignored, not a failure", async () => {
   const brain = fakeBrain();
 
   await assert.doesNotReject(
-    brain.work("instructions", "/workdir", { effort: "ludicrous-speed" })
+    brain.work("brief", "/workdir", { reasoningEffort: "ludicrous-speed" })
   );
 });
 
-test("fakeBrain: the requested effort is recorded even though the fake ignores it", async () => {
+test("fakeBrain: the requested reasoningEffort is recorded even though the fake ignores it", async () => {
   const brain = fakeBrain();
 
-  await brain.work("instructions one", "/workdir", { effort: "high" });
-  await brain.work("instructions two", "/workdir");
+  await brain.work("brief one", "/workdir", { reasoningEffort: "high" });
+  await brain.work("brief two", "/workdir");
 
-  assert.deepEqual(brain.effortsRequested, ["high", undefined]);
+  assert.deepEqual(brain.reasoningEffortsRequested, ["high", undefined]);
 });
 
-test("fakeBrain: effort is passed through to onWork alongside instructions and workdir", async () => {
+test("fakeBrain: reasoningEffort is passed through to onWork alongside brief and workdir", async () => {
   const seen: Array<string | undefined> = [];
-  const brain = fakeBrain({ onWork: (_instructions, _workdir, effort) => seen.push(effort) });
+  const brain = fakeBrain({ onWork: (_brief, _workdir, reasoningEffort) => seen.push(reasoningEffort) });
 
-  await brain.work("instructions", "/workdir", { effort: "low" });
+  await brain.work("brief", "/workdir", { reasoningEffort: "low" });
 
   assert.deepEqual(seen, ["low"]);
 });

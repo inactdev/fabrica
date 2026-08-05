@@ -17,7 +17,7 @@ test("rule 8: the whole lifecycle runs on a completely fake brain", async () => 
   const project = makeFixtureRepo("exit 0");
   const brain = fakeBrain();
 
-  const fabrica = createFabrica({ home: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
   const task = await fabrica.do("small change", { project, brain });
 
   assert.ok(brain.calls >= 1, "the plugged-in brain was never used");

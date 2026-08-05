@@ -11,14 +11,14 @@ import { createFabrica } from "./surface.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
-for (const n of [1, 3, 5]) {
-  test(`rule 3: asking for ${n} attempts causes exactly ${n} worker runs`, async () => {
+for (const attempts of [1, 3, 5]) {
+  test(`rule 3: asking for ${attempts} attempts causes exactly ${attempts} worker runs`, async () => {
     const project = makeFixtureRepo("exit 0");
     const brain = fakeBrain();
 
-    const fabrica = createFabrica({ home: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
-    await fabrica.do("same task, counted attempts", { project, n, brain });
+    const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+    await fabrica.do("same task, counted attempts", { project, attempts, brain });
 
-    assert.equal(brain.calls, n, `asked for ${n}, worker ran ${brain.calls} times — rule 3 broken`);
+    assert.equal(brain.calls, attempts, `asked for ${attempts}, worker ran ${brain.calls} times — rule 3 broken`);
   });
 }

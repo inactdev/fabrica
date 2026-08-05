@@ -1,1 +1,1 @@
-export type { Brain, BrainWorkOptions, BrainWorkResult } from "./types.ts";
+export type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "./types.ts";

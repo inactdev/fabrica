@@ -23,13 +23,13 @@ test("rule 9: an UNDECLARED edit to the project's checks is discarded", async ()
     },
   });
 
-  const fabrica = createFabrica({ home: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
   const task = await fabrica.do("make the build green", { project, brain: cheat });
 
   const delivery = await fabrica.deliveryOf(task.id);
   assert.ok(delivery, "no delivery record at all");
   assert.equal(
-    delivery.kind,
+    delivery.outcome,
     "discarded-protected-path",
     "a silent gate edit was not discarded — rule 9 broken"
   );
@@ -51,13 +51,13 @@ test("rule 9: a DECLARED gate change is delivered, declaration attached", async 
     gateChanges: "check.sh: the brief changes the pass condition",
   });
 
-  const fabrica = createFabrica({ home: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const fabrica = createFabrica({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
   const task = await fabrica.do("change what green means", { project, brain: honest });
 
   const delivery = await fabrica.deliveryOf(task.id);
   assert.ok(delivery, "no delivery record at all");
   assert.notEqual(
-    delivery.kind,
+    delivery.outcome,
     "discarded-protected-path",
     "an openly declared gate change was discarded — amended rule 9 broken"
   );

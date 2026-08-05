@@ -1,4 +1,4 @@
-// Tears down a ProductionLine: removes the throwaway worktree, keeps the
+// Destroys a ProductionLine: removes the throwaway worktree, keeps the
 // branch intact for the Client to review (SPEC: v1 never pushes; the
 // Client merges or discards by hand). Every removal is gated on git's own
 // worktree registry (see safety.ts) — a path is never deleted on say-so
@@ -12,13 +12,13 @@ import { LineError } from "./errors.ts";
 import type { ProductionLine } from "./types.ts";
 import { describeGitError, requireLinkedWorktree } from "./safety.ts";
 
-export function tearDownLine(line: ProductionLine): void {
-  const expected = join(line.home, "tasks", line.id, "worktree");
+export function destroyProductionLine(line: ProductionLine): void {
+  const expected = join(line.recordHome, "tasks", line.taskId, "worktree");
   if (line.workdir !== expected) {
     throw new LineError(
       "unsafe-teardown",
-      `Refusing to tear down ${line.workdir}: it does not match the expected ` +
-        `ProductionLine path ${expected} for task ${line.id}.`
+      `Refusing to destroy ${line.workdir}: it does not match the expected ` +
+        `ProductionLine path ${expected} for task ${line.taskId}.`
     );
   }
 
@@ -28,7 +28,7 @@ export function tearDownLine(line: ProductionLine): void {
   } catch {
     throw new LineError(
       "unsafe-teardown",
-      `Refusing to tear down ${line.workdir}: project path ${line.project} does not exist.`
+      `Refusing to destroy ${line.workdir}: project path ${line.project} does not exist.`
     );
   }
 
@@ -42,7 +42,7 @@ export function tearDownLine(line: ProductionLine): void {
   } catch (err) {
     throw new LineError(
       "teardown-failed",
-      `Could not tear down ProductionLine ${line.branch}: ${describeGitError(err)}`
+      `Could not destroy ProductionLine ${line.branch}: ${describeGitError(err)}`
     );
   }
 }
