@@ -16,4 +16,7 @@
 # Resolves to Node v20.20.2 on Alpine 3.23.4, verified on the real
 # machine at the time this was pinned.
 FROM node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+# git so the Worker can actually use the read-only .git mount
+# worktree-git.ts provides (status/log/diff against the real history).
+RUN apk add --no-cache git
 RUN npm install -g @anthropic-ai/claude-code
