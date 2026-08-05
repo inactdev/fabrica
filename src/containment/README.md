@@ -137,13 +137,18 @@ const result = await runContained("echo", ["hi"], {
   is "not the network unless deliberately allowed," and a required
   field is what makes every call site actually state that choice.
 - **`env`** - the exact environment variables the contained process
-  receives. Passed as name-only `-e KEY` flags, with the values riding
-  docker's own process environment instead of its command line (verified
-  live: docker resolves a bare `-e KEY` from its own environment) - so a
-  value, e.g. a credential, never appears in host `ps` listings of the
-  docker command. Omit it and the container gets only what its own image
-  defines - Docker's own default behavior already matches "the worker
-  has what it needs," not the caller's whole environment.
+  receives. Written to a throwaway `--env-file` per call rather than
+  passed as `-e` flags at all, for two reasons verified live: neither
+  the keys nor the values ever appear in host `ps` listings of the
+  docker command (a plain `-e KEY=value` puts the value there; even a
+  name-only `-e KEY` still puts the key there and requires merging
+  `opts.env` into the spawned `docker` client's own process environment,
+  where a key that collides with something the docker CLI itself reads
+  - `DOCKER_HOST`, `DOCKER_CONFIG`, `PATH` - would change the client's
+  own behavior, not just the container's). Omit it and the container
+  gets only what its own image defines - Docker's own default behavior
+  already matches "the worker has what it needs," not the caller's
+  whole environment.
 - **`image`** - the Docker image the command runs inside, required with
   no default for the same reason `network` has none: a generic command
   (`sh`, `cat`) can run in any small stock image, but a caller whose

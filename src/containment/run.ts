@@ -6,7 +6,9 @@
 // reshaping how it reads the result.
 
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildDockerArgs } from "./docker-args.ts";
 import { ContainmentError } from "./errors.ts";
 import type { ContainedRunResult, RunContainedOptions } from "./types.ts";
@@ -71,44 +73,59 @@ export async function runContained(
       ? `${process.getuid()}:${process.getgid()}`
       : undefined;
 
-  const dockerArgs = [
-    ...buildDockerArgs({
-      workdir,
-      network: opts.network,
-      env: opts.env,
-      image: opts.image,
-      user,
-      readOnlyMounts,
-      memory: opts.memory,
-      cpus: opts.cpus,
-      pidsLimit: opts.pidsLimit,
-      homeDir,
-    }),
-    command,
-    ...args,
-  ];
+  // The env allowlist rides a throwaway --env-file, not argv and not the
+  // spawned docker client's own process environment: verified live that
+  // `ps` shows only this file's path, never a key or value, and that a
+  // key colliding with something the docker CLI itself consumes
+  // (DOCKER_HOST, DOCKER_CONFIG, PATH, ...) can no longer change the
+  // docker client's own behavior, since opts.env never touches that
+  // process's environment at all.
+  let envFileDir: string | undefined;
+  let envFile: string | undefined;
+  if (opts.env !== undefined && Object.keys(opts.env).length > 0) {
+    envFileDir = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-containment-env-"));
+    envFile = join(envFileDir, "env");
+    writeFileSync(envFile, `${Object.entries(opts.env).map(([key, value]) => `${key}=${value}`).join("\n")}\n`);
+  }
 
-  return new Promise<ContainedRunResult>((resolve, reject) => {
-    // The env allowlist's values ride docker's own process environment,
-    // matching docker-args.ts's name-only `-e KEY` flags - verified
-    // live: docker reads a bare `-e KEY` from its own environment and
-    // passes the value into the container.
-    const child = spawn("docker", dockerArgs, { env: { ...process.env, ...opts.env } });
-    child.stdin.end();
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.on("data", (chunk: string) => (stderr += chunk));
-    child.on("error", (err: NodeJS.ErrnoException) => {
-      reject(
-        new ContainmentError(
-          "spawn-failed",
-          `could not run "${command}" contained (docker) in ${workdir}: ${err.code ?? err.message}`
-        )
-      );
+  try {
+    const dockerArgs = [
+      ...buildDockerArgs({
+        workdir,
+        network: opts.network,
+        envFile,
+        image: opts.image,
+        user,
+        readOnlyMounts,
+        memory: opts.memory,
+        cpus: opts.cpus,
+        pidsLimit: opts.pidsLimit,
+        homeDir,
+      }),
+      command,
+      ...args,
+    ];
+
+    return await new Promise<ContainedRunResult>((resolve, reject) => {
+      const child = spawn("docker", dockerArgs);
+      child.stdin.end();
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => (stdout += chunk));
+      child.stderr.on("data", (chunk: string) => (stderr += chunk));
+      child.on("error", (err: NodeJS.ErrnoException) => {
+        reject(
+          new ContainmentError(
+            "spawn-failed",
+            `could not run "${command}" contained (docker) in ${workdir}: ${err.code ?? err.message}`
+          )
+        );
+      });
+      child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
     });
-    child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
-  });
+  } finally {
+    if (envFileDir !== undefined) rmSync(envFileDir, { recursive: true, force: true });
+  }
 }

@@ -17,7 +17,7 @@ const CONTAINER_HOME = "/home/worker";
 export function buildDockerArgs(opts: {
   workdir: string;
   network: "denied" | "allowed";
-  env?: Record<string, string>;
+  envFile?: string;
   image: string;
   user?: string;
   readOnlyMounts?: string[];
@@ -49,15 +49,16 @@ export function buildDockerArgs(opts: {
   if (opts.network === "denied") args.push("--network", "none");
 
   // Docker never auto-inherits the host's environment into a container
-  // (verified), so nothing needs filtering here - only what's listed
-  // reaches the container, exactly "the worker has what it needs."
-  // Name-only `-e KEY`, never `-e KEY=value`: docker resolves a bare
-  // key from its own process environment (runContained supplies the
-  // values there when it spawns docker), so a value - e.g. a credential
-  // - never appears in host `ps` listings of the docker command line.
-  for (const key of Object.keys(opts.env ?? {})) {
-    args.push("-e", key);
-  }
+  // (verified), so nothing needs filtering here - only what's in the
+  // file reaches the container, exactly "the worker has what it needs."
+  // `--env-file`, not `-e KEY=value` or even name-only `-e KEY`: neither
+  // the keys nor the values ever appear in host `ps` listings of the
+  // docker command line (verified: `ps` shows only the file path), and
+  // - unlike merging opts.env into the spawned docker client's own
+  // process environment - a value can never collide with a variable the
+  // docker CLI itself consumes (DOCKER_HOST, DOCKER_CONFIG, PATH, ...).
+  // runContained writes this file fresh per call and removes it after.
+  if (opts.envFile !== undefined) args.push("--env-file", opts.envFile);
 
   // Persists whatever a tool writes under $HOME (e.g. session state for
   // a warm --resume) across calls that share this same homeDir, without

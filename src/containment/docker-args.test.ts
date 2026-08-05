@@ -37,22 +37,17 @@ test("buildDockerArgs adds --network none when denied, omits it when allowed", (
   assert.ok(!allowed.includes("--network"));
 });
 
-test("buildDockerArgs passes the env allowlist as name-only -e flags, never values", () => {
+test("buildDockerArgs passes envFile as --env-file, with no key or value ever in argv", () => {
   const args = buildDockerArgs({
     workdir: "/w",
     network: "denied",
     image: "alpine",
-    env: { FOO: "bar", BAZ: "qux" },
+    envFile: "/tmp/some-env-file",
   });
 
-  assert.deepEqual(
-    args.filter((_, i) => args[i - 1] === "-e"),
-    ["FOO", "BAZ"]
-  );
-  assert.ok(
-    !args.some((a) => a.includes("bar") || a.includes("qux")),
-    "an env value must never appear in the docker argument list"
-  );
+  assert.equal(args[args.indexOf("--env-file") + 1], "/tmp/some-env-file");
+  const without = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine" });
+  assert.ok(!without.includes("--env-file"));
 });
 
 test("buildDockerArgs ends with the image name, ready for the command and args to follow", () => {
