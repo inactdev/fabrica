@@ -38,7 +38,10 @@ export async function runContained(
 
   try {
     return await new Promise<ContainedRunResult>((resolve, reject) => {
-      const child = spawn("sandbox-exec", ["-f", profilePath, command, ...args], { cwd: workdir });
+      const child = spawn("sandbox-exec", ["-f", profilePath, command, ...args], {
+        cwd: workdir,
+        env: { PATH: process.env.PATH ?? "", ...(opts.env ?? {}) },
+      });
       child.stdin.end();
       let stdout = "";
       let stderr = "";

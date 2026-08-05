@@ -110,6 +110,33 @@ test("runContained: network is denied by default", async (t) => {
   }
 });
 
+test("runContained: the parent's environment never leaks in - only PATH plus the explicit env allowlist", async (t) => {
+  if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
+  const { homeDir, workdir } = makeFixture();
+
+  process.env.FABRICA_TEST_WOULD_BE_LEAKED = "a secret the child must never inherit";
+  try {
+    const byDefault = await runContained("/bin/sh", ["-c", 'echo "${FABRICA_TEST_WOULD_BE_LEAKED-unset}"'], {
+      workdir,
+      homeDir,
+      network: "denied",
+    });
+    assert.equal(byDefault.exitCode, 0);
+    assert.equal(byDefault.stdout, "unset\n", "a parent env var must not reach the contained child by default");
+
+    const allowlisted = await runContained("/bin/sh", ["-c", 'echo "${FABRICA_TEST_WOULD_BE_LEAKED-unset}"'], {
+      workdir,
+      homeDir,
+      network: "denied",
+      env: { FABRICA_TEST_WOULD_BE_LEAKED: "explicitly allowlisted" },
+    });
+    assert.equal(allowlisted.exitCode, 0);
+    assert.equal(allowlisted.stdout, "explicitly allowlisted\n");
+  } finally {
+    delete process.env.FABRICA_TEST_WOULD_BE_LEAKED;
+  }
+});
+
 test("runContained: network reaches out when deliberately allowed", async (t) => {
   if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
   const { homeDir, workdir } = makeFixture();

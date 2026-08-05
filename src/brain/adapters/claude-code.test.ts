@@ -169,14 +169,14 @@ test("claudeCodeAdapter({ contained: true }) confines the spawned process to wor
   const decoyPath = join(homeDir, "decoy.txt");
   writeFileSync(decoyPath, "should never be readable from workdir");
 
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI, contained: true, homeDir });
-  process.env.FABRICA_TEST_DECOY_PATH = decoyPath;
-  try {
-    const result = await brain.work("TRY_READ_DECOY", workdir);
-    assert.equal(result.transcript[0].text, "READ_BLOCKED");
-  } finally {
-    delete process.env.FABRICA_TEST_DECOY_PATH;
-  }
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI,
+    contained: true,
+    homeDir,
+    env: { FABRICA_TEST_DECOY_PATH: decoyPath },
+  });
+  const result = await brain.work("TRY_READ_DECOY", workdir);
+  assert.equal(result.transcript[0].text, "READ_BLOCKED");
 });
 
 // Capability spike (issue #6): the tests above prove the adapter's own

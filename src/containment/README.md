@@ -103,6 +103,13 @@ const result = await runContained("/bin/echo", ["hi"], {
   There's no silent choice here on purpose: the issue's own requirement
   is "not the network unless deliberately allowed," and a required field
   is what makes every call site actually state that choice.
+- **`env`** - the exact environment variables the contained process
+  receives: "the worker has what it needs," not the Foreman's whole
+  environment. Whatever is passed here is merged over a PATH-only base
+  (`PATH` alone is needed to resolve the command at all); nothing else
+  from this process's environment - API keys, tokens, anything a secret
+  might live in - reaches the child by inheritance. Omit it and the
+  child gets just `PATH`.
 
 Returns `{ stdout, stderr, exitCode }` - identical in shape to a plain
 `child_process.spawn` wrapped in a promise, so an adapter that already
@@ -120,6 +127,36 @@ reshaping how it reads the result.
   the *contained command* failing, which just comes back as a normal
   result with a non-zero `exitCode` - `runContained` doesn't try to
   guess why a command failed once it actually ran.
+
+## An accepted gap: mach-lookup is not restricted
+
+The profile leaves `(allow mach-lookup)` unrestricted: a contained
+process can still talk to any Mach/XPC service on the host. That is a
+deliberate, accepted, non-urgent gap - documented here so nobody
+mistakes the verified guarantees for more than they are.
+
+Why it's acceptable: the Client's two real requirements are that his
+filesystem stays intact and that no change reaches his project without
+his approval - and both are already met independent of mach-lookup.
+Rule 1 is proven by a byte-for-byte fingerprint test, and v1 never
+pushes, so work only ever lands on a branch he reviews and merges by
+hand.
+
+Why it isn't narrowed: restricting mach-lookup to a named allowlist of
+services would mean guessing which Mach/XPC services the real binary
+needs and breaking it repeatedly to find out - exactly what already
+happened once in this module's own discovery process, when a
+hand-picked system-read-path allowlist starved `dyld` under macOS's
+sealed, cryptex-based system volume (see "What was tried and rejected"
+above).
+
+Stated plainly: this is a smaller room than before, not a walk-away
+guarantee. A contained process can still reach system services that
+could in principle proxy around the `network: "denied"` boundary (a
+background transfer daemon, the pasteboard), even though direct sockets
+are verified blocked. Also stated plainly: the Client's own crewmates
+run today with no sandbox at all, so this - even with the mach-lookup
+gap - is already meaningfully stricter than the status quo.
 
 ## What this does NOT solve yet: the reference CLI adapter isn't wired to use it by default
 

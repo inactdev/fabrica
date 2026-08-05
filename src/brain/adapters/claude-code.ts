@@ -49,6 +49,13 @@ export interface ClaudeCodeAdapterOptions {
    * directory - the same reason `binPath` is overridable. Has no effect
    * when `contained` is not set. */
   homeDir?: string;
+  /** Only used when `contained` is set: the exact environment variables
+   * the sandboxed process receives, passed straight through to
+   * `runContained`'s allowlist. Omitted means the contained CLI gets
+   * only `PATH` - nothing from this process's own environment (API
+   * keys, tokens) leaks in by inheritance. An uncontained spawn is
+   * unaffected and inherits normally. */
+  env?: Record<string, string>;
 }
 
 // One line of `claude ... --output-format stream-json`. Only the shape
@@ -121,10 +128,11 @@ async function runContainedOrWrap(
   bin: string,
   args: string[],
   workdir: string,
-  homeDir: string
+  homeDir: string,
+  env?: Record<string, string>
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   try {
-    return await runContained(bin, args, { workdir, homeDir, network: "allowed" });
+    return await runContained(bin, args, { workdir, homeDir, network: "allowed", env });
   } catch (err) {
     if (err instanceof ContainmentError) {
       throw new ClaudeCodeError("spawn-failed", `could not run "${bin}" contained in ${workdir}: ${err.message}`);
@@ -195,7 +203,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       const args = buildArgs(brief, opts, workOpts);
 
       const { stdout, stderr, exitCode } = opts.contained
-        ? await runContainedOrWrap(bin, args, workdir, opts.homeDir ?? homedir())
+        ? await runContainedOrWrap(bin, args, workdir, opts.homeDir ?? homedir(), opts.env)
         : await new Promise<{
             stdout: string;
             stderr: string;

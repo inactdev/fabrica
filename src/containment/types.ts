@@ -21,6 +21,12 @@ export interface RunContainedOptions {
    * default, so every call site states the choice rather than inheriting
    * one silently. */
   network: "denied" | "allowed";
+  /** The exact environment variables the contained process receives -
+   * "the worker has what it needs," not the Foreman's whole environment.
+   * Merged over a PATH-only base (`PATH` alone is needed to resolve the
+   * command at all), so nothing else from the parent's environment -
+   * API keys, tokens - flows in by inheritance. Omit for just PATH. */
+  env?: Record<string, string>;
 }
 
 export interface ContainedRunResult {

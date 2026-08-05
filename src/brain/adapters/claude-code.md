@@ -38,6 +38,12 @@ Call this once to get a `Brain`. Four optional fields:
   sandbox excludes from its read allowance. Defaults to `os.homedir()`;
   overridable so tests can point it at a throwaway fixture instead of the
   real machine's real home directory.
+- **`env`** - only used when `contained` is set: the exact environment
+  variables the sandboxed process receives, passed straight through to
+  `runContained`'s allowlist. Leave it out and the contained CLI gets
+  only `PATH` - nothing from this process's own environment (API keys,
+  tokens) leaks in by inheritance. An uncontained spawn is unaffected
+  and inherits normally.
 
 ## The command it runs
 
@@ -83,7 +89,12 @@ own API - see that module's README for why filesystem is what's
 actually enforced here). That mechanism is real and verified on the
 real machine, not a description of one - see
 `../../containment/README.md` for what was tried, what broke, and what's
-actually proven.
+actually proven. One residual channel is documented there as a
+deliberate, accepted, non-urgent gap rather than closed: the sandbox
+profile does not restrict mach-lookup, so a contained process can still
+talk to host Mach/XPC services that could in principle proxy around the
+network boundary - see that README's "An accepted gap" section for why
+narrowing it isn't worth the breakage it would cause.
 
 It is **not** the default for this adapter yet, and that's a deliberate,
 documented gap rather than an oversight. Verified live: the real
