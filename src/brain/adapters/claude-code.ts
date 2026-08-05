@@ -4,7 +4,7 @@
 // binary, and translate what it prints back into the shapes `Brain`
 // promises. All flags below were verified against the installed binary
 // (2.1.222) on 2026-08-04, not guessed - see claude-code.test.ts's
-// real-binary test for the live proof and claude-code/README.md for what
+// real-binary test for the live proof and claude-code.md for what
 // each discovery means.
 
 import { spawn } from "node:child_process";
@@ -160,8 +160,10 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         const child = spawn(bin, args, { cwd: workdir });
         let stdout = "";
         let stderr = "";
-        child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-        child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => (stdout += chunk));
+        child.stderr.on("data", (chunk: string) => (stderr += chunk));
         child.on("error", (err: NodeJS.ErrnoException) => {
           reject(
             new ClaudeCodeError(
@@ -198,7 +200,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       // Fabrica ever makes. Recording it as one more structured entry,
       // rather than a return field, gets it where it's needed (whatever
       // assembles Receipt can read this entry back out) without
-      // reshaping the seam - see claude-code/README.md.
+      // reshaping the seam - see claude-code.md.
       transcript.push({
         occurredAt: new Date().toISOString(),
         kind: "usage",

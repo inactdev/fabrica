@@ -159,6 +159,16 @@ test("claude-code adapter: real binary does real work in a real worktree (capabi
     t.skip("the real `claude` binary is not installed on this machine");
     return;
   }
+  try {
+    const status = JSON.parse(execFileSync("claude", ["auth", "status"], { encoding: "utf8" }));
+    if (status.loggedIn !== true) {
+      t.skip("the real `claude` binary is installed but not authenticated on this machine");
+      return;
+    }
+  } catch {
+    t.skip("could not confirm the real `claude` binary is authenticated on this machine");
+    return;
+  }
 
   const project = makeFixtureProject();
   const recordHome = makeFixtureHome();
