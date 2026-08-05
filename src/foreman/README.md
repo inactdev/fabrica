@@ -97,6 +97,10 @@ a number:
 | omitted (default 2) | yes | SPEC.md's real, cost-conscious default: don't burn a second Worker call on a task that already passed. |
 | given explicitly | no | CONTRACT rule 3: an explicit count is a promise, not a hint. |
 
+An explicit `attempts` that isn't a positive integer is refused up front
+(`ForemanError("invalid-attempts")`), before any task is registered or
+line cut.
+
 ### `brain`
 
 Required — v1 has no default adapter to fall back on yet (issue #6 builds
@@ -224,7 +228,7 @@ doesn't write that event or interpret one; that's left to whoever builds
 | File | Holds |
 | --- | --- |
 | `types.ts` | `GateResult`, `Receipt`, `Delivery`, `FabricaTask` — matched by hand to `contract/surface.ts`, same pattern as `src/record/types.ts`'s `FabricaEvent`. |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `missing-check`, `not-built`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `not-built`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Snapshots and compares `check.sh`, for rule 9's undeclared-change detection. |

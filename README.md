@@ -17,12 +17,11 @@ To see the current state:
     npm install
     npm test
 
-Expected today: **red**, on purpose. `npm test` runs the contract suite
-together with the tool's own tests. Most contract tests still say "fabrica
-is not built yet (Phase 1)" - they reach for parts that do not exist yet.
-Two never depended on the tool at all and pass from the start: the
-watchdog proving the answer key itself is whole, and a scan of `src/` for
-hardcoded model names. Run the command for today's exact tally - it is
-meant to move with every issue closed, so it is not quoted here.
+Expected today: **mostly green, a little red, on purpose**. `npm test`
+runs the contract suite together with the tool's own tests. The loop
+itself (`fabrica do`) is built and most contract rules pass; the tests
+still red reach for the parts that do not exist yet. Run the command for
+today's exact tally - it is meant to move with every issue closed, so it
+is not quoted here.
 
 Phase 1 has exactly one definition of done: every contract test turns green.
