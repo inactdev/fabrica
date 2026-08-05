@@ -185,17 +185,17 @@ now, not a corner cut:
   `questions-asked` step in it. The loop as ratified today goes straight
   through.
 
-`brief.md` is written on every task regardless — it is the record of what
-was actually handed to a Worker, not a cache of `request.md`. See the
-comment above the `writeTaskFile` call in `do.ts` for the full reasoning:
-once issue #19 primes per-project lessons into it, a brief will contain
-material that cannot be reconstructed later from `request.md` +
-`answers.md` alone, so storing it now is evidence, not a convenience.
-Today the two files are byte-identical, because v1 neither asks a
-clarifying question (issue #8) nor primes lessons (issue #19) yet —
-`fabrica answer` will still only have to append a round to `answers.md`
-and re-derive `brief.md` from it; none of this changes how `do()` itself
-is structured.
+`brief.md` is written on every task regardless — see the comment above
+the `writeTaskFile` call in `do.ts` for the full reasoning, which is two
+complementary halves. `fabrica answer` (issue #8) is why it's written
+*now*, upfront: so a clarify round only has to append to `answers.md` and
+re-derive `brief.md`, instead of creating the file itself. Per-project
+lessons (issue #19) are why it must be *stored* rather than derived on
+demand later: once lessons get primed into it, `brief.md` becomes the
+record of what was actually handed to a Worker, not a cache of
+`request.md` — material `request.md` + `answers.md` can no longer
+reconstruct on their own, because lessons change over time. Today the two
+files are byte-identical, because v1 does neither yet.
 
 ## Why receipts and deliveries live on `events.jsonl`, not their own file
 

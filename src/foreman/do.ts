@@ -50,14 +50,22 @@ export async function doTask(
   // writes brief.md here, afterwards — the Foreman owns what a Worker is
   // actually given.
   //
-  // brief.md is the record of what was actually handed to a Worker, not a
-  // cache of request.md: once issue #19 primes per-project lessons into
-  // it, a brief will contain material that cannot be reconstructed later
-  // from request.md + answers.md alone, because lessons change over time.
-  // Storing it now is evidence, not a convenience. Today it is
-  // byte-identical to request.md — v1 never asks a clarifying question
-  // (issue #8) or primes lessons (issue #19) — and that sameness is
-  // expected to end the moment either one lands.
+  // Two complementary reasons to write it now, upfront, rather than
+  // deriving it on demand later:
+  //   - #8 is why it exists NOW: brief.md is written here so fabrica
+  //     answer only has to append a round to answers.md and re-derive
+  //     brief.md from what's already there, instead of having to create
+  //     the file itself and reshape this path.
+  //   - #19 is why it must be STORED rather than derived LATER: once
+  //     per-project lessons get primed into the brief, brief.md becomes
+  //     the record of what was actually handed to a Worker, not a cache
+  //     of request.md — a brief will contain material that cannot be
+  //     reconstructed later from request.md + answers.md alone, because
+  //     lessons change over time. Storing it is evidence, not a
+  //     convenience.
+  // Today brief.md is byte-identical to request.md — v1 neither asks a
+  // clarifying question (#8) nor primes lessons (#19) yet — and that
+  // sameness is expected to end the moment either one lands.
   writeTaskFile(recordHome, taskId, "brief.md", taskText);
 
   const line = createProductionLine({ project: opts.project, taskId, recordHome });
