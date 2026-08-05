@@ -6,13 +6,21 @@
 // working tree, so a bug here fails closed, not open.
 
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { LineError } from "./errors.ts";
 import type { ProductionLine } from "./types.ts";
-import { describeGitError, requireLinkedWorktree } from "./safety.ts";
+import { describeGitError, isKnownWorktree, requireLinkedWorktree } from "./safety.ts";
 
-export function destroyProductionLine(line: ProductionLine): void {
+/** What actually happened. `already-destroyed` is the idempotent case
+ * (issue #7): a correctly-addressed line whose worktree is already gone —
+ * a second call in a cleanup path, or one removed out of band — is not an
+ * error, just nothing left to do. */
+export interface TeardownResult {
+  status: "destroyed" | "already-destroyed";
+}
+
+export function destroyProductionLine(line: ProductionLine): TeardownResult {
   const expected = join(line.recordHome, "tasks", line.taskId, "worktree");
   if (line.workdir !== expected) {
     throw new LineError(
@@ -32,6 +40,16 @@ export function destroyProductionLine(line: ProductionLine): void {
     );
   }
 
+  // The path is exactly where this task's line should be (checked above),
+  // but nothing is there anymore — on disk or in git's own worktree
+  // registry. That is what a prior successful teardown, or an out-of-band
+  // `git worktree remove`, leaves behind. A path that still exists on disk
+  // but isn't a registered worktree is a different, genuinely unsafe case
+  // and falls through to requireLinkedWorktree's refusal below.
+  if (!existsSync(line.workdir) && !isKnownWorktree(project, line.workdir)) {
+    return { status: "already-destroyed" };
+  }
+
   const entry = requireLinkedWorktree(project, line.workdir);
 
   try {
@@ -45,4 +63,6 @@ export function destroyProductionLine(line: ProductionLine): void {
       `Could not destroy ProductionLine ${line.branch}: ${describeGitError(err)}`
     );
   }
+
+  return { status: "destroyed" };
 }

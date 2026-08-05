@@ -120,6 +120,17 @@ export function requireLinkedWorktree(project: string, workdir: string): Worktre
   return match;
 }
 
+/**
+ * True if git currently registers `workdir` — main or linked — as a
+ * worktree of `project`. Used by teardown.ts to tell an already-destroyed
+ * ProductionLine apart from a genuinely unsafe path: unlike
+ * requireLinkedWorktree, this never throws.
+ */
+export function isKnownWorktree(project: string, workdir: string): boolean {
+  const target = normalize(workdir);
+  return listWorktrees(project).some((entry) => normalize(entry.path) === target);
+}
+
 /** Best-effort human-readable detail from a failed git invocation. */
 export function describeGitError(err: unknown): string {
   const stderr = (err as { stderr?: Buffer | string } | undefined)?.stderr;

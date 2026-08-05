@@ -71,6 +71,31 @@ test("destroyProductionLine refuses a path that is not a registered worktree at 
   assert.equal(readFileSync(join(randomDir, "innocent.txt"), "utf8"), "leave me alone\n");
 });
 
+test("destroyProductionLine on an already-destroyed line reports already-destroyed instead of throwing", () => {
+  const project = makeFixtureProject();
+  const recordHome = makeFixtureHome();
+  const line = createProductionLine({ project, taskId: "task-double", recordHome });
+
+  const first = destroyProductionLine(line);
+  assert.deepEqual(first, { status: "destroyed" });
+
+  const second = destroyProductionLine(line);
+  assert.deepEqual(second, { status: "already-destroyed" });
+  assert.equal(existsSync(line.workdir), false);
+});
+
+test("destroyProductionLine treats a worktree removed out of band the same as already-destroyed", () => {
+  const project = makeFixtureProject();
+  const recordHome = makeFixtureHome();
+  const line = createProductionLine({ project, taskId: "task-outofband", recordHome });
+
+  execFileSync("git", ["worktree", "remove", "--force", line.workdir], { cwd: project });
+  assert.equal(existsSync(line.workdir), false);
+
+  const result = destroyProductionLine(line);
+  assert.deepEqual(result, { status: "already-destroyed" });
+});
+
 test("destroyProductionLine refuses a workdir that doesn't match the expected task path", () => {
   const project = makeFixtureProject();
   const recordHome = makeFixtureHome();

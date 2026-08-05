@@ -46,7 +46,10 @@ Everything a Worker or a check does for this task should happen inside
 
 ## `destroyProductionLine(line)`
 
-Takes the whole `ProductionLine` object `createProductionLine` returned
+Returns a `TeardownResult`: `{ status: "destroyed" }` when it actually
+removed something, or `{ status: "already-destroyed" }` when there was
+nothing left to remove — see "Idempotent teardown" below. Takes the whole
+`ProductionLine` object `createProductionLine` returned
 - not a loose `taskId`/`recordHome`/`workdir` trio - and removes the
 worktree: the directory at `line.workdir` and git's own bookkeeping for
 it.
@@ -153,12 +156,22 @@ what triggers each one and what to do about it.
   reason other than the safety checks above. Read the wrapped git error
   in the message.
 
-## A known rough edge
+## Idempotent teardown
 
-Destroying a line that's already gone currently surfaces as
-`unsafe-teardown` - the same "this isn't a registered worktree" message
-you'd get for a genuinely wrong path, not a clearer "already destroyed."
-That's a real rough edge, not a hidden one: it's being handled where it
-actually bites, in issue #7, once something is calling
-`destroyProductionLine` as part of a real retry/failure path rather than
-once per task.
+Destroying a line whose worktree is already gone — a second call in a
+cleanup path, or a worktree removed out of band (a manual `git worktree
+remove`, say) — returns `{ status: "already-destroyed" }` rather than
+throwing. This matters because `src/foreman/` (issue #7) calls
+`destroyProductionLine` from the loop's cleanup path, where a double
+teardown is easy to reach: a failure after teardown already ran, for
+instance.
+
+The check is narrow on purpose, so it can't paper over a genuine
+`unsafe-teardown`: it only fires once `line.workdir` has already passed
+both safety checks above (it's exactly the path this task's line should
+be at, and `line.project` resolves), and only when the worktree is gone
+*both* from disk and from git's own worktree list. A path that still
+exists on disk but was never a registered worktree — the spoofed and
+tampered cases above — still throws `unsafe-teardown` exactly as before;
+only a path that legitimately once was this line and now isn't anywhere
+reads as "already destroyed."
