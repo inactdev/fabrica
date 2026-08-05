@@ -1,13 +1,14 @@
 # The Foreman
 
 `src/foreman/` is the real implementation behind `createForeman` in
-`contract/surface.ts` (issue #7, "the loop: `fabrica do`"). It is the
-delegator LANGUAGE.md calls the Foreman: it registers a task, cuts a
-ProductionLine, runs a Worker for a counted number of attempts, verifies
-the result with the project's own check, and writes a delivery — wiring
-`src/record`, `src/line`, `src/brain`, and `src/config` into the one loop
-SPEC.md calls "fabrica do". It is pure code: it delegates and counts, it
-never decides anything a model should decide instead.
+`src/index.ts` (issue #7, "the loop: `fabrica do`"; issue #45 moved the
+public entry point here from `contract/`). It is the delegator LANGUAGE.md
+calls the Foreman: it registers a task, cuts a ProductionLine, runs a
+Worker for a counted number of attempts, verifies the result with the
+project's own check, and writes a delivery — wiring `src/record`,
+`src/line`, `src/brain`, and `src/config` into the one loop SPEC.md calls
+"fabrica do". It is pure code: it delegates and counts, it never decides
+anything a model should decide instead.
 
 ## `createForeman({ recordHome, caps? })`
 
@@ -19,14 +20,14 @@ const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
   task this Foreman touches reads and writes under here; nothing in this
   module ever falls back to a fixed default path.
 - **`caps`** — `{ perTaskUsd?, perDayUsd? }`. Accepted so this factory's
-  shape matches `contract/surface.ts`'s `createForeman` exactly. Not
+  shape matches `contract/surface.ts`'s `Foreman` exactly. Not
   enforced here: CONTRACT rule 10 ("It cannot outspend you") is issue
   #11's job, not this loop's. Passing it today has no effect; omitting it
   has no effect either.
 
-The return value satisfies `Foreman`: `do`, `deliveryOf`, `receiptsOf`,
-`status`, `events`, `recordPath`, and a `verdict` stub (see "What's
-deliberately still a stub" below).
+The return value satisfies `Foreman` (`contract/surface.ts`): `do`,
+`deliveryOf`, `receiptsOf`, `status`, `events`, `recordPath`, and a
+`verdict` stub (see "What's deliberately still a stub" below).
 
 ## `do(taskText, { project, attempts?, brain? })`
 
@@ -234,7 +235,6 @@ doesn't write that event or interpret one; that's left to whoever builds
 
 | File | Holds |
 | --- | --- |
-| `types.ts` | `GateResult`, `Receipt`, `Delivery`, `FabricaTask` — matched by hand to `contract/surface.ts`, same pattern as `src/record/types.ts`'s `FabricaEvent`. |
 | `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `not-built`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
@@ -245,3 +245,8 @@ doesn't write that event or interpret one; that's left to whoever builds
 | `do.ts` | `doTask` — the orchestration described above. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape. |
+
+`GateResult`, `Receipt`, `Delivery`, `FabricaTask`, and `Foreman` itself
+are declared once, in `contract/surface.ts`, and imported into this
+module's files as types (issue #45) — there is no local `types.ts` here
+to keep in sync by hand any more.

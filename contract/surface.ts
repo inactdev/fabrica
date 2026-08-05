@@ -1,18 +1,35 @@
 // contract/surface.ts — the shapes of fabrica's seams.
 //
-// Phase 0 declares these; Phase 1 implements them. createForeman (issue
-// #7) now delegates to src/foreman, which wires src/record, src/line,
-// src/brain, and src/config together into the loop. validateDelivery
-// (CONTRACT rule 4) is still unbuilt — that's issue #9's job — so it
-// keeps throwing NotBuiltError below.
-
-import { createForeman as createForemanImpl } from "../src/foreman/index.ts";
+// Purely declarative (issue #45): this file describes and verifies, it
+// never executes production code. Every type here is declared exactly
+// once; src/** imports these as `import type` (erased at compile time, so
+// that creates no runtime dependency on contract/) and implements them.
+// contract/*.test.ts imports types from here and the implementation from
+// src/index.ts. validateDelivery (CONTRACT rule 4) is still unbuilt —
+// that's issue #9's job — so it keeps throwing NotBuiltError below.
 
 export class NotBuiltError extends Error {
   constructor(phase = "Phase 1") {
     super(`fabrica is not built yet (${phase})`);
     this.name = "NotBuiltError";
   }
+}
+
+/**
+ * A created, live ProductionLine: a linked git worktree of `project`
+ * (CONTRACT rule 1, "it never touches your stuff" — `contract/
+ * rule1.isolation.test.ts` exists solely to prove this shape holds).
+ */
+export interface ProductionLine {
+  taskId: string;
+  /** `fabrica/<taskId>` — left intact after the line is destroyed, for the Client to review. */
+  branch: string;
+  /** Resolved root of the Client's own checkout. Never written to. */
+  project: string;
+  /** The throwaway worktree — every Worker and check runs here. */
+  workdir: string;
+  /** Resolved record home the workdir was created under (`recordHome/tasks/<taskId>/worktree`). */
+  recordHome: string;
 }
 
 /**
@@ -30,27 +47,39 @@ export interface TranscriptEntry {
   text: string;
 }
 
+/** Warm-session support: pass a prior session id to continue that
+ * worker's context. A retry is a correction into the same session,
+ * never a cold restart that throws away what the worker just learned
+ * (SPEC.md, adopted Aug 2026). */
+export interface BrainWorkOptions {
+  session?: string;
+  /** Free-form effort hint (e.g. "low", "high", or a tool's own
+   * vocabulary) - deliberately not a closed union, so callers never
+   * couple to one adapter's vocabulary. An adapter that does not
+   * recognize the value must ignore it, not fail; the value is still
+   * recorded as requested regardless of whether the adapter used it. */
+  reasoningEffort?: string;
+}
+
+export interface BrainWorkResult {
+  /** The live stream `fabrica watch` renders is derived from these
+   * entries, in order. Adapters whose tool already emits structured
+   * output map it directly; text-only adapters wrap each chunk as one
+   * entry. */
+  transcript: TranscriptEntry[];
+  /** Open declaration of any ratified-test or check-setting changes made,
+   * and why (rule 9). Omitted = gate untouched. */
+  gateChanges?: string;
+  /** The session id for this run, so follow-ups and corrections can
+   * resume it. Lands on the receipt. */
+  session?: string;
+}
+
 /** The brain socket (contract rule 8). The ONLY place a real AI plugs in. */
 export interface Brain {
   name: string;
   model: string;
-  work(
-    brief: string,
-    workdir: string,
-    opts?: {
-      /** Warm sessions: pass a prior session id to continue that worker's context — a retry is a correction, never a cold restart. */
-      session?: string;
-      /** Free-form effort hint (e.g. "low", "high", or a tool's own vocabulary). An adapter that does not recognize the value must ignore it, not fail - and the value is recorded as requested regardless. */
-      reasoningEffort?: string;
-    }
-  ): Promise<{
-    /** The live stream `fabrica watch` renders is derived from these entries, in order. Adapters whose tool already emits structured output map it directly; text-only adapters wrap each chunk as one entry. */
-    transcript: TranscriptEntry[];
-    /** Open declaration of any ratified-test or check-setting changes made, and why (rule 9). Omitted = gate untouched. */
-    gateChanges?: string;
-    /** The session id for this run, so follow-ups and corrections can resume it. Lands on the receipt. */
-    session?: string;
-  }>;
+  work(brief: string, workdir: string, opts?: BrainWorkOptions): Promise<BrainWorkResult>;
 }
 
 export interface GateResult {
@@ -139,14 +168,6 @@ export interface Foreman {
   events(taskId: string): Promise<FabricaEvent[]>;
   /** Absolute path of the append-only event record (events.jsonl). */
   recordPath(): string;
-}
-
-export function createForeman(opts: {
-  recordHome: string;
-  /** Rule 10: hard dollar limits, enforced by code. */
-  caps?: { perTaskUsd?: number; perDayUsd?: number };
-}): Foreman {
-  return createForemanImpl(opts);
 }
 
 /** Phase 1 replaces this throw with the real delivery validator (rule 4). */

@@ -7,7 +7,7 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ForemanError } from "./errors.ts";
-import type { GateResult } from "./types.ts";
+import type { GateResult } from "../../contract/surface.ts";
 
 export const DEFAULT_CHECK_COMMAND = "./check.sh";
 

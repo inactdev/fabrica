@@ -8,7 +8,7 @@
 
 import type { Brain, TranscriptEntry } from "../brain/index.ts";
 import { runCheck } from "./check.ts";
-import type { GateResult, Receipt } from "./types.ts";
+import type { GateResult, Receipt } from "../../contract/surface.ts";
 
 export interface AttemptLoopResult {
   /** One per attempt actually run, in order. Each entry's `outcome`
