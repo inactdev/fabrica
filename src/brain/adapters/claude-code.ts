@@ -8,7 +8,9 @@
 // each discovery means.
 
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
+import { ContainmentError, runContained } from "../../containment/index.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
 
@@ -32,6 +34,21 @@ export interface ClaudeCodeAdapterOptions {
    * a controllable fake binary. Defaults to "claude" (resolved via PATH,
    * same as a person typing it at a shell). */
   binPath?: string;
+  /** Run the CLI through `src/containment/` (a real macOS sandbox)
+   * instead of directly on the host - confined to `workdir` for reads
+   * and writes, network deliberately allowed (the CLI needs it to reach
+   * Anthropic's API). Defaults to false: the real, currently-configured
+   * binary authenticates through macOS Keychain, and Keychain access is
+   * verified to break inside this sandbox (see claude-code.md's "Process
+   * containment" section and containment/README.md). Set this once a
+   * non-Keychain credential is in place for this adapter to use. */
+  contained?: boolean;
+  /** The directory `contained` excludes from the sandbox's read
+   * allowance. Defaults to `os.homedir()`; exists so tests can point
+   * this at a throwaway fixture instead of the real machine's home
+   * directory - the same reason `binPath` is overridable. Has no effect
+   * when `contained` is not set. */
+  homeDir?: string;
 }
 
 // One line of `claude ... --output-format stream-json`. Only the shape
@@ -76,13 +93,10 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
     // TTY to answer the prompt, so the tool can only refuse). The cost:
     // for the duration of a call the worker has the full access of the
     // OS account this process runs as - Bash/Write/Edit are NOT scoped
-    // to workdir. The ProductionLine worktree protects the Client's
-    // real project files from modification (CONTRACT rule 1), but it
-    // provides no process-level containment - a worker could in
-    // principle reach the real checkout, the home directory, or the
-    // network. Accepted, documented v1 risk: tolerable only because
-    // runs are small and attended; real containment is separate
-    // follow-up work that must land before anything runs unattended.
+    // to workdir by this flag alone. `opts.contained` (src/containment/)
+    // is the real, verified fix for that - see this file's own doc
+    // ("Process containment") for its current status and the one
+    // specific thing blocking it from being the default.
     "--permission-mode",
     "bypassPermissions",
   ];
@@ -95,6 +109,28 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
   // enforce here.
   if (workOpts?.reasoningEffort) args.push("--effort", workOpts.reasoningEffort);
   return args;
+}
+
+// Runs `bin` through src/containment/ instead of a raw host spawn, and
+// translates a ContainmentError into this adapter's own ClaudeCodeError
+// so a caller branching on error codes never needs to know containment
+// exists underneath. Network is deliberately allowed - not left open by
+// accident - because the CLI has to reach Anthropic's API to do anything
+// at all; workdir is what's actually confined.
+async function runContainedOrWrap(
+  bin: string,
+  args: string[],
+  workdir: string,
+  homeDir: string
+): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  try {
+    return await runContained(bin, args, { workdir, homeDir, network: "allowed" });
+  } catch (err) {
+    if (err instanceof ContainmentError) {
+      throw new ClaudeCodeError("spawn-failed", `could not run "${bin}" contained in ${workdir}: ${err.message}`);
+    }
+    throw err;
+  }
 }
 
 function parseLines(stdout: string): ClaudeStreamLine[] {
@@ -158,29 +194,31 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions): Promise<BrainWorkResult> {
       const args = buildArgs(brief, opts, workOpts);
 
-      const { stdout, stderr, exitCode } = await new Promise<{
-        stdout: string;
-        stderr: string;
-        exitCode: number | null;
-      }>((resolve, reject) => {
-        const child = spawn(bin, args, { cwd: workdir });
-        child.stdin.end();
-        let stdout = "";
-        let stderr = "";
-        child.stdout.setEncoding("utf8");
-        child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk: string) => (stdout += chunk));
-        child.stderr.on("data", (chunk: string) => (stderr += chunk));
-        child.on("error", (err: NodeJS.ErrnoException) => {
-          reject(
-            new ClaudeCodeError(
-              "spawn-failed",
-              `could not run "${bin}" in ${workdir}: ${err.code ?? err.message}`
-            )
-          );
-        });
-        child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
-      });
+      const { stdout, stderr, exitCode } = opts.contained
+        ? await runContainedOrWrap(bin, args, workdir, opts.homeDir ?? homedir())
+        : await new Promise<{
+            stdout: string;
+            stderr: string;
+            exitCode: number | null;
+          }>((resolve, reject) => {
+            const child = spawn(bin, args, { cwd: workdir });
+            child.stdin.end();
+            let stdout = "";
+            let stderr = "";
+            child.stdout.setEncoding("utf8");
+            child.stderr.setEncoding("utf8");
+            child.stdout.on("data", (chunk: string) => (stdout += chunk));
+            child.stderr.on("data", (chunk: string) => (stderr += chunk));
+            child.on("error", (err: NodeJS.ErrnoException) => {
+              reject(
+                new ClaudeCodeError(
+                  "spawn-failed",
+                  `could not run "${bin}" in ${workdir}: ${err.code ?? err.message}`
+                )
+              );
+            });
+            child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
+          });
 
       const lines = parseLines(stdout);
       const result = [...lines].reverse().find((l) => l.type === "result");

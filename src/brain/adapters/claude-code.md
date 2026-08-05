@@ -14,7 +14,7 @@ real file in a real throwaway worktree and checks it exists.
 
 ## `claudeCodeAdapter(opts?)`
 
-Call this once to get a `Brain`. Two optional fields:
+Call this once to get a `Brain`. Four optional fields:
 
 - **`model`** - the value passed straight to `claude --model`, e.g.
   `"claude-opus-5"` or the alias `"sonnet"`. Leave it out and the call
@@ -30,6 +30,14 @@ Call this once to get a `Brain`. Two optional fields:
   instead of paying for a real call on every test run. Leave it out in
   real use; it resolves `"claude"` via `PATH`, same as typing it at a
   shell.
+- **`contained`** - route the call through `../../containment/`'s real
+  OS-level sandbox instead of a raw host spawn. Defaults to `false` - see
+  "Process containment" below for exactly why, and what has to change
+  before it can default to `true`.
+- **`homeDir`** - only used when `contained` is set: the directory the
+  sandbox excludes from its read allowance. Defaults to `os.homedir()`;
+  overridable so tests can point it at a throwaway fixture instead of the
+  real machine's real home directory.
 
 ## The command it runs
 
@@ -60,14 +68,42 @@ it resolves. `--permission-mode bypassPermissions` removes the
 approval step entirely - and the cost of that must be stated plainly:
 for the duration of a call, the worker has the full access of the OS
 account this adapter runs as. `Bash`/`Write`/`Edit` are **not** scoped
-to `workdir`. The `ProductionLine` worktree protects the Client's real
-project files from modification (CONTRACT rule 1,
-`src/line/README.md`), but it provides no process-level containment - a
-worker could in principle reach the real checkout, the home directory,
-or the network. This is an accepted, documented v1 risk: tolerable
-right now only because runs are small and attended, and real
-containment is tracked as separate follow-up work that must land before
-anything runs unattended.
+to `workdir` by this flag alone. The `ProductionLine` worktree protects
+the Client's real project files from modification (CONTRACT rule 1,
+`src/line/README.md`), but it provides no process-level containment on
+its own. `opts.contained` (see "Process containment" below) is the real
+fix for that - not yet the default, for one specific, verified reason.
+
+### Process containment
+
+Passing `contained: true` runs the CLI through `../../containment/`'s
+`runContained` instead of a raw host spawn: reads and writes confined to
+`workdir`, network deliberately allowed (this CLI needs it to reach its
+own API - see that module's README for why filesystem is what's
+actually enforced here). That mechanism is real and verified on the
+real machine, not a description of one - see
+`../../containment/README.md` for what was tried, what broke, and what's
+actually proven.
+
+It is **not** the default for this adapter yet, and that's a deliberate,
+documented gap rather than an oversight. Verified live: the real
+`claude` binary authenticates through macOS Keychain (`claude auth
+status` reads a Keychain item, not a file or an env var), and Keychain
+access for a sandboxed process is gated by sandbox-container entitlements
+Apple grants its own signed apps - not something an ad-hoc `sandbox-exec`
+profile can restore. Running the real binary with `contained: true`,
+even with every read and mach-lookup rule wide open, comes back `"Not
+logged in · Please run /login"`; the underlying keychain query itself
+fails with `SecKeychainSearchCreateFromAttributes: A Module Directory
+Service error` (checked without ever reading the credential's actual
+value).
+
+So flipping the default to `true` today would break the one real,
+currently-working adapter's ability to authenticate at all. Fixing that
+means moving this adapter to a non-Keychain credential - `claude
+setup-token` generates a long-lived token meant for exactly this kind of
+headless use - which is a live-credential decision for whoever
+configures Fabrica, not something this file decides on its own.
 
 ### Why `--output-format stream-json --verbose`, not `json`
 

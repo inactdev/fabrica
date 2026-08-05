@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -142,6 +142,41 @@ test("claudeCodeAdapter throws ClaudeCodeError('spawn-failed') when the binary c
 test("claudeCodeAdapter reports model as configured, or 'default' when none was given", async () => {
   assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI }).model, "default");
   assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI, model: "claude-opus-5" }).model, "claude-opus-5");
+});
+
+function sandboxAvailable(): boolean {
+  if (process.platform !== "darwin") return false;
+  try {
+    execFileSync("sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Proves the wiring (issue #44), not just the standalone primitive:
+// src/containment/run.test.ts already proves runContained() itself works;
+// this proves that passing `contained: true` to the actual adapter really
+// does route the actual binary through it, end to end - a decoy file
+// that sits outside workdir but under the adapter's own homeDir must stay
+// unreadable to the process claudeCodeAdapter spawns.
+test("claudeCodeAdapter({ contained: true }) confines the spawned process to workdir", async (t) => {
+  if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
+
+  const homeDir = mkdtempSync(join(tmpdir(), "fabrica-claude-code-home-"));
+  const workdir = join(homeDir, "tasks", "t1", "worktree");
+  mkdirSync(workdir, { recursive: true });
+  const decoyPath = join(homeDir, "decoy.txt");
+  writeFileSync(decoyPath, "should never be readable from workdir");
+
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI, contained: true, homeDir });
+  process.env.FABRICA_TEST_DECOY_PATH = decoyPath;
+  try {
+    const result = await brain.work("TRY_READ_DECOY", workdir);
+    assert.equal(result.transcript[0].text, "READ_BLOCKED");
+  } finally {
+    delete process.env.FABRICA_TEST_DECOY_PATH;
+  }
 });
 
 // Capability spike (issue #6): the tests above prove the adapter's own

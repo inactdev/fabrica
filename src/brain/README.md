@@ -38,10 +38,14 @@ does happens inside it.
   checkout (CONTRACT rule 1). The brain is free to make a mess, run
   commands, edit anything in there - the folder gets destroyed after,
   and edits to its files never land in the original project. That is a
-  guarantee about project state, not process containment: a real
-  adapter's process is not sandboxed to `workdir` (see the reference CLI
-  adapter's own doc file under `adapters/` for what that means in
-  practice).
+  guarantee about project state, not process containment on its own -
+  real, OS-level process containment exists at `../containment/` (issue
+  #44), confining a call's reads, writes, and network to `workdir` unless
+  deliberately allowed further. An adapter opts into it rather than
+  getting it automatically, because plugging it in can require an
+  adapter-specific tradeoff (see the reference CLI adapter's own doc
+  file under `adapters/`, "Process containment," for the one that
+  applies there).
 - By the time the returned promise resolves, the brain is expected to
   have actually done the work described in `brief` inside `workdir` -
   not planned it, not described it back. Fabrica checks the result next

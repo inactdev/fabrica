@@ -8,6 +8,8 @@
 // flakiness of a real call. The real binary is proven separately in
 // claude-code.test.ts's real-binary test - this file is not that proof.
 
+import { readFileSync } from "node:fs";
+
 const args = process.argv.slice(2);
 const brief = args[args[0] === "-p" ? 1 : args.indexOf("-p") + 1];
 
@@ -63,6 +65,24 @@ switch (brief) {
   }
   case "SUCCESS_NO_RESULT_LINE": {
     line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
+    break;
+  }
+  case "TRY_READ_DECOY": {
+    // Attempts to read a path named by an env var, so
+    // claude-code.test.ts's containment-wiring test can prove that
+    // `contained: true` really is confining THIS process end to end,
+    // not just the standalone runContained() primitive.
+    let text;
+    try {
+      text = readFileSync(process.env.FABRICA_TEST_DECOY_PATH, "utf8");
+    } catch {
+      text = null;
+    }
+    line({
+      type: "assistant",
+      message: { content: [{ type: "text", text: text === null ? "READ_BLOCKED" : `READ_SUCCEEDED:${text}` }] },
+    });
+    line(resultLine({}));
     break;
   }
   default: {
