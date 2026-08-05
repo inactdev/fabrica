@@ -149,11 +149,12 @@ want in one place: `total_cost_usd`, `duration_ms`, and a per-token
 
 Rather than drop that data because the interface has no dedicated slot
 for it, this adapter appends it as one more `TranscriptEntry`, `kind:
-"usage"`, `text` the JSON string above, always last. Whatever eventually
-assembles a `Receipt` (issue #7) can read it back out of the transcript
-without this adapter having reshaped the `Brain` seam to fit its own
-tool - which is the thing `adapters/README.md` asks every adapter to
-guard against.
+"usage"`, `text` the JSON string above, always last. The Foreman
+(`src/foreman/`, issue #7) now assembles `Receipt`s but still records
+`costUsd: null` - reading this entry back out of the transcript is issue
+#11's job - and either way the data sits there without this adapter
+having reshaped the `Brain` seam to fit its own tool, which is the thing
+`adapters/README.md` asks every adapter to guard against.
 
 This account is a flat-rate subscription (`claude auth status` reports
 `"subscriptionType": "max"`), so the dollar figure above is notional -
