@@ -88,7 +88,8 @@ guess."* Concretely, for each candidate:
 2. **How `brief` goes in and `transcript` comes out.** Some tools take
    the prompt as an argument, some on stdin, some from a file; some
    print plain text, some emit structured output (Grok Build's headless
-   mode is JSON) that has to be reduced to a transcript string.
+   mode is JSON) that maps piece-by-piece into `transcript` entries, the
+   way `claude-code.ts` maps `stream-json` lines.
 3. **How it represents a resumable run.** Some tools hand back an id you
    pass on the next invocation; others resume from a local state
    directory instead. Whichever it is, that's what `opts.session` and
