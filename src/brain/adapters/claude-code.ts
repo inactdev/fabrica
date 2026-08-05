@@ -7,8 +7,6 @@
 // real-binary test for the live proof and claude-code.md for what
 // each discovery means.
 
-import { spawn } from "node:child_process";
-import { homedir } from "node:os";
 import type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
 
@@ -24,37 +22,32 @@ export class ClaudeCodeError extends Error {
   }
 }
 
+// Built from src/brain/adapters/docker/Dockerfile (`docker build -t
+// fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .`,
+// once, before this adapter's default image can be found) - see that
+// file and claude-code.md's "Process containment" section for what it
+// installs and why a fresh build has nothing authenticated yet.
+const DEFAULT_IMAGE = "fabrica-claude-code:latest";
+
 export interface ClaudeCodeAdapterOptions {
   /** Value for `claude --model` (an alias like "sonnet" or a full model
    * id like "claude-sonnet-5"). Omitted means the CLI's own configured
    * default runs, and `Brain.model` reports that honestly as "default"
    * rather than guessing which model that resolves to. */
   model?: string;
-  /** The `claude` executable to run - override for tests that stand in
-   * a controllable fake binary. Defaults to "claude" (resolved via PATH,
-   * same as a person typing it at a shell). */
+  /** The command to run inside the container - override for tests that
+   * stand in a controllable fake binary, reachable at a path under
+   * `workdir` (the only thing the container can see). Defaults to
+   * "claude", resolved via the image's own PATH. */
   binPath?: string;
-  /** Run the CLI through `src/containment/` (a real macOS sandbox)
-   * instead of directly on the host - confined to `workdir` for reads
-   * and writes, network deliberately allowed (the CLI needs it to reach
-   * Anthropic's API). Defaults to false: the real, currently-configured
-   * binary authenticates through macOS Keychain, and Keychain access is
-   * verified to break inside this sandbox (see claude-code.md's "Process
-   * containment" section and containment/README.md). Set this once a
-   * non-Keychain credential is in place for this adapter to use. */
-  contained?: boolean;
-  /** The directory `contained` excludes from the sandbox's read
-   * allowance. Defaults to `os.homedir()`; exists so tests can point
-   * this at a throwaway fixture instead of the real machine's home
-   * directory - the same reason `binPath` is overridable. Has no effect
-   * when `contained` is not set. */
-  homeDir?: string;
-  /** Only used when `contained` is set: the exact environment variables
-   * the sandboxed process receives, passed straight through to
-   * `runContained`'s allowlist. Omitted means the contained CLI gets
-   * only `PATH` - nothing from this process's own environment (API
-   * keys, tokens) leaks in by inheritance. An uncontained spawn is
-   * unaffected and inherits normally. */
+  /** The Docker image `runContained` runs `binPath` inside. Defaults to
+   * `DEFAULT_IMAGE`; overridable for tests that need a different
+   * image (e.g. one with Node, to run a fake CLI script). */
+  image?: string;
+  /** The exact environment variables the contained process receives,
+   * passed straight through to `runContained`'s allowlist. Omitted means
+   * the container gets only what its own image defines - nothing from
+   * this process's own environment (API keys, tokens) leaks in. */
   env?: Record<string, string>;
 }
 
@@ -97,13 +90,11 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
     "--verbose",
     // Without this, every Write/Edit/Bash mutation is silently
     // permission-denied in non-interactive mode (verified: there is no
-    // TTY to answer the prompt, so the tool can only refuse). The cost:
-    // for the duration of a call the worker has the full access of the
-    // OS account this process runs as - Bash/Write/Edit are NOT scoped
-    // to workdir by this flag alone. `opts.contained` (src/containment/)
-    // is the real, verified fix for that - see this file's own doc
-    // ("Process containment") for its current status and the one
-    // specific thing blocking it from being the default.
+    // TTY to answer the prompt, so the tool can only refuse). This
+    // adapter always runs through src/containment/ (Docker), so the
+    // "full OS account access" cost this flag would otherwise carry is
+    // already contained to `workdir` - see this file's own "Process
+    // containment" section.
     "--permission-mode",
     "bypassPermissions",
   ];
@@ -116,29 +107,6 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
   // enforce here.
   if (workOpts?.reasoningEffort) args.push("--effort", workOpts.reasoningEffort);
   return args;
-}
-
-// Runs `bin` through src/containment/ instead of a raw host spawn, and
-// translates a ContainmentError into this adapter's own ClaudeCodeError
-// so a caller branching on error codes never needs to know containment
-// exists underneath. Network is deliberately allowed - not left open by
-// accident - because the CLI has to reach Anthropic's API to do anything
-// at all; workdir is what's actually confined.
-async function runContainedOrWrap(
-  bin: string,
-  args: string[],
-  workdir: string,
-  homeDir: string,
-  env?: Record<string, string>
-): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-  try {
-    return await runContained(bin, args, { workdir, homeDir, network: "allowed", env });
-  } catch (err) {
-    if (err instanceof ContainmentError) {
-      throw new ClaudeCodeError("spawn-failed", `could not run "${bin}" contained in ${workdir}: ${err.message}`);
-    }
-    throw err;
-  }
 }
 
 function parseLines(stdout: string): ClaudeStreamLine[] {
@@ -194,6 +162,7 @@ function toTranscript(lines: ClaudeStreamLine[]): TranscriptEntry[] {
 
 export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
   const bin = opts.binPath ?? "claude";
+  const image = opts.image ?? DEFAULT_IMAGE;
 
   return {
     name: "claude-code",
@@ -202,31 +171,28 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions): Promise<BrainWorkResult> {
       const args = buildArgs(brief, opts, workOpts);
 
-      const { stdout, stderr, exitCode } = opts.contained
-        ? await runContainedOrWrap(bin, args, workdir, opts.homeDir ?? homedir(), opts.env)
-        : await new Promise<{
-            stdout: string;
-            stderr: string;
-            exitCode: number | null;
-          }>((resolve, reject) => {
-            const child = spawn(bin, args, { cwd: workdir });
-            child.stdin.end();
-            let stdout = "";
-            let stderr = "";
-            child.stdout.setEncoding("utf8");
-            child.stderr.setEncoding("utf8");
-            child.stdout.on("data", (chunk: string) => (stdout += chunk));
-            child.stderr.on("data", (chunk: string) => (stderr += chunk));
-            child.on("error", (err: NodeJS.ErrnoException) => {
-              reject(
-                new ClaudeCodeError(
-                  "spawn-failed",
-                  `could not run "${bin}" in ${workdir}: ${err.code ?? err.message}`
-                )
-              );
-            });
-            child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
-          });
+      let stdout: string;
+      let stderr: string;
+      let exitCode: number | null;
+      try {
+        // Network is deliberately allowed - not left open by accident -
+        // because the CLI has to reach its own API to do anything at
+        // all; workdir is what's actually confined.
+        ({ stdout, stderr, exitCode } = await runContained(bin, args, {
+          workdir,
+          network: "allowed",
+          image,
+          env: opts.env,
+        }));
+      } catch (err) {
+        if (err instanceof ContainmentError) {
+          throw new ClaudeCodeError(
+            "spawn-failed",
+            `could not run "${bin}" contained (image ${image}) in ${workdir}: ${err.message}`
+          );
+        }
+        throw err;
+      }
 
       const lines = parseLines(stdout);
       const result = [...lines].reverse().find((l) => l.type === "result");

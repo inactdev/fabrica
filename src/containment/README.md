@@ -11,105 +11,108 @@ or write anywhere that account can reach, or talk to anywhere on the
 network. `runContained` is a real, working answer to that - not a
 description of one.
 
-## Why macOS's Seatbelt, and not the container stack the Client chose
+## Why Docker
 
-The Client's stated direction for this general problem is a per-task
-container stack (own services, volumes, network). That's the right
-answer for workloads that can run in a Linux container. It is not the
-right answer for the one real `Brain` adapter this project has: running
-`file` on that adapter's installed binary shows a Mach-O 64-bit arm64
-executable - native macOS code, not Linux. There is no container runtime
-on this machine (or any Mac) that executes it, because a Linux container
-is still a Linux kernel underneath. This is exactly the case the
-Client's own architecture note carved out an exception for: "native
-macOS work, isolated host-side instead, per task." `runContained` is
-that host-side mechanism, chosen and verified for that reason - not
-because containers were rejected in general.
+Docker is the only mechanism this module implements - there is no
+platform-specific fallback, and there never was meant to be one. Three
+reasons, in order of how much they matter going forward:
 
-macOS's own sandboxing primitive, `sandbox-exec`, is what's used. Its
-`man` page marks the *command* deprecated in favor of the App Sandbox
-entitlement system - but App Sandbox requires a code-signed app bundle
-built with Xcode, which cannot wrap an arbitrary third-party binary at
-runtime. The underlying kernel mechanism it drives (Seatbelt) is not
-going anywhere: `/System/Library/Sandbox/Profiles/` ships dozens of
-`.sb` profiles that real macOS system daemons are still confined by
-today. `sandbox-exec` is the only way to point that same mechanism at an
-arbitrary command, so that's what this module uses - verified against
-the real, installed `sandbox-exec` on the real machine, not assumed from
-its man page.
+- **Portability.** Fabrica isn't committed to staying macOS-only, and a
+  containment scheme wired to one OS's own kernel sandboxing primitive
+  makes moving to Linux or Windows harder, not easier. Docker Desktop
+  and Docker Engine both run on all three.
+- **One mechanism for both isolation problems.** The Client had already
+  chosen a per-task container stack (its own services, volumes,
+  network) as the direction for keeping parallel tasks from colliding
+  at runtime. Worker containment is the same shape of problem - this
+  module is that same direction, applied here.
+- **Not building on something already retired.** An earlier version of
+  this module used macOS's `sandbox-exec`. Its own `man` page opens with
+  the word `DEPRECATED`. Docker is an actively maintained mechanism;
+  `sandbox-exec` is not.
 
-## What the profile actually does, and why
+### What was tried and replaced: macOS's `sandbox-exec`
 
-Every process gets a freshly generated Seatbelt profile (see
-`profile.ts`), written to its own throwaway temp file per call:
+Worth recording plainly, since it was real, verified work, not a
+discarded guess: `sandbox-exec` (Seatbelt) genuinely did confine a
+process's reads, writes, and network - proven live against the real
+binary before it was replaced. What it could not do, also verified
+live: run the reference CLI adapter's actual authentication path.
+That binary reads its credential from macOS Keychain, and Keychain
+access for a sandboxed process is gated by sandbox-container
+entitlements Apple grants its own signed apps - an ad-hoc `sandbox-exec`
+profile cannot restore that, no matter how permissive the rest of the
+profile is (verified: even with every file-read and mach-lookup rule
+wide open, the Keychain query itself failed with `SecKeychainSearch
+CreateFromAttributes: A Module Directory Service error`, checked
+without ever reading the credential's actual value). Docker replaces it
+entirely - see "What's still not solved" below for how the *equivalent*
+gap shows up under Docker, and why it's a smaller, more ordinary one.
 
-- **Writes** are denied everywhere except `workdir`.
-- **Reads** are allowed everywhere *except* `homeDir` - with `workdir`
-  re-opened as an explicit exception, because `workdir` usually lives
-  inside `homeDir` (Fabrica's own `recordHome` defaults to `~/.fabrica`).
-- **Network** is denied unless `network: "allowed"` is passed.
+## What the container actually does, and why
 
-### What was tried and rejected: an allowlist of system directories
+Every call runs a fresh, throwaway container (`docker run --rm`):
 
-The obvious-looking design is "deny reads everywhere except a short list
-of system directories the OS needs (`/usr`, `/bin`, `/System`,
-`/Library`, ...) plus `workdir`." That was built first, and it broke:
-even `/usr/bin/true` aborted with no error output under it. The cause,
-found by checking `mount` and `/System/Volumes/Preboot/Cryptexes` on the
-real machine: modern macOS's system volume is sealed and read-only, with
-its actual libraries served through cryptex overlays mounted at paths
-like `/System/Volumes/Preboot/Cryptexes/OS/...` - not simply under
-`/System`. There is no small, stable, enumerable set of paths a process
-needs just to start up. Trying to hand-pick one is fragile by
-construction and was proven so on this exact machine.
-
-The design that's actually in `profile.ts` inverts this: allow reads
-everywhere, and carve out one specific exclusion (`homeDir`) rather than
-trying to enumerate an allowlist. This sidesteps the sealed-volume
-problem entirely (the OS's own paths are never touched by the
-exclusion, whatever they happen to be on a given macOS version) while
-still closing the concrete thing the issue asks for - a Worker reading
-files "in the home directory" it has no business seeing.
+- **Writes** are confined to `workdir` because it is the *only* thing
+  bind-mounted into the container (`-v <workdir>:/workdir -w /workdir`).
+  There is no allow/deny rule to get right here, unlike a host-process
+  sandbox - the container's filesystem view simply doesn't contain
+  anything else from the host at all.
+- **Reads** are confined the same way, and this is a strictly stronger
+  guarantee than the `sandbox-exec` version's was: that version had to
+  carve out one exclusion (the home directory) from an otherwise-broad
+  read allowance, because a host-process sandbox still has to let the
+  OS's own files through. A container has no such tension - nothing
+  outside `workdir` is visible, full stop, not just "the home
+  directory."
+- **Network** is denied by passing `--network none` (verified: DNS
+  resolution itself fails under it, and so does a plain TCP connect to
+  a real listener) and allowed by omitting it (the container gets
+  Docker's normal default bridge network).
+- **Environment** needs no filtering the way a host-process sandbox
+  does: Docker never auto-inherits the host's environment into a
+  container (verified) - only what's passed via `-e` reaches the
+  contained process, so "the worker has what it needs, not the
+  Foreman's whole environment" holds by construction, not by a base
+  case this module has to build itself.
 
 ### Per-task isolation
 
-Every call generates its own profile file, referencing only that
-particular `workdir`. Nothing is shared or reused across calls or across
-concurrently-running tasks, so two Workers running at once cannot
-collide with each other through this mechanism - each one's profile
-only ever grants access to its own task's workdir.
+Every call is its own throwaway container, torn down (`--rm`) the
+moment the command exits. Nothing is shared or reused across calls or
+across concurrently-running tasks, so two Workers running at once
+cannot collide with each other through this mechanism.
 
 ## `runContained(command, args, opts)`
 
 ```ts
-const result = await runContained("/bin/echo", ["hi"], {
-  workdir: line.workdir,       // the ProductionLine's throwaway worktree
-  homeDir: os.homedir(),       // excluded from the broad read allowance
-  network: "denied",           // or "allowed" - no default; state it
+const result = await runContained("echo", ["hi"], {
+  workdir: line.workdir,  // bind-mounted at /workdir - the only host path visible
+  network: "denied",      // or "allowed" - no default; state it
+  image: "alpine",        // required - which image the command runs inside
 });
 // result: { stdout: "hi\n", stderr: "", exitCode: 0 }
 ```
 
-- **`workdir`** - reads and writes are confined here. Resolved with
+- **`workdir`** - the only host path bind-mounted into the container, at
+  `/workdir` (also the container's working directory). Resolved with
   `realpathSync` internally, so a path through a symlink (macOS's
   `/tmp` -> `/private/tmp`, same sharp edge `src/line/README.md`
-  documents) still matches what the sandbox actually sees.
-- **`homeDir`** - the directory excluded from the broad read allowance.
-  Not read from `os.homedir()` internally - the caller passes it in, the
-  same discipline this project already applies to `recordHome`, so a
-  test can point it at a throwaway fixture and prove the exclusion
-  without touching the real machine's real home directory.
+  documents) still matches what actually gets mounted.
 - **`network`** - `"denied"` or `"allowed"`, required with no default.
   There's no silent choice here on purpose: the issue's own requirement
-  is "not the network unless deliberately allowed," and a required field
-  is what makes every call site actually state that choice.
+  is "not the network unless deliberately allowed," and a required
+  field is what makes every call site actually state that choice.
 - **`env`** - the exact environment variables the contained process
-  receives: "the worker has what it needs," not the Foreman's whole
-  environment. Whatever is passed here is merged over a PATH-only base
-  (`PATH` alone is needed to resolve the command at all); nothing else
-  from this process's environment - API keys, tokens, anything a secret
-  might live in - reaches the child by inheritance. Omit it and the
-  child gets just `PATH`.
+  receives, as `-e KEY=VALUE` flags. Omit it and the container gets only
+  what its own image defines - Docker's own default behavior already
+  matches "the worker has what it needs," not the caller's whole
+  environment.
+- **`image`** - the Docker image the command runs inside, required with
+  no default for the same reason `network` has none: a generic command
+  (`sh`, `cat`) can run in any small stock image, but a caller whose
+  command is a specific tool needs an image that actually has that tool
+  installed, and this module won't guess which one that is.
 
 Returns `{ stdout, stderr, exitCode }` - identical in shape to a plain
 `child_process.spawn` wrapped in a promise, so an adapter that already
@@ -118,68 +121,29 @@ reshaping how it reads the result.
 
 ## Errors: `ContainmentError`
 
-- **`unsupported-platform`** - thrown immediately if
-  `process.platform !== "darwin"`. This module only implements macOS's
-  Seatbelt; it does not silently no-op or fall back to running
-  uncontained on another OS.
-- **`invalid-path`** - `workdir` or `homeDir` doesn't resolve to a real,
-  existing path, so no profile could be built around it. The message
-  names which of the two failed and why.
-- **`spawn-failed`** - `sandbox-exec` itself couldn't be launched (not
-  installed, or some other OS-level failure starting it). Distinct from
-  the *contained command* failing, which just comes back as a normal
-  result with a non-zero `exitCode` - `runContained` doesn't try to
-  guess why a command failed once it actually ran.
+- **`invalid-path`** - `workdir` doesn't resolve to a real, existing
+  path.
+- **`spawn-failed`** - `docker` itself couldn't be launched (not
+  installed, daemon down in a way that prevents even starting the CLI).
+  Distinct from the *contained command* failing to run, or the daemon
+  refusing the request once `docker` did start - both of those come back
+  as a normal result with a non-zero `exitCode` and Docker's own error
+  text in `stderr`, exactly like any other command failure.
 
-## An accepted gap: mach-lookup is not restricted
+## What's still not solved: the reference CLI adapter's own credential
 
-The profile leaves `(allow mach-lookup)` unrestricted: a contained
-process can still talk to any Mach/XPC service on the host. That is a
-deliberate, accepted, non-urgent gap - documented here so nobody
-mistakes the verified guarantees for more than they are.
-
-Why it's acceptable: the Client's two real requirements are that his
-filesystem stays intact and that no change reaches his project without
-his approval - and both are already met independent of mach-lookup.
-Rule 1 is proven by a byte-for-byte fingerprint test, and v1 never
-pushes, so work only ever lands on a branch he reviews and merges by
-hand.
-
-Why it isn't narrowed: restricting mach-lookup to a named allowlist of
-services would mean guessing which Mach/XPC services the real binary
-needs and breaking it repeatedly to find out - exactly what already
-happened once in this module's own discovery process, when a
-hand-picked system-read-path allowlist starved `dyld` under macOS's
-sealed, cryptex-based system volume (see "What was tried and rejected"
-above).
-
-Stated plainly: this is a smaller room than before, not a walk-away
-guarantee. A contained process can still reach system services that
-could in principle proxy around the `network: "denied"` boundary (a
-background transfer daemon, the pasteboard), even though direct sockets
-are verified blocked. Also stated plainly: the Client's own crewmates
-run today with no sandbox at all, so this - even with the mach-lookup
-gap - is already meaningfully stricter than the status quo.
-
-## What this does NOT solve yet: the reference CLI adapter isn't wired to use it by default
-
-This module is not currently the default execution path for that
-adapter's factory function, and that's a deliberate, documented gap -
-not an oversight. Verified live on this machine: the real binary
-authenticates through macOS Keychain (its own auth-status subcommand
-reads a Keychain item, not a file or env var), and Keychain access for a
-sandboxed process is gated by sandbox-container entitlements Apple
-grants its own signed apps - not something an ad-hoc `sandbox-exec`
-profile can restore. Running the real binary under this sandbox, even
-with every read/mach-lookup rule wide open, reports back "not logged
-in"; the underlying keychain query itself fails with
-`SecKeychainSearchCreateFromAttributes: A Module Directory Service
-error` (checked without ever reading the credential's actual value).
-
-So enabling this for that adapter today would break the one real,
-currently-working adapter's ability to authenticate at all. That's a
-live-credential decision (moving to a non-Keychain, long-lived token the
-CLI itself can generate for headless use) reserved for whoever
-configures Fabrica, not something this module decides on its own. See
-that adapter's own doc file, "Process containment" section, for the
-exact, up-to-date status of that decision.
+Docker changes *what kind* of gap remains for the reference adapter, not
+whether one does. Verified on the real machine: the host's installed
+CLI is a native macOS binary and can never run inside any Linux
+container - but installing that same tool's own Linux build via its
+public npm package, inside a container, works (confirmed: it starts,
+parses arguments, and reports a version). The only thing that doesn't
+work is authentication - a fresh container has no credential configured
+at all, the same as any brand-new install of any authenticated CLI would
+need one before it does real work. That's a far more ordinary,
+better-understood gap than `sandbox-exec`'s Keychain failure was, and
+closing it (e.g. the CLI's own long-lived-token mechanism for headless
+use) is a live-credential decision for whoever configures Fabrica, not
+something this module decides on its own. See the reference CLI
+adapter's own doc file, "Process containment," for the exact,
+up-to-date status.

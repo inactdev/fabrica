@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,12 +9,41 @@ import { claudeCodeAdapter, ClaudeCodeError } from "./claude-code.ts";
 import { createProductionLine, destroyProductionLine } from "../../line/index.ts";
 import { makeFixtureHome, makeFixtureProject } from "../../line/helpers/fixture.ts";
 
-const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-claude-cli.mjs");
+const FAKE_CLI_SOURCE = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-claude-cli.mjs");
+// A container only ever sees `workdir` (mounted at /workdir) - the fake
+// CLI has to live inside it, not at its real path on the host.
+const FAKE_CLI_IN_CONTAINER = "/workdir/fake-claude-cli.mjs";
+// Needs Node to run the fake CLI's .mjs script; the real adapter's own
+// default image (built from docker/Dockerfile) has this too, plus the
+// real CLI.
+const TEST_IMAGE = "node:20-alpine";
 
-test("claudeCodeAdapter always passes bypassPermissions and forwards --resume, --model, --effort", async () => {
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI, model: "claude-fable-5" });
+function dockerAvailable(): boolean {
+  try {
+    execFileSync("docker", ["info"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  const result = await brain.work("ECHO_ARGS", process.cwd(), {
+function makeFakeCliWorkdir(): string {
+  const workdir = mkdtempSync(join(tmpdir(), "fabrica-claude-code-workdir-"));
+  const dest = join(workdir, "fake-claude-cli.mjs");
+  copyFileSync(FAKE_CLI_SOURCE, dest);
+  chmodSync(dest, 0o755);
+  return workdir;
+}
+
+test("claudeCodeAdapter always passes bypassPermissions and forwards --resume, --model, --effort", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    model: "claude-fable-5",
+  });
+
+  const result = await brain.work("ECHO_ARGS", makeFakeCliWorkdir(), {
     session: "prior-session-id",
     reasoningEffort: "high",
   });
@@ -37,10 +66,11 @@ test("claudeCodeAdapter always passes bypassPermissions and forwards --resume, -
   ]);
 });
 
-test("claudeCodeAdapter omits --resume, --model, --effort when not given", async () => {
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI });
+test("claudeCodeAdapter omits --resume, --model, --effort when not given", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
-  const result = await brain.work("ECHO_ARGS", process.cwd());
+  const result = await brain.work("ECHO_ARGS", makeFakeCliWorkdir());
 
   const argsSeen = JSON.parse(result.transcript[0].text);
   assert.deepEqual(argsSeen, [
@@ -54,10 +84,11 @@ test("claudeCodeAdapter omits --resume, --model, --effort when not given", async
   ]);
 });
 
-test("claudeCodeAdapter maps structured stream-json into transcript entries and skips harness noise", async () => {
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI });
+test("claudeCodeAdapter maps structured stream-json into transcript entries and skips harness noise", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
-  const result = await brain.work("SUCCESS_WITH_TOOLS", process.cwd());
+  const result = await brain.work("SUCCESS_WITH_TOOLS", makeFakeCliWorkdir());
 
   assert.deepEqual(
     result.transcript.map((e) => e.kind),
@@ -70,18 +101,20 @@ test("claudeCodeAdapter maps structured stream-json into transcript entries and 
   assert.ok(!result.transcript.some((e) => e.text.includes("init")));
 });
 
-test("claudeCodeAdapter records session id from the terminal result line", async () => {
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI });
+test("claudeCodeAdapter records session id from the terminal result line", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
-  const result = await brain.work("SUCCESS_WITH_TOOLS", process.cwd());
+  const result = await brain.work("SUCCESS_WITH_TOOLS", makeFakeCliWorkdir());
 
   assert.equal(result.session, "fake-session-123");
 });
 
-test("claudeCodeAdapter carries cost, duration, and token usage on a 'usage' transcript entry", async () => {
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI });
+test("claudeCodeAdapter carries cost, duration, and token usage on a 'usage' transcript entry", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
-  const result = await brain.work("SUCCESS_WITH_TOOLS", process.cwd());
+  const result = await brain.work("SUCCESS_WITH_TOOLS", makeFakeCliWorkdir());
 
   const usageEntry = result.transcript.at(-1)!;
   assert.equal(usageEntry.kind, "usage");
@@ -96,11 +129,12 @@ test("claudeCodeAdapter carries cost, duration, and token usage on a 'usage' tra
   });
 });
 
-test("claudeCodeAdapter throws ClaudeCodeError('cli-error') on a non-zero exit with no JSON on stdout", async () => {
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI });
+test("claudeCodeAdapter throws ClaudeCodeError('cli-error') on a non-zero exit with no JSON on stdout", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
   await assert.rejects(
-    () => brain.work("FAIL_EXIT_NONZERO_NO_JSON", process.cwd()),
+    () => brain.work("FAIL_EXIT_NONZERO_NO_JSON", makeFakeCliWorkdir()),
     (err: unknown) =>
       err instanceof ClaudeCodeError &&
       err.code === "cli-error" &&
@@ -108,11 +142,12 @@ test("claudeCodeAdapter throws ClaudeCodeError('cli-error') on a non-zero exit w
   );
 });
 
-test("claudeCodeAdapter throws ClaudeCodeError('cli-error') using the tool's own message when stdout is JSON with is_error", async () => {
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI });
+test("claudeCodeAdapter throws ClaudeCodeError('cli-error') using the tool's own message when stdout is JSON with is_error", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
   await assert.rejects(
-    () => brain.work("FAIL_EXIT_NONZERO_WITH_JSON", process.cwd()),
+    () => brain.work("FAIL_EXIT_NONZERO_WITH_JSON", makeFakeCliWorkdir()),
     (err: unknown) =>
       err instanceof ClaudeCodeError &&
       err.code === "cli-error" &&
@@ -121,87 +156,89 @@ test("claudeCodeAdapter throws ClaudeCodeError('cli-error') using the tool's own
   );
 });
 
-test("claudeCodeAdapter throws ClaudeCodeError('unparseable-output') on exit 0 with no result line", async () => {
-  const brain = claudeCodeAdapter({ binPath: FAKE_CLI });
+test("claudeCodeAdapter throws ClaudeCodeError('unparseable-output') on exit 0 with no result line", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
   await assert.rejects(
-    () => brain.work("SUCCESS_NO_RESULT_LINE", process.cwd()),
+    () => brain.work("SUCCESS_NO_RESULT_LINE", makeFakeCliWorkdir()),
     (err: unknown) => err instanceof ClaudeCodeError && err.code === "unparseable-output"
   );
 });
 
-test("claudeCodeAdapter throws ClaudeCodeError('spawn-failed') when the binary can't be run", async () => {
-  const brain = claudeCodeAdapter({ binPath: join(tmpdir(), "definitely-not-a-real-binary-xyz") });
+test("claudeCodeAdapter throws ClaudeCodeError('cli-error') when the containerized command doesn't exist", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  // Unlike a host spawn, a missing command inside a container is Docker's
+  // own exit-127 failure, not a Node-level spawn error - so this is a
+  // cli-error (bad exit, real message), not spawn-failed. spawn-failed
+  // is proven at the containment layer instead (docker itself missing),
+  // see src/containment/run.test.ts. Plain `alpine`, not TEST_IMAGE: the
+  // official node image's own entrypoint script reinterprets a missing
+  // command as a node script argument (a real, verified quirk of that
+  // image, not of this adapter), which would otherwise mask the plain
+  // "not found" failure this test wants to prove.
+  const brain = claudeCodeAdapter({ binPath: "/definitely-not-a-real-binary-xyz", image: "alpine" });
 
   await assert.rejects(
-    () => brain.work("hi", process.cwd()),
-    (err: unknown) => err instanceof ClaudeCodeError && err.code === "spawn-failed"
+    () => brain.work("hi", makeFakeCliWorkdir()),
+    (err: unknown) =>
+      err instanceof ClaudeCodeError && err.code === "cli-error" && /no such file or directory/i.test(err.message)
   );
 });
 
 test("claudeCodeAdapter reports model as configured, or 'default' when none was given", async () => {
-  assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI }).model, "default");
-  assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI, model: "claude-opus-5" }).model, "claude-opus-5");
+  assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER }).model, "default");
+  assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, model: "claude-opus-5" }).model, "claude-opus-5");
 });
-
-function sandboxAvailable(): boolean {
-  if (process.platform !== "darwin") return false;
-  try {
-    execFileSync("sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 // Proves the wiring (issue #44), not just the standalone primitive:
 // src/containment/run.test.ts already proves runContained() itself works;
-// this proves that passing `contained: true` to the actual adapter really
-// does route the actual binary through it, end to end - a decoy file
-// that sits outside workdir but under the adapter's own homeDir must stay
-// unreadable to the process claudeCodeAdapter spawns.
-test("claudeCodeAdapter({ contained: true }) confines the spawned process to workdir", async (t) => {
-  if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
+// this proves that claudeCodeAdapter's work() really does route the
+// actual command through it, end to end - a decoy file that sits
+// outside workdir must stay unreadable to the process it spawns.
+test("claudeCodeAdapter confines the spawned process to workdir", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
 
-  const homeDir = mkdtempSync(join(tmpdir(), "fabrica-claude-code-home-"));
-  const workdir = join(homeDir, "tasks", "t1", "worktree");
-  mkdirSync(workdir, { recursive: true });
-  const decoyPath = join(homeDir, "decoy.txt");
+  const workdir = makeFakeCliWorkdir();
+  const outsideDir = mkdtempSync(join(tmpdir(), "fabrica-claude-code-outside-"));
+  const decoyPath = join(outsideDir, "decoy.txt");
   writeFileSync(decoyPath, "should never be readable from workdir");
 
   const brain = claudeCodeAdapter({
-    binPath: FAKE_CLI,
-    contained: true,
-    homeDir,
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
     env: { FABRICA_TEST_DECOY_PATH: decoyPath },
   });
   const result = await brain.work("TRY_READ_DECOY", workdir);
   assert.equal(result.transcript[0].text, "READ_BLOCKED");
 });
 
-// Capability spike (issue #6): the tests above prove the adapter's own
-// logic against a controllable fake; this test proves the real thing.
-// It drives the actual installed `claude` binary against a real
-// ProductionLine worktree and asserts the file it was asked to create
-// really exists - not a simulated result. It requires the real binary
-// to be installed and authenticated; it skips (does not fail) rather
-// than lie about proving this when that's not true on the machine
-// running it.
+// Capability spike (issue #6, updated for issue #44): the tests above
+// prove the adapter's own logic against a controllable fake; this test
+// proves the real thing - now necessarily the containerized real CLI,
+// since work() always runs through Docker (the host's own installed
+// binary is a native macOS executable and can never run in a
+// container - see claude-code.md). It requires DEFAULT_IMAGE to exist
+// (`docker build`, see docker/Dockerfile) and be authenticated inside
+// the container; it skips (does not fail) rather than lie about
+// proving this when that's not true on the machine running it.
 test("claude-code adapter: real binary does real work in a real worktree (capability spike)", async (t) => {
-  try {
-    execFileSync("claude", ["--version"], { stdio: "ignore" });
-  } catch {
-    t.skip("the real `claude` binary is not installed on this machine");
+  if (!dockerAvailable()) {
+    t.skip("Docker is not available on this machine");
     return;
   }
   try {
-    const status = JSON.parse(execFileSync("claude", ["auth", "status"], { encoding: "utf8" }));
+    const status = JSON.parse(
+      execFileSync("docker", ["run", "--rm", "fabrica-claude-code:latest", "claude", "auth", "status"], {
+        encoding: "utf8",
+      })
+    );
     if (status.loggedIn !== true) {
-      t.skip("the real `claude` binary is installed but not authenticated on this machine");
+      t.skip("the containerized real binary is installed but not authenticated");
       return;
     }
   } catch {
-    t.skip("could not confirm the real `claude` binary is authenticated on this machine");
+    t.skip("could not confirm the containerized real binary is built and authenticated on this machine");
     return;
   }
 

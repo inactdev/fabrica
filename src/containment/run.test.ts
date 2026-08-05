@@ -1,10 +1,10 @@
 // The real proof (issue #44): runs actual processes through runContained
 // and shows, live, that they cannot write outside their workdir, cannot
-// read a file that sits elsewhere under the home directory, and cannot
-// reach the network unless network is deliberately allowed - all against
-// the real `sandbox-exec` on the real machine, nothing mocked. Skips
-// (never fails) on a non-macOS machine, since this module only implements
-// the macOS mechanism - see README.md.
+// read a file that sits elsewhere on the host, and cannot reach the
+// network unless network is deliberately allowed - all against the real
+// Docker daemon on the real machine, nothing mocked. Skips (never fails)
+// when Docker isn't available, since this module needs a real daemon to
+// prove anything - see README.md.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -16,32 +16,33 @@ import { execFileSync } from "node:child_process";
 import { ContainmentError } from "./errors.ts";
 import { runContained } from "./run.ts";
 
-function sandboxAvailable(): boolean {
-  if (process.platform !== "darwin") return false;
+const IMAGE = "alpine";
+
+function dockerAvailable(): boolean {
   try {
-    execFileSync("sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], { stdio: "ignore" });
+    execFileSync("docker", ["info"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
   }
 }
 
-// A fixture "home": workdir nested inside it (matching Fabrica's real
-// shape - recordHome defaults to ~/.fabrica, workdir lives under that),
-// plus a decoy file that sits under the fixture home but outside workdir,
-// standing in for something real like ~/.ssh/id_rsa.
+// workdir plus a decoy that sits entirely outside it on the host -
+// standing in for something real like the Client's actual project
+// files or ~/.ssh/id_rsa. Unlike a host-process sandbox, nothing here
+// needs to look like Fabrica's real directory shape (recordHome nesting,
+// etc.) - a container never sees the host filesystem at all except
+// what's explicitly mounted, so any two host directories prove the
+// point equally well.
 function makeFixture() {
-  const homeDir = mkdtempSync(join(tmpdir(), "fabrica-containment-home-"));
-  const workdir = join(homeDir, "tasks", "t1", "worktree");
-  mkdirSync(workdir, { recursive: true });
+  const workdir = mkdtempSync(join(tmpdir(), "fabrica-containment-workdir-"));
   writeFileSync(join(workdir, "inside.txt"), "inside workdir\n");
-  const decoyDir = join(homeDir, "not-the-workdir");
-  mkdirSync(decoyDir, { recursive: true });
-  writeFileSync(join(decoyDir, "secret.txt"), "should never be readable from workdir\n");
-  return { homeDir, workdir, decoyDir };
+  const outsideDir = mkdtempSync(join(tmpdir(), "fabrica-containment-outside-"));
+  writeFileSync(join(outsideDir, "secret.txt"), "should never be readable from workdir\n");
+  return { workdir, outsideDir };
 }
 
-async function listenOnLoopback(): Promise<{ port: number; close: () => void }> {
+async function listenOnHost(): Promise<{ port: number; close: () => void }> {
   const server = createServer((sock) => {
     // `nc -z` (a connectivity probe, used below) closes the socket right
     // after connecting without reading anything - writing to it then
@@ -49,73 +50,75 @@ async function listenOnLoopback(): Promise<{ port: number; close: () => void }> 
     sock.on("error", () => {});
     sock.end("hi\n");
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  // 0.0.0.0, not 127.0.0.1: a container reaches the host through Docker
+  // Desktop's `host.docker.internal`, a real interface, not loopback.
+  await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("expected a bound TCP address");
   return { port: address.port, close: () => server.close() };
 }
 
 test("runContained: writes land inside workdir, and nowhere outside it", async (t) => {
-  if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
-  const { homeDir, workdir, decoyDir } = makeFixture();
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir, outsideDir } = makeFixture();
 
-  const inside = await runContained("/bin/sh", ["-c", "echo written > written.txt"], {
+  const inside = await runContained("sh", ["-c", "echo written > written.txt"], {
     workdir,
-    homeDir,
     network: "denied",
+    image: IMAGE,
   });
   assert.equal(inside.exitCode, 0);
   assert.equal(readFileSync(join(workdir, "written.txt"), "utf8"), "written\n");
 
-  const outside = await runContained("/bin/sh", ["-c", `echo hack > ${join(decoyDir, "hack.txt")}`], {
+  // The exact host path outside workdir doesn't exist inside the
+  // container at all - not merely write-protected, genuinely absent -
+  // because nothing outside the one bind mount is ever visible.
+  const outside = await runContained("sh", ["-c", `echo hack > ${join(outsideDir, "hack.txt")}`], {
     workdir,
-    homeDir,
     network: "denied",
+    image: IMAGE,
   });
   assert.notEqual(outside.exitCode, 0);
-  assert.equal(existsSync(join(decoyDir, "hack.txt")), false, "a write outside workdir must never land");
+  assert.equal(existsSync(join(outsideDir, "hack.txt")), false, "a write outside workdir must never land");
 });
 
-test("runContained: reads work inside workdir and outside the home dir, but not elsewhere under the home dir", async (t) => {
-  if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
-  const { homeDir, workdir, decoyDir } = makeFixture();
+test("runContained: reads work inside workdir, but a file elsewhere on the host is invisible", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir, outsideDir } = makeFixture();
 
-  const readInside = await runContained("/bin/cat", [join(workdir, "inside.txt")], { workdir, homeDir, network: "denied" });
+  const readInside = await runContained("cat", ["inside.txt"], { workdir, network: "denied", image: IMAGE });
   assert.equal(readInside.exitCode, 0);
   assert.equal(readInside.stdout, "inside workdir\n");
 
-  const readDecoy = await runContained("/bin/cat", [join(decoyDir, "secret.txt")], { workdir, homeDir, network: "denied" });
-  assert.notEqual(readDecoy.exitCode, 0, "a file elsewhere under the home dir must not be readable");
-  assert.equal(readDecoy.stdout, "");
-
-  // Something outside the excluded home dir entirely - proves the profile
-  // isn't just denying everything, only the home dir minus workdir.
-  const readSystemFile = await runContained("/bin/cat", ["/private/etc/hosts"], { workdir, homeDir, network: "denied" });
-  assert.equal(readSystemFile.exitCode, 0);
+  const readOutside = await runContained("cat", [join(outsideDir, "secret.txt")], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+  });
+  assert.notEqual(readOutside.exitCode, 0, "a file outside workdir must not be readable by its host path");
+  assert.match(readOutside.stderr, /no such file or directory/i);
 });
 
 test("runContained: a nonexistent workdir is refused with a typed error, not a raw ENOENT", async (t) => {
-  if (process.platform !== "darwin") return t.skip("runContained only implements macOS's sandbox-exec");
-  const { homeDir } = makeFixture();
-  const missing = join(homeDir, "does-not-exist");
+  const { workdir } = makeFixture();
+  const missing = join(workdir, "does-not-exist");
 
   await assert.rejects(
-    runContained("/bin/sh", ["-c", "true"], { workdir: missing, homeDir, network: "denied" }),
-    (err: unknown) =>
-      err instanceof ContainmentError && err.code === "invalid-path" && err.message.includes("workdir")
+    runContained("sh", ["-c", "true"], { workdir: missing, network: "denied", image: IMAGE }),
+    (err: unknown) => err instanceof ContainmentError && err.code === "invalid-path" && err.message.includes("workdir")
   );
 });
 
 test("runContained: network is denied by default", async (t) => {
-  if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
-  const { homeDir, workdir } = makeFixture();
-  const server = await listenOnLoopback();
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+  const server = await listenOnHost();
 
   try {
-    const result = await runContained("/usr/bin/nc", ["-z", "-w", "2", "127.0.0.1", String(server.port)], {
+    const result = await runContained("nc", ["-z", "-w", "2", "host.docker.internal", String(server.port)], {
       workdir,
-      homeDir,
       network: "denied",
+      image: IMAGE,
     });
     assert.notEqual(result.exitCode, 0, "a contained process must not reach the network unless allowed");
   } finally {
@@ -123,46 +126,46 @@ test("runContained: network is denied by default", async (t) => {
   }
 });
 
-test("runContained: the parent's environment never leaks in - only PATH plus the explicit env allowlist", async (t) => {
-  if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
-  const { homeDir, workdir } = makeFixture();
+test("runContained: network reaches out when deliberately allowed", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+  const server = await listenOnHost();
+
+  try {
+    const result = await runContained("nc", ["-z", "-w", "2", "host.docker.internal", String(server.port)], {
+      workdir,
+      network: "allowed",
+      image: IMAGE,
+    });
+    assert.equal(result.exitCode, 0, 'network: "allowed" must let the process actually reach it');
+  } finally {
+    server.close();
+  }
+});
+
+test("runContained: the host's environment never leaks in - only the explicit env allowlist", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
 
   process.env.FABRICA_TEST_WOULD_BE_LEAKED = "a secret the child must never inherit";
   try {
-    const byDefault = await runContained("/bin/sh", ["-c", 'echo "${FABRICA_TEST_WOULD_BE_LEAKED-unset}"'], {
+    const byDefault = await runContained("sh", ["-c", 'echo "${FABRICA_TEST_WOULD_BE_LEAKED-unset}"'], {
       workdir,
-      homeDir,
       network: "denied",
+      image: IMAGE,
     });
     assert.equal(byDefault.exitCode, 0);
-    assert.equal(byDefault.stdout, "unset\n", "a parent env var must not reach the contained child by default");
+    assert.equal(byDefault.stdout, "unset\n", "a host env var must never reach the contained process by default");
 
-    const allowlisted = await runContained("/bin/sh", ["-c", 'echo "${FABRICA_TEST_WOULD_BE_LEAKED-unset}"'], {
+    const allowlisted = await runContained("sh", ["-c", 'echo "${FABRICA_TEST_WOULD_BE_LEAKED-unset}"'], {
       workdir,
-      homeDir,
       network: "denied",
+      image: IMAGE,
       env: { FABRICA_TEST_WOULD_BE_LEAKED: "explicitly allowlisted" },
     });
     assert.equal(allowlisted.exitCode, 0);
     assert.equal(allowlisted.stdout, "explicitly allowlisted\n");
   } finally {
     delete process.env.FABRICA_TEST_WOULD_BE_LEAKED;
-  }
-});
-
-test("runContained: network reaches out when deliberately allowed", async (t) => {
-  if (!sandboxAvailable()) return t.skip("sandbox-exec is not available on this machine");
-  const { homeDir, workdir } = makeFixture();
-  const server = await listenOnLoopback();
-
-  try {
-    const result = await runContained("/usr/bin/nc", ["-z", "-w", "2", "127.0.0.1", String(server.port)], {
-      workdir,
-      homeDir,
-      network: "allowed",
-    });
-    assert.equal(result.exitCode, 0, "network: \"allowed\" must let the process actually reach it");
-  } finally {
-    server.close();
   }
 });

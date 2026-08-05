@@ -40,13 +40,15 @@ does happens inside it.
   and edits to its files never land in the original project. That is a
   guarantee about project state, not process containment on its own -
   real, OS-level process containment exists at `../containment/` (issue
-  #44), confining a call's writes to `workdir`, excluding the home
-  directory from its reads, and denying the network unless deliberately
-  allowed (see that module's README for the exact rules and why). An
-  adapter opts into it rather than getting it automatically, because
-  plugging it in can require an adapter-specific tradeoff (see the
-  reference CLI adapter's own doc file under `adapters/`, "Process
-  containment," for the one that applies there).
+  #44, Docker-based): a call's reads and writes are confined to
+  `workdir` because it is the only thing bind-mounted into a fresh,
+  throwaway container, and network is denied unless deliberately
+  allowed (see that module's README for the exact rules and why). Each
+  adapter wires this in itself rather than getting it for free from the
+  `Brain` interface, because plugging it in means running the adapter's
+  own tool *inside* a container image, which is adapter-specific
+  plumbing (see the reference CLI adapter's own doc file under
+  `adapters/`, "Process containment," for what that means there).
 - By the time the returned promise resolves, the brain is expected to
   have actually done the work described in `brief` inside `workdir` -
   not planned it, not described it back. Fabrica checks the result next

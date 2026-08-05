@@ -14,7 +14,10 @@ real file in a real throwaway worktree and checks it exists.
 
 ## `claudeCodeAdapter(opts?)`
 
-Call this once to get a `Brain`. Five optional fields:
+Call this once to get a `Brain`. Every call always runs through
+`../../containment/`'s `runContained` (Docker) - there is no toggle for
+this and no uncontained path; see "Process containment" below for what
+that guarantees and the one thing it doesn't yet. Four optional fields:
 
 - **`model`** - the value passed straight to `claude --model`, e.g.
   `"claude-opus-5"` or the alias `"sonnet"`. Leave it out and the call
@@ -24,26 +27,22 @@ Call this once to get a `Brain`. Five optional fields:
   resolves to - the adapter would have to make an extra real call just
   to find out, and `"default"` is the honest answer to "which model is
   this adapter using" when no override was given.
-- **`binPath`** - the executable to spawn instead of `"claude"`.
-  Exists so `claude-code.test.ts`'s fast tests can point this at
-  `helpers/fake-claude-cli.mjs`, a script that prints canned responses,
-  instead of paying for a real call on every test run. Leave it out in
-  real use; it resolves `"claude"` via `PATH`, same as typing it at a
-  shell.
-- **`contained`** - route the call through `../../containment/`'s real
-  OS-level sandbox instead of a raw host spawn. Defaults to `false` - see
-  "Process containment" below for exactly why, and what has to change
-  before it can default to `true`.
-- **`homeDir`** - only used when `contained` is set: the directory the
-  sandbox excludes from its read allowance. Defaults to `os.homedir()`;
-  overridable so tests can point it at a throwaway fixture instead of the
-  real machine's real home directory.
-- **`env`** - only used when `contained` is set: the exact environment
-  variables the sandboxed process receives, passed straight through to
-  `runContained`'s allowlist. Leave it out and the contained CLI gets
-  only `PATH` - nothing from this process's own environment (API keys,
-  tokens) leaks in by inheritance. An uncontained spawn is unaffected
-  and inherits normally.
+- **`binPath`** - the command to run inside the container instead of
+  `"claude"`. Exists so `claude-code.test.ts`'s fast tests can point
+  this at a copy of `helpers/fake-claude-cli.mjs` placed inside
+  `workdir` (the only path the container can see), instead of paying
+  for a real call on every test run. Leave it out in real use; it
+  resolves `"claude"` via the image's own `PATH`.
+- **`image`** - the Docker image `binPath` runs inside. Defaults to
+  `DEFAULT_IMAGE` (`"fabrica-claude-code:latest"`, built from
+  `docker/Dockerfile` in this directory - see "Process containment"
+  below for what it installs). Overridable for tests that need a
+  different image, e.g. one with Node to run a fake CLI script.
+- **`env`** - the exact environment variables the contained process
+  receives, passed straight through to `runContained`'s allowlist. Leave
+  it out and the container gets only what its own image defines -
+  nothing from this process's own environment (API keys, tokens) leaks
+  in.
 
 ## The command it runs
 
@@ -71,50 +70,48 @@ still work; nothing that changes `workdir` does.
 That would make the adapter unable to do the one thing `Brain.work()`
 promises: that the work is genuinely done inside `workdir` by the time
 it resolves. `--permission-mode bypassPermissions` removes the
-approval step entirely - and the cost of that must be stated plainly:
-for the duration of a call, the worker has the full access of the OS
-account this adapter runs as. `Bash`/`Write`/`Edit` are **not** scoped
-to `workdir` by this flag alone. The `ProductionLine` worktree protects
-the Client's real project files from modification (CONTRACT rule 1,
-`src/line/README.md`), but it provides no process-level containment on
-its own. `opts.contained` (see "Process containment" below) is the real
-fix for that - not yet the default, for one specific, verified reason.
+approval step entirely - and the cost of that would have to be stated
+plainly if nothing else confined it: for the duration of a call, the
+worker would have the full access of the OS account this adapter runs
+as. It doesn't, because `work()` always runs the call through
+`../../containment/`'s `runContained` (Docker) - see "Process
+containment" below for what that guarantees and the one thing it
+doesn't yet.
 
 ### Process containment
 
-Passing `contained: true` runs the CLI through `../../containment/`'s
-`runContained` instead of a raw host spawn: reads and writes confined to
-`workdir`, network deliberately allowed (this CLI needs it to reach its
-own API - see that module's README for why filesystem is what's
-actually enforced here). That mechanism is real and verified on the
-real machine, not a description of one - see
-`../../containment/README.md` for what was tried, what broke, and what's
-actually proven. One residual channel is documented there as a
-deliberate, accepted, non-urgent gap rather than closed: the sandbox
-profile does not restrict mach-lookup, so a contained process can still
-talk to host Mach/XPC services that could in principle proxy around the
-network boundary - see that README's "An accepted gap" section for why
-narrowing it isn't worth the breakage it would cause.
+Every call runs inside a fresh, throwaway Docker container: reads and
+writes confined to `workdir` (the only thing bind-mounted in), network
+deliberately allowed (this CLI needs it to reach its own API - see
+`../../containment/README.md` for why filesystem is what's actually
+enforced here, and why Docker's own bind-mount model makes that
+guarantee stronger than a host-process sandbox's could be). This isn't
+a description of a mechanism - it's real and verified on the real
+machine; see that README for what was tried before (macOS's
+`sandbox-exec`, replaced), what broke, and what's actually proven.
 
-It is **not** the default for this adapter yet, and that's a deliberate,
-documented gap rather than an oversight. Verified live: the real
-`claude` binary authenticates through macOS Keychain (`claude auth
-status` reads a Keychain item, not a file or an env var), and Keychain
-access for a sandboxed process is gated by sandbox-container entitlements
-Apple grants its own signed apps - not something an ad-hoc `sandbox-exec`
-profile can restore. Running the real binary with `contained: true`,
-even with every read and mach-lookup rule wide open, comes back `"Not
-logged in · Please run /login"`; the underlying keychain query itself
-fails with `SecKeychainSearchCreateFromAttributes: A Module Directory
-Service error` (checked without ever reading the credential's actual
-value).
+One real thing still doesn't work end to end: authentication. The
+host's installed `claude` binary is a native macOS executable and can
+never run inside a Linux container - verified via `file` on it. What
+does work, also verified: installing that same tool's own Linux build
+via its public npm package inside a container (`docker/Dockerfile` in
+this directory, built once as `DEFAULT_IMAGE`) - it starts, parses
+arguments, and reports a version. What it can't do yet is log in: a
+fresh container has no credential configured at all, verified live
+(`claude auth status` inside the built image reports "Not logged in").
+That's an ordinary bootstrap requirement for any brand-new install of
+an authenticated CLI, not a special containment-caused breakage the way
+`sandbox-exec`'s Keychain failure was.
 
-So flipping the default to `true` today would break the one real,
-currently-working adapter's ability to authenticate at all. Fixing that
-means moving this adapter to a non-Keychain credential - `claude
-setup-token` generates a long-lived token meant for exactly this kind of
-headless use - which is a live-credential decision for whoever
-configures Fabrica, not something this file decides on its own.
+Closing it means giving this adapter's container a non-Keychain
+credential - `claude setup-token` generates a long-lived token meant for
+exactly this kind of headless use - which is a live-credential decision
+for whoever configures Fabrica, not something this file decides on its
+own. Until that's done, real tasks routed through this adapter fail at
+the authentication step; `claude-code.test.ts`'s capability-spike test
+checks the built image's own auth status before attempting real work,
+and skips (does not fail) rather than lie about proving this when it
+isn't true.
 
 ### Why `--output-format stream-json --verbose`, not `json`
 
@@ -225,11 +222,13 @@ doesn't currently have - not from guessing.
 
 Every failure this file raises is a `ClaudeCodeError` with a `code`:
 
-- **`spawn-failed`** - the binary itself couldn't be started (wrong
-  `binPath`, `workdir` doesn't exist). Verified: spawning into a
-  nonexistent directory fails at the Node `child_process` layer with
-  `ENOENT` before `claude` ever runs - this adapter surfaces that
-  directly rather than confusing it with a tool-level failure.
+- **`spawn-failed`** - `../../containment/`'s `runContained` threw a
+  `ContainmentError` (`docker` itself couldn't be launched, or `workdir`
+  doesn't resolve to a real path) - this adapter catches that one type
+  and re-wraps it rather than confusing it with a tool-level failure. A
+  wrong `binPath` that simply doesn't exist *inside* the container is
+  different: Docker starts fine and the command fails with a normal
+  non-zero exit, which surfaces as `cli-error` below, not this.
 - **`cli-error`** - the binary ran but the call failed. Two real shapes
   were verified, and this adapter reads whichever one shows up:
   - Exit code 1, **no** JSON on stdout at all, a one-line plain-text
