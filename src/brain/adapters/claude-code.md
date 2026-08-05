@@ -103,13 +103,17 @@ that same containment, both closed:
   deliberate result, not a bug, since it structurally prevents a
   contained Worker from committing its own work at all (merges and
   commits happen outside the Worker). One file in that mount is never
-  the real one: the shared `.git`'s `config` can carry a remote URL
-  with an embedded push credential, so `work()` shadow-mounts a
-  throwaway sanitized copy (`writeSanitizedGitConfig`, remote sections
-  stripped, deleted again after the call) over the real config's path -
+  the real one: the shared `.git`'s `config` can carry a push
+  credential in several forms (a remote URL, an `extraheader` line, an
+  `insteadOf` rewrite, a credential-helper setting), so `work()`
+  shadow-mounts a throwaway sanitized copy (`writeSanitizedGitConfig`,
+  deleted again after the call) over the real config's path. That copy
+  forwards only the real config's `[core]` section - an allowlist, so
+  anything not explicitly forwarded is invisible by construction - and
   the Worker keeps history, reflogs, and the object database
   (read-only context on a project it already has fully checked out),
-  but no remote URL or credential is readable inside the container.
+  but nothing from the project's git configuration beyond `[core]` is
+  readable inside the container.
   See `../../containment/README.md`'s "Git under containment" for the
   full reasoning, the exact read-boundary, and the design that was
   tried and rejected first.

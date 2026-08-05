@@ -204,32 +204,46 @@ Two designs were tried; the second is what shipped:
   system`.
 
 One file in that mount gets special treatment: the shared `.git`'s own
-`config`, the one file in a git directory that can carry a credential
-(a remote URL like `https://user:token@host/repo.git`, or a
-credential-helper setting). Mounting it as-is would hand that
-credential to a Worker that also has network allowed - enough to push
-to the Client's remote directly, sidestepping the read-only-commit
-enforcement below. So the real `config` is never visible inside the
-container: `src/line/worktree-git.ts`'s `writeSanitizedGitConfig`
-produces a throwaway copy with every `[remote "..."]` section (header
-and body) stripped, and the caller shadow-mounts that copy over the
-real config's path (a `{ source, target }` entry in `readOnlyMounts` -
-Docker layers a file mount over an already-mounted directory's
-sub-path correctly, verified live). Stripping only the remote sections
-is deliberate: excluding `config` entirely breaks git's repository
-detection outright (`fatal: not a git repository: (null)`, verified
-live), while the sanitized copy keeps `[core]` and the rest, so
-`git status`/`log`/`diff` still work and `git config --get
-remote.origin.url` returns nothing inside the container.
+`config`, the one file in a git directory that can carry a credential.
+Mounting it as-is would hand that credential to a Worker that also has
+network allowed - enough to push to the Client's remote directly,
+sidestepping the read-only-commit enforcement below. So the real
+`config` is never visible inside the container:
+`src/line/worktree-git.ts`'s `writeSanitizedGitConfig` writes a
+throwaway copy that copies forward **only the `[core]` section** of the
+real config and drops every other section by default, and the caller
+shadow-mounts that copy over the real config's path (a `{ source,
+target }` entry in `readOnlyMounts` - Docker layers a file mount over
+an already-mounted directory's sub-path correctly, verified live). A
+`[core]`-only config is enough: excluding `config` entirely breaks
+git's repository detection outright (`fatal: not a git repository:
+(null)`, verified live), while `git status`/`log`/`diff` all work with
+only `[core]` present and `git config --get remote.origin.url` returns
+nothing inside the container.
+
+The allowlist shape is deliberate, and the stronger, fail-safe framing
+versus the denylist it replaced (strip `[remote "..."]` sections,
+forward everything else). A denylist fails open the moment an
+unanticipated form shows up, and review found two immediately: git's
+deprecated dotted section syntax (`[remote.origin]`, honored by git but
+not matched by a quoted-form-only strip), and config-based credential
+mechanisms living outside remote sections entirely
+(`http.<url>.extraheader` - exactly what CI systems write into a repo
+config - `url.<base>.insteadOf` rewrites with an embedded credential,
+`[credential]` helper settings, `[include]`/`[includeIf]` directives
+pulling any of those in). Under the allowlist, anything not explicitly
+forwarded - those forms, and any future config-based credential
+mechanism nobody has thought of yet - is invisible by construction, not
+because it was individually identified and blocked.
 
 Stated plainly, what a Worker can and cannot read from `.git` under
 this design: it **can** read commit history, reflogs, and dangling or
 unreferenced objects - all inherently readable once the object
 database is mounted at all, and no more than added context on a
 project whose every file it already has checked out in `workdir`. It
-**cannot** read remote URLs or any credential embedded in one - the
-one thing in `.git` whose exposure would grant new reach (a push
-credential), removed via the sanitized config.
+**cannot** read anything from the project's git configuration beyond
+`[core]` - not a remote URL or a credential embedded in one, not a
+credential helper, not a header or URL-rewrite setting.
 
 That last result is a feature, not a limitation. It enforces the
 Client's architecture in the filesystem itself: merges and commits are

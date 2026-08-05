@@ -69,18 +69,23 @@ export function resolveCommonGitDir(workdir: string): string {
   }
 }
 
-// The shared .git's `config` is the one file in it that can carry a
-// credential: a remote URL like https://user:token@host/repo.git, or a
-// credential-helper setting. A contained process that can read it (and
-// is allowed network) could push with that credential - so the config
-// mounted into a container must never be the real one. This writes a
-// throwaway sanitized copy with every [remote "..."] section (header
-// and body) stripped, for the caller to shadow-mount over the real
-// config's path and delete after the call. Stripping only remote
-// sections, not the whole file, is deliberate: git refuses to detect a
-// repository with no config at all ("fatal: not a git repository:
-// (null)", verified live), while a config keeping [core] and the rest
-// leaves status/log/diff working normally.
+// The shared .git's `config` can carry a credential in more ways than
+// one: a remote URL like https://user:token@host/repo.git (quoted
+// [remote "origin"] or git's deprecated dotted [remote.origin] form),
+// an http.<url>.extraheader authorization line, a url.<base>.insteadOf
+// rewrite with an embedded credential, a [credential] helper setting,
+// or an [include]/[includeIf] path pulling any of those in. A contained
+// process that can read one (and is allowed network) could push with it
+// - so the config mounted into a container must never be the real one.
+// This writes a throwaway sanitized copy that copies forward ONLY the
+// [core] section and drops every other section by default - an
+// allowlist, so anything not explicitly forwarded is invisible by
+// construction, rather than a denylist that fails open on the first
+// unanticipated form. The caller shadow-mounts the copy over the real
+// config's path and deletes it after the call. A [core]-only config is
+// enough: git refuses to detect a repository with no config at all
+// ("fatal: not a git repository: (null)", verified live), but
+// status/log/diff all work normally with only [core] present.
 export function writeSanitizedGitConfig(commonGitDir: string): string {
   let config: string;
   try {
@@ -93,15 +98,15 @@ export function writeSanitizedGitConfig(commonGitDir: string): string {
   }
 
   const kept: string[] = [];
-  let inRemoteSection = false;
+  let inCoreSection = false;
   for (const line of config.split("\n")) {
     const header = line.match(/^\s*\[\s*([^\s\]"]+)/);
-    if (header) inRemoteSection = header[1].toLowerCase() === "remote";
-    if (!inRemoteSection) kept.push(line);
+    if (header) inCoreSection = header[1].toLowerCase() === "core";
+    if (inCoreSection) kept.push(line);
   }
 
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-sanitized-git-config-"));
   const sanitizedPath = join(dir, "config");
-  writeFileSync(sanitizedPath, kept.join("\n"));
+  writeFileSync(sanitizedPath, `${kept.join("\n")}\n`);
   return sanitizedPath;
 }

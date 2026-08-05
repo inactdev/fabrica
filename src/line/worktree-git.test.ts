@@ -44,20 +44,33 @@ test("resolveCommonGitDir resolves a relative gitdir pointer against the workdir
   assert.equal(resolveCommonGitDir(workdir), realpathSync(projectGitDir));
 });
 
-test("writeSanitizedGitConfig strips every [remote ...] section, header and body, keeping the rest", () => {
+test("writeSanitizedGitConfig copies forward only the [core] section - an allowlist, nothing else survives", () => {
   const gitDir = makeFixtureHome();
+  // Every config-based credential mechanism review has surfaced so far,
+  // plus git's deprecated dotted section syntax - and one benign
+  // non-core section ([branch]) proving the allowlist drops the
+  // unrecognized-but-harmless too, not just the known-bad.
   writeFileSync(
     join(gitDir, "config"),
     [
       "[core]",
       "\trepositoryformatversion = 0",
+      "\tfilemode = true",
       '[remote "origin"]',
       "\turl = https://x-token:FAKE_CREDENTIAL@example.invalid/repo.git",
       "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+      "[remote.upstream]",
+      "\turl = https://x-token:FAKE_DOTTED_CREDENTIAL@example.invalid/repo.git",
+      '[http "https://example.invalid"]',
+      "\textraheader = AUTHORIZATION: basic FAKE_BASIC_TOKEN",
+      '[url "https://x-token:FAKE_REWRITE_CREDENTIAL@example.invalid/"]',
+      "\tinsteadOf = https://example.invalid/",
+      "[credential]",
+      "\thelper = store",
+      "[include]",
+      "\tpath = ../elsewhere.inc",
       '[branch "main"]',
       "\tremote = origin",
-      '[remote "backup"]',
-      "\turl = ssh://git@example.invalid/backup.git",
       "",
     ].join("\n")
   );
@@ -65,12 +78,12 @@ test("writeSanitizedGitConfig strips every [remote ...] section, header and body
   const sanitizedPath = writeSanitizedGitConfig(gitDir);
   try {
     const sanitized = readFileSync(sanitizedPath, "utf8");
-    assert.ok(sanitized.includes("[core]"));
-    assert.ok(sanitized.includes("repositoryformatversion = 0"));
-    assert.ok(sanitized.includes('[branch "main"]'));
-    assert.ok(!sanitized.includes("[remote"), "no remote section header may survive");
-    assert.ok(!sanitized.includes("url ="), "no remote body line may survive");
-    assert.ok(!sanitized.includes("FAKE_CREDENTIAL"), "no embedded credential may survive");
+    const lines = sanitized.split("\n").filter((line) => line.trim() !== "");
+    assert.deepEqual(
+      lines,
+      ["[core]", "\trepositoryformatversion = 0", "\tfilemode = true"],
+      "the sanitized config must contain the [core] section's lines and nothing else at all"
+    );
   } finally {
     rmSync(dirname(sanitizedPath), { recursive: true, force: true });
   }
