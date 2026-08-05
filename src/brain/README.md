@@ -36,8 +36,11 @@ does happens inside it.
   actually receives.
 - `workdir` is a throwaway copy of the project, never the Client's real
   checkout (CONTRACT rule 1). The brain is free to make a mess, run
-  commands, edit anything in there - the folder gets destroyed after, and
-  nothing it does can reach the original.
+  commands, edit anything in there - the folder gets destroyed after,
+  and edits to its files never land in the original project. That is a
+  guarantee about project state, not process containment: a real
+  adapter's process is not sandboxed to `workdir` (see
+  `adapters/claude-code.md` for what that means in practice).
 - By the time the returned promise resolves, the brain is expected to
   have actually done the work described in `brief` inside `workdir` -
   not planned it, not described it back. Fabrica checks the result next
@@ -118,8 +121,8 @@ Structured entries exist instead of one raw string so a live view (Phase
 single string can't give that back without the view re-parsing itself
 apart from what the adapter already knew when it produced the output.
 An adapter whose underlying tool already emits structured output (see
-`adapters/README.md`'s candidates for an example) maps each piece to its
-own entry directly. A text-only adapter that only gets one blob of
+`adapters/README.md`'s written adapters for a real one) maps each piece
+to its own entry directly. A text-only adapter that only gets one blob of
 output back wraps that whole blob as a single entry - one array element
 is a valid transcript, never an error.
 
@@ -149,8 +152,8 @@ A real adapter is anything that implements `Brain` honestly: pick a
 `name`, report the `model` it's actually using, and make `work()` really
 do the requested work inside `workdir`, returning a transcript and, when
 they apply, a session id and a gate declaration. See
-[`adapters/README.md`](./adapters/README.md) for concrete candidates and
-a sketch of the shape.
+[`adapters/README.md`](./adapters/README.md) for the written adapters,
+further candidates, and a sketch of the shape.
 
 The one hard rule: no brain, model, or vendor name may appear anywhere
 under `src/` except inside `src/brain/adapters/`. That's not a style

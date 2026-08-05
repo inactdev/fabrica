@@ -53,8 +53,16 @@ This is not a menu to build all at once. ROADMAP.md is explicit: brains
 come from the Client's existing subscriptions first, through their
 officially approved harnesses, and per-token API pipes stay closed
 unless he deliberately opens one behind a cap that can be zero. So the
-CLI family comes first - issue #6 builds the first CLI adapter - and
-direct API adapters arrive later, behind that deliberate switch.
+CLI family comes first - issue #6 built the first CLI adapter, listed
+below - and direct API adapters arrive later, behind that deliberate
+switch.
+
+## Written adapters
+
+- **`claude-code.ts`** - the Client's own daily coding agent, driven
+  through the `claude` CLI's non-interactive mode. The first CLI
+  adapter (issue #6). See [`claude-code.md`](./claude-code.md) for what
+  was verified against the real binary and why each flag is there.
 
 ## Candidate CLI adapters
 
@@ -80,7 +88,8 @@ guess."* Concretely, for each candidate:
 2. **How `brief` goes in and `transcript` comes out.** Some tools take
    the prompt as an argument, some on stdin, some from a file; some
    print plain text, some emit structured output (Grok Build's headless
-   mode is JSON) that has to be reduced to a transcript string.
+   mode is JSON) that maps piece-by-piece into `transcript` entries, the
+   way `claude-code.ts` maps `stream-json` lines.
 3. **How it represents a resumable run.** Some tools hand back an id you
    pass on the next invocation; others resume from a local state
    directory instead. Whichever it is, that's what `opts.session` and
