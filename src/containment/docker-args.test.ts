@@ -14,11 +14,19 @@ test("buildDockerArgs mounts workdir at /workdir and sets it as the working dire
   assert.deepEqual(args.slice(0, 6), [
     "run",
     "--rm",
-    "-v",
-    "/Users/ari/.fabrica/tasks/t1/worktree:/workdir",
+    "--mount",
+    "type=bind,source=/Users/ari/.fabrica/tasks/t1/worktree,target=/workdir",
     "-w",
     "/workdir",
   ]);
+});
+
+test("buildDockerArgs adds --user when given one, omits it otherwise", () => {
+  const withUser = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine", user: "501:20" });
+  const without = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine" });
+
+  assert.equal(withUser[withUser.indexOf("--user") + 1], "501:20");
+  assert.ok(!without.includes("--user"));
 });
 
 test("buildDockerArgs adds --network none when denied, omits it when allowed", () => {

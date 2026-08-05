@@ -9,7 +9,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -42,21 +41,10 @@ function makeFixture() {
   return { workdir, outsideDir };
 }
 
-async function listenOnHost(): Promise<{ port: number; close: () => void }> {
-  const server = createServer((sock) => {
-    // `nc -z` (a connectivity probe, used below) closes the socket right
-    // after connecting without reading anything - writing to it then
-    // resets the connection. That's expected and not a test failure.
-    sock.on("error", () => {});
-    sock.end("hi\n");
-  });
-  // 0.0.0.0, not 127.0.0.1: a container reaches the host through Docker
-  // Desktop's `host.docker.internal`, a real interface, not loopback.
-  await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("expected a bound TCP address");
-  return { port: address.port, close: () => server.close() };
-}
+// The network probe below targets a well-known public IP:port directly
+// (no DNS, no Docker Desktop-only names like `host.docker.internal`), so
+// it behaves identically on Docker Desktop and native Linux Docker Engine.
+const NETWORK_PROBE_ARGS = ["-z", "-w", "3", "1.1.1.1", "443"];
 
 test("runContained: writes land inside workdir, and nowhere outside it", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
@@ -112,35 +100,25 @@ test("runContained: a nonexistent workdir is refused with a typed error, not a r
 test("runContained: network is denied by default", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const { workdir } = makeFixture();
-  const server = await listenOnHost();
 
-  try {
-    const result = await runContained("nc", ["-z", "-w", "2", "host.docker.internal", String(server.port)], {
-      workdir,
-      network: "denied",
-      image: IMAGE,
-    });
-    assert.notEqual(result.exitCode, 0, "a contained process must not reach the network unless allowed");
-  } finally {
-    server.close();
-  }
+  const result = await runContained("nc", NETWORK_PROBE_ARGS, {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+  });
+  assert.notEqual(result.exitCode, 0, "a contained process must not reach the network unless allowed");
 });
 
 test("runContained: network reaches out when deliberately allowed", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const { workdir } = makeFixture();
-  const server = await listenOnHost();
 
-  try {
-    const result = await runContained("nc", ["-z", "-w", "2", "host.docker.internal", String(server.port)], {
-      workdir,
-      network: "allowed",
-      image: IMAGE,
-    });
-    assert.equal(result.exitCode, 0, 'network: "allowed" must let the process actually reach it');
-  } finally {
-    server.close();
-  }
+  const result = await runContained("nc", NETWORK_PROBE_ARGS, {
+    workdir,
+    network: "allowed",
+    image: IMAGE,
+  });
+  assert.equal(result.exitCode, 0, 'network: "allowed" must let the process actually reach it');
 });
 
 test("runContained: the host's environment never leaks in - only the explicit env allowlist", async (t) => {

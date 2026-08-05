@@ -54,10 +54,13 @@ gap shows up under Docker, and why it's a smaller, more ordinary one.
 Every call runs a fresh, throwaway container (`docker run --rm`):
 
 - **Writes** are confined to `workdir` because it is the *only* thing
-  bind-mounted into the container (`-v <workdir>:/workdir -w /workdir`).
-  There is no allow/deny rule to get right here, unlike a host-process
-  sandbox - the container's filesystem view simply doesn't contain
-  anything else from the host at all.
+  bind-mounted into the container
+  (`--mount type=bind,source=<workdir>,target=/workdir -w /workdir` -
+  the long form on purpose: unlike `-v`, its key=value fields don't
+  split on a `:` appearing in the workdir path, and `recordHome` is
+  caller-configurable). There is no allow/deny rule to get right here,
+  unlike a host-process sandbox - the container's filesystem view simply
+  doesn't contain anything else from the host at all.
 - **Reads** are confined the same way, and this is a strictly stronger
   guarantee than the `sandbox-exec` version's was: that version had to
   carve out one exclusion (the home directory) from an otherwise-broad
@@ -75,6 +78,18 @@ Every call runs a fresh, throwaway container (`docker run --rm`):
   contained process, so "the worker has what it needs, not the
   Foreman's whole environment" holds by construction, not by a base
   case this module has to build itself.
+- **Ownership**: the container runs as the invoking host process's own
+  UID/GID (`--user`, from `process.getuid()`/`process.getgid()`), not as
+  root (verified: files created in the bind-mounted workdir come out
+  owned by the invoking host user, and the reference adapter's installed
+  CLI still runs under it). This matters most on native Linux - the
+  portability direction that motivated choosing Docker in the first
+  place - where a root container's writes into the bind mount would come
+  out root-owned on the host, breaking host-side git operations and
+  `destroyProductionLine`'s teardown. Docker Desktop for macOS already
+  maps ownership transparently, so nothing changes there. On platforms
+  where those process getters don't exist (non-POSIX), the flag is
+  simply omitted rather than passing an invalid value.
 
 ### Per-task isolation
 

@@ -26,8 +26,13 @@ export async function runContained(
     );
   }
 
+  const user =
+    typeof process.getuid === "function" && typeof process.getgid === "function"
+      ? `${process.getuid()}:${process.getgid()}`
+      : undefined;
+
   const dockerArgs = [
-    ...buildDockerArgs({ workdir, network: opts.network, env: opts.env, image: opts.image }),
+    ...buildDockerArgs({ workdir, network: opts.network, env: opts.env, image: opts.image, user }),
     command,
     ...args,
   ];

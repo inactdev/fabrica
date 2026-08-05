@@ -7,8 +7,16 @@ export function buildDockerArgs(opts: {
   network: "denied" | "allowed";
   env?: Record<string, string>;
   image: string;
+  user?: string;
 }): string[] {
-  const args = ["run", "--rm", "-v", `${opts.workdir}:/workdir`, "-w", "/workdir"];
+  // The long `--mount` form, not `-v`: its key=value fields don't split
+  // on a ':' appearing in the workdir path the way the short form does.
+  const args = ["run", "--rm", "--mount", `type=bind,source=${opts.workdir},target=/workdir`, "-w", "/workdir"];
+
+  // Run as the invoking host user, not root: on native Linux, files a
+  // root container writes into the bind mount come out root-owned on
+  // the host, breaking host-side git and teardown - see README.md.
+  if (opts.user !== undefined) args.push("--user", opts.user);
 
   // Denied is the absence of network access, not a rule fenced around
   // it - Docker's own `--network none` gives the container no network
