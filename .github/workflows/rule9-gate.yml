@@ -66,6 +66,11 @@ jobs:
             check.sh
         run: |
           merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          # --no-renames: with git's rename detection on, moving check.sh
+          # to another path is reported as the NEW path only, so the
+          # protected path never appears in the list and this gate waves
+          # through exactly the change it exists to block. Off, the move is
+          # reported as a delete of check.sh plus an add.
           touched=$(git diff --no-renames --name-only "$merge_base" "$HEAD_SHA")
 
           while IFS= read -r path; do
