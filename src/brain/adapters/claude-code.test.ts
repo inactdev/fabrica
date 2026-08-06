@@ -209,6 +209,29 @@ test("resolveGitMounts refuses a workdir with no git repository, telling the Cli
   );
 });
 
+// The same refusal holds for every other way the mounts can't be
+// resolved, not just the missing-repository one above: an unsanitizable
+// config surfaces its own LineError instead of being swallowed into a
+// silent "run the Worker without git" (the review finding this test
+// pins down - see resolveGitMounts's own comment).
+test("resolveGitMounts surfaces a LineError other than not-a-worktree instead of silently dropping git", () => {
+  const project = makeFixtureProject();
+  execFileSync("git", ["config", "extensions.someFutureCredentialBearingKey", "value"], { cwd: project });
+  const line = createProductionLine({ project, taskId: "unsanitizable-config", recordHome: makeFixtureHome() });
+
+  try {
+    assert.throws(
+      () => resolveGitMounts(line.workdir),
+      (err: unknown) =>
+        err instanceof LineError &&
+        err.code === "unsanitizable-config" &&
+        /someFutureCredentialBearingKey/.test(err.message)
+    );
+  } finally {
+    destroyProductionLine(line);
+  }
+});
+
 test("claudeCodeAdapter reports model as configured, or 'default' when none was given", async () => {
   assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER }).model, "default");
   assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, model: "claude-opus-5" }).model, "claude-opus-5");

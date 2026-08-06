@@ -238,9 +238,9 @@ and returns the copy's path for the caller to shadow-mount over the
 real config's path and delete after the call (the reference CLI
 adapter does both). Throws the same `LineError("not-a-worktree")` when
 the config can't be read at all, and
-`LineError("unsanitizable-config")` for an `[extensions]` key off the
-allowlist (or a URI-form `refStorage` value), naming it - never
-silently dropped, never passed through. See
-`../containment/README.md`'s "Git under containment" for the exact key
-list, why `worktreeConfig` is deliberately excluded, and the known
+`LineError("unsanitizable-config")` for any `[extensions]` content it
+can't prove credential-free, naming it - never silently dropped, never
+passed through. See `../containment/README.md`'s "Git under
+containment" for the exact key list, everything else that refuses the
+run, why `worktreeConfig` is deliberately excluded, and the known
 `partialClone` limitation.

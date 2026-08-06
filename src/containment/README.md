@@ -254,7 +254,11 @@ anticipates backends like `postgres://` whose URI could carry a
 password). A URI-form `refStorage` value (`<format>://<payload>`) fails
 for the same reason - its payload names a host location the container
 can't see - while a bare format name (`files`, `reftable`) forwards
-normally. `worktreeConfig` is deliberately off the allowlist:
+normally. Anything else the sanitizer can't read as a plain key of that
+section fails the same way rather than being guessed at: a subsectioned
+header (`[extensions "..."]` or `[extensions.foo]`, which no documented
+extension key uses) and a line it can't parse as `key = value` both
+refuse the run. `worktreeConfig` is deliberately off the allowlist:
 forwarding it would make git honor an unsanitized `config.worktree`
 file inside the mount, reopening the exact config-borne credential
 channel this sanitizer closes.
@@ -274,7 +278,8 @@ unreferenced objects - all inherently readable once the object
 database is mounted at all, and no more than added context on a
 project whose every file it already has checked out in `workdir`. It
 **cannot** read anything from the project's git configuration beyond
-`[core]` - not a remote URL or a credential embedded in one, not a
+`[core]` and the allowlisted structural `[extensions]` keys above - not
+a remote URL or a credential embedded in one, not a
 credential helper, not a header or URL-rewrite setting.
 
 That last result is a feature, not a limitation. It enforces the

@@ -278,7 +278,13 @@ doesn't currently have - not from guessing.
 
 ## Errors: `ClaudeCodeError`
 
-Every failure this file raises is a `ClaudeCodeError` with a `code`:
+Every failure this file raises is a `ClaudeCodeError` with a `code`.
+One failure a caller can see from `work()` isn't one of them: resolving
+the git mounts runs first, before the container starts, and its
+`LineError` (`not-a-worktree`, `unsanitizable-config`) surfaces
+unwrapped - that's the upfront refusal "Process containment" above
+describes instead of a no-git fallback, and its message already says
+what to fix.
 
 - **`spawn-failed`** - `../../containment/`'s `runContained` threw a
   `ContainmentError` (`docker` itself couldn't be launched, or `workdir`/
