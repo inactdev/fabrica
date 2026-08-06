@@ -93,12 +93,17 @@ delivery never slides through on green alone: it reaches the Client
 with those changes front and center, and later automated reviewers get
 the same emphasis. What stays forbidden forever is the silent version.
 Fabrica made the throwaway copy, so it knows the gate's before-state;
-any undeclared change to it is detected and the attempt is thrown away
-automatically, no matter how good the result looks.
+any undeclared change to it is detected and the branch it lands on is
+blocked from merging automatically, no matter how good the result
+looks. The work itself is never thrown away — it stays committed,
+visible, and reviewable; only the Client, as the one person who can
+tell an honest declaration mistake from actual cheating, may override
+the block and merge it in.
 *Checked by:* two tests. A fake worker edits the project's checks
-without declaring it — the attempt is discarded. A fake worker edits
-them WITH a declaration — the work is delivered, carrying the
-declaration where the Client cannot miss it.
+without declaring it — the work lands on the branch but is blocked from
+merging. A fake worker edits them WITH a declaration — the work is
+delivered normally, carrying the declaration where the Client cannot
+miss it.
 
 **10. It cannot outspend you.**
 Money runs metered, so the limits are law: a cap per task and a cap

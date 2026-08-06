@@ -15,7 +15,6 @@ import { resolveCheckCommand } from "./resolve-check.ts";
 import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
 import { listTouchedFiles } from "./files.ts";
 import { commitWorktreeChanges } from "./commit.ts";
-import { captureDiscardedPatch } from "./discard.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
@@ -131,62 +130,60 @@ export async function doTask(
     // construction rather than by validating around it: `files` is then
     // read back from the branch's own diff (diffFiles), so it and `branch`
     // describe the same surviving reality, and the Client's `git merge`
-    // has something to merge.
+    // has something to merge. This now runs uniformly for every outcome,
+    // discarded-protected-path included — see the rule 9 comment below for
+    // why that outcome no longer skips it.
+    if (listTouchedFiles(line.workdir).length > 0) {
+      commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+    }
+
+    // CONTRACT rule 9 (Client ruling, superseding the original
+    // force-reset-and-patch design): an undeclared gate change is never
+    // force-reset or thrown away any more. That design needed
+    // discarded.patch as an escape hatch purely to avoid losing good work
+    // by accident when the reset erased a Worker's own commits along with
+    // the tampering — two mechanisms in service of a problem that doesn't
+    // exist if nothing is ever erased in the first place. Instead the
+    // work stays committed on the branch like any other outcome (the
+    // uniform commit above already did that), and the branch itself
+    // carries the CI-visible signal: renamed from `fabrica/<taskId>` to
+    // `fabrica/discarded/<taskId>` so a mergeable branch and a blocked one
+    // are never spelled the same way.
     //
-    // The one exception is discarded-protected-path. Rule 5 keeps EVIDENCE
-    // (the delivery, outcome, receipts, and transcript stay on the record
-    // regardless of outcome) while rule 9 discards the WORK — different
-    // things, not in conflict. Committing tampered code onto a durable,
-    // mergeable branch would turn "thrown away, no matter how good the
-    // result looks" into "thrown away, but here it is anyway, one click
-    // from merging." Emptying the branch means `files` (read from the
-    // branch's diff) comes back empty, which is honest — nothing is handed
-    // over on the branch. But "discarded" must not mean "destroyed": an
-    // undeclared gate change is often a declaration mistake, and the work
-    // behind it may be entirely good, so everything changed since the fork
-    // point is captured to the record as discarded.patch instead — never
-    // committed. The ratified rule 9 tests
-    // (contract/rule9.no-self-grading.test.ts) pass either way — they
-    // assert on delivery.outcome and delivery.gateChanges, never on what
-    // survives on the branch or in the record — so this is a deliberate
-    // product decision the contract does not force, not something derived
-    // from a failing test.
-    let discardedPatchSaved = false;
+    // A branch name is the signal, not a file in the tree, because a file
+    // would still be sitting in the diff a Client might merge — something
+    // that has to be remembered and stripped out before merging clean.
+    // The branch name needs no such remembering: it never becomes part of
+    // any commit's content, so merging the branch's commits into another
+    // branch carries no residue at all. `.github/workflows/rule9-gate.yml`
+    // fails a check on any push or pull request whose branch matches
+    // `fabrica/discarded/*`, with a message explaining why and that only
+    // the Client may override it — CI can't see `~/.fabrica`'s
+    // `delivery.outcome`, so the branch name is the one signal a GitHub
+    // Actions workflow in this repo can actually read.
+    //
+    // Renaming rather than moving the branch, and doing it after the
+    // commit above (not instead of it), means a Worker's own commits
+    // (full git access inside the worktree, so it could commit tampered
+    // work itself) travel with the rename — nothing is left behind on the
+    // old name for `git branch -m` to leave dangling.
+    let branch = line.branch;
     if (outcome === "discarded-protected-path") {
-      const patch = captureDiscardedPatch(line.workdir, baseCommit);
-      if (patch.length > 0) {
-        writeTaskFile(recordHome, taskId, "discarded.patch", patch);
-        discardedPatchSaved = true;
-      }
-      // Rule 9 says the attempt is thrown away automatically, no matter
-      // how good the result looks — and a branch a Worker committed to
-      // itself (it has full git access inside the worktree) is exactly as
-      // mergeable as one Fabrica committed to. So the branch ref itself is
-      // forced back to the exact commit the line was cut from; merely
-      // skipping Fabrica's own commit step (the previous fix) stopped
-      // Fabrica from adding a commit but did nothing about a Worker
-      // committing directly. update-ref rather than `branch -f` because
-      // git refuses to force-move a branch checked out in a worktree, and
-      // this one still is until teardown. After this, diffFiles below
-      // naturally reports an empty files list — branch and baseCommit are
-      // the same commit.
-      execFileSync("git", ["update-ref", `refs/heads/${line.branch}`, baseCommit], {
+      branch = `fabrica/discarded/${taskId}`;
+      execFileSync("git", ["branch", "-m", line.branch, branch], {
         cwd: line.project,
         stdio: ["ignore", "pipe", "pipe"],
       });
-    } else if (listTouchedFiles(line.workdir).length > 0) {
-      commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+      line.branch = branch;
     }
 
     const delivery = buildDelivery(outcome, {
       taskText,
       attempts: receipts.length,
       lastGate,
-      branch: line.branch,
-      files: diffFiles(line.project, line.branch, baseCommit),
+      branch,
+      files: diffFiles(line.project, branch, baseCommit),
       declaredGateChanges,
-      taskId,
-      discardedPatchSaved,
     });
 
     // Never present a malformed delivery as done (rule 4) — prove the

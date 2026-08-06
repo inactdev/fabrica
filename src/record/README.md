@@ -7,7 +7,7 @@
 The record has two parts:
 
 - **`events.jsonl`** — one JSON object per line, appended as things happen. This is the single source of truth (SPEC.md "The record"). Nothing in Fabrica may reconstruct a task's history from anywhere else.
-- **`tasks/<id>/`** — a folder of files per task (below), for humans and other tools to read without parsing JSON lines. Every one of them is derived from `events.jsonl`, never an independent record of its own - with one exception: `discarded.patch` (present only on a `discarded-protected-path` outcome) holds content that exists nowhere in the event log; the log records that the discard happened, but the patch itself lives only in the task folder, and only the delivery's gaps text points at it.
+- **`tasks/<id>/`** — a folder of files per task (below), for humans and other tools to read without parsing JSON lines. Every one of them is derived from `events.jsonl`, never an independent record of its own.
 
 This module exists because of CONTRACT rule 5, "It writes everything down": every step of a task — received, worked, checked, delivered, ruled on — lands here in order, and none of it can be changed or erased afterward.
 
@@ -61,7 +61,6 @@ Each task gets `tasks/<id>/`, holding:
 | `delivery.md` | The delivery block, or a failure report | The Foreman, once, after checks run. |
 | `verdict` | The Client's ruling (`accept` / `fix` / `wrong`) plus their note and a timestamp | `fabrica verdict`, once. |
 | `transcript.log` | The worker's transcript entries, one JSON line each (see `src/brain/README.md`'s `TranscriptEntry`) | The Foreman, one append per attempt as the loop runs. |
-| `discarded.patch` | Only on a `discarded-protected-path` outcome: the unified diff (against the line's fork point, `--binary`) of the work rule 9 kept off the branch, so a declaration mistake doesn't destroy it | The Foreman, once, before teardown; absent when nothing changed since the fork point. |
 
 `registerTask` writes `request.md` and appends the matching `task-received` event to `events.jsonl` in the same call, so the file and the record can't drift apart. `src/foreman/` (issue #7) now writes `brief.md`, `transcript.log`, and `delivery.md` the same way; the remaining files exist for the modules that write them later in the loop to reuse the pattern.
 

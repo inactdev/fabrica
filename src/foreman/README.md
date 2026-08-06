@@ -55,40 +55,38 @@ return early" below.
    then runs the check, for up to `attempts` rounds. See "How `attempts`
    actually behaves" below — it is not simply "retry until green."
 5. **Checks for an undeclared gate change** (`gate-changes.ts`) — CONTRACT
-   rule 9. If the check script changed and nothing declared it, the whole
-   attempt is discarded regardless of whether the check went green.
+   rule 9. If the check script changed and nothing declared it, the
+   outcome is forced to `discarded-protected-path` regardless of whether
+   the check went green - blocked from merging, not thrown away (see
+   "Rule 9: blocked, not discarded" below).
 6. **Commits, builds, and validates the delivery**: any changes still
    sitting uncommitted in the worktree are committed onto the
    ProductionLine's branch (`commit.ts`) before that worktree is
    destroyed - see `src/delivery/README.md`'s "files-list-vs-teardown
-   decision" for why. The one exception is a
-   `discarded-protected-path` outcome: rule 9 discards the work, so
-   everything changed since the line's fork point - a Worker's own
-   commits included, since a Worker has full git access inside the
-   worktree - is captured as one diff (`discard.ts`'s
-   `captureDiscardedPatch(workdir, baseCommit)`) and saved to the task's
-   record folder as `discarded.patch`, and then the branch ref itself is
-   forced back to the exact commit the line was cut from (`git
-   update-ref`, run against the project - `branch -f` refuses while the
-   worktree still has the branch checked out). Skipping Fabrica's own
-   commit alone would leave a loophole: a Worker that ran `git commit`
-   itself would have its tampered work sitting on the mergeable branch
-   anyway. Moving the ref closes it - the branch provably lands back at
-   its fork point no matter who committed. The delivery's `gaps` field
-   says where the patch landed and how to run the task again with the
-   gate change declared - "discarded" means "kept off the branch," not
-   "destroyed." `delivery.ts` builds the `Delivery` object from the
-   branch's own diff (pinned to the commit the line was cut from, via
-   `src/delivery`'s `baseCommitOf`), and `src/delivery`'s
-   `validateDelivery` (CONTRACT rule 4, issue #9) proves it's complete
-   before anything downstream sees it - structural only (required
-   fields, right types); it does not separately re-check `files` against
-   the diff, because `files` is already read straight from that diff
-   above, not a claim to weigh against it (see `src/delivery/README.md`'s
-   "Why there's no check against the branch's real diff"). `delivery.md`
-   is written for a human to read; the same structured `Delivery` object
-   lands on the `"delivered"` event for `deliveryOf` to read back
-   exactly.
+   decision" for why. This runs for every outcome uniformly, including
+   `discarded-protected-path` - a rule 9 violation is no longer force-
+   reset or thrown away (Client ruling, superseding the original
+   design): the work stays committed like any other outcome, and the
+   branch is renamed from `fabrica/<taskId>` to
+   `fabrica/discarded/<taskId>` so the branch name itself carries the
+   signal a `.github/workflows/rule9-gate.yml` check can read - CI can't
+   see `~/.fabrica`'s `delivery.outcome`, only the repository it runs in.
+   The rename happens after the commit, not instead of it, so a Worker's
+   own commits (full git access inside the worktree, so it could commit
+   tampered work itself) travel with the rename rather than being left
+   on the old branch name. See "Rule 9: blocked, not discarded" below for
+   the full reasoning and why a branch rename beats a file in the tree.
+   `delivery.ts` builds the `Delivery` object from the branch's own diff
+   (pinned to the commit the line was cut from, via `src/delivery`'s
+   `baseCommitOf`), and `src/delivery`'s `validateDelivery` (CONTRACT
+   rule 4, issue #9) proves it's complete before anything downstream sees
+   it - structural only (required fields, right types); it does not
+   separately re-check `files` against the diff, because `files` is
+   already read straight from that diff above, not a claim to weigh
+   against it (see `src/delivery/README.md`'s "Why there's no check
+   against the branch's real diff"). `delivery.md` is written for a human
+   to read; the same structured `Delivery` object lands on the
+   `"delivered"` event for `deliveryOf` to read back exactly.
 7. **Destroys the ProductionLine** in every case — success, failure, or a
    thrown error — via a single `finally`.
 
@@ -182,6 +180,56 @@ not a silent one — closing it needs a way for a registered project to
 say which paths are its "ratified tests and check settings," which
 doesn't exist yet.
 
+## Rule 9: blocked, not discarded
+
+An earlier version of this design force-reset the branch back to its
+fork point and saved the discarded work as a patch in the record
+(`discarded.patch`), so nothing tampered ever reached a mergeable
+branch. The Client overturned that: "keeping something mergeable around
+is fine as long as it doesn't get merged" — a CI check that blocks the
+merge is simpler, and the Client is the one person who can tell a
+declaration mistake from actual cheating, so he should get to look at
+the real work and decide, not read a patch file reconstructed from it.
+
+So a `discarded-protected-path` outcome now behaves exactly like every
+other outcome up through the commit: whatever a Worker left in the
+worktree, committed or not, ends up on the ProductionLine's branch. The
+only difference is what happens to the branch next — it is renamed from
+`fabrica/<taskId>` to `fabrica/discarded/<taskId>` (`do.ts`, via `git
+branch -m`, which git allows even while that branch is the one checked
+out in the worktree).
+
+**Why a branch rename, not a file in the tree.** The constraint driving
+this whole design is that CI can only see the repository it runs in —
+not `~/.fabrica`, so not `delivery.outcome`, not any record file. The
+signal has to be something a GitHub Actions workflow in *this*
+repository can read: the branch name, a commit, or a file. A branch
+name wins on the one property that matters most here: it is never part
+of any commit's content, so if the Client does override and merge the
+branch, no residue survives the merge — nothing to remember to strip
+out first. A marker file would need exactly that remembering, on every
+override, forever. "Prefer the signal that cannot be forgotten" cuts
+both ways — writing it by construction (Fabrica renames the branch
+itself, unconditionally, on this one outcome) and never needing it
+un-written again.
+
+**The check itself:** `.github/workflows/rule9-gate.yml` runs on any
+push or pull request whose branch matches `fabrica/discarded/*` and
+fails on purpose, with a message stating plainly that the work touched
+its own gate without declaring it and that only the Client may review
+and override. Branch protection is what makes a failing check actually
+block a merge — that's a GitHub repository setting, not something this
+code can turn on for you; see the workflow file's own header comment.
+
+**Known v1 limitation:** SPEC.md's `fabrica do` never pushes anything to
+a remote on its own, so this CI check only ever runs once something
+*else* pushes the `fabrica/discarded/<taskId>` branch or opens a PR from
+it — today that means the Client, by hand. The workflow also currently
+lives only in this repository's own `.github/workflows/`; a project
+`fabrica` manages gets no copy of it yet, so this is a working
+demonstration of the mechanism, not project scaffolding — that's a
+future `fabrica init`-shaped concern, not solved here.
+
 ## Why `do()` doesn't return early
 
 SPEC.md describes `fabrica do` as detached: it prints the task id and
@@ -271,8 +319,7 @@ doesn't write that event or interpret one; that's left to whoever builds
 | `gate-changes.ts` | Snapshots and compares `check.sh`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. |
 | `files.ts` | Lists files still uncommitted in a worktree (`git status --porcelain`) - used only to decide whether there's anything left to commit before teardown. |
-| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown. Skipped for a `discarded-protected-path` outcome - rule 9 keeps discarded work off the branch. |
-| `discard.ts` | `captureDiscardedPatch(workdir, baseCommit)`: captures everything changed since the line's fork point - a worker's own commits and uncommitted edits alike, `--binary` so binary files survive - as one `git apply`-able diff, without committing. The source of `discarded.patch` on a `discarded-protected-path` outcome. |
+| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked, not discarded" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |

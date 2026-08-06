@@ -14,8 +14,6 @@ export function buildDelivery(
     branch: string;
     files: string[];
     declaredGateChanges: string | undefined;
-    taskId: string;
-    discardedPatchSaved: boolean;
   }
 ): Delivery {
   const summary =
@@ -23,7 +21,8 @@ export function buildDelivery(
       ? `Completed: ${ctx.taskText}`
       : outcome === "failure-report"
         ? `The project's check did not pass after ${ctx.attempts} attempt(s).`
-        : "The project's checks changed without a declared gate change (rule 9) - held back, not delivered.";
+        : "The project's checks changed without a declared gate change (rule 9) - blocked from " +
+          "merging until the Client reviews it and chooses to override.";
 
   const evidence =
     outcome === "discarded-protected-path"
@@ -35,14 +34,9 @@ export function buildDelivery(
     outcome === "failure-report"
       ? "The project's check did not pass; see evidence for the failure output."
       : outcome === "discarded-protected-path"
-        ? "files is intentionally empty: nothing is handed over on the branch while a change to the " +
-          "project's checks is undeclared. This is usually a declaration mistake, not cheating, and " +
-          "the work itself was not deleted." +
-          (ctx.discardedPatchSaved
-            ? ` The full diff was saved to tasks/${ctx.taskId}/discarded.patch - read it, declare ` +
-              "the gate change via gateChanges, run the task again, and git apply picks the patch " +
-              "back up."
-            : "")
+        ? `The work is not discarded - it is committed on \`${ctx.branch}\`, renamed so a CI check ` +
+          "on that branch fails on purpose and blocks the merge. Only the Client can review the " +
+          "undeclared change and override the check to merge it."
         : "";
 
   return {

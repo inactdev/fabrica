@@ -55,8 +55,7 @@ export function diffFiles(project: string, branch: string, base?: string): strin
     // listTouchedFiles — non-ASCII and quote-bearing names come back exact.
     // Node's default maxBuffer (1 MiB) is too small to trust for git
     // output that scales with the changeset - a huge file list must not
-    // abort delivery mid-flight (see src/foreman/discard.ts for the
-    // rule-9 stakes of a git capture dying on buffer overflow).
+    // abort delivery mid-flight.
     const raw = execFileSync("git", ["diff", "--name-only", "-z", forkPoint, branch], {
       cwd: project,
       encoding: "utf8",

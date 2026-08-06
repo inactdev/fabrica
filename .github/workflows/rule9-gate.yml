@@ -1,0 +1,33 @@
+# CONTRACT rule 9's CI-visible gate. CI can only see this repository, not
+# ~/.fabrica, so it can't read delivery.outcome directly — src/foreman/do.ts
+# renames a violating task's branch from fabrica/<taskId> to
+# fabrica/discarded/<taskId> instead, and this workflow fails on that name.
+# See src/foreman/README.md's "Rule 9: blocked, not discarded" for why a
+# branch rename was chosen over a marker file left in the tree.
+#
+# A failing check here does not, by itself, block a merge — GitHub only
+# enforces that once this workflow's job is marked a required status check
+# in the repository's branch protection settings, a manual setting this
+# file cannot turn on for you.
+name: rule9-gate
+
+on:
+  push:
+    branches:
+      - "fabrica/discarded/**"
+  pull_request:
+
+jobs:
+  block-undeclared-gate-change:
+    # push is already filtered to fabrica/discarded/** above; pull_request
+    # has no branches filter (a PR's *base* branch could be anything), so
+    # this condition does the real matching there, against the PR's own
+    # head branch. github.head_ref is only set for pull_request events, so
+    # it's tried first and falls back to github.ref_name for push.
+    if: startsWith(github.head_ref || github.ref_name, 'fabrica/discarded/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block merge — undeclared gate change (CONTRACT rule 9)
+        run: |
+          echo "::error::This branch's work touched the project's own checks (CONTRACT rule 9) without declaring the change. Fabrica renamed it to ${{ github.head_ref || github.ref_name }} instead of merging it silently — the work is not lost, it is committed right here. Only the Client may review it and deliberately override this check to merge it."
+          exit 1

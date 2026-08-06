@@ -174,9 +174,8 @@ test("doTask rejects when no brain is provided", async () => {
   );
 });
 
-test("doTask on an undeclared gate change resets the branch to its fork point and saves the work as a patch", async () => {
+test("doTask on an undeclared gate change renames the branch instead of discarding the work", async () => {
   const project = makeFixtureRepo("exit 1");
-  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
   const recordHome = freshHome();
   const brain = fakeBrain({
     onWork: (_brief, workdir) => {
@@ -189,23 +188,28 @@ test("doTask on an undeclared gate change resets the branch to its fork point an
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "discarded-protected-path");
-  assert.deepEqual(delivery?.files, [], "a discarded attempt hands nothing over on the branch");
-  const branchTip = execSync(`git rev-parse fabrica/${task.id}`, {
-    cwd: project,
-    encoding: "utf8",
-  }).trim();
-  assert.equal(branchTip, baseCommit, "the branch must land back at its exact fork point");
+  const blockedBranch = `fabrica/discarded/${task.id}`;
+  assert.equal(delivery?.branch, blockedBranch, "delivery.branch must point at the renamed branch");
+  assert.deepEqual(
+    delivery?.files,
+    ["check.sh", "feature.txt"],
+    "the work must land on the branch, not come back empty"
+  );
 
-  const patch = readTaskFile(recordHome, task.id, "discarded.patch");
-  assert.ok(patch, "the discarded work must be preserved as a patch on the record");
-  assert.match(patch, /feature\.txt/);
-  assert.match(patch, /check\.sh/);
-  assert.match(delivery?.gaps ?? "", /discarded\.patch/);
+  const content = execSync(`git show ${blockedBranch}:feature.txt`, { cwd: project, encoding: "utf8" });
+  assert.equal(content, "possibly good work\n", "the branch must carry the worker's real content");
+
+  let originalStillExists = true;
+  try {
+    execSync(`git rev-parse --verify fabrica/${task.id}`, { cwd: project, stdio: "ignore" });
+  } catch {
+    originalStillExists = false;
+  }
+  assert.equal(originalStillExists, false, "fabrica/<taskId> must be renamed away, not left behind");
 });
 
-test("doTask discards an undeclared gate change even when the worker commits it itself", async () => {
+test("doTask renames the branch on an undeclared gate change even when the worker commits it itself", async () => {
   const project = makeFixtureRepo("exit 1");
-  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
   const recordHome = freshHome();
   const brain = fakeBrain({
     onWork: (_brief, workdir) => {
@@ -222,21 +226,16 @@ test("doTask discards an undeclared gate change even when the worker commits it 
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "discarded-protected-path");
+  const blockedBranch = `fabrica/discarded/${task.id}`;
+  assert.equal(delivery?.branch, blockedBranch, "delivery.branch must point at the renamed branch");
   assert.deepEqual(
     delivery?.files,
-    [],
-    "a worker's own commit must not smuggle discarded work into the delivery"
+    ["check.sh", "feature.txt"],
+    "the worker's own commit must still show up on the renamed branch, not vanish"
   );
-  const branchTip = execSync(`git rev-parse fabrica/${task.id}`, {
-    cwd: project,
-    encoding: "utf8",
-  }).trim();
-  assert.equal(branchTip, baseCommit, "the worker's own commits must not survive on the branch");
 
-  const patch = readTaskFile(recordHome, task.id, "discarded.patch");
-  assert.ok(patch, "the committed-then-discarded work must still be preserved as a patch");
-  assert.match(patch, /feature\.txt/);
-  assert.match(patch, /exit 0/, "the tampered check content must be captured in the patch");
+  const content = execSync(`git show ${blockedBranch}:feature.txt`, { cwd: project, encoding: "utf8" });
+  assert.equal(content, "committed by the worker\n", "the branch must carry the worker's real content");
 });
 
 test("doTask records files touched by the worker in the delivery", async () => {

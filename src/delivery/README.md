@@ -130,12 +130,9 @@ didn't before), chosen because `src/line/README.md` already documented
 intent - a commit was always the missing half of that promise, not a
 new decision this module invented.
 
-The one outcome handled differently is `discarded-protected-path`: rule
-9 discards the work, so nothing may land on the branch and `files`
-honestly comes back empty. Everything changed since the fork point is
-captured to the task's record folder as `discarded.patch` instead
-(`src/foreman/discard.ts`), and the branch ref is forced back to the
-fork point - see "Rule 9 and this module" below.
+`discarded-protected-path` now goes through the exact same commit as
+every other outcome - see "Rule 9 and this module" below for why an
+undeclared gate change no longer skips it.
 
 ## Errors
 
@@ -158,20 +155,13 @@ string field (present, right type), and an empty string is a legitimate
 "the gate was untouched," not a violation. Duplicating rule 9's detection
 here would just be a second place for it to disagree with the first.
 
-What a discarded outcome means for this module's checks: for
-`discarded-protected-path`, `do.ts` skips the commit-before-teardown
-AND forces the ProductionLine's branch ref back to the exact commit the
-line was cut from - rule 5 keeps the EVIDENCE (delivery, receipts,
-transcript stay on the record) while rule 9 discards the WORK, and
-leaving discarded work reachable on a mergeable branch would blur
-exactly that line. The ref move matters because a Worker has full git
-access inside the worktree and may have committed its own changes;
-merely skipping Fabrica's commit would leave those on the branch tip.
-With the branch back at the fork point, `diffFiles(project, branch,
-base)` naturally reports an empty `files` list - no special-casing.
-Because a declaration mistake shouldn't destroy good work, everything
-changed since the fork point (commits and uncommitted edits alike,
-`--binary` so it stays `git apply`-able) is first saved to the task's
-record folder as `discarded.patch`, and the delivery's `gaps` field says
-where it landed and how to run the task again with the gate change
-declared.
+What a `discarded-protected-path` outcome means for this module's
+checks: nothing, any more. Client ruling (superseding the original
+force-reset-and-patch design) - see `src/foreman/README.md`'s "Rule 9:
+blocked, not discarded" for the full reasoning - moved rule 9's
+consequence off the branch entirely and onto CI: the work commits like
+any other outcome, `diffFiles(project, branch, base)` reports its real
+diff like any other outcome, and the one difference is that `do.ts`
+renames the branch to `fabrica/discarded/<taskId>` afterward so a
+`.github/workflows/rule9-gate.yml` check can find it and block the
+merge. This module has no special case for it left to document.

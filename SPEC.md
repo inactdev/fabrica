@@ -123,9 +123,6 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
         transcript.log        # the worker's structured transcript entries,
                               # one JSON line each; `fabrica watch` renders
                               # the live stream from them
-        discarded.patch       # only on a discarded-protected-path
-                              # outcome: the diff rule 9 kept off the
-                              # branch (see src/record/README.md)
         worktree/             # the ProductionLine while the task runs;
                               # removed when it is destroyed (the branch stays)
       projects.toml           # project registry + caps (below)
@@ -134,9 +131,7 @@ Files, not a database, in v1: the Client must be able to read, grep, and
 diff the record with bare hands, and later organs (learning, status,
 Amy) read the same files. `events.jsonl` is the single source of truth;
 everything else, including `brief.md`, is a convenience view of it
-(Contract 5), with one exception: `discarded.patch` holds content that
-exists nowhere in the event log (`src/record/README.md` has the
-reasoning) — `brief.md` could be derived on every read instead of
+(Contract 5) — `brief.md` could be derived on every read instead of
 written to disk, but writing it keeps the record readable with bare
 hands, which this section requires of everything under the record home.
 
