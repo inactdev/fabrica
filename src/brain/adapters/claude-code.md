@@ -116,7 +116,12 @@ that same containment, both closed:
   Worker keeps history, reflogs, and the object database (read-only
   context on a project it already has fully checked out), but nothing
   from the project's git configuration beyond `[core]` and those
-  structural extension keys is readable inside the container.
+  structural extension keys is readable inside the container. There is
+  no no-git fallback: a `workdir` whose git mounts can't be resolved -
+  no git repository at all, a corrupted worktree, an unsanitizable
+  config - refuses the run with an error saying what to fix (for the
+  no-git case: initialize git in the project first), instead of running
+  the Worker with git silently unavailable.
   See `../../containment/README.md`'s "Git under containment" for the
   full reasoning, the exact read-boundary, the known `partialClone`
   limitation, and the design that was tried and rejected first.

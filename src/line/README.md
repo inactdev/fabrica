@@ -205,10 +205,13 @@ Throws `LineError("not-a-worktree")` when `<workdir>/.git` isn't a
 worktree pointer file at all (a plain directory with no `.git`, or one
 that's already a real `.git` directory rather than a worktree's), and
 also when the pointer chain is broken - the pointer parses but the
-shared `.git` it ultimately names no longer exists on disk. Callers
-that don't know in advance whether `workdir` is a genuine
-`ProductionLine` worktree should catch this specific code rather than
-assume it always resolves.
+shared `.git` it ultimately names no longer exists on disk. The
+no-`.git` message is written as an instruction to the Client - Fabrica
+needs a git repository in the working directory, so initialize git
+there first - and callers are expected to let it surface rather than
+catch it and degrade: the reference CLI adapter deliberately has no
+no-git fallback, so a Worker never runs with git silently
+unavailable.
 
 What it's *for*: mounting the result read-only into a container lets
 git work at all inside one, without exposing write access to the

@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
-import { LineError, resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
+import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
 
@@ -174,32 +174,20 @@ function toTranscript(lines: ClaudeStreamLine[]): TranscriptEntry[] {
 // keys - an allowlist, not a denylist - is shadow-mounted over the
 // real one - status/log/diff still work, but no remote URL, embedded
 // credential, credential helper, or other config-borne credential
-// mechanism is readable inside the container. Falls back to no git
-// access only for LineError("not-a-worktree") - workdir isn't a
-// worktree at all (test fixtures that skip git entirely) - and
-// rethrows any other LineError (e.g. "unsanitizable-config" for an
-// [extensions] key the sanitizer refuses to forward or drop), rather
-// than silently running with no git access over a failure this
-// fallback was never meant to cover. `resolveGitDir` and
-// `sanitizeConfig` default to the real functions; claude-code.test.ts
-// overrides them to prove the rethrow without needing a full worktree
-// fixture.
-export function resolveGitMounts(
-  workdir: string,
-  resolveGitDir: typeof resolveCommonGitDir = resolveCommonGitDir,
-  sanitizeConfig: typeof writeSanitizedGitConfig = writeSanitizedGitConfig
-): { readOnlyMounts?: ReadOnlyMount[]; sanitizedConfigDir?: string } {
-  try {
-    const commonGitDir = resolveGitDir(workdir);
-    const sanitizedConfig = sanitizeConfig(commonGitDir);
-    return {
-      readOnlyMounts: [commonGitDir, { source: sanitizedConfig, target: join(commonGitDir, "config") }],
-      sanitizedConfigDir: dirname(sanitizedConfig),
-    };
-  } catch (err) {
-    if (!(err instanceof LineError) || err.code !== "not-a-worktree") throw err;
-    return {};
-  }
+// mechanism is readable inside the container. There is no no-git
+// fallback: a workdir the mounts can't be resolved for - no git
+// repository at all, a corrupted worktree, an unsanitizable config -
+// refuses the run with the LineError saying what to fix, rather than
+// running the Worker with git silently unavailable (a Worker needs
+// git constantly, so "no git, no signal" is a worse failure than an
+// upfront refusal with an obvious remedy).
+export function resolveGitMounts(workdir: string): { readOnlyMounts: ReadOnlyMount[]; sanitizedConfigDir: string } {
+  const commonGitDir = resolveCommonGitDir(workdir);
+  const sanitizedConfig = writeSanitizedGitConfig(commonGitDir);
+  return {
+    readOnlyMounts: [commonGitDir, { source: sanitizedConfig, target: join(commonGitDir, "config") }],
+    sanitizedConfigDir: dirname(sanitizedConfig),
+  };
 }
 
 export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
@@ -227,14 +215,14 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       // the same session, never a cold restart) - see this file's
       // "Process containment" section. A workdir that doesn't resolve
       // is left for runContained's own typed invalid-path refusal.
-      let realWorkdir: string;
+      let realWorkdir: string | undefined;
       try {
         realWorkdir = realpathSync(workdir);
       } catch {
-        realWorkdir = workdir;
+        realWorkdir = undefined;
       }
-      const sessionDir = `${realWorkdir}.fabrica-session`;
-      mkdirSync(sessionDir, { recursive: true });
+      const sessionDir = `${realWorkdir ?? workdir}.fabrica-session`;
+      if (realWorkdir !== undefined) mkdirSync(sessionDir, { recursive: true });
 
       let stdout: string;
       let stderr: string;
@@ -261,7 +249,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         }
         throw err;
       } finally {
-        if (sanitizedConfigDir !== undefined) rmSync(sanitizedConfigDir, { recursive: true, force: true });
+        rmSync(sanitizedConfigDir, { recursive: true, force: true });
       }
 
       const lines = parseLines(stdout);

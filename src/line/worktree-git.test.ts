@@ -161,6 +161,23 @@ test("writeSanitizedGitConfig refuses a URI-form refStorage value, whose payload
   );
 });
 
+test("writeSanitizedGitConfig refuses a subsectioned or dotted [extensions] header - never silently drops it", () => {
+  for (const header of ['[extensions "sub"]', "[extensions.objectFormat]"]) {
+    const gitDir = makeFixtureHome();
+    writeFileSync(
+      join(gitDir, "config"),
+      ["[core]", "\trepositoryformatversion = 1", header, "\tsomekey = value", ""].join("\n")
+    );
+
+    assert.throws(
+      () => writeSanitizedGitConfig(gitDir),
+      (err: unknown) =>
+        err instanceof LineError && err.code === "unsanitizable-config" && err.message.includes(header),
+      `header ${header} must be refused, not dropped`
+    );
+  }
+});
+
 test("resolveCommonGitDir refuses a directory that isn't a git worktree", () => {
   const notAWorktree = makeFixtureHome();
   writeFileSync(join(notAWorktree, ".git"), "not a real pointer file\n");

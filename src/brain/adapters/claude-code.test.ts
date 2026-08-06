@@ -28,12 +28,20 @@ function dockerAvailable(): boolean {
   }
 }
 
+// A real ProductionLine worktree, not a plain temp dir: work() has no
+// no-git fallback, so every workdir it runs must resolve real git
+// mounts, fixtures included.
+let fakeCliTaskCounter = 0;
 function makeFakeCliWorkdir(): string {
-  const workdir = mkdtempSync(join(tmpdir(), "fabrica-claude-code-workdir-"));
-  const dest = join(workdir, "fake-claude-cli.mjs");
+  const line = createProductionLine({
+    project: makeFixtureProject(),
+    taskId: `fake-cli-${fakeCliTaskCounter++}`,
+    recordHome: makeFixtureHome(),
+  });
+  const dest = join(line.workdir, "fake-claude-cli.mjs");
   copyFileSync(FAKE_CLI_SOURCE, dest);
   chmodSync(dest, 0o755);
-  return workdir;
+  return line.workdir;
 }
 
 test("claudeCodeAdapter always passes bypassPermissions and forwards --resume, --model, --effort", async (t) => {
@@ -187,27 +195,17 @@ test("claudeCodeAdapter throws ClaudeCodeError('cli-error') when the containeriz
   );
 });
 
-// The git-mount fallback (issue #44 review, finding "git-mount-swallows-
-// every-LineError") must only swallow LineError("not-a-worktree") - the
-// "workdir isn't a worktree at all" case - and rethrow everything else,
-// e.g. writeSanitizedGitConfig's "unsanitizable-config" for an
-// [extensions] key it refuses to forward or drop. Injected stand-ins
-// prove the rethrow without needing a full worktree fixture - see
-// resolveGitMounts's own comment.
-test("resolveGitMounts swallows LineError('not-a-worktree') but rethrows any other LineError", () => {
-  assert.deepEqual(
-    resolveGitMounts("/irrelevant", () => {
-      throw new LineError("not-a-worktree", "synthetic: workdir is not a worktree");
-    }),
-    {}
-  );
+// There is no no-git fallback: a workdir whose git mounts can't be
+// resolved refuses the run outright, with a message telling the Client
+// to initialize git first - never a Worker running with git silently
+// unavailable. See resolveGitMounts's own comment.
+test("resolveGitMounts refuses a workdir with no git repository, telling the Client to initialize git first", () => {
+  const noGitDir = mkdtempSync(join(tmpdir(), "fabrica-claude-code-nogit-"));
 
   assert.throws(
-    () =>
-      resolveGitMounts("/irrelevant", () => {
-        throw new LineError("not-a-repo", "synthetic: corrupted shared .git");
-      }),
-    (err: unknown) => err instanceof LineError && err.code === "not-a-repo"
+    () => resolveGitMounts(noGitDir),
+    (err: unknown) =>
+      err instanceof LineError && err.code === "not-a-worktree" && /initialize git/i.test(err.message)
   );
 });
 

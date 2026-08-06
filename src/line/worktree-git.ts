@@ -28,9 +28,9 @@ export function resolveCommonGitDir(workdir: string): string {
   } catch (err) {
     throw new LineError(
       "not-a-worktree",
-      `"${pointerPath}" could not be read - is ${workdir} a ProductionLine worktree? ${
+      `Fabrica needs a git repository in the working directory: "${pointerPath}" could not be read (${
         err instanceof Error ? err.message : String(err)
-      }`
+      }). Initialize git in the project first - Fabrica cuts its ProductionLine worktrees from a real repository.`
     );
   }
 
@@ -136,9 +136,19 @@ export function writeSanitizedGitConfig(commonGitDir: string): string {
     const header = line.match(/^\s*\[\s*([^\s\]"]+)/);
     if (header) {
       const name = header[1].toLowerCase();
-      if (name === "core") section = "core";
-      else if (name === "extensions" && /^\s*\[\s*extensions\s*\]/i.test(line)) section = "extensions";
-      else section = "other";
+      if (name === "core") {
+        section = "core";
+      } else if (name === "extensions" || name.startsWith("extensions.")) {
+        if (!/^\s*\[\s*extensions\s*\]/i.test(line)) {
+          throw new LineError(
+            "unsanitizable-config",
+            `"${configPath}" has an [extensions] header with a subsection ("${line.trim()}"), which no documented extension key uses - refusing to forward it into the container or silently drop it`
+          );
+        }
+        section = "extensions";
+      } else {
+        section = "other";
+      }
       if (section === "core") kept.push(line);
       continue;
     }
