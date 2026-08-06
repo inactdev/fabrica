@@ -112,7 +112,7 @@ test("runContained: a path containing a comma is refused with a clear typed erro
   );
 });
 
-test("runContained: network is denied by default", async (t) => {
+test("runContained: network: \"denied\" cannot reach the network", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const { workdir } = makeFixture();
 

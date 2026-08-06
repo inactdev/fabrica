@@ -164,6 +164,42 @@ function toTranscript(lines: ClaudeStreamLine[]): TranscriptEntry[] {
   return entries;
 }
 
+// workdir is a ProductionLine worktree, so git needs its real project's
+// shared .git mounted back in (read-only) to work at all inside the
+// container - see src/line/worktree-git.ts and this file's "Process
+// containment" section for why. The shared .git's own `config` is the
+// one file in it that can carry a credential (a remote URL can embed
+// one), so a sanitized throwaway copy forwarding only the [core]
+// section - an allowlist, not a denylist - is shadow-mounted over the
+// real one - status/log/diff still work, but no remote URL, embedded
+// credential, credential helper, or other config-borne credential
+// mechanism is readable inside the container. Falls back to no git
+// access only for LineError("not-a-worktree") - workdir isn't a
+// worktree at all (test fixtures that skip git entirely) - and
+// rethrows any other LineError (e.g. "not-a-repo" from a corrupted
+// shared .git), rather than silently running with no git access over a
+// failure this fallback was never meant to cover. `resolveGitDir` and
+// `sanitizeConfig` default to the real functions; claude-code.test.ts
+// overrides them to prove the rethrow, since neither real function has
+// a path to any other LineErrorCode today.
+export function resolveGitMounts(
+  workdir: string,
+  resolveGitDir: typeof resolveCommonGitDir = resolveCommonGitDir,
+  sanitizeConfig: typeof writeSanitizedGitConfig = writeSanitizedGitConfig
+): { readOnlyMounts?: ReadOnlyMount[]; sanitizedConfigDir?: string } {
+  try {
+    const commonGitDir = resolveGitDir(workdir);
+    const sanitizedConfig = sanitizeConfig(commonGitDir);
+    return {
+      readOnlyMounts: [commonGitDir, { source: sanitizedConfig, target: join(commonGitDir, "config") }],
+      sanitizedConfigDir: dirname(sanitizedConfig),
+    };
+  } catch (err) {
+    if (!(err instanceof LineError) || err.code !== "not-a-worktree") throw err;
+    return {};
+  }
+}
+
 export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
   const bin = opts.binPath ?? "claude";
   const image = opts.image ?? DEFAULT_IMAGE;
@@ -175,28 +211,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions): Promise<BrainWorkResult> {
       const args = buildArgs(brief, opts, workOpts);
 
-      // workdir is a ProductionLine worktree, so git needs its real
-      // project's shared .git mounted back in (read-only) to work at
-      // all inside the container - see src/line/worktree-git.ts and
-      // this file's "Process containment" section for why. The shared
-      // .git's own `config` is the one file in it that can carry a
-      // credential (a remote URL can embed one), so a sanitized
-      // throwaway copy with every [remote "..."] section stripped is
-      // shadow-mounted over the real one - status/log/diff still work,
-      // but no remote URL is readable inside the container. Falls back
-      // to no git access when workdir isn't a worktree at all (test
-      // fixtures that skip git entirely), rather than failing a call
-      // over a directory shape only real ProductionLine workdirs have.
-      let readOnlyMounts: ReadOnlyMount[] | undefined;
-      let sanitizedConfigDir: string | undefined;
-      try {
-        const commonGitDir = resolveCommonGitDir(workdir);
-        const sanitizedConfig = writeSanitizedGitConfig(commonGitDir);
-        sanitizedConfigDir = dirname(sanitizedConfig);
-        readOnlyMounts = [commonGitDir, { source: sanitizedConfig, target: join(commonGitDir, "config") }];
-      } catch (err) {
-        if (!(err instanceof LineError)) throw err;
-      }
+      const { readOnlyMounts, sanitizedConfigDir } = resolveGitMounts(workdir);
 
       // A sibling of workdir, named from workdir's own path rather than
       // assumed to sit under some recordHome/tasks/<id>/ layout, so this

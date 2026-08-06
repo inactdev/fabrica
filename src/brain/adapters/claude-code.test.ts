@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { claudeCodeAdapter, ClaudeCodeError } from "./claude-code.ts";
+import { claudeCodeAdapter, ClaudeCodeError, resolveGitMounts } from "./claude-code.ts";
 import { createProductionLine, destroyProductionLine } from "../../line/index.ts";
 import { makeFixtureHome, makeFixtureProject } from "../../line/helpers/fixture.ts";
+import { LineError } from "../../line/index.ts";
 
 const FAKE_CLI_SOURCE = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-claude-cli.mjs");
 // A container only ever sees `workdir` (mounted at /workdir) - the fake
@@ -183,6 +184,30 @@ test("claudeCodeAdapter throws ClaudeCodeError('cli-error') when the containeriz
     () => brain.work("hi", makeFakeCliWorkdir()),
     (err: unknown) =>
       err instanceof ClaudeCodeError && err.code === "cli-error" && /no such file or directory/i.test(err.message)
+  );
+});
+
+// The git-mount fallback (issue #44 review, finding "git-mount-swallows-
+// every-LineError") must only swallow LineError("not-a-worktree") - the
+// "workdir isn't a worktree at all" case - and rethrow everything else.
+// Neither resolveCommonGitDir nor writeSanitizedGitConfig has a real path
+// to any other LineErrorCode today (both only ever throw not-a-worktree),
+// so this proves the rethrow with injected stand-ins rather than a fixture
+// that can't yet exist for real - see resolveGitMounts's own comment.
+test("resolveGitMounts swallows LineError('not-a-worktree') but rethrows any other LineError", () => {
+  assert.deepEqual(
+    resolveGitMounts("/irrelevant", () => {
+      throw new LineError("not-a-worktree", "synthetic: workdir is not a worktree");
+    }),
+    {}
+  );
+
+  assert.throws(
+    () =>
+      resolveGitMounts("/irrelevant", () => {
+        throw new LineError("not-a-repo", "synthetic: corrupted shared .git");
+      }),
+    (err: unknown) => err instanceof LineError && err.code === "not-a-repo"
   );
 });
 
