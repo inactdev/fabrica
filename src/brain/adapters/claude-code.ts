@@ -213,16 +213,12 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       // without which a fresh --rm container each call would never find
       // the last one's session (SPEC.md: a retry is a correction into
       // the same session, never a cold restart) - see this file's
-      // "Process containment" section. A workdir that doesn't resolve
-      // is left for runContained's own typed invalid-path refusal.
-      let realWorkdir: string | undefined;
-      try {
-        realWorkdir = realpathSync(workdir);
-      } catch {
-        realWorkdir = undefined;
-      }
-      const sessionDir = `${realWorkdir ?? workdir}.fabrica-session`;
-      if (realWorkdir !== undefined) mkdirSync(sessionDir, { recursive: true });
+      // "Process containment" section. resolveGitMounts above already
+      // proved workdir is a readable directory, so realpathSync here
+      // cannot fail.
+      const realWorkdir = realpathSync(workdir);
+      const sessionDir = `${realWorkdir}.fabrica-session`;
+      mkdirSync(sessionDir, { recursive: true });
 
       let stdout: string;
       let stderr: string;
