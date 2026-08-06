@@ -25,3 +25,25 @@ today's exact tally - it is meant to move with every issue closed, so it
 is not quoted here.
 
 Phase 1 has exactly one definition of done: every contract test turns green.
+
+## Installing the command
+
+    npm install
+    npm link
+
+`npm link` puts `fabrica` on your `PATH`, working from any directory.
+There is no separate build step - it runs `src/`'s TypeScript directly.
+
+    fabrica do "<task text>" --project <path-or-name>
+
+Prints the new task's id and returns immediately; the work continues in
+the background (`src/cli/README.md` has the full design). `--project`
+takes either a plain filesystem path, or the name of a project already
+registered in `~/.fabrica/projects.toml`:
+
+    [projects.spending-app]
+    path  = "~/inkling-umbrella/spending-app"
+    check = "bin/ci"
+
+Set `FABRICA_HOME` to use a record home other than `~/.fabrica`. Run
+`fabrica --help` or `fabrica do --help` for the rest.

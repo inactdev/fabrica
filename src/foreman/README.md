@@ -68,7 +68,8 @@ return early" below.
 Always a filesystem path to the root of a git repository — the same
 thing `createProductionLine` expects. SPEC.md's CLI describes `--project
 <path-or-name>`; the "or-name" half (looking a registered project up by
-name in `projects.toml`) is a CLI-layer concern nothing has built yet,
+name in `projects.toml`) is a CLI-layer concern - `src/cli/resolve-project.ts`
+(issue #47) does it before this function is ever called -
 not something this function does. `resolve-check.ts` does something
 related but different: it looks a *path* up in `projects.toml` to find
 that project's configured check command (see below) — it never treats
@@ -165,10 +166,10 @@ calls `await foreman.do(...)` and immediately inspects `deliveryOf` and
 the time the promise resolves. "Detached" is a property of the CLI a
 Client types at — spawning the loop in a background process and
 returning control to the shell right away — not a property this
-programmatic seam can have while staying testable synchronously. No CLI
-exists yet to make that distinction concrete; when one is built, it can
-wrap this same `do()` in whatever backgrounding mechanism it needs
-without reshaping anything here.
+programmatic seam can have while staying testable synchronously.
+`src/cli/` (issue #47) makes that distinction concrete: `fabrica do`
+wraps this same `do()` in a detached child process without reshaping
+anything here - `src/cli/README.md` owns the mechanism.
 
 ## The ask-first seam
 
