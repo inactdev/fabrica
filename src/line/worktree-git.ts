@@ -117,6 +117,33 @@ const FORWARDED_EXTENSION_KEYS = new Set([
   "submodulepathconfig",
 ]);
 
+// git accepts a variable written on the same line as its section header
+// ("[extensions] objectFormat = sha256" sets extensions.objectFormat,
+// verified live), so a key can arrive either on its own line or riding
+// the header. Both forms go through this one check.
+function checkExtensionEntry(entryText: string, configPath: string): void {
+  const entry = entryText.match(/^([A-Za-z][A-Za-z0-9-]*)\s*(?:=\s*(.*))?$/);
+  if (!entry) {
+    throw new LineError(
+      "unsanitizable-config",
+      `"${configPath}" has an [extensions] line ("${entryText}") this sanitizer cannot parse - refusing to guess whether it is credential-free`
+    );
+  }
+  const key = entry[1];
+  if (!FORWARDED_EXTENSION_KEYS.has(key.toLowerCase())) {
+    throw new LineError(
+      "unsanitizable-config",
+      `"${configPath}" sets extensions.${key}, which is not on the sanitizer's allowlist of known credential-free extension keys - refusing to forward it into the container or silently drop it`
+    );
+  }
+  if (key.toLowerCase() === "refstorage" && (entry[2] ?? "").includes("://")) {
+    throw new LineError(
+      "unsanitizable-config",
+      `"${configPath}" sets extensions.refStorage to a URI-form value, whose payload names a host location not visible inside the container - only a bare format name (files, reftable) can be forwarded`
+    );
+  }
+}
+
 export function writeSanitizedGitConfig(commonGitDir: string): string {
   const configPath = join(commonGitDir, "config");
   let config: string;
@@ -146,6 +173,11 @@ export function writeSanitizedGitConfig(commonGitDir: string): string {
           );
         }
         section = "extensions";
+        const inline = line.replace(/^\s*\[\s*extensions\s*\]/i, "").trim();
+        if (inline !== "" && !inline.startsWith("#") && !inline.startsWith(";")) {
+          checkExtensionEntry(inline, configPath);
+          extensionLines.push(`\t${inline}`);
+        }
       } else {
         section = "other";
       }
@@ -157,26 +189,7 @@ export function writeSanitizedGitConfig(commonGitDir: string): string {
     } else if (section === "extensions") {
       const trimmed = line.trim();
       if (trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
-      const entry = trimmed.match(/^([A-Za-z][A-Za-z0-9-]*)\s*(?:=\s*(.*))?$/);
-      if (!entry) {
-        throw new LineError(
-          "unsanitizable-config",
-          `"${configPath}" has an [extensions] line ("${trimmed}") this sanitizer cannot parse - refusing to guess whether it is credential-free`
-        );
-      }
-      const key = entry[1];
-      if (!FORWARDED_EXTENSION_KEYS.has(key.toLowerCase())) {
-        throw new LineError(
-          "unsanitizable-config",
-          `"${configPath}" sets extensions.${key}, which is not on the sanitizer's allowlist of known credential-free extension keys - refusing to forward it into the container or silently drop it`
-        );
-      }
-      if (key.toLowerCase() === "refstorage" && (entry[2] ?? "").includes("://")) {
-        throw new LineError(
-          "unsanitizable-config",
-          `"${configPath}" sets extensions.refStorage to a URI-form value, whose payload names a host location not visible inside the container - only a bare format name (files, reftable) can be forwarded`
-        );
-      }
+      checkExtensionEntry(trimmed, configPath);
       extensionLines.push(line);
     }
   }

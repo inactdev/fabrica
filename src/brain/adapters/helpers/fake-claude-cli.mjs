@@ -70,9 +70,11 @@ switch (brief) {
   }
   case "TRY_READ_DECOY": {
     // Attempts to read a path named by an env var, so
-    // claude-code.test.ts's containment-wiring test can prove that
-    // `contained: true` really is confining THIS process end to end,
-    // not just the standalone runContained() primitive.
+    // claude-code.test.ts's containment-wiring test can prove the
+    // adapter really does confine THIS process end to end - containment
+    // is unconditional, so the read must fail no matter how work() is
+    // called, not just when the standalone runContained() primitive is
+    // exercised on its own.
     let text;
     try {
       text = readFileSync(process.env.FABRICA_TEST_DECOY_PATH, "utf8");

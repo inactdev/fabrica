@@ -161,6 +161,46 @@ test("writeSanitizedGitConfig refuses a URI-form refStorage value, whose payload
   );
 });
 
+test("writeSanitizedGitConfig checks an [extensions] key written on the header line, forwarding or refusing it like any other", () => {
+  // git honors "[extensions] objectFormat = sha256" as setting
+  // extensions.objectFormat (verified against the installed git), so
+  // the same allowlist must apply to a key riding its own header.
+  const forwarding = makeFixtureHome();
+  writeFileSync(
+    join(forwarding, "config"),
+    ["[core]", "\trepositoryformatversion = 1", "[extensions] objectFormat = sha256", ""].join("\n")
+  );
+
+  const sanitizedPath = writeSanitizedGitConfig(forwarding);
+  try {
+    const lines = readFileSync(sanitizedPath, "utf8")
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+    assert.deepEqual(
+      lines,
+      ["[core]", "\trepositoryformatversion = 1", "[extensions]", "\tobjectFormat = sha256"],
+      "a structural key on the header line must survive sanitization, not vanish"
+    );
+  } finally {
+    rmSync(dirname(sanitizedPath), { recursive: true, force: true });
+  }
+
+  const refusing = makeFixtureHome();
+  writeFileSync(
+    join(refusing, "config"),
+    ["[core]", "\trepositoryformatversion = 1", "[extensions] worktreeConfig = true", ""].join("\n")
+  );
+
+  assert.throws(
+    () => writeSanitizedGitConfig(refusing),
+    (err: unknown) =>
+      err instanceof LineError &&
+      err.code === "unsanitizable-config" &&
+      err.message.includes("extensions.worktreeConfig"),
+    "an off-allowlist key on the header line must fail the run, not pass silently"
+  );
+});
+
 test("writeSanitizedGitConfig refuses a subsectioned or dotted [extensions] header - never silently drops it", () => {
   for (const header of ['[extensions "sub"]', "[extensions.objectFormat]"]) {
     const gitDir = makeFixtureHome();
