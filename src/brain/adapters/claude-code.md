@@ -14,7 +14,10 @@ real file in a real throwaway worktree and checks it exists.
 
 ## `claudeCodeAdapter(opts?)`
 
-Call this once to get a `Brain`. Two optional fields:
+Call this once to get a `Brain`. Every call always runs through
+`../../containment/`'s `runContained` (Docker) - there is no toggle for
+this and no uncontained path; see "Process containment" below for what
+that guarantees and the one thing it doesn't yet. Four optional fields:
 
 - **`model`** - the value passed straight to `claude --model`, e.g.
   `"claude-opus-5"` or the alias `"sonnet"`. Leave it out and the call
@@ -24,12 +27,22 @@ Call this once to get a `Brain`. Two optional fields:
   resolves to - the adapter would have to make an extra real call just
   to find out, and `"default"` is the honest answer to "which model is
   this adapter using" when no override was given.
-- **`binPath`** - the executable to spawn instead of `"claude"`.
-  Exists so `claude-code.test.ts`'s fast tests can point this at
-  `helpers/fake-claude-cli.mjs`, a script that prints canned responses,
-  instead of paying for a real call on every test run. Leave it out in
-  real use; it resolves `"claude"` via `PATH`, same as typing it at a
-  shell.
+- **`binPath`** - the command to run inside the container instead of
+  `"claude"`. Exists so `claude-code.test.ts`'s fast tests can point
+  this at a copy of `helpers/fake-claude-cli.mjs` placed inside
+  `workdir` (the only path the container can see), instead of paying
+  for a real call on every test run. Leave it out in real use; it
+  resolves `"claude"` via the image's own `PATH`.
+- **`image`** - the Docker image `binPath` runs inside. Defaults to
+  `DEFAULT_IMAGE` (`"fabrica-claude-code:latest"`, built from
+  `docker/Dockerfile` in this directory - see "Process containment"
+  below for what it installs). Overridable for tests that need a
+  different image, e.g. one with Node to run a fake CLI script.
+- **`env`** - the exact environment variables the contained process
+  receives, passed straight through to `runContained`'s allowlist. Leave
+  it out and the container gets only what its own image defines -
+  nothing from this process's own environment (API keys, tokens) leaks
+  in.
 
 ## The command it runs
 
@@ -57,17 +70,98 @@ still work; nothing that changes `workdir` does.
 That would make the adapter unable to do the one thing `Brain.work()`
 promises: that the work is genuinely done inside `workdir` by the time
 it resolves. `--permission-mode bypassPermissions` removes the
-approval step entirely - and the cost of that must be stated plainly:
-for the duration of a call, the worker has the full access of the OS
-account this adapter runs as. `Bash`/`Write`/`Edit` are **not** scoped
-to `workdir`. The `ProductionLine` worktree protects the Client's real
-project files from modification (CONTRACT rule 1,
-`src/line/README.md`), but it provides no process-level containment - a
-worker could in principle reach the real checkout, the home directory,
-or the network. This is an accepted, documented v1 risk: tolerable
-right now only because runs are small and attended, and real
-containment is tracked as separate follow-up work that must land before
-anything runs unattended.
+approval step entirely - and the cost of that would have to be stated
+plainly if nothing else confined it: for the duration of a call, the
+worker would have the full access of the OS account this adapter runs
+as. It doesn't, because `work()` always runs the call through
+`../../containment/`'s `runContained` (Docker) - see "Process
+containment" below for what that guarantees and the one thing it
+doesn't yet.
+
+### Process containment
+
+Every call runs inside a fresh, throwaway Docker container: reads and
+writes confined to `workdir` (the only thing bind-mounted in), network
+deliberately allowed (this CLI needs it to reach its own API - see
+`../../containment/README.md` for why filesystem is what's actually
+enforced here, and why Docker's own bind-mount model makes that
+guarantee stronger than a host-process sandbox's could be). This isn't
+a description of a mechanism - it's real and verified on the real
+machine; see that README for what was tried before (macOS's
+`sandbox-exec`, replaced), what broke, and what's actually proven.
+
+Two things a real coding-agent Worker needs would otherwise break under
+that same containment, both closed:
+
+- **Git.** `workdir` is a git worktree, whose `.git` names the real
+  project's shared history by an absolute host path outside `workdir` -
+  mounting only `workdir` leaves git unable to find its own repository
+  at all. `work()` resolves that real path itself
+  (`resolveCommonGitDir`, `src/line/worktree-git.ts`) and mounts it
+  back in, read-only. Verified live: `git status`/`git log` work
+  normally; `git commit` fails with "Read-only file system" - a
+  deliberate result, not a bug, since it structurally prevents a
+  contained Worker from committing its own work at all (merges and
+  commits happen outside the Worker). One file in that mount is never
+  the real one: the shared `.git`'s `config` can carry a push
+  credential in several forms (a remote URL, an `extraheader` line, an
+  `insteadOf` rewrite, a credential-helper setting), so `work()`
+  shadow-mounts a throwaway sanitized copy (`writeSanitizedGitConfig`,
+  deleted again after the call) over the real config's path. That copy
+  forwards only the real config's `[core]` section plus individually
+  allowlisted, credential-free `[extensions]` keys - an allowlist, so
+  anything not explicitly forwarded is invisible by construction; an
+  `[extensions]` key off the allowlist fails the run with a clear
+  error naming it, never silently dropped or passed through - and the
+  Worker keeps history, reflogs, and the object database (read-only
+  context on a project it already has fully checked out), but nothing
+  from the project's git configuration beyond `[core]` and those
+  structural extension keys is readable inside the container. There is
+  no no-git fallback: a `workdir` whose git mounts can't be resolved -
+  no git repository at all, a corrupted worktree, an unsanitizable
+  config - refuses the run with an error saying what to fix (for the
+  no-git case: initialize git in the project first), instead of running
+  the Worker with git silently unavailable.
+  See `../../containment/README.md`'s "Git under containment" for the
+  full reasoning, the exact read-boundary, the known `partialClone`
+  limitation, and the design that was tried and rejected first.
+- **Warm sessions.** Every call is a fresh, throwaway container, so
+  without something persisted across calls, a second attempt's
+  `--resume` would find no session at all. `work()` derives a per-task
+  home directory from `workdir` (`` `${workdir}.fabrica-session` ``,
+  created on demand) and mounts it as the container's `$HOME` on every
+  call for that `workdir` - see `../../containment/README.md`'s
+  "Session persistence" for what's verified and the one honest gap
+  (nothing yet deletes that directory when the task's line is torn
+  down).
+
+One real thing still doesn't work end to end: authentication. The
+host's installed `claude` binary is a native macOS executable and can
+never run inside a Linux container - verified via `file` on it. What
+does work, also verified: installing that same tool's own Linux build
+via its public npm package inside a container (`docker/Dockerfile` in
+this directory, built once as `DEFAULT_IMAGE`) - it starts, parses
+arguments, and reports a version. What it can't do yet is log in: a
+fresh container has no credential configured at all, verified live
+(`claude auth status` inside the built image reports "Not logged in").
+That's an ordinary bootstrap requirement for any brand-new install of
+an authenticated CLI, not a special containment-caused breakage the way
+`sandbox-exec`'s Keychain failure was.
+
+Closing it means giving this adapter's container a non-Keychain
+credential - `claude setup-token` generates a long-lived token meant for
+exactly this kind of headless use - which is a live-credential decision
+for whoever configures Fabrica, not something this file decides on its
+own. Until that's done, real tasks routed through this adapter fail at
+the authentication step; `claude-code.test.ts`'s capability-spike test
+checks the built image's own auth status before attempting real work,
+and skips (does not fail) rather than lie about proving this when it
+isn't true. One caveat on that guard, noted in the test itself: it
+probes auth as the image's own default user and `$HOME`, not the
+`--user`/mounted-home combination `work()` actually runs with -
+equivalent while the credential arrives via the environment, but the
+guard needs realigning if the gap is ever closed by baking a credential
+into the image instead.
 
 ### Why `--output-format stream-json --verbose`, not `json`
 
@@ -99,6 +193,14 @@ use: one task gets one `ProductionLine` worktree for its whole life
 runs in the same `workdir` by construction. It would only bite a caller
 that tried to resume a session against a workdir other than the one
 that started it - not something this adapter does.
+
+That verification predates containment, where a second constraint joins
+it: the session data itself lives under `$HOME`, and every contained
+call is its own fresh, throwaway container. "Process containment" above
+covers the fix - a per-`workdir` home directory, mounted on every call
+for that task - without which this whole section would describe
+behavior that stopped being true the moment `work()` started running
+through Docker.
 
 ## `opts.reasoningEffort` and `--effort`
 
@@ -176,13 +278,23 @@ doesn't currently have - not from guessing.
 
 ## Errors: `ClaudeCodeError`
 
-Every failure this file raises is a `ClaudeCodeError` with a `code`:
+Every failure this file raises is a `ClaudeCodeError` with a `code`.
+One failure a caller can see from `work()` isn't one of them: resolving
+the git mounts runs first, before the container starts, and its
+`LineError` (`not-a-worktree`, `unsanitizable-config`) surfaces
+unwrapped - that's the upfront refusal "Process containment" above
+describes instead of a no-git fallback, and its message already says
+what to fix.
 
-- **`spawn-failed`** - the binary itself couldn't be started (wrong
-  `binPath`, `workdir` doesn't exist). Verified: spawning into a
-  nonexistent directory fails at the Node `child_process` layer with
-  `ENOENT` before `claude` ever runs - this adapter surfaces that
-  directly rather than confusing it with a tool-level failure.
+- **`spawn-failed`** - `../../containment/`'s `runContained` threw a
+  `ContainmentError` (`docker` itself couldn't be launched, or a path it
+  was handed can't be resolved or represented as a mount) - this adapter
+  catches that one type and re-wraps it rather than confusing it with a
+  tool-level failure. An unusable `workdir` never reaches it: resolving
+  the git mounts runs first and refuses that as the `LineError` above.
+  A wrong `binPath` that simply doesn't exist *inside* the container is
+  different: Docker starts fine and the command fails with a normal
+  non-zero exit, which surfaces as `cli-error` below, not this.
 - **`cli-error`** - the binary ran but the call failed. Two real shapes
   were verified, and this adapter reads whichever one shows up:
   - Exit code 1, **no** JSON on stdout at all, a one-line plain-text

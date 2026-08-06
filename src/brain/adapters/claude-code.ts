@@ -7,8 +7,12 @@
 // real-binary test for the live proof and claude-code.md for what
 // each discovery means.
 
-import { spawn } from "node:child_process";
+import { mkdirSync, realpathSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
+import { ContainmentError, runContained } from "../../containment/index.ts";
+import type { ReadOnlyMount } from "../../containment/index.ts";
+import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
 
@@ -22,16 +26,33 @@ export class ClaudeCodeError extends Error {
   }
 }
 
+// Built from src/brain/adapters/docker/Dockerfile (`docker build -t
+// fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .`,
+// once, before this adapter's default image can be found) - see that
+// file and claude-code.md's "Process containment" section for what it
+// installs and why a fresh build has nothing authenticated yet.
+const DEFAULT_IMAGE = "fabrica-claude-code:latest";
+
 export interface ClaudeCodeAdapterOptions {
   /** Value for `claude --model` (an alias like "sonnet" or a full model
    * id like "claude-sonnet-5"). Omitted means the CLI's own configured
    * default runs, and `Brain.model` reports that honestly as "default"
    * rather than guessing which model that resolves to. */
   model?: string;
-  /** The `claude` executable to run - override for tests that stand in
-   * a controllable fake binary. Defaults to "claude" (resolved via PATH,
-   * same as a person typing it at a shell). */
+  /** The command to run inside the container - override for tests that
+   * stand in a controllable fake binary, reachable at a path under
+   * `workdir` (the only thing the container can see). Defaults to
+   * "claude", resolved via the image's own PATH. */
   binPath?: string;
+  /** The Docker image `runContained` runs `binPath` inside. Defaults to
+   * `DEFAULT_IMAGE`; overridable for tests that need a different
+   * image (e.g. one with Node, to run a fake CLI script). */
+  image?: string;
+  /** The exact environment variables the contained process receives,
+   * passed straight through to `runContained`'s allowlist. Omitted means
+   * the container gets only what its own image defines - nothing from
+   * this process's own environment (API keys, tokens) leaks in. */
+  env?: Record<string, string>;
 }
 
 // One line of `claude ... --output-format stream-json`. Only the shape
@@ -73,16 +94,11 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
     "--verbose",
     // Without this, every Write/Edit/Bash mutation is silently
     // permission-denied in non-interactive mode (verified: there is no
-    // TTY to answer the prompt, so the tool can only refuse). The cost:
-    // for the duration of a call the worker has the full access of the
-    // OS account this process runs as - Bash/Write/Edit are NOT scoped
-    // to workdir. The ProductionLine worktree protects the Client's
-    // real project files from modification (CONTRACT rule 1), but it
-    // provides no process-level containment - a worker could in
-    // principle reach the real checkout, the home directory, or the
-    // network. Accepted, documented v1 risk: tolerable only because
-    // runs are small and attended; real containment is separate
-    // follow-up work that must land before anything runs unattended.
+    // TTY to answer the prompt, so the tool can only refuse). This
+    // adapter always runs through src/containment/ (Docker), so the
+    // "full OS account access" cost this flag would otherwise carry is
+    // already contained to `workdir` - see this file's own "Process
+    // containment" section.
     "--permission-mode",
     "bypassPermissions",
   ];
@@ -148,8 +164,35 @@ function toTranscript(lines: ClaudeStreamLine[]): TranscriptEntry[] {
   return entries;
 }
 
+// workdir is a ProductionLine worktree, so git needs its real project's
+// shared .git mounted back in (read-only) to work at all inside the
+// container - see src/line/worktree-git.ts and this file's "Process
+// containment" section for why. The shared .git's own `config` is the
+// one file in it that can carry a credential (a remote URL can embed
+// one), so a sanitized throwaway copy forwarding only the [core]
+// section plus individually allowlisted, credential-free [extensions]
+// keys - an allowlist, not a denylist - is shadow-mounted over the
+// real one - status/log/diff still work, but no remote URL, embedded
+// credential, credential helper, or other config-borne credential
+// mechanism is readable inside the container. There is no no-git
+// fallback: a workdir the mounts can't be resolved for - no git
+// repository at all, a corrupted worktree, an unsanitizable config -
+// refuses the run with the LineError saying what to fix, rather than
+// running the Worker with git silently unavailable (a Worker needs
+// git constantly, so "no git, no signal" is a worse failure than an
+// upfront refusal with an obvious remedy).
+export function resolveGitMounts(workdir: string): { readOnlyMounts: ReadOnlyMount[]; sanitizedConfigDir: string } {
+  const commonGitDir = resolveCommonGitDir(workdir);
+  const sanitizedConfig = writeSanitizedGitConfig(commonGitDir);
+  return {
+    readOnlyMounts: [commonGitDir, { source: sanitizedConfig, target: join(commonGitDir, "config") }],
+    sanitizedConfigDir: dirname(sanitizedConfig),
+  };
+}
+
 export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
   const bin = opts.binPath ?? "claude";
+  const image = opts.image ?? DEFAULT_IMAGE;
 
   return {
     name: "claude-code",
@@ -158,29 +201,52 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions): Promise<BrainWorkResult> {
       const args = buildArgs(brief, opts, workOpts);
 
-      const { stdout, stderr, exitCode } = await new Promise<{
-        stdout: string;
-        stderr: string;
-        exitCode: number | null;
-      }>((resolve, reject) => {
-        const child = spawn(bin, args, { cwd: workdir });
-        child.stdin.end();
-        let stdout = "";
-        let stderr = "";
-        child.stdout.setEncoding("utf8");
-        child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk: string) => (stdout += chunk));
-        child.stderr.on("data", (chunk: string) => (stderr += chunk));
-        child.on("error", (err: NodeJS.ErrnoException) => {
-          reject(
-            new ClaudeCodeError(
-              "spawn-failed",
-              `could not run "${bin}" in ${workdir}: ${err.code ?? err.message}`
-            )
+      const { readOnlyMounts, sanitizedConfigDir } = resolveGitMounts(workdir);
+
+      // A sibling of workdir, named from workdir's own resolved path
+      // (the same realpath runContained mounts, so two spellings of one
+      // workdir - macOS's /tmp vs /private/tmp - share one session dir)
+      // rather than assumed to sit under some recordHome/tasks/<id>/
+      // layout, so this needs nothing beyond what work() already has.
+      // Persists this task's $HOME (session state under it, for a warm
+      // --resume) across every runContained call for this same task,
+      // without which a fresh --rm container each call would never find
+      // the last one's session (SPEC.md: a retry is a correction into
+      // the same session, never a cold restart) - see this file's
+      // "Process containment" section. resolveGitMounts above already
+      // proved workdir is a readable directory, so realpathSync here
+      // cannot fail.
+      const realWorkdir = realpathSync(workdir);
+      const sessionDir = `${realWorkdir}.fabrica-session`;
+      mkdirSync(sessionDir, { recursive: true });
+
+      let stdout: string;
+      let stderr: string;
+      let exitCode: number | null;
+      try {
+        // Network is deliberately allowed - not left open by accident -
+        // because the CLI has to reach its own API to do anything at
+        // all; workdir is what's actually confined, plus read-only git
+        // access to the real project's history via readOnlyMounts.
+        ({ stdout, stderr, exitCode } = await runContained(bin, args, {
+          workdir,
+          network: "allowed",
+          image,
+          env: opts.env,
+          readOnlyMounts,
+          homeDir: sessionDir,
+        }));
+      } catch (err) {
+        if (err instanceof ContainmentError) {
+          throw new ClaudeCodeError(
+            "spawn-failed",
+            `could not run "${bin}" contained (image ${image}) in ${workdir}: ${err.message}`
           );
-        });
-        child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
-      });
+        }
+        throw err;
+      } finally {
+        rmSync(sanitizedConfigDir, { recursive: true, force: true });
+      }
 
       const lines = parseLines(stdout);
       const result = [...lines].reverse().find((l) => l.type === "result");

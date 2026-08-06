@@ -161,6 +161,10 @@ what triggers each one and what to do about it.
 - **`teardown-failed`** - git's own `worktree remove` failed for a
   reason other than the safety checks above. Read the wrapped git error
   in the message.
+- **`not-a-worktree`** and **`unsanitizable-config`** - the two refusals
+  the git-under-containment helpers raise; see
+  `resolveCommonGitDir(workdir)` and `writeSanitizedGitConfig(commonGitDir)`
+  below for exactly what triggers each.
 
 ## Idempotent teardown
 
@@ -181,3 +185,66 @@ exists on disk but was never a registered worktree — the spoofed and
 tampered cases above — still throws `unsafe-teardown` exactly as before;
 only a path that legitimately once was this line and now isn't anywhere
 reads as "already destroyed."
+
+## `resolveCommonGitDir(workdir)`
+
+Finds the real project's shared `.git` — the object database, refs, and
+config every worktree of that project points back to — from a
+`ProductionLine` workdir alone, no `ProductionLine` object needed. Built
+for issue #44 (containment): `git worktree add` always leaves
+`<workdir>/.git` as a one-line pointer file, `gitdir: <project>/.git/
+worktrees/<taskId>` — a real, absolute host path outside `workdir`
+entirely. This function reads that pointer, then reads *its* own
+`commondir` file (a path relative to the worktree-internal directory) to
+resolve the actual shared `.git`, and returns it `realpathSync`'d.
+
+The reason this takes `workdir` alone, not a `ProductionLine`: it exists
+to be called from the reference CLI adapter's own `work(brief, workdir,
+opts)` (`src/brain/adapters/`), and `contract/surface.ts`'s `Brain`
+interface has no room to also pass `project` or `taskId` through —
+`workdir`'s own pointer file already names them, so nothing else is
+needed.
+
+Throws `LineError("not-a-worktree")` when `<workdir>/.git` isn't a
+worktree pointer file at all (a plain directory with no `.git`, or one
+that's already a real `.git` directory rather than a worktree's), and
+also when the pointer chain is broken - the pointer parses but the
+shared `.git` it ultimately names no longer exists on disk. The
+no-`.git` message is written as an instruction to the Client - Fabrica
+needs a git repository in the working directory, so initialize git
+there first - and callers are expected to let it surface rather than
+catch it and degrade: the reference CLI adapter deliberately has no
+no-git fallback, so a Worker never runs with git silently
+unavailable.
+
+What it's *for*: mounting the result read-only into a container lets
+git work at all inside one, without exposing write access to the
+Client's real repository — see `../containment/README.md`'s "Git under
+containment" for what that unlocks and why a commit attempt still fails
+(deliberately) even with this mounted in.
+
+## `writeSanitizedGitConfig(commonGitDir)`
+
+The companion to the mount above: the shared `.git`'s `config` is the
+one file in it that can carry a credential (a remote URL, an
+`extraheader` line, an `insteadOf` rewrite, a credential-helper
+setting), so the real config must never be visible inside a container.
+This writes a throwaway copy that forwards **only the `[core]` section
+and individually allowlisted, credential-free `[extensions]` keys**
+and drops every other section by default - an allowlist, so anything
+not explicitly forwarded is invisible by construction, rather than a
+denylist that fails open on the first unanticipated form; a
+`[core]`-only config is enough for an ordinary repo, since git refuses
+to detect a repository with no config at all but works normally with
+just `[core]`, while `[extensions]` keys are structural and their
+absence would make git misread the repo - into its own temp directory,
+and returns the copy's path for the caller to shadow-mount over the
+real config's path and delete after the call (the reference CLI
+adapter does both). Throws the same `LineError("not-a-worktree")` when
+the config can't be read at all, and
+`LineError("unsanitizable-config")` for any `[extensions]` content it
+can't prove credential-free, naming it - never silently dropped, never
+passed through. See `../containment/README.md`'s "Git under
+containment" for the exact key list, everything else that refuses the
+run, why `worktreeConfig` is deliberately excluded, and the known
+`partialClone` limitation.

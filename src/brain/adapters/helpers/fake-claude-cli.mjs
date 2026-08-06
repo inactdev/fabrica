@@ -8,6 +8,9 @@
 // flakiness of a real call. The real binary is proven separately in
 // claude-code.test.ts's real-binary test - this file is not that proof.
 
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 const args = process.argv.slice(2);
 const brief = args[args[0] === "-p" ? 1 : args.indexOf("-p") + 1];
 
@@ -63,6 +66,48 @@ switch (brief) {
   }
   case "SUCCESS_NO_RESULT_LINE": {
     line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
+    break;
+  }
+  case "TRY_READ_DECOY": {
+    // Attempts to read a path named by an env var, so
+    // claude-code.test.ts's containment-wiring test can prove the
+    // adapter really does confine THIS process end to end - containment
+    // is unconditional, so the read must fail no matter how work() is
+    // called, not just when the standalone runContained() primitive is
+    // exercised on its own.
+    let text;
+    try {
+      text = readFileSync(process.env.FABRICA_TEST_DECOY_PATH, "utf8");
+    } catch {
+      text = null;
+    }
+    line({
+      type: "assistant",
+      message: { content: [{ type: "text", text: text === null ? "READ_BLOCKED" : `READ_SUCCEEDED:${text}` }] },
+    });
+    line(resultLine({}));
+    break;
+  }
+  case "SESSION_MARKER": {
+    // Reports whatever a previous call already left under $HOME, then
+    // adds its own mark - so claude-code.test.ts's session-persistence
+    // test can prove a second work() call for the same task sees the
+    // first call's state, even though each call is its own fresh
+    // container with nothing else surviving between them.
+    const markerPath = join(process.env.HOME ?? "/", "marker.txt");
+    let seenBefore = "";
+    try {
+      seenBefore = readFileSync(markerPath, "utf8");
+    } catch {
+      // No prior marker - this is the first call for this $HOME.
+    }
+    writeFileSync(markerPath, `${seenBefore}call;`);
+    // Prefixed so this is never an empty string - toTranscript() drops
+    // an assistant "text" block whose text is falsy, which would
+    // otherwise make the very case with nothing to report disappear
+    // from the transcript entirely instead of asserting on it.
+    line({ type: "assistant", message: { content: [{ type: "text", text: `SEEN:${seenBefore}` }] } });
+    line(resultLine({}));
     break;
   }
   default: {

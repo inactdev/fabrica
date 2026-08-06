@@ -9,7 +9,9 @@ export type LineErrorCode =
   | "workdir-exists"
   | "cut-failed"
   | "unsafe-teardown"
-  | "teardown-failed";
+  | "teardown-failed"
+  | "not-a-worktree"
+  | "unsanitizable-config";
 
 export class LineError extends Error {
   readonly code: LineErrorCode;
