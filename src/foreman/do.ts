@@ -145,10 +145,11 @@ export async function doTask(
     // work there. Detection stays exactly as it was (`gate-changes.ts`
     // still forces this outcome, honestly, regardless of how good the
     // check looked); what moved is enforcement. `.github/workflows/
-    // rule9-gate.yml` blocks the merge by reading the pull request's own
-    // diff for a touched protected path (`check.sh`) - it needs nothing
-    // from Fabrica, so a bug in this detection or a Worker evading it
-    // can't also fool the thing policing it. See
+    // rule9-gate.yml` blocks the merge by asking the GitHub API which
+    // files the pull request changed and matching them against its
+    // protected paths (`check.sh`, plus the workflow directory itself) -
+    // it needs nothing from Fabrica, so a bug in this detection or a
+    // Worker evading it can't also fool the thing policing it. See
     // `src/foreman/README.md`'s "Rule 9: blocked by CI, not by Fabrica's
     // own mark" for the full reasoning, and issue #55 for the limitation
     // that this check exists only in Fabrica's own repository today.
