@@ -242,7 +242,14 @@ account for renames the same way the earlier git-diff version needed
 `--no-renames` for: the API reports a pure rename as one entry (the new
 filename plus `previous_filename`), so the step checks both, or a PR
 renaming `check.sh` away would evade detection exactly like the
-git-rename case did.
+git-rename case did. That listing is also capped at 3000 files by
+GitHub, however many pages are requested, and the truncation is silent -
+the dropped entries just never arrive, nothing matches, and the gate
+would report a pass on exactly the change it exists to block. So the
+step counts the entries it got and fails the job unless that count
+equals the pull request's own `changed_files`: an unreadable file list
+blocks the merge rather than waving it through, the same way an API
+error already did.
 
 **The check itself:** the job runs on every pull request, unconditionally
 - the path match happens inside the one step, not as a job-level `if`,

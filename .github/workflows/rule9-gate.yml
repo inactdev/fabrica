@@ -70,6 +70,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # The pull request's own count of changed files, straight from
+          # the event payload GitHub supplies - not from the branch, and
+          # not subject to the listing cap the step checks it against.
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
           # Matches what src/foreman/gate-changes.ts watches today (the
           # check.sh convention) plus this workflow directory itself, so
           # the enforcement protects its own definition too. A project
@@ -95,17 +99,40 @@ jobs:
           # rename check.sh away undetected - the same rename-evasion gap
           # this workflow's git-diff predecessor needed --no-renames for.
           # Emitting previous_filename too (when present) closes it here.
+          #
+          # One tab-separated LINE per entry, deliberately: the line count
+          # is then exactly the number of files GitHub listed, which the
+          # next block compares against the pull request's own
+          # changed_files. That endpoint returns at most 3000 files no
+          # matter how many pages are requested, and the truncation is
+          # silent - the dropped entries simply never appear, nothing
+          # matches, and this gate would report a pass on precisely the
+          # change it exists to block. An API error already fails the job
+          # (the default `bash -e` shell); a short list must too.
           touched=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
-            --jq '.[] | .filename, (.previous_filename // empty)')
+            --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv')
+
+          if [ -z "$touched" ]; then
+            listed=0
+          else
+            listed=$(printf '%s\n' "$touched" | wc -l | tr -d '[:space:]')
+          fi
+
+          if [ "$listed" != "$CHANGED_FILES" ]; then
+            echo "::error::Could not read this pull request's complete changed-file list: GitHub listed $listed file(s), but the pull request itself reports $CHANGED_FILES changed. The API caps that listing at 3000 files, so this pull request cannot be checked against the project's protected paths (CONTRACT rule 9). Failing closed rather than passing unchecked - split the pull request into smaller ones, or have the Client review it and deliberately override this check."
+            exit 1
+          fi
 
           while IFS= read -r pattern; do
             [ -n "$pattern" ] || continue
-            while IFS= read -r file; do
-              [ -n "$file" ] || continue
-              if [[ "$file" == $pattern ]]; then
-                echo "::error::This pull request touches \"$file\", one of the project's own protected checks (CONTRACT rule 9). Changing the thing that decides whether work passes needs the Client's eyes, declared or not. Only the Client may review this and deliberately override this check to merge it."
-                exit 1
-              fi
+            while IFS=$'\t' read -r file previous_file; do
+              for candidate in "$file" "$previous_file"; do
+                [ -n "$candidate" ] || continue
+                if [[ "$candidate" == $pattern ]]; then
+                  echo "::error::This pull request touches \"$candidate\", one of the project's own protected checks (CONTRACT rule 9). Changing the thing that decides whether work passes needs the Client's eyes, declared or not. Only the Client may review this and deliberately override this check to merge it."
+                  exit 1
+                fi
+              done
             done <<< "$touched"
           done <<< "$PROTECTED_PATHS"
           echo "No protected path touched."
