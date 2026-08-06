@@ -210,8 +210,9 @@ network allowed - enough to push to the Client's remote directly,
 sidestepping the read-only-commit enforcement below. So the real
 `config` is never visible inside the container:
 `src/line/worktree-git.ts`'s `writeSanitizedGitConfig` writes a
-throwaway copy that copies forward **only the `[core]` section** of the
-real config and drops every other section by default, and the caller
+throwaway copy that copies forward **only the `[core]` section and
+individually allowlisted `[extensions]` keys** of the real config and
+drops every other section by default, and the caller
 shadow-mounts that copy over the real config's path (a `{ source,
 target }` entry in `readOnlyMounts` - Docker layers a file mount over
 an already-mounted directory's sub-path correctly, verified live). A
@@ -235,6 +236,37 @@ pulling any of those in). Under the allowlist, anything not explicitly
 forwarded - those forms, and any future config-based credential
 mechanism nobody has thought of yet - is invisible by construction, not
 because it was individually identified and blocked.
+
+`[extensions]` gets one deliberate refinement rather than a blanket
+drop: its keys are structural (hash algorithm, ref storage backend,
+relative worktree paths), so a repo that declares them is misread
+outright by a git that can't see them - `status`/`log`/`diff` would
+fail or misbehave, breaking git-under-containment for exactly those
+repos. Each key documented by the installed git that is credential-free
+by construction (`compatObjectFormat`, `noop`, `noop-v1`,
+`objectFormat`, `partialClone`, `preciousObjects`, `refStorage`,
+`relativeWorktrees`, `submodulePathConfig`) is forwarded individually.
+Any other `[extensions]` key fails the run with a clear error naming it
+- never silently dropped (which would misread the repo), never passed
+through (a future key's value may not be credential-free:
+`refStorage` already accepts a URI payload, and git's manual
+anticipates backends like `postgres://` whose URI could carry a
+password). A URI-form `refStorage` value (`<format>://<payload>`) fails
+for the same reason - its payload names a host location the container
+can't see - while a bare format name (`files`, `reftable`) forwards
+normally. `worktreeConfig` is deliberately off the allowlist:
+forwarding it would make git honor an unsanitized `config.worktree`
+file inside the mount, reopening the exact config-borne credential
+channel this sanitizer closes.
+
+One known limitation this leaves: `extensions.partialClone` names a
+promisor remote, and `remote.*` is deliberately never forwarded - so in
+a partially-cloned repo, a contained git command that needs an object
+the partial clone omitted cannot fetch it, because the promisor remote
+isn't visible inside the container at all (a feature: no remote URL is,
+credential-bearing or not). Reads of already-present objects work
+normally; the
+gap only shows on objects the partial clone deliberately left out.
 
 Stated plainly, what a Worker can and cannot read from `.git` under
 this design: it **can** read commit history, reflogs, and dangling or

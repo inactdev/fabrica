@@ -222,13 +222,22 @@ The companion to the mount above: the shared `.git`'s `config` is the
 one file in it that can carry a credential (a remote URL, an
 `extraheader` line, an `insteadOf` rewrite, a credential-helper
 setting), so the real config must never be visible inside a container.
-This writes a throwaway copy that forwards **only the `[core]`
-section** and drops every other section by default - an allowlist, so
-anything not explicitly forwarded is invisible by construction, rather
-than a denylist that fails open on the first unanticipated form; a
-`[core]`-only config is enough, since git refuses to detect a
-repository with no config at all but works normally with just `[core]`
-- into its own temp directory, and returns the copy's path for the
-caller to shadow-mount over the real config's path and delete after
-the call (the reference CLI adapter does both). Throws the same
-`LineError("not-a-worktree")` when the config can't be read at all.
+This writes a throwaway copy that forwards **only the `[core]` section
+and individually allowlisted, credential-free `[extensions]` keys**
+and drops every other section by default - an allowlist, so anything
+not explicitly forwarded is invisible by construction, rather than a
+denylist that fails open on the first unanticipated form; a
+`[core]`-only config is enough for an ordinary repo, since git refuses
+to detect a repository with no config at all but works normally with
+just `[core]`, while `[extensions]` keys are structural and their
+absence would make git misread the repo - into its own temp directory,
+and returns the copy's path for the caller to shadow-mount over the
+real config's path and delete after the call (the reference CLI
+adapter does both). Throws the same `LineError("not-a-worktree")` when
+the config can't be read at all, and
+`LineError("unsanitizable-config")` for an `[extensions]` key off the
+allowlist (or a URI-form `refStorage` value), naming it - never
+silently dropped, never passed through. See
+`../containment/README.md`'s "Git under containment" for the exact key
+list, why `worktreeConfig` is deliberately excluded, and the known
+`partialClone` limitation.

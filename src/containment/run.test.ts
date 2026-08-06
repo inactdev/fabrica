@@ -250,6 +250,18 @@ test("runContained: resource caps are genuinely enforced, not just documented", 
   assert.equal(memory.exitCode, 0);
   assert.equal(memory.stdout.trim(), String(256 * 1024 * 1024), "the cgroup must reflect the requested memory cap");
 
+  const cpu = await runContained(
+    "sh",
+    [
+      "-c",
+      'cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo "$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us) $(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)"',
+    ],
+    { workdir, network: "denied", image: IMAGE, cpus: "1.5" }
+  );
+  assert.equal(cpu.exitCode, 0);
+  const [quota, period] = cpu.stdout.trim().split(/\s+/).map(Number);
+  assert.equal(quota / period, 1.5, "the cgroup must reflect the requested cpu cap");
+
   const forkBomb = await runContained(
     "sh",
     ["-c", "for i in $(seq 1 20); do sleep 5 & done; wait"],

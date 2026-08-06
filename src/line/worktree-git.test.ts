@@ -44,7 +44,7 @@ test("resolveCommonGitDir resolves a relative gitdir pointer against the workdir
   assert.equal(resolveCommonGitDir(workdir), realpathSync(projectGitDir));
 });
 
-test("writeSanitizedGitConfig copies forward only the [core] section - an allowlist, nothing else survives", () => {
+test("writeSanitizedGitConfig copies forward the [core] section and drops every non-allowlisted section", () => {
   const gitDir = makeFixtureHome();
   // Every config-based credential mechanism review has surfaced so far,
   // plus git's deprecated dotted section syntax - and one benign
@@ -87,6 +87,78 @@ test("writeSanitizedGitConfig copies forward only the [core] section - an allowl
   } finally {
     rmSync(dirname(sanitizedPath), { recursive: true, force: true });
   }
+});
+
+test("writeSanitizedGitConfig forwards allowlisted [extensions] keys, so the container's git reads the repo correctly", () => {
+  const gitDir = makeFixtureHome();
+  writeFileSync(
+    join(gitDir, "config"),
+    [
+      "[core]",
+      "\trepositoryformatversion = 1",
+      "[extensions]",
+      "\tobjectFormat = sha256",
+      "\trefStorage = reftable",
+      "\trelativeWorktrees = true",
+      '[remote "origin"]',
+      "\turl = https://x-token:FAKE_CREDENTIAL@example.invalid/repo.git",
+      "",
+    ].join("\n")
+  );
+
+  const sanitizedPath = writeSanitizedGitConfig(gitDir);
+  try {
+    const lines = readFileSync(sanitizedPath, "utf8")
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+    assert.deepEqual(
+      lines,
+      [
+        "[core]",
+        "\trepositoryformatversion = 1",
+        "[extensions]",
+        "\tobjectFormat = sha256",
+        "\trefStorage = reftable",
+        "\trelativeWorktrees = true",
+      ],
+      "structural extension keys must survive sanitization, and nothing else may"
+    );
+  } finally {
+    rmSync(dirname(sanitizedPath), { recursive: true, force: true });
+  }
+});
+
+test("writeSanitizedGitConfig refuses an [extensions] key not on its allowlist, naming it - never silently drops it", () => {
+  const gitDir = makeFixtureHome();
+  // worktreeConfig is a real, documented extension that is deliberately
+  // off the allowlist: forwarding it would make git honor an
+  // unsanitized config.worktree file inside the mount.
+  writeFileSync(
+    join(gitDir, "config"),
+    ["[core]", "\trepositoryformatversion = 1", "[extensions]", "\tworktreeConfig = true", ""].join("\n")
+  );
+
+  assert.throws(
+    () => writeSanitizedGitConfig(gitDir),
+    (err: unknown) =>
+      err instanceof LineError &&
+      err.code === "unsanitizable-config" &&
+      err.message.includes("extensions.worktreeConfig")
+  );
+});
+
+test("writeSanitizedGitConfig refuses a URI-form refStorage value, whose payload names a host location", () => {
+  const gitDir = makeFixtureHome();
+  writeFileSync(
+    join(gitDir, "config"),
+    ["[core]", "\trepositoryformatversion = 1", "[extensions]", "\trefStorage = reftable:///on/the/host", ""].join("\n")
+  );
+
+  assert.throws(
+    () => writeSanitizedGitConfig(gitDir),
+    (err: unknown) =>
+      err instanceof LineError && err.code === "unsanitizable-config" && err.message.includes("refStorage")
+  );
 });
 
 test("resolveCommonGitDir refuses a directory that isn't a git worktree", () => {

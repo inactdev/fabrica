@@ -7,7 +7,7 @@
 // real-binary test for the live proof and claude-code.md for what
 // each discovery means.
 
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
@@ -170,18 +170,20 @@ function toTranscript(lines: ClaudeStreamLine[]): TranscriptEntry[] {
 // containment" section for why. The shared .git's own `config` is the
 // one file in it that can carry a credential (a remote URL can embed
 // one), so a sanitized throwaway copy forwarding only the [core]
-// section - an allowlist, not a denylist - is shadow-mounted over the
+// section plus individually allowlisted, credential-free [extensions]
+// keys - an allowlist, not a denylist - is shadow-mounted over the
 // real one - status/log/diff still work, but no remote URL, embedded
 // credential, credential helper, or other config-borne credential
 // mechanism is readable inside the container. Falls back to no git
 // access only for LineError("not-a-worktree") - workdir isn't a
 // worktree at all (test fixtures that skip git entirely) - and
-// rethrows any other LineError (e.g. "not-a-repo" from a corrupted
-// shared .git), rather than silently running with no git access over a
-// failure this fallback was never meant to cover. `resolveGitDir` and
+// rethrows any other LineError (e.g. "unsanitizable-config" for an
+// [extensions] key the sanitizer refuses to forward or drop), rather
+// than silently running with no git access over a failure this
+// fallback was never meant to cover. `resolveGitDir` and
 // `sanitizeConfig` default to the real functions; claude-code.test.ts
-// overrides them to prove the rethrow, since neither real function has
-// a path to any other LineErrorCode today.
+// overrides them to prove the rethrow without needing a full worktree
+// fixture.
 export function resolveGitMounts(
   workdir: string,
   resolveGitDir: typeof resolveCommonGitDir = resolveCommonGitDir,
@@ -213,16 +215,25 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
 
       const { readOnlyMounts, sanitizedConfigDir } = resolveGitMounts(workdir);
 
-      // A sibling of workdir, named from workdir's own path rather than
-      // assumed to sit under some recordHome/tasks/<id>/ layout, so this
-      // needs nothing beyond what work() already has. Persists this
-      // task's $HOME (session state under it, for a warm --resume)
-      // across every runContained call for this same task, without
-      // which a fresh --rm container each call would never find the
-      // last one's session (SPEC.md: a retry is a correction into the
-      // same session, never a cold restart) - see this file's "Process
-      // containment" section.
-      const sessionDir = `${workdir}.fabrica-session`;
+      // A sibling of workdir, named from workdir's own resolved path
+      // (the same realpath runContained mounts, so two spellings of one
+      // workdir - macOS's /tmp vs /private/tmp - share one session dir)
+      // rather than assumed to sit under some recordHome/tasks/<id>/
+      // layout, so this needs nothing beyond what work() already has.
+      // Persists this task's $HOME (session state under it, for a warm
+      // --resume) across every runContained call for this same task,
+      // without which a fresh --rm container each call would never find
+      // the last one's session (SPEC.md: a retry is a correction into
+      // the same session, never a cold restart) - see this file's
+      // "Process containment" section. A workdir that doesn't resolve
+      // is left for runContained's own typed invalid-path refusal.
+      let realWorkdir: string;
+      try {
+        realWorkdir = realpathSync(workdir);
+      } catch {
+        realWorkdir = workdir;
+      }
+      const sessionDir = `${realWorkdir}.fabrica-session`;
       mkdirSync(sessionDir, { recursive: true });
 
       let stdout: string;

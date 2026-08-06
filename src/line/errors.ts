@@ -10,7 +10,8 @@ export type LineErrorCode =
   | "cut-failed"
   | "unsafe-teardown"
   | "teardown-failed"
-  | "not-a-worktree";
+  | "not-a-worktree"
+  | "unsanitizable-config";
 
 export class LineError extends Error {
   readonly code: LineErrorCode;

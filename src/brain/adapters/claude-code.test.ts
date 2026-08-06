@@ -189,11 +189,11 @@ test("claudeCodeAdapter throws ClaudeCodeError('cli-error') when the containeriz
 
 // The git-mount fallback (issue #44 review, finding "git-mount-swallows-
 // every-LineError") must only swallow LineError("not-a-worktree") - the
-// "workdir isn't a worktree at all" case - and rethrow everything else.
-// Neither resolveCommonGitDir nor writeSanitizedGitConfig has a real path
-// to any other LineErrorCode today (both only ever throw not-a-worktree),
-// so this proves the rethrow with injected stand-ins rather than a fixture
-// that can't yet exist for real - see resolveGitMounts's own comment.
+// "workdir isn't a worktree at all" case - and rethrow everything else,
+// e.g. writeSanitizedGitConfig's "unsanitizable-config" for an
+// [extensions] key it refuses to forward or drop. Injected stand-ins
+// prove the rethrow without needing a full worktree fixture - see
+// resolveGitMounts's own comment.
 test("resolveGitMounts swallows LineError('not-a-worktree') but rethrows any other LineError", () => {
   assert.deepEqual(
     resolveGitMounts("/irrelevant", () => {
