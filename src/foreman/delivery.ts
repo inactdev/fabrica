@@ -35,9 +35,10 @@ export function buildDelivery(
       ? "The project's check did not pass; see evidence for the failure output."
       : outcome === "discarded-protected-path"
         ? `The work is not discarded - it is committed on \`${ctx.branch}\` like any other outcome. ` +
-          "This repository's own CI blocks the merge by reading the pull request's diff for the " +
-          "touched protected path - nothing here does that blocking itself. Only the Client can " +
-          "review the undeclared change and override the check to merge it."
+          "The merge is meant to be blocked by a repository CI gate reading the pull request's diff " +
+          "for the touched protected path - today only Fabrica's own repository has one " +
+          "(https://github.com/inactdev/fabrica/issues/55 tracks giving every managed project its " +
+          "own). Only the Client can review the undeclared change and override that check to merge it."
         : "";
 
   return {
