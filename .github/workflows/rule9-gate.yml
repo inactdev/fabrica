@@ -58,7 +58,7 @@ jobs:
           PROTECTED_PATHS: "check.sh"
         run: |
           merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
-          touched=$(git diff --name-only "$merge_base" "$HEAD_SHA")
+          touched=$(git diff --no-renames --name-only "$merge_base" "$HEAD_SHA")
 
           for path in $PROTECTED_PATHS; do
             if grep -qxF "$path" <<< "$touched"; then
