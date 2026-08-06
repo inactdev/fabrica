@@ -143,6 +143,11 @@ undeclared gate change no longer skips it.
 - **`branch-unreadable`** - `diffFiles` couldn't diff the branch at all
   (most likely a fabricated or missing branch name); the message names
   the branch and project and carries git's own stderr.
+- **`workdir-unreadable`** - `baseCommitOf` couldn't read a workdir's
+  `HEAD`. Deliberately not `branch-unreadable`: no branch has been named
+  yet at that point, and a caller branching on the code has to be able
+  to tell "this workdir has no readable HEAD" from "the branch this
+  delivery names can't be diffed".
 
 ## Rule 9 and this module
 

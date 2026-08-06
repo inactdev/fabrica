@@ -29,8 +29,12 @@ export function baseCommitOf(workdir: string): string {
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   } catch (err) {
+    // Not "branch-unreadable": nothing has named a branch yet. This is a
+    // workdir with no readable HEAD, a different failure with a different
+    // cause, and a caller branching on the code has to be able to tell
+    // them apart.
     throw new DeliveryError(
-      "branch-unreadable",
+      "workdir-unreadable",
       `could not read the base commit of ${workdir}: ${describeGitError(err)}`
     );
   }

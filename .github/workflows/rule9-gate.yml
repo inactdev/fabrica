@@ -57,15 +57,22 @@ jobs:
           # check.sh convention only). A project registered with a custom
           # check command needs its own list here - see the "Known v1
           # limitation" note in src/foreman/README.md.
-          PROTECTED_PATHS: "check.sh"
+          #
+          # One path per line, read below with `read -r` rather than word-
+          # split: a path containing a space would otherwise split into two
+          # patterns that can never match a real path, and this gate would
+          # pass silently on exactly the change it exists to block.
+          PROTECTED_PATHS: |
+            check.sh
         run: |
           merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           touched=$(git diff --no-renames --name-only "$merge_base" "$HEAD_SHA")
 
-          for path in $PROTECTED_PATHS; do
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
             if grep -qxF "$path" <<< "$touched"; then
               echo "::error::This pull request touches \"$path\", one of the project's own protected checks (CONTRACT rule 9). Changing the thing that decides whether work passes needs the Client's eyes, declared or not. Only the Client may review this and deliberately override this check to merge it."
               exit 1
             fi
-          done
+          done <<< "$PROTECTED_PATHS"
           echo "No protected path touched."
