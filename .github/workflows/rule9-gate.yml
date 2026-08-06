@@ -9,6 +9,13 @@
 # enforces that once this workflow's job is marked a required status check
 # in the repository's branch protection settings, a manual setting this
 # file cannot turn on for you.
+#
+# The job below deliberately has no job-level `if`. A job an `if` skips
+# reports a "skipped" conclusion, and whether GitHub treats "skipped" as
+# passing for a *required* status check is a known trap, not a documented
+# guarantee. So the job always runs on every pull_request, and the branch
+# name is decided inside the one step instead — every run reports a real
+# pass or fail, never a skip.
 name: rule9-gate
 
 on:
@@ -19,15 +26,17 @@ on:
 
 jobs:
   block-undeclared-gate-change:
-    # push is already filtered to fabrica/discarded/** above; pull_request
-    # has no branches filter (a PR's *base* branch could be anything), so
-    # this condition does the real matching there, against the PR's own
-    # head branch. github.head_ref is only set for pull_request events, so
-    # it's tried first and falls back to github.ref_name for push.
-    if: startsWith(github.head_ref || github.ref_name, 'fabrica/discarded/')
     runs-on: ubuntu-latest
     steps:
       - name: Block merge — undeclared gate change (CONTRACT rule 9)
+        env:
+          # github.head_ref is only set for pull_request events; push is
+          # already filtered to fabrica/discarded/** by the trigger above,
+          # so github.ref_name covers that case.
+          BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          echo "::error::This branch's work touched the project's own checks (CONTRACT rule 9) without declaring the change. Fabrica renamed it to ${{ github.head_ref || github.ref_name }} instead of merging it silently — the work is not lost, it is committed right here. Only the Client may review it and deliberately override this check to merge it."
-          exit 1
+          if [[ "$BRANCH" == fabrica/discarded/* ]]; then
+            echo "::error::This branch's work touched the project's own checks (CONTRACT rule 9) without declaring the change. Fabrica renamed it to $BRANCH instead of merging it silently — the work is not lost, it is committed right here. Only the Client may review it and deliberately override this check to merge it."
+            exit 1
+          fi
+          echo "No rule 9 violation - branch is $BRANCH."

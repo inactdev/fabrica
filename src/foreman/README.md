@@ -213,13 +213,18 @@ both ways — writing it by construction (Fabrica renames the branch
 itself, unconditionally, on this one outcome) and never needing it
 un-written again.
 
-**The check itself:** `.github/workflows/rule9-gate.yml` runs on any
-push or pull request whose branch matches `fabrica/discarded/*` and
+**The check itself:** `.github/workflows/rule9-gate.yml` runs its one
+job on every pull request, unconditionally - the branch-name match
+happens inside the step, not as a job-level `if`, because a skipped job
+reports a "skipped" conclusion and whether GitHub treats that as passing
+a *required* status check is a known trap, not a documented guarantee.
+So every run reports a real pass or fail: a `fabrica/discarded/*` branch
 fails on purpose, with a message stating plainly that the work touched
 its own gate without declaring it and that only the Client may review
-and override. Branch protection is what makes a failing check actually
-block a merge — that's a GitHub repository setting, not something this
-code can turn on for you; see the workflow file's own header comment.
+and override; any other branch passes. Branch protection is what makes
+a failing check actually block a merge — that's a GitHub repository
+setting, not something this code can turn on for you; see the workflow
+file's own header comment.
 
 **Known v1 limitation:** SPEC.md's `fabrica do` never pushes anything to
 a remote on its own, so this CI check only ever runs once something
