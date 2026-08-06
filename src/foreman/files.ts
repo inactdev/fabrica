@@ -11,10 +11,14 @@ import { execFileSync } from "node:child_process";
 export function listTouchedFiles(workdir: string): string[] {
   // -z gives NUL-separated, never-quoted paths — without it, git C-quotes
   // paths with quotes, backslashes, or (by default) non-ASCII bytes.
+  // Node's default maxBuffer (1 MiB) is too small to trust for git output
+  // that scales with the changeset — an ENOBUFS here would abort delivery
+  // before the pre-teardown commit, losing the very work it exists to keep.
   const raw = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], {
     cwd: workdir,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 100 * 1024 * 1024,
   });
 
   const files: string[] = [];

@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import { appendEvent, appendTaskFile, registerTask, writeTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
-import { ForemanError } from "./errors.ts";
+import { ForemanError, describeGitError } from "./errors.ts";
 import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
 import { resolveCheckCommand } from "./resolve-check.ts";
 import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
@@ -170,10 +170,18 @@ export async function doTask(
     let branch = line.branch;
     if (outcome === "discarded-protected-path") {
       branch = `fabrica/discarded/${taskId}`;
-      execFileSync("git", ["branch", "-m", line.branch, branch], {
-        cwd: line.project,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      try {
+        execFileSync("git", ["branch", "-m", line.branch, branch], {
+          cwd: line.project,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (err) {
+        throw new ForemanError(
+          "branch-rename-failed",
+          `could not rename branch "${line.branch}" to "${branch}" in ${line.project} ` +
+            `(the Worker's commits are preserved on "${line.branch}"): ${describeGitError(err)}`
+        );
+      }
       line.branch = branch;
     }
 

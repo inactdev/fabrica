@@ -7,32 +7,40 @@
 // workaround.
 
 import { execFileSync } from "node:child_process";
+import { ForemanError, describeGitError } from "./errors.ts";
 
 export function commitWorktreeChanges(workdir: string, message: string): void {
-  execFileSync("git", ["add", "-A"], { cwd: workdir, stdio: ["ignore", "pipe", "pipe"] });
-  // -c user.*: a throwaway worktree has no reason to inherit (or require)
-  // the Client's own git identity — every commit here is machine-made.
-  // -c commit.gpgsign=false and --no-verify: same reasoning, applied to the
-  // Client's signing config and the project's own commit hooks. A hook that
-  // expects installed dependencies (routinely absent in a fresh worktree),
-  // or signing that wants a key this machine-made commit has no claim to,
-  // would make this commit throw — and a throw here means the finally-block
-  // teardown force-removes the worktree with the work still uncommitted,
-  // the exact loss this commit exists to prevent.
-  execFileSync(
-    "git",
-    [
-      "-c",
-      "user.name=Fabrica",
-      "-c",
-      "user.email=fabrica@local",
-      "-c",
-      "commit.gpgsign=false",
-      "commit",
-      "--no-verify",
-      "-qm",
-      message,
-    ],
-    { cwd: workdir, stdio: ["ignore", "pipe", "pipe"] }
-  );
+  try {
+    execFileSync("git", ["add", "-A"], { cwd: workdir, stdio: ["ignore", "pipe", "pipe"] });
+    // -c user.*: a throwaway worktree has no reason to inherit (or require)
+    // the Client's own git identity — every commit here is machine-made.
+    // -c commit.gpgsign=false and --no-verify: same reasoning, applied to the
+    // Client's signing config and the project's own commit hooks. A hook that
+    // expects installed dependencies (routinely absent in a fresh worktree),
+    // or signing that wants a key this machine-made commit has no claim to,
+    // would make this commit throw — and a throw here means the finally-block
+    // teardown force-removes the worktree with the work still uncommitted,
+    // the exact loss this commit exists to prevent.
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fabrica",
+        "-c",
+        "user.email=fabrica@local",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--no-verify",
+        "-qm",
+        message,
+      ],
+      { cwd: workdir, stdio: ["ignore", "pipe", "pipe"] }
+    );
+  } catch (err) {
+    throw new ForemanError(
+      "commit-failed",
+      `could not commit the Worker's changes in ${workdir}: ${describeGitError(err)}`
+    );
+  }
 }
