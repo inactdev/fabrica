@@ -21,7 +21,10 @@ export function snapshotGate(workdir: string): string {
 /** True if check.sh's content differs from `before` — regardless of
  * whether a brain declared the change. Deciding whether that's allowed is
  * the caller's job (rule 9): declared changes are fine, undeclared ones
- * are discarded, "no matter how good the result looks." */
+ * force the discarded-protected-path outcome, "no matter how good the
+ * result looks" — recorded honestly, work kept on the branch; the merge
+ * is blocked by CI, not here (README.md "Rule 9: blocked by CI, not by
+ * Fabrica's own mark"). */
 export function gateWasTouched(workdir: string, before: string): boolean {
   if (!existsSync(checkScriptPath(workdir))) return true;
   return readFileSync(checkScriptPath(workdir), "utf8") !== before;

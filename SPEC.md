@@ -187,6 +187,8 @@ legal cap, not an absent one.
     gaps:       what was not done, or remains confusing
     branch:     fabrica/<id> in <project path>
     files:      files touched
+    gateChanges: declared gate changes (Contract 9), empty when the
+                gate was left alone
 
 A delivery missing any field must not be presented.
 
