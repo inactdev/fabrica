@@ -1,19 +1,38 @@
-# CONTRACT rule 9's CI-visible gate. Reads the pull request's OWN diff for
-# a touched protected path, rather than trusting any mark Fabrica itself
-# writes about the violation. Fabrica's own detection (gate-changes.ts)
-# stays in place and still records the outcome honestly in the delivery -
-# but that is detection, not enforcement. If it were CI's signal, a bug in
-# that detection, or a Worker that evades it, would leave CI looking at an
-# ordinary-looking PR and waving it through: the thing being policed would
-# be writing its own accusation. Diffing the PR needs nothing from
-# Fabrica, so it works the same way for a human contributor's PR as for a
-# Worker's, and can't be defeated by Fabrica misbehaving.
+# CONTRACT rule 9's CI-visible gate. Reads the pull request's changed-file
+# list via the GitHub API for a touched protected path, rather than
+# trusting any mark Fabrica itself writes about the violation. Fabrica's
+# own detection (gate-changes.ts) stays in place and still records the
+# outcome honestly in the delivery - but that is detection, not
+# enforcement. Diffing the PR needs nothing from Fabrica, so it works the
+# same way for a human contributor's PR as for a Worker's, and can't be
+# defeated by Fabrica misbehaving.
 #
 # This blocks a DECLARED gate change too, not only an undeclared one - a
 # change to the thing that decides whether work passes deserves the
 # Client's eyes every time, declared or not. Fabrica's own delivery record
 # still tells the two apart for the Client's benefit; this check does not
 # need to.
+#
+# SAFETY-CRITICAL - read before editing this file:
+#
+# This job runs on `pull_request_target`, not `pull_request`, so GitHub
+# reads this workflow's DEFINITION from the base branch (master), never
+# from the pull request's head. A pull request can edit this file all it
+# likes; the version that actually runs is still the one already on
+# master, unaffected. `.github/workflows/**` is itself in PROTECTED_PATHS
+# below, so an attempted edit to this file (or any other workflow) is
+# exactly the kind of change that blocks the merge - the enforcement now
+# protects its own definition the same way it protects check.sh.
+#
+# `pull_request_target` runs with elevated permissions and access to
+# secrets, which is the standard, well-known disaster waiting to happen
+# the moment a workflow checks out and executes code from the pull
+# request it's supposed to be policing. THIS JOB MUST NEVER DO THAT. It
+# only asks GitHub's API which files a PR changed and compares names - no
+# `actions/checkout`, no running anything from the branch, ever. If you
+# are reading this because you want to add a checkout step: stop. That is
+# exactly the vulnerability class `pull_request_target` is known for, and
+# it would turn this gate into the thing it exists to prevent.
 #
 # A failing check here does not, by itself, block a merge — GitHub only
 # enforces that once this workflow's job is marked a required status check
@@ -23,7 +42,7 @@
 # The job below deliberately has no job-level `if`. A job an `if` skips
 # reports a "skipped" conclusion, and whether GitHub treats "skipped" as
 # passing for a *required* status check is a known trap, not a documented
-# guarantee. So the job always runs on every pull_request; the diff
+# guarantee. So the job always runs on every pull request; the path
 # inspection happens inside the one step instead — every run reports a
 # real pass or fail, never a skip.
 #
@@ -31,53 +50,62 @@
 # exists only in Fabrica's own repository. Every other project Fabrica
 # manages currently has no gate at all - closing that is issue #55's job,
 # not this file's.
+#
+# Keep the job name `block-protected-path-change` exactly as it is - that
+# string gets wired into the repository's required-status-check settings,
+# and a rename silently breaks the protection.
 name: rule9-gate
 
 on:
-  pull_request:
+  pull_request_target:
 
 jobs:
   block-protected-path-change:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # A shallow clone has no merge-base to diff against. fetch-depth: 0
-          # pulls full history so the comparison below is against the
-          # pull request's real base, not a guess.
-          fetch-depth: 0
-
       - name: Block merge — protected path touched (CONTRACT rule 9)
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           # Matches what src/foreman/gate-changes.ts watches today (the
-          # check.sh convention only). A project registered with a custom
-          # check command needs its own list here - see the "Known v1
-          # limitation" note in src/foreman/README.md.
-          #
-          # One path per line, read below with `read -r` rather than word-
-          # split: a path containing a space would otherwise split into two
-          # patterns that can never match a real path, and this gate would
-          # pass silently on exactly the change it exists to block.
+          # check.sh convention) plus this workflow directory itself, so
+          # the enforcement protects its own definition too. A project
+          # registered with a custom check command needs its own entry
+          # here - see the "Known v1 limitation" note in
+          # src/foreman/README.md. One pattern per line, read with
+          # `read -r` rather than word-split: a pattern containing a
+          # space would otherwise split into two patterns that can never
+          # match a real path, and this gate would pass silently on
+          # exactly the change it exists to block. `*` matches any
+          # characters, `/` included, in bash's `[[ ]]` pattern matching.
           PROTECTED_PATHS: |
             check.sh
+            .github/workflows/**
         run: |
-          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
-          # --no-renames: with git's rename detection on, moving check.sh
-          # to another path is reported as the NEW path only, so the
-          # protected path never appears in the list and this gate waves
-          # through exactly the change it exists to block. Off, the move is
-          # reported as a delete of check.sh plus an add.
-          touched=$(git diff --no-renames --name-only "$merge_base" "$HEAD_SHA")
+          # The API listing needs no checkout at all - GitHub supplies the
+          # file list directly from the pull request, which is also the
+          # only source that's safe to trust when the workflow definition
+          # itself must not depend on anything the PR controls.
+          #
+          # A pure rename reports as ONE entry: the new filename, plus
+          # previous_filename. Emitting only .filename would let a PR
+          # rename check.sh away undetected - the same rename-evasion gap
+          # this workflow's git-diff predecessor needed --no-renames for.
+          # Emitting previous_filename too (when present) closes it here.
+          touched=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | .filename, (.previous_filename // empty)')
 
-          while IFS= read -r path; do
-            [ -n "$path" ] || continue
-            if grep -qxF "$path" <<< "$touched"; then
-              echo "::error::This pull request touches \"$path\", one of the project's own protected checks (CONTRACT rule 9). Changing the thing that decides whether work passes needs the Client's eyes, declared or not. Only the Client may review this and deliberately override this check to merge it."
-              exit 1
-            fi
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            while IFS= read -r file; do
+              [ -n "$file" ] || continue
+              if [[ "$file" == $pattern ]]; then
+                echo "::error::This pull request touches \"$file\", one of the project's own protected checks (CONTRACT rule 9). Changing the thing that decides whether work passes needs the Client's eyes, declared or not. Only the Client may review this and deliberately override this check to merge it."
+                exit 1
+              fi
+            done <<< "$touched"
           done <<< "$PROTECTED_PATHS"
           echo "No protected path touched."

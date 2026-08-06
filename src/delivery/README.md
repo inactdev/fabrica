@@ -169,6 +169,6 @@ entirely and onto the repository's own CI: the work commits onto the
 ordinary branch like any other outcome, and `diffFiles(project, branch,
 base)` reports its real diff like any other outcome. Nothing here marks
 the branch or the delivery for enforcement; `.github/workflows/
-rule9-gate.yml` blocks the merge by reading the pull request's diff for
-a touched protected path, independent of anything this module or `do.ts`
+rule9-gate.yml` blocks the merge by querying the GitHub API for a
+touched protected path, independent of anything this module or `do.ts`
 produces. This module has no special case for it left to document.

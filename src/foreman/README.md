@@ -204,12 +204,12 @@ the receipt (rule 5's total-recall concern, separate from enforcement).
 What changed is that detection no longer drives enforcement at all.
 
 **Enforcement lives outside Fabrica, in `.github/workflows/
-rule9-gate.yml`.** It reads the pull request's own diff — comparing
-against the PR's real merge-base, fetched with full history rather than
-guessed from a shallow clone — for whether it touches a protected path
-(`check.sh` today, the same file `gate-changes.ts` watches; the list is
-one `PROTECTED_PATHS` value in the workflow file, easy to extend for a
-project with a different check convention). This needs nothing from
+rule9-gate.yml`.** It queries the GitHub API for the pull request's
+changed-file list - never a checkout, never `git diff` - for whether it
+touches a protected path (`check.sh` today, the same file
+`gate-changes.ts` watches, plus `.github/workflows/**` itself; the list
+is one `PROTECTED_PATHS` value in the workflow file, easy to extend for
+a project with a different check convention). This needs nothing from
 Fabrica: not `delivery.outcome`, not a branch name, not any record file.
 It works identically for a human contributor's PR and for a Worker's,
 and a bug or an evasion in Fabrica's own detection can't also blind the
@@ -219,16 +219,47 @@ whether work passes deserves the Client's eyes every time; Fabrica's own
 delivery record still tells the two apart for the Client's benefit
 (`gateChanges`), the CI check does not need to.
 
+**Protecting its own definition.** An earlier version of this workflow
+ran on plain `pull_request`, which has a sharp edge review caught twice:
+GitHub reads a `pull_request` workflow's *definition* from the PR's own
+head, so a PR could edit `check.sh` and rewrite `rule9-gate.yml` in the
+same commit, and the rewritten (neutered) gate is what actually ran -
+the thing being policed supplying its own enforcement code, the exact
+failure mode branch-renaming was overturned for one design earlier.
+Client ruling: the trigger is `pull_request_target` instead, which reads
+the workflow's definition from the base branch (`master`) regardless of
+what the PR contains, and `.github/workflows/**` is itself in
+`PROTECTED_PATHS`, so an edit to this file is exactly the kind of change
+that now blocks the merge. `pull_request_target` is dangerous in general
+- it runs with the base branch's elevated permissions and secret access,
+and the standard disaster is a workflow that then checks out and
+executes the PR's own code with that access. This job never does: it
+only asks the API which files changed and compares names, no
+`actions/checkout`, no execution of anything from the branch, ever - see
+the workflow file's own header comment, which says so loudly on purpose
+for whoever edits this file next. The changed-file listing also has to
+account for renames the same way the earlier git-diff version needed
+`--no-renames` for: the API reports a pure rename as one entry (the new
+filename plus `previous_filename`), so the step checks both, or a PR
+renaming `check.sh` away would evade detection exactly like the
+git-rename case did.
+
 **The check itself:** the job runs on every pull request, unconditionally
 - the path match happens inside the one step, not as a job-level `if`,
 because a skipped job reports a "skipped" conclusion and whether GitHub
 treats that as passing a *required* status check is a known trap, not a
 documented guarantee. So every run reports a real pass or fail: a PR
-touching `check.sh` fails on purpose, naming the file and stating
-plainly that only the Client may review and override; any other PR
-passes. Branch protection is what makes a failing check actually block a
-merge — that's a GitHub repository setting, not something this code can
-turn on for you; see the workflow file's own header comment.
+touching `check.sh` (or `.github/workflows/**`) fails on purpose, naming
+the file and stating plainly that only the Client may review and
+override; any other PR passes. The job's `permissions:` are scoped to
+`pull-requests: read` only, the minimum the API call needs, rather than
+inheriting the default token scope. The job name stays
+`block-protected-path-change` regardless of any other change to this
+file - that exact string is what gets wired into the repository's
+required-status-check settings, and a rename silently breaks the
+protection. Branch protection is what makes a failing check actually
+block a merge — that's a GitHub repository setting, not something this
+code can turn on for you; see the workflow file's own header comment.
 
 **Known v1 limitations, two of them:** this workflow lives only in this
 repository's own `.github/workflows/` — a project Fabrica manages
