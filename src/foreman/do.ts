@@ -5,11 +5,10 @@
 // leans on (why check.sh, why attempts behaves the way it does, why the
 // promise doesn't resolve early).
 
-import { execFileSync } from "node:child_process";
 import { appendEvent, appendTaskFile, registerTask, writeTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
-import { ForemanError, describeGitError } from "./errors.ts";
+import { ForemanError } from "./errors.ts";
 import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
 import { resolveCheckCommand } from "./resolve-check.ts";
 import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
@@ -138,59 +137,27 @@ export async function doTask(
     }
 
     // CONTRACT rule 9 (Client ruling, superseding the original
-    // force-reset-and-patch design): an undeclared gate change is never
-    // force-reset or thrown away any more. That design needed
-    // discarded.patch as an escape hatch purely to avoid losing good work
-    // by accident when the reset erased a Worker's own commits along with
-    // the tampering — two mechanisms in service of a problem that doesn't
-    // exist if nothing is ever erased in the first place. Instead the
-    // work stays committed on the branch like any other outcome (the
-    // uniform commit above already did that), and the branch itself
-    // carries the CI-visible signal: renamed from `fabrica/<taskId>` to
-    // `fabrica/discarded/<taskId>` so a mergeable branch and a blocked one
-    // are never spelled the same way.
-    //
-    // A branch name is the signal, not a file in the tree, because a file
-    // would still be sitting in the diff a Client might merge — something
-    // that has to be remembered and stripped out before merging clean.
-    // The branch name needs no such remembering: it never becomes part of
-    // any commit's content, so merging the branch's commits into another
-    // branch carries no residue at all. `.github/workflows/rule9-gate.yml`
-    // fails a check on any push or pull request whose branch matches
-    // `fabrica/discarded/*`, with a message explaining why and that only
-    // the Client may override it — CI can't see `~/.fabrica`'s
-    // `delivery.outcome`, so the branch name is the one signal a GitHub
-    // Actions workflow in this repo can actually read.
-    //
-    // Renaming rather than moving the branch, and doing it after the
-    // commit above (not instead of it), means a Worker's own commits
-    // (full git access inside the worktree, so it could commit tampered
-    // work itself) travel with the rename — nothing is left behind on the
-    // old name for `git branch -m` to leave dangling.
-    let branch = line.branch;
-    if (outcome === "discarded-protected-path") {
-      branch = `fabrica/discarded/${taskId}`;
-      try {
-        execFileSync("git", ["branch", "-m", line.branch, branch], {
-          cwd: line.project,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      } catch (err) {
-        throw new ForemanError(
-          "branch-rename-failed",
-          `could not rename branch "${line.branch}" to "${branch}" in ${line.project} ` +
-            `(the Worker's commits are preserved on "${line.branch}"): ${describeGitError(err)}`
-        );
-      }
-      line.branch = branch;
-    }
-
+    // force-reset-and-patch design, and then again superseding a
+    // branch-rename design): an undeclared gate change is never force-
+    // reset, thrown away, or specially marked on the branch any more. The
+    // branch stays `fabrica/<taskId>` for every outcome, discarded-
+    // protected-path included - the uniform commit above already put the
+    // work there. Detection stays exactly as it was (`gate-changes.ts`
+    // still forces this outcome, honestly, regardless of how good the
+    // check looked); what moved is enforcement. `.github/workflows/
+    // rule9-gate.yml` blocks the merge by reading the pull request's own
+    // diff for a touched protected path (`check.sh`) - it needs nothing
+    // from Fabrica, so a bug in this detection or a Worker evading it
+    // can't also fool the thing policing it. See
+    // `src/foreman/README.md`'s "Rule 9: blocked by CI, not by Fabrica's
+    // own mark" for the full reasoning, and issue #55 for the limitation
+    // that this check exists only in Fabrica's own repository today.
     const delivery = buildDelivery(outcome, {
       taskText,
       attempts: receipts.length,
       lastGate,
-      branch,
-      files: diffFiles(line.project, branch, baseCommit),
+      branch: line.branch,
+      files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
     });
 

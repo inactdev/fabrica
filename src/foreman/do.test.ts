@@ -174,7 +174,7 @@ test("doTask rejects when no brain is provided", async () => {
   );
 });
 
-test("doTask on an undeclared gate change renames the branch instead of discarding the work", async () => {
+test("doTask on an undeclared gate change keeps the work on the ordinary branch, it does not discard it", async () => {
   const project = makeFixtureRepo("exit 1");
   const recordHome = freshHome();
   const brain = fakeBrain({
@@ -188,27 +188,19 @@ test("doTask on an undeclared gate change renames the branch instead of discardi
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "discarded-protected-path");
-  const blockedBranch = `fabrica/discarded/${task.id}`;
-  assert.equal(delivery?.branch, blockedBranch, "delivery.branch must point at the renamed branch");
+  const branch = `fabrica/${task.id}`;
+  assert.equal(delivery?.branch, branch, "delivery.branch must stay the ordinary branch");
   assert.deepEqual(
     delivery?.files,
     ["check.sh", "feature.txt"],
     "the work must land on the branch, not come back empty"
   );
 
-  const content = execSync(`git show ${blockedBranch}:feature.txt`, { cwd: project, encoding: "utf8" });
+  const content = execSync(`git show ${branch}:feature.txt`, { cwd: project, encoding: "utf8" });
   assert.equal(content, "possibly good work\n", "the branch must carry the worker's real content");
-
-  let originalStillExists = true;
-  try {
-    execSync(`git rev-parse --verify fabrica/${task.id}`, { cwd: project, stdio: "ignore" });
-  } catch {
-    originalStillExists = false;
-  }
-  assert.equal(originalStillExists, false, "fabrica/<taskId> must be renamed away, not left behind");
 });
 
-test("doTask renames the branch on an undeclared gate change even when the worker commits it itself", async () => {
+test("doTask keeps the work on the ordinary branch on an undeclared gate change even when the worker commits it itself", async () => {
   const project = makeFixtureRepo("exit 1");
   const recordHome = freshHome();
   const brain = fakeBrain({
@@ -226,15 +218,15 @@ test("doTask renames the branch on an undeclared gate change even when the worke
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "discarded-protected-path");
-  const blockedBranch = `fabrica/discarded/${task.id}`;
-  assert.equal(delivery?.branch, blockedBranch, "delivery.branch must point at the renamed branch");
+  const branch = `fabrica/${task.id}`;
+  assert.equal(delivery?.branch, branch, "delivery.branch must stay the ordinary branch");
   assert.deepEqual(
     delivery?.files,
     ["check.sh", "feature.txt"],
-    "the worker's own commit must still show up on the renamed branch, not vanish"
+    "the worker's own commit must still show up on the branch, not vanish"
   );
 
-  const content = execSync(`git show ${blockedBranch}:feature.txt`, { cwd: project, encoding: "utf8" });
+  const content = execSync(`git show ${branch}:feature.txt`, { cwd: project, encoding: "utf8" });
   assert.equal(content, "committed by the worker\n", "the branch must carry the worker's real content");
 });
 

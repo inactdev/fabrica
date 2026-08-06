@@ -57,8 +57,8 @@ return early" below.
 5. **Checks for an undeclared gate change** (`gate-changes.ts`) — CONTRACT
    rule 9. If the check script changed and nothing declared it, the
    outcome is forced to `discarded-protected-path` regardless of whether
-   the check went green - blocked from merging, not thrown away (see
-   "Rule 9: blocked, not discarded" below).
+   the check went green - recorded honestly, not thrown away (see "Rule
+   9: blocked by CI, not by Fabrica's own mark" below).
 6. **Commits, builds, and validates the delivery**: any changes still
    sitting uncommitted in the worktree are committed onto the
    ProductionLine's branch (`commit.ts`) before that worktree is
@@ -66,16 +66,11 @@ return early" below.
    decision" for why. This runs for every outcome uniformly, including
    `discarded-protected-path` - a rule 9 violation is no longer force-
    reset or thrown away (Client ruling, superseding the original
-   design): the work stays committed like any other outcome, and the
-   branch is renamed from `fabrica/<taskId>` to
-   `fabrica/discarded/<taskId>` so the branch name itself carries the
-   signal a `.github/workflows/rule9-gate.yml` check can read - CI can't
-   see `~/.fabrica`'s `delivery.outcome`, only the repository it runs in.
-   The rename happens after the commit, not instead of it, so a Worker's
-   own commits (full git access inside the worktree, so it could commit
-   tampered work itself) travel with the rename rather than being left
-   on the old branch name. See "Rule 9: blocked, not discarded" below for
-   the full reasoning and why a branch rename beats a file in the tree.
+   design): the work stays committed on the ordinary `fabrica/<taskId>`
+   branch, exactly like any other outcome. Fabrica does not mark the
+   branch, rename it, or otherwise flag it for CI - see "Rule 9: blocked
+   by CI, not by Fabrica's own mark" below for why that mark was tried
+   and then deliberately removed.
    `delivery.ts` builds the `Delivery` object from the branch's own diff
    (pinned to the commit the line was cut from, via `src/delivery`'s
    `baseCommitOf`), and `src/delivery`'s `validateDelivery` (CONTRACT
@@ -180,60 +175,68 @@ not a silent one — closing it needs a way for a registered project to
 say which paths are its "ratified tests and check settings," which
 doesn't exist yet.
 
-## Rule 9: blocked, not discarded
+## Rule 9: blocked by CI, not by Fabrica's own mark
 
-An earlier version of this design force-reset the branch back to its
-fork point and saved the discarded work as a patch in the record
-(`discarded.patch`), so nothing tampered ever reached a mergeable
-branch. The Client overturned that: "keeping something mergeable around
-is fine as long as it doesn't get merged" — a CI check that blocks the
-merge is simpler, and the Client is the one person who can tell a
-declaration mistake from actual cheating, so he should get to look at
-the real work and decide, not read a patch file reconstructed from it.
+Two earlier designs here, both superseded by Client rulings. First, an
+undeclared gate change force-reset the branch back to its fork point and
+saved the discarded work as a patch in the record (`discarded.patch`),
+so nothing tampered ever reached a mergeable branch — overturned because
+"keeping something mergeable around is fine as long as it doesn't get
+merged," and the Client is the one person who can tell a declaration
+mistake from actual cheating, so he should get to look at the real work
+and decide, not read a patch file reconstructed from it. Second, the
+branch was left mergeable but renamed from `fabrica/<taskId>` to
+`fabrica/discarded/<taskId>`, so a CI workflow could find and block it by
+name — overturned in turn, for a sharper reason: that design still had
+Fabrica marking its own violation, and CI trusting the mark. A bug in
+`gate-changes.ts`, or a Worker clever enough to evade its detection,
+would mean the rename never happens, and CI sees an ordinary branch name
+and waves it through. The thing being policed was writing its own
+accusation.
 
-So a `discarded-protected-path` outcome now behaves exactly like every
-other outcome up through the commit: whatever a Worker left in the
-worktree, committed or not, ends up on the ProductionLine's branch. The
-only difference is what happens to the branch next — it is renamed from
-`fabrica/<taskId>` to `fabrica/discarded/<taskId>` (`do.ts`, via `git
-branch -m`, which git allows even while that branch is the one checked
-out in the worktree).
+So today a `discarded-protected-path` outcome behaves exactly like every
+other outcome, full stop: whatever a Worker left in the worktree,
+committed or not, ends up on the ordinary `fabrica/<taskId>` branch, and
+Fabrica does nothing further to flag it. Detection stays exactly where
+it was — `gate-changes.ts` still forces this outcome, honestly, no
+matter how good the check looked, and it still lands in the delivery and
+the receipt (rule 5's total-recall concern, separate from enforcement).
+What changed is that detection no longer drives enforcement at all.
 
-**Why a branch rename, not a file in the tree.** The constraint driving
-this whole design is that CI can only see the repository it runs in —
-not `~/.fabrica`, so not `delivery.outcome`, not any record file. The
-signal has to be something a GitHub Actions workflow in *this*
-repository can read: the branch name, a commit, or a file. A branch
-name wins on the one property that matters most here: it is never part
-of any commit's content, so if the Client does override and merge the
-branch, no residue survives the merge — nothing to remember to strip
-out first. A marker file would need exactly that remembering, on every
-override, forever. "Prefer the signal that cannot be forgotten" cuts
-both ways — writing it by construction (Fabrica renames the branch
-itself, unconditionally, on this one outcome) and never needing it
-un-written again.
+**Enforcement lives outside Fabrica, in `.github/workflows/
+rule9-gate.yml`.** It reads the pull request's own diff — comparing
+against the PR's real merge-base, fetched with full history rather than
+guessed from a shallow clone — for whether it touches a protected path
+(`check.sh` today, the same file `gate-changes.ts` watches; the list is
+one `PROTECTED_PATHS` value in the workflow file, easy to extend for a
+project with a different check convention). This needs nothing from
+Fabrica: not `delivery.outcome`, not a branch name, not any record file.
+It works identically for a human contributor's PR and for a Worker's,
+and a bug or an evasion in Fabrica's own detection can't also blind the
+thing meant to catch it. It deliberately blocks a *declared* gate change
+too, not only an undeclared one — a change to the thing that decides
+whether work passes deserves the Client's eyes every time; Fabrica's own
+delivery record still tells the two apart for the Client's benefit
+(`gateChanges`), the CI check does not need to.
 
-**The check itself:** `.github/workflows/rule9-gate.yml` runs its one
-job on every pull request, unconditionally - the branch-name match
-happens inside the step, not as a job-level `if`, because a skipped job
-reports a "skipped" conclusion and whether GitHub treats that as passing
-a *required* status check is a known trap, not a documented guarantee.
-So every run reports a real pass or fail: a `fabrica/discarded/*` branch
-fails on purpose, with a message stating plainly that the work touched
-its own gate without declaring it and that only the Client may review
-and override; any other branch passes. Branch protection is what makes
-a failing check actually block a merge — that's a GitHub repository
-setting, not something this code can turn on for you; see the workflow
-file's own header comment.
+**The check itself:** the job runs on every pull request, unconditionally
+- the path match happens inside the one step, not as a job-level `if`,
+because a skipped job reports a "skipped" conclusion and whether GitHub
+treats that as passing a *required* status check is a known trap, not a
+documented guarantee. So every run reports a real pass or fail: a PR
+touching `check.sh` fails on purpose, naming the file and stating
+plainly that only the Client may review and override; any other PR
+passes. Branch protection is what makes a failing check actually block a
+merge — that's a GitHub repository setting, not something this code can
+turn on for you; see the workflow file's own header comment.
 
-**Known v1 limitation:** SPEC.md's `fabrica do` never pushes anything to
-a remote on its own, so this CI check only ever runs once something
-*else* pushes the `fabrica/discarded/<taskId>` branch or opens a PR from
-it — today that means the Client, by hand. The workflow also currently
-lives only in this repository's own `.github/workflows/`; a project
-`fabrica` manages gets no copy of it yet, so this is a working
-demonstration of the mechanism, not project scaffolding — that's a
-future `fabrica init`-shaped concern, not solved here.
+**Known v1 limitations, two of them:** this workflow lives only in this
+repository's own `.github/workflows/` — a project Fabrica manages
+elsewhere currently has no gate at all. [Issue #55](https://github.com/inactdev/fabrica/issues/55)
+tracks closing that; it is not solved here. And SPEC.md's `fabrica do`
+never pushes anything to a remote on its own, so this check only ever
+runs once something *else* pushes the branch or opens a PR from it —
+today that means the Client, by hand.
 
 ## Why `do()` doesn't return early
 
@@ -318,13 +321,13 @@ doesn't write that event or interpret one; that's left to whoever builds
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `not-built`, `commit-failed`, `branch-rename-failed`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `not-built`, `commit-failed`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Snapshots and compares `check.sh`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. |
 | `files.ts` | Lists files still uncommitted in a worktree (`git status --porcelain`) - used only to decide whether there's anything left to commit before teardown. |
-| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked, not discarded" above. |
+| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |

@@ -2,11 +2,15 @@
 // A worker MAY change the project's checks openly (features change
 // behavior; the gate must be able to change with them). What is forbidden
 // is the silent version: an undeclared change to the gate is detected by
-// the tool — it made the copy, it knows the before-state — and the branch
-// it lands on is blocked from merging automatically. The work itself is
-// never thrown away: it stays committed and reviewable, and only the
-// Client may override the block (Client ruling, superseding the earlier
-// force-reset-and-discard design).
+// the tool — it made the copy, it knows the before-state — and the work
+// is recorded as discarded-protected-path. The work itself is never
+// thrown away: it stays committed on the ordinary fabrica/<taskId> branch
+// like any other outcome, reviewable. Enforcement lives outside Fabrica
+// entirely now: .github/workflows/rule9-gate.yml reads the pull request's
+// own diff for a touched protected path and blocks the merge from there,
+// so Fabrica's own detection can't also be the thing a bug in it, or an
+// evading Worker, fools (Client ruling, superseding first a force-reset-
+// and-discard design, then a branch-rename design).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -18,13 +22,13 @@ import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
-test("rule 9: an UNDECLARED edit to the project's checks blocks the merge, it does not discard the work", async () => {
+test("rule 9: an UNDECLARED edit to the project's checks is recorded, not discarded", async () => {
   const project = makeFixtureRepo("exit 1"); // honest gate would fail...
   const cheat = fakeBrain({
     onWork: (workdir) => {
       // ...so the cheating worker silently rewrites the check to pass,
       // and commits its own tampered work itself - a Worker has full git
-      // access inside the worktree, so the block must catch this exactly
+      // access inside the worktree, so detection must catch this exactly
       // like an uncommitted edit, not miss it because it was already
       // committed.
       writeFileSync(join(workdir, "check.sh"), "#!/bin/sh\nexit 0\n");
@@ -54,44 +58,22 @@ test("rule 9: an UNDECLARED edit to the project's checks blocks the merge, it do
     "the violation is not on the receipt - rules 5+9 broken"
   );
 
-  // The work is not discarded: it is committed, and the branch is renamed
-  // so a CI check (.github/workflows/rule9-gate.yml) can find it and block
-  // the merge - only the Client can override that.
-  const blockedBranch = `fabrica/discarded/${task.id}`;
-  assert.equal(
-    delivery.branch,
-    blockedBranch,
-    "delivery.branch must point at the renamed, CI-blocked branch"
-  );
+  // The work is not discarded: it stays committed on the ordinary
+  // fabrica/<taskId> branch, exactly like any other outcome. Enforcement
+  // is .github/workflows/rule9-gate.yml's job now, reading the pull
+  // request's own diff - not something Fabrica marks on the branch itself.
+  const branch = `fabrica/${task.id}`;
+  assert.equal(delivery.branch, branch, "delivery.branch must stay the ordinary branch, not a special name");
   assert.ok(
     delivery.files.includes("feature.txt"),
     "the worker's file must survive on the branch, not come back empty"
   );
 
-  let originalBranchStillExists = true;
-  try {
-    execFileSync("git", ["rev-parse", "--verify", `fabrica/${task.id}`], {
-      cwd: project,
-      stdio: "ignore",
-    });
-  } catch {
-    originalBranchStillExists = false;
-  }
-  assert.equal(
-    originalBranchStillExists,
-    false,
-    "the original fabrica/<taskId> branch must be gone, renamed away rather than left behind"
-  );
-
-  const content = execFileSync("git", ["show", `${blockedBranch}:feature.txt`], {
+  const content = execFileSync("git", ["show", `${branch}:feature.txt`], {
     cwd: project,
     encoding: "utf8",
   });
-  assert.equal(
-    content,
-    "possibly good work\n",
-    "the blocked branch must carry the worker's real content, not a stub"
-  );
+  assert.equal(content, "possibly good work\n", "the branch must carry the worker's real content, not a stub");
 });
 
 test("rule 9: a DECLARED gate change is delivered, declaration attached", async () => {

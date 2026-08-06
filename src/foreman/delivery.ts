@@ -34,9 +34,10 @@ export function buildDelivery(
     outcome === "failure-report"
       ? "The project's check did not pass; see evidence for the failure output."
       : outcome === "discarded-protected-path"
-        ? `The work is not discarded - it is committed on \`${ctx.branch}\`, renamed so a CI check ` +
-          "on that branch fails on purpose and blocks the merge. Only the Client can review the " +
-          "undeclared change and override the check to merge it."
+        ? `The work is not discarded - it is committed on \`${ctx.branch}\` like any other outcome. ` +
+          "This repository's own CI blocks the merge by reading the pull request's diff for the " +
+          "touched protected path - nothing here does that blocking itself. Only the Client can " +
+          "review the undeclared change and override the check to merge it."
         : "";
 
   return {

@@ -156,12 +156,14 @@ string field (present, right type), and an empty string is a legitimate
 here would just be a second place for it to disagree with the first.
 
 What a `discarded-protected-path` outcome means for this module's
-checks: nothing, any more. Client ruling (superseding the original
-force-reset-and-patch design) - see `src/foreman/README.md`'s "Rule 9:
-blocked, not discarded" for the full reasoning - moved rule 9's
-consequence off the branch entirely and onto CI: the work commits like
-any other outcome, `diffFiles(project, branch, base)` reports its real
-diff like any other outcome, and the one difference is that `do.ts`
-renames the branch to `fabrica/discarded/<taskId>` afterward so a
-`.github/workflows/rule9-gate.yml` check can find it and block the
-merge. This module has no special case for it left to document.
+checks: nothing, any more. Client ruling (superseding first a
+force-reset-and-patch design, then a branch-rename design) - see
+`src/foreman/README.md`'s "Rule 9: blocked by CI, not by Fabrica's own
+mark" for the full reasoning - moved rule 9's consequence off Fabrica
+entirely and onto the repository's own CI: the work commits onto the
+ordinary branch like any other outcome, and `diffFiles(project, branch,
+base)` reports its real diff like any other outcome. Nothing here marks
+the branch or the delivery for enforcement; `.github/workflows/
+rule9-gate.yml` blocks the merge by reading the pull request's diff for
+a touched protected path, independent of anything this module or `do.ts`
+produces. This module has no special case for it left to document.

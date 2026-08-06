@@ -7,8 +7,7 @@ export type ForemanErrorCode =
   | "invalid-attempts"
   | "missing-check"
   | "not-built"
-  | "commit-failed"
-  | "branch-rename-failed";
+  | "commit-failed";
 
 export class ForemanError extends Error {
   readonly code: ForemanErrorCode;

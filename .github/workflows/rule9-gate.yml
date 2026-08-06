@@ -1,9 +1,19 @@
-# CONTRACT rule 9's CI-visible gate. CI can only see this repository, not
-# ~/.fabrica, so it can't read delivery.outcome directly — src/foreman/do.ts
-# renames a violating task's branch from fabrica/<taskId> to
-# fabrica/discarded/<taskId> instead, and this workflow fails on that name.
-# See src/foreman/README.md's "Rule 9: blocked, not discarded" for why a
-# branch rename was chosen over a marker file left in the tree.
+# CONTRACT rule 9's CI-visible gate. Reads the pull request's OWN diff for
+# a touched protected path, rather than trusting any mark Fabrica itself
+# writes about the violation. Fabrica's own detection (gate-changes.ts)
+# stays in place and still records the outcome honestly in the delivery -
+# but that is detection, not enforcement. If it were CI's signal, a bug in
+# that detection, or a Worker that evades it, would leave CI looking at an
+# ordinary-looking PR and waving it through: the thing being policed would
+# be writing its own accusation. Diffing the PR needs nothing from
+# Fabrica, so it works the same way for a human contributor's PR as for a
+# Worker's, and can't be defeated by Fabrica misbehaving.
+#
+# This blocks a DECLARED gate change too, not only an undeclared one - a
+# change to the thing that decides whether work passes deserves the
+# Client's eyes every time, declared or not. Fabrica's own delivery record
+# still tells the two apart for the Client's benefit; this check does not
+# need to.
 #
 # A failing check here does not, by itself, block a merge — GitHub only
 # enforces that once this workflow's job is marked a required status check
@@ -13,30 +23,47 @@
 # The job below deliberately has no job-level `if`. A job an `if` skips
 # reports a "skipped" conclusion, and whether GitHub treats "skipped" as
 # passing for a *required* status check is a known trap, not a documented
-# guarantee. So the job always runs on every pull_request, and the branch
-# name is decided inside the one step instead — every run reports a real
-# pass or fail, never a skip.
+# guarantee. So the job always runs on every pull_request; the diff
+# inspection happens inside the one step instead — every run reports a
+# real pass or fail, never a skip.
+#
+# Known limitation (github.com/inactdev/fabrica/issues/55): this workflow
+# exists only in Fabrica's own repository. Every other project Fabrica
+# manages currently has no gate at all - closing that is issue #55's job,
+# not this file's.
 name: rule9-gate
 
 on:
-  push:
-    branches:
-      - "fabrica/discarded/**"
   pull_request:
 
 jobs:
-  block-undeclared-gate-change:
+  block-protected-path-change:
     runs-on: ubuntu-latest
     steps:
-      - name: Block merge — undeclared gate change (CONTRACT rule 9)
+      - uses: actions/checkout@v4
+        with:
+          # A shallow clone has no merge-base to diff against. fetch-depth: 0
+          # pulls full history so the comparison below is against the
+          # pull request's real base, not a guess.
+          fetch-depth: 0
+
+      - name: Block merge — protected path touched (CONTRACT rule 9)
         env:
-          # github.head_ref is only set for pull_request events; push is
-          # already filtered to fabrica/discarded/** by the trigger above,
-          # so github.ref_name covers that case.
-          BRANCH: ${{ github.head_ref || github.ref_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Matches what src/foreman/gate-changes.ts watches today (the
+          # check.sh convention only). A project registered with a custom
+          # check command needs its own list here - see the "Known v1
+          # limitation" note in src/foreman/README.md.
+          PROTECTED_PATHS: "check.sh"
         run: |
-          if [[ "$BRANCH" == fabrica/discarded/* ]]; then
-            echo "::error::This branch's work touched the project's own checks (CONTRACT rule 9) without declaring the change. Fabrica renamed it to $BRANCH instead of merging it silently — the work is not lost, it is committed right here. Only the Client may review it and deliberately override this check to merge it."
-            exit 1
-          fi
-          echo "No rule 9 violation - branch is $BRANCH."
+          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          touched=$(git diff --name-only "$merge_base" "$HEAD_SHA")
+
+          for path in $PROTECTED_PATHS; do
+            if grep -qxF "$path" <<< "$touched"; then
+              echo "::error::This pull request touches \"$path\", one of the project's own protected checks (CONTRACT rule 9). Changing the thing that decides whether work passes needs the Client's eyes, declared or not. Only the Client may review this and deliberately override this check to merge it."
+              exit 1
+            fi
+          done
+          echo "No protected path touched."
