@@ -34,6 +34,13 @@ Phase 1 has exactly one definition of done: every contract test turns green.
 `npm link` puts `fabrica` on your `PATH`, working from any directory.
 There is no separate build step - it runs `src/`'s TypeScript directly.
 
+Running a task also needs Docker: every Worker call runs inside a
+throwaway container, built once from
+`src/brain/adapters/docker/Dockerfile` (that file carries the exact
+build command). See `src/containment/README.md` for what the container
+confines, and `src/brain/adapters/claude-code.md` for the one step still
+open inside it - the coding agent's credential.
+
     fabrica do "<task text>" --project <path-or-name>
 
 Prints the new task's id and returns immediately; the work continues in

@@ -161,6 +161,10 @@ what triggers each one and what to do about it.
 - **`teardown-failed`** - git's own `worktree remove` failed for a
   reason other than the safety checks above. Read the wrapped git error
   in the message.
+- **`not-a-worktree`** and **`unsanitizable-config`** - the two refusals
+  the git-under-containment helpers raise; see
+  `resolveCommonGitDir(workdir)` and `writeSanitizedGitConfig(commonGitDir)`
+  below for exactly what triggers each.
 
 ## Idempotent teardown
 

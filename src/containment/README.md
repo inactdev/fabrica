@@ -4,12 +4,14 @@
 reads and writes are confined to a single directory, and it cannot reach
 the network unless told to. It exists to close a specific gap (issue
 #44): CONTRACT rule 1 proves the Client's own checkout is never touched,
-but that says nothing about the Worker's *process* - today, a Worker
-(via `src/brain/adapters/`'s reference CLI adapter) runs with the full
-access of the OS account it's launched as, and could in principle read
-or write anywhere that account can reach, or talk to anywhere on the
-network. `runContained` is a real, working answer to that - not a
-description of one.
+but that says nothing about the Worker's *process* - before this module,
+a Worker (via `src/brain/adapters/`'s reference CLI adapter) ran with the
+full access of the OS account it was launched as, and could in principle
+read or write anywhere that account could reach, or talk to anywhere on
+the network. That is no longer true: the reference adapter now routes
+every call through `runContained`, with no toggle and no uncontained
+path. `runContained` is a real, working answer - not a description of
+one.
 
 ## Why Docker
 
@@ -75,10 +77,11 @@ Every call runs a fresh, throwaway container (`docker run --rm`):
   Docker's normal default bridge network).
 - **Environment** needs no filtering the way a host-process sandbox
   does: Docker never auto-inherits the host's environment into a
-  container (verified) - only what's passed via `-e` reaches the
-  contained process, so "the worker has what it needs, not the
-  Foreman's whole environment" holds by construction, not by a base
-  case this module has to build itself.
+  container (verified) - only what the caller's own `env` allowlist
+  names reaches the contained process (through a throwaway
+  `--env-file`, see the `env` option below), so "the worker has what it
+  needs, not the Foreman's whole environment" holds by construction, not
+  by a base case this module has to build itself.
 - **Ownership**: the container runs as the invoking host process's own
   UID/GID (`--user`, from `process.getuid()`/`process.getgid()`), not as
   root (verified: files created in the bind-mounted workdir come out

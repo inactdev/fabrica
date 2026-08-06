@@ -287,13 +287,14 @@ describes instead of a no-git fallback, and its message already says
 what to fix.
 
 - **`spawn-failed`** - `../../containment/`'s `runContained` threw a
-  `ContainmentError` (`docker` itself couldn't be launched, or `workdir`/
-  the resolved git dir/the session `homeDir` doesn't resolve to a real
-  path) - this adapter catches that one type and re-wraps it rather
-  than confusing it with a tool-level failure. A wrong `binPath` that
-  simply doesn't exist *inside* the container is different: Docker
-  starts fine and the command fails with a normal non-zero exit, which
-  surfaces as `cli-error` below, not this.
+  `ContainmentError` (`docker` itself couldn't be launched, or a path it
+  was handed can't be resolved or represented as a mount) - this adapter
+  catches that one type and re-wraps it rather than confusing it with a
+  tool-level failure. An unusable `workdir` never reaches it: resolving
+  the git mounts runs first and refuses that as the `LineError` above.
+  A wrong `binPath` that simply doesn't exist *inside* the container is
+  different: Docker starts fine and the command fails with a normal
+  non-zero exit, which surfaces as `cli-error` below, not this.
 - **`cli-error`** - the binary ran but the call failed. Two real shapes
   were verified, and this adapter reads whichever one shows up:
   - Exit code 1, **no** JSON on stdout at all, a one-line plain-text
