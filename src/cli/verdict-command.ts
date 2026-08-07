@@ -2,9 +2,11 @@
 // and report plainly what happened - CONTRACT rule 6, and the one command
 // SPEC.md needs before the Client can close the loop by hand.
 //
-// Unlike `fabrica do`, this never detaches: a "fix" verdict runs its one
-// extra worker attempt synchronously, so the command can report its
-// outcome directly instead of the Client having to separately poll for it.
+// Unlike `fabrica do`, this never detaches: a "fix" verdict runs its
+// worker round synchronously, so the command can report that round's
+// number and outcome directly instead of the Client having to separately
+// poll for it. There is no cap on how many rounds a task can have
+// (issue #65) - see `fixRoundOf` for where the number comes from.
 
 import { createForeman, fixRoundOf } from "../index.ts";
 import type { Brain } from "../index.ts";
