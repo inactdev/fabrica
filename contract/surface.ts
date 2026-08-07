@@ -142,6 +142,7 @@ export interface FabricaTask {
 export type FabricaEventName =
   | "task-received"
   | "questions-asked"
+  | "ask-failed"
   | "answers-given"
   | "work-started"
   | "check-run"

@@ -49,40 +49,53 @@ The one command this issue builds. What it does, in order:
    CLI-layer concern - `doTask` itself only ever sees a resolved path.
 4. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
    new task's id the moment it's registered (`watch-for-task-id.ts`).
-5. **Waits, bounded, to see whether the task asks or proceeds**
+5. **Waits, bounded, to see whether the task asks, proceeds, or fails**
    (`wait-for-ask-outcome.ts`, issue #8): the detached process is still
    running `doTask` (`src/foreman/do.ts`), which now does register ->
    ask -> maybe isolate/work in one call (SPEC.md step 2, "Clarify-or-
    proceed" - see `src/foreman/README.md`'s "The ask-first seam"). This
-   polls that task's own record for whichever of `"questions-asked"` or
-   `"work-started"` lands first:
+   polls that task's own record for whichever of `"questions-asked"`,
+   `"ask-failed"`, or `"work-started"` lands first:
    - **Materially ambiguous** → stops, printing the numbered questions
      and how to answer them (`fabrica answer <id> -m "<text>"`) to
      **stderr**. No Worker ever ran; nothing keeps running in the
      background for this task until answered.
+   - **`brain.ask()` itself threw** (the reference adapter's documented
+     credential gap is today's live path) → stops, printing the real
+     reason to **stderr** and exiting **non-zero** (Client ruling, issue
+     #8 follow-up: "a failed task must never look like a started one").
+     `ask.ts`'s `registerAndAsk` already wrote this to the record as
+     `"ask-failed"` before this process ever sees it.
    - **Otherwise, or if the wait times out** → nothing further to print;
      this process then exits, and the task keeps running in the
      background. See "Why detached execution needs its own file" below
      for the spawn mechanism.
 
-   The wait is bounded, not indefinite, on purpose: `ask()` is a real
-   call to whichever brain is wired in, and a slow or already-failed
-   call (e.g. a missing check command, which fails before ever reaching
-   `"work-started"`) must never hang the terminal - timing out just moves
-   on with nothing more to report, the same as if this step didn't exist.
-   The task itself is never affected by what this observes; it keeps
-   running (or having already stopped) regardless.
+   The wait is bounded, not indefinite, on purpose - but the timeout is
+   for the genuinely-slow-brain case only, not a stand-in for "the task
+   failed": a brain that throws is detected directly, above, the moment
+   `"ask-failed"` lands, not left to exhaust the clock. Only a brain
+   that is simply slow, or a task that fails for an unrelated reason
+   before ever reaching `"work-started"` (e.g. a missing check command -
+   a known, separate gap this doesn't close), falls through to the
+   timeout, which still resolves as "proceeding" - the task itself is
+   never affected by what this observes; it keeps running (or, in that
+   separate gap's case, has already failed silently upstream of what
+   this can see).
 
-**stdout is always exactly the task id, one line, nothing else** -
-Client ruling (issue #8 follow-up): an earlier version also put the
-asking case's explanation and questions on stdout, which broke the
-documented contract below by putting prose ahead of `$id` in the output
-a script reads. The questions are guidance for the Client's own screen,
-not data - they go to stderr, and there is no separate exit code for the
-asking case either, since restoring the plain stdout contract already
-covers scripting (`fabrica answer` and the task's own `"questions-asked"`
-event carry the real content regardless of what the terminal still
-shows).
+**stdout is always exactly the task id, one line, nothing else, in
+every outcome including the failed one** - Client ruling (issue #8
+follow-up): an earlier version also put the asking case's explanation
+and questions on stdout, which broke the documented contract below by
+putting prose ahead of `$id` in the output a script reads. Explanations,
+questions, and failure reasons are all for the Client's own screen, not
+data - they go to stderr. There is no separate exit code for the asking
+case (restoring the plain stdout contract already covers scripting -
+`fabrica answer` and the task's own `"questions-asked"` event carry the
+real content regardless of what the terminal still shows), but the
+failed case does exit non-zero - the one outcome this contract actually
+has to distinguish, since a script's `id=$(fabrica do "...") || exit 1`
+depends on that exit code alone to know whether `$id` is worth trusting.
 
 A refusal at steps 1-3 exits non-zero with the message on stderr - safe
 to use in a script (`id=$(fabrica do "..." --project foo) || exit 1`).

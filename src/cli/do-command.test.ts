@@ -106,6 +106,35 @@ test("runDoCommand: a materially ambiguous task prints the numbered questions an
   assert.match(io.err.join("\n"), new RegExp(`fabrica answer ${taskId} -m "<text>"`));
 });
 
+// Client ruling, issue #8 follow-up: a task that fails before any work
+// starts (brain.ask() throwing - the reference adapter's documented
+// credential gap is today's live path) must exit non-zero with the real
+// reason, so `id=$(fabrica do "..." --project foo) || exit 1`
+// (src/cli/README.md) actually catches it, instead of reading a
+// success code off a task that never got past its own first step.
+test("runDoCommand: a task whose ask() fails prints the real reason and exits non-zero", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["ASK_FAILS_SOMETHING build an app", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.equal(io.out.length, 1, "stdout still carries only the task id - the task was genuinely registered");
+  assert.match(io.out[0], /^\d{8}-/);
+  const taskId = io.out[0];
+  assert.match(io.err.join("\n"), /the task failed before any work started/);
+  assert.match(io.err.join("\n"), /simulated: the brain is unreachable/);
+
+  const events = readEventsForTask(recordHome, taskId).map((e) => e.name);
+  assert.deepEqual(events, ["task-received", "ask-failed"]);
+});
+
 // Issue #8's own definition of done, scenario 3, exercised end to end:
 // an unambiguous task is unaffected and still delivers in the
 // background exactly as before.

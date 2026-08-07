@@ -100,23 +100,37 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
     // stdout stays exactly the task id, one line, nothing else, in every
     // case - that contract is what makes `id=$(fabrica do "..." --project
     // foo) || exit 1` (src/cli/README.md) safe to script against. The
-    // asking case's explanation and questions are guidance for the
-    // Client's screen, not data a script should ever have to parse, so
-    // they go to stderr instead - Client ruling (issue #8 follow-up):
-    // no separate exit code for this case either, since restoring the
-    // documented stdout contract already fixes every script this could
-    // have broken. The questions themselves are never only on the
-    // terminal: they are already on the record, in the "questions-asked"
-    // event's own details, recoverable long after this output has
-    // scrolled away - this is a convenience view of that, not the source.
+    // task was genuinely registered even when it goes on to fail, so the
+    // id is still worth printing (the record under it is real and worth
+    // inspecting) - only the exit code and the human explanation change.
     stdout(taskId);
 
     if (outcome.status === "asking") {
+      // Guidance for the Client's screen, not data a script should ever
+      // have to parse, so it goes to stderr - Client ruling (issue #8
+      // follow-up): no separate exit code for this case either, since
+      // restoring the documented stdout contract already fixes every
+      // script this could have broken. The questions themselves are
+      // never only on the terminal: they are already on the record, in
+      // the "questions-asked" event's own details, recoverable long
+      // after this output has scrolled away - this is a convenience
+      // view of that, not the source.
       stderr("");
       stderr("This task is materially ambiguous - answer before any work starts:");
       outcome.questions.forEach((question, i) => stderr(`  ${i + 1}. ${question}`));
       stderr("");
       stderr(`  fabrica answer ${taskId} -m "<text>"`);
+      return 0;
+    }
+
+    if (outcome.status === "failed") {
+      // A failed task must never look like a started one (Client ruling,
+      // issue #8 follow-up): a non-zero exit here is what makes
+      // `id=$(fabrica do "..." --project foo) || exit 1` actually catch
+      // it, instead of a script reading a success code off a task that
+      // never got past its own first step.
+      stderr(`fabrica do: the task failed before any work started: ${outcome.reason}`);
+      return 1;
     }
 
     return 0;

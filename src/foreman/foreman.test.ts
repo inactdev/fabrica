@@ -127,3 +127,19 @@ test("answer() on an unknown task id refuses plainly", async () => {
     (err: unknown) => err instanceof ForemanError && err.code === "unknown-task"
   );
 });
+
+// Client ruling, issue #8 follow-up: a task whose brain.ask() itself
+// threw must show up as failed, not silently stuck at "working" forever
+// (deriveState's own fallback) or missing from status() entirely.
+test("status() lists a task whose ask() threw as failed", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome });
+  const project = makeFixtureRepo("exit 0");
+  const brain = fakeBrain({ askError: new Error("simulated: the brain is unreachable") });
+
+  await assert.rejects(() => foreman.do("build me an app", { project, brain }));
+
+  const tasks = await foreman.status();
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].state, "failed");
+});

@@ -99,6 +99,13 @@ function deriveState(events: FabricaEvent[]): FabricaTask["state"] {
     return details?.outcome === "done" ? "delivered" : "failed";
   }
 
+  // brain.ask() itself threw (issue #8 follow-up, Client ruling) - the
+  // task never got past its own first step, so it is failed, not still
+  // "working" or silently invisible. Checked before check-run/work-started
+  // only for read order; the two never coexist; a task whose ask() threw
+  // never reaches either.
+  if (events.some((e) => e.name === "ask-failed")) return "failed";
+
   if (events.some((e) => e.name === "check-run")) return "checking";
   if (events.some((e) => e.name === "work-started")) return "working";
   // The Client already answered (issue #8) - even if runProductionRound

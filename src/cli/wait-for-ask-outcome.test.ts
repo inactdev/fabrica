@@ -59,6 +59,35 @@ test("waitForAskOutcome: falls back to 'proceeding' on timeout rather than hangi
   assert.ok(elapsedMs < 2000, `expected the timeout to bound the wait, took ${elapsedMs}ms`);
 });
 
+// Client ruling, issue #8 follow-up: a brain that throws must be
+// detected directly, not left to exhaust the timeout and get reported
+// as "proceeding" (a false success).
+test("waitForAskOutcome: resolves 'failed' with the reason once ask-failed lands, well before any timeout", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "ask-failed", details: { error: "the brain is unreachable" } });
+
+  const started = Date.now();
+  // A generous timeout the "failed" detection must resolve well inside -
+  // proves this is a real, immediate signal, not the timeout in disguise.
+  const outcome = await waitForAskOutcome(recordHome, "t1", { timeoutMs: 5000, pollMs: 10 });
+  const elapsedMs = Date.now() - started;
+
+  assert.deepEqual(outcome, { status: "failed", questions: [], reason: "the brain is unreachable" });
+  assert.ok(elapsedMs < 1000, `expected ask-failed to resolve immediately, took ${elapsedMs}ms`);
+});
+
+test("waitForAskOutcome: a slow-but-not-failed brain still falls back to 'proceeding' on timeout", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  // No ask-failed, no questions-asked, no work-started - genuinely still
+  // thinking, distinct from having thrown.
+
+  const outcome = await waitForAskOutcome(recordHome, "t1", { timeoutMs: 100, pollMs: 10 });
+
+  assert.deepEqual(outcome, { status: "proceeding", questions: [] });
+});
+
 test("waitForAskOutcome: only looks at the given task's own events", async () => {
   const recordHome = tempRecordHome();
   appendEvent(recordHome, {

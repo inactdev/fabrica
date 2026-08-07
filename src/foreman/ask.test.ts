@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerAndAsk } from "./ask.ts";
@@ -106,4 +106,33 @@ test("registerAndAsk rejects a non-positive-integer attempts count", async () =>
     () => registerAndAsk(recordHome, "small change", { project, brain: fakeBrain(), attempts: 0 }),
     (err: unknown) => err instanceof ForemanError && err.code === "invalid-attempts"
   );
+});
+
+// A task must never look started when its very first step never ran
+// (Client ruling, issue #8 follow-up) - if brain.ask() itself throws
+// (the reference adapter's documented credential gap is today's live
+// path), the record must say so, not stay silent at "task-received"
+// forever.
+test("registerAndAsk records ask-failed with the real error, and still rethrows, when brain.ask() throws", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  const brain = fakeBrain({ askError: new Error("simulated: the brain is unreachable") });
+
+  await assert.rejects(
+    () => registerAndAsk(recordHome, "build an app", { project, brain }),
+    /simulated: the brain is unreachable/
+  );
+
+  // The task was still registered - registerTask runs before ask() ever
+  // does - so its record folder and taskId exist even though this call
+  // never returns one; find it back the same way a fresh watcher would.
+  const [taskId] = readdirSync(join(recordHome, "tasks"));
+
+  const events = readEventsForTask(recordHome, taskId);
+  assert.deepEqual(
+    events.map((e) => e.name),
+    ["task-received", "ask-failed"]
+  );
+  const details = events[1].details as { error: string };
+  assert.equal(details.error, "simulated: the brain is unreachable");
 });

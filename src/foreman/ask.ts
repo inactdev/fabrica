@@ -33,6 +33,14 @@ export interface AskedDetails {
   explicitAttempts: boolean;
 }
 
+/** Everything the "ask-failed" event's `details` carries (issue #8
+ * follow-up, Client ruling): the real reason `brain.ask()` itself threw
+ * - today's live path is the reference adapter's documented credential
+ * gap, but this records whatever the plugged-in brain actually says. */
+export interface AskFailedDetails {
+  error: string;
+}
+
 export interface RegisterAndAskResult {
   taskId: string;
   /** request.md's content - identical to brief.md at this point, since
@@ -84,8 +92,24 @@ export async function registerAndAsk(
   // re-derive brief.md from what's already there.
   writeTaskFile(recordHome, taskId, "brief.md", taskText);
 
-  const { questions: asked } = await brain.ask(taskText);
-  const questions = (asked ?? []).filter((q) => q.trim().length > 0);
+  // A task must never look started when its very first step never ran -
+  // "ask-failed" is what lets an outside observer (fabrica do's own
+  // process, src/cli/wait-for-ask-outcome.ts) tell that apart from
+  // "still thinking," instead of the record staying silent at
+  // "task-received" while this throws and the CLI's bounded wait times
+  // out into a false success (Client ruling, issue #8 follow-up: a
+  // failed task must never look like a started one). Rethrown after
+  // recording, unchanged - every direct caller of registerAndAsk/doTask
+  // still sees the real error; only the record gains a trace of it.
+  let asked: { questions?: string[] };
+  try {
+    asked = await brain.ask(taskText);
+  } catch (err) {
+    const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };
+    appendEvent(recordHome, { taskId, name: "ask-failed", details });
+    throw err;
+  }
+  const questions = (asked.questions ?? []).filter((q) => q.trim().length > 0);
 
   if (questions.length > 0) {
     const details: AskedDetails = { questions, project: opts.project, totalAttempts, explicitAttempts };

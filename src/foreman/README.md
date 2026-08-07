@@ -390,7 +390,16 @@ as `"questions-asked"` (details: the questions, plus `project`,
 `totalAttempts`, and `explicitAttempts` - a later `fabrica answer` has no
 ProductionLine to remember these on, since none was ever cut, so they
 ride on this event instead) and `doTask` returns `{ id, state: "asking" }`
-immediately - no ProductionLine, no Worker, no check ever runs. An empty
+immediately - no ProductionLine, no Worker, no check ever runs. If
+`brain.ask()` itself throws instead of returning (the reference
+adapter's documented credential gap is today's live path), that is
+recorded too - `"ask-failed"` (details: `{ error }`, the thrown error's
+own message) - before the error is rethrown unchanged, so every direct
+caller still sees the real exception and only the record gains a trace
+of it (Client ruling, issue #8 follow-up: "a failed task must never look
+like a started one" - `queries.ts`'s `deriveState` reports this state as
+`"failed"`, and `src/cli/wait-for-ask-outcome.ts` watches for it
+directly rather than only ever finding out via a timeout). An empty
 result falls through to `runProductionRound` (do.ts), the exact same
 isolate/work/verify/deliver pipeline this file always ran, now factored
 out so `answer.ts` can reach it too.
@@ -590,7 +599,7 @@ whether a task is `"closed"`.
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. |
-| `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous. See "The ask-first seam" above. |
+| `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
 | `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/deliver — shared with `answer.ts`'s resume path). |
 | `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong, re-enters the same line and worker on fix. |

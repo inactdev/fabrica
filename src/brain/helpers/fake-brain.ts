@@ -30,6 +30,12 @@ export function fakeBrain(
      * (the default) means the task always looks clear enough to
      * proceed - matching a brain that has nothing to ask. */
     askQuestions?: string[];
+    /** ask() throws this instead of returning, every time it's called -
+     * stands in for a brain that is genuinely unreachable (the reference
+     * adapter's documented credential gap is today's live example),
+     * distinct from askQuestions (a brain that answered, just with
+     * questions). Ignored if askQuestions is also set. */
+    askError?: Error;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -55,6 +61,7 @@ export function fakeBrain(
     },
     async ask(brief: string): Promise<BrainAskResult> {
       askCalls.push(brief);
+      if (opts.askError) throw opts.askError;
       return opts.askQuestions ? { questions: opts.askQuestions } : {};
     },
     async work(brief, workdir, workOpts) {
