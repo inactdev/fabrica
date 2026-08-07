@@ -60,6 +60,28 @@ test("answerTask resumes an asking task, extends the brief, and delivers", async
   assert.equal(delivery?.outcome, "done");
 });
 
+// verdict.ts's fix path deliberately keeps its delivery.summary to the
+// Client's original one-line request, never the full brief a worker
+// receives - runProductionRound now mirrors that for a resumed round
+// too, instead of handing buildDelivery the extended brief (request.md
+// plus the whole "## Clarification" Q/A block), which would have turned
+// delivery.summary and delivery.md into a multi-paragraph blob.
+test("answerTask's delivery summary stays the original one-line request, not the extended brief", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const askBrain = fakeBrain({ askQuestions: ["What database should this use?"] });
+  const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
+
+  await answerTask(recordHome, asked.id, "Use Postgres.", { brain: fakeBrain() });
+
+  const delivery = deliveryOf(recordHome, asked.id);
+  assert.equal(delivery?.summary, "Completed: build me an app");
+  assert.doesNotMatch(delivery?.summary ?? "", /Clarification|Use Postgres/);
+
+  const deliveryMd = readTaskFile(recordHome, asked.id, "delivery.md");
+  assert.match(deliveryMd ?? "", /^summary:\s+Completed: build me an app$/m);
+});
+
 test("answerTask never calls ask() again - one clarification round by default", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();

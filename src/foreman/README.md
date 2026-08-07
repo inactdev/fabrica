@@ -400,9 +400,22 @@ calls: find the task's last `"questions-asked"` event (refuses with
 `ForemanError("no-questions-pending")` if there isn't one), append the
 round to `answers.md`, re-derive `brief.md` as `request.md` plus every
 answer so far, append `"answers-given"`, then call `runProductionRound`
-with the extended brief. It never calls `brain.ask()` again, regardless
-of whether the extended brief would still look ambiguous - the dial is
-fixed, not a negotiation loop.
+with the extended brief - what the *worker* receives. It never calls
+`brain.ask()` again, regardless of whether the extended brief would
+still look ambiguous - the dial is fixed, not a negotiation loop.
+
+`runProductionRound` itself keeps two things distinct that a first-ever
+round never had to: `brief` (what `brain.work()` gets - the full,
+possibly-extended text) and the delivery's own `taskText` (what
+`buildDelivery`'s `summary`/`delivery.md` describe - always
+`request.md`, read back from the record rather than aliased to `brief`).
+For a resumed task `brief` is `request.md` plus the whole
+`"## Clarification"` Q/A block; without this split, `delivery.summary`
+(`Completed: ${taskText}`) and `delivery.md` would turn into that same
+multi-paragraph blob instead of staying one line. `verdict.ts`'s fix
+path already drew this exact line (`readTaskFile(..., "request.md")` for
+`taskText`, `brief.md` only for the worker's own brief) - mirrored here
+rather than reinvented (Client ruling, issue #8 follow-up).
 
 `ForemanError("already-answered")` - v1's "one clarification round by
 default," enforced here rather than left to silently re-ask - fires only

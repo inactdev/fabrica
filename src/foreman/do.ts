@@ -6,7 +6,7 @@
 // attempts behaves the way it does, why the promise doesn't resolve
 // early).
 
-import { appendEvent, appendTaskFile, writeTaskFile } from "../record/index.ts";
+import { appendEvent, appendTaskFile, readTaskFile, writeTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
@@ -70,7 +70,15 @@ export async function runProductionRound(
   ctx: { project: string; brain: Brain; totalAttempts: number; explicitAttempts: boolean; isRetry: boolean }
 ): Promise<FabricaTask> {
   const { project, brain, totalAttempts, explicitAttempts, isRetry } = ctx;
-  const taskText = brief;
+  // The delivery's summary/evidence want the Client's original one-line
+  // ask, not the full brief a resumed round's worker receives - `brief`
+  // for an answer.ts retry is request.md plus the whole "## Clarification"
+  // Q/A block, which would otherwise turn `delivery.summary` (`Completed:
+  // ${taskText}`) and delivery.md into a multi-paragraph blob instead of
+  // one line. verdict.ts's fix path already draws this exact distinction
+  // (`readTaskFile(..., "request.md")` for taskText, `brief.md` only for
+  // the worker's own brief) - mirrored here rather than reinvented.
+  const taskText = readTaskFile(recordHome, taskId, "request.md") ?? brief;
   // `isRetry` is an explicit signal the caller derives from the RECORD -
   // answer.ts sets it true only when this exact taskId, in this exact
   // record home, already has a prior "answers-given" that never
@@ -120,7 +128,7 @@ export async function runProductionRound(
 
     const { receipts, lastGate, declaredGateChanges } = await runAttempts({
       brain,
-      brief: taskText,
+      brief,
       workdir: line.workdir,
       taskId,
       check,
