@@ -226,20 +226,21 @@ competence comes from the manual.
 
 ## Catching off-the-books work
 
-The AI you talk to must never do work itself, and two nets enforce and
-measure that. **Prevention, where the harness allows it:** the skill
-folder ships a per-harness session setup that switches off file-editing
-tools for the session you talk to — real settings, not instructions —
-and narrows which terminal commands that session may run to the tool's
-own commands plus read-only ones. **Detection, always:** every time any
-tool command runs, the tool checks each registered project for changes
-that no task explains — code changed, nothing on the record — and logs
-an `unattributed-change` event with project, files, and time. Where the
-harness supports event hooks (Claude Code does), the session setup also
-logs every blocked edit attempt as an `edit-attempt-blocked` event.
-Both events are improvement signals, and both surface in Phase 4's live
-view. Deliberately small — one config folder plus one cheap check —
-until living with the tool shows how common the problem actually is.
+The AI you talk to must never do work itself, and prevention enforces
+that where the harness allows it: the skill folder ships a per-harness
+session setup that switches off file-editing tools for the session you
+talk to — real settings, not instructions — and narrows which terminal
+commands that session may run to the tool's own commands plus read-only
+ones. Where the harness supports event hooks (Claude Code does), the
+session setup also logs every blocked edit attempt as an
+`edit-attempt-blocked` event, an improvement signal that surfaces in
+Phase 4's live view. A second net was specified here and then cut
+(Client ruling, Aug 2026): checking every registered project for
+changes that no task explains, logged as an `unattributed-change`
+event. That event name stays ratified with nothing emitting it;
+AGENTS.md carries the reasoning and the instruction not to rebuild it.
+Deliberately small — one config folder — until living with the tool
+shows how common the problem actually is.
 
 ## Out of scope for v1 — explicitly
 
