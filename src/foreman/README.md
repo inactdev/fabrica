@@ -249,7 +249,15 @@ would report a pass on exactly the change it exists to block. So the
 step counts the entries it got and fails the job unless that count
 equals the pull request's own `changed_files`: an unreadable file list
 blocks the merge rather than waving it through, the same way an API
-error already did.
+error already did. That mismatch has a second, unrelated cause worth
+knowing about: `changed_files` is a snapshot from the event payload
+while the listing is fetched live, so a push landing mid-run makes the
+two disagree with nothing truncated. Both cases fail closed - the step
+only tells them apart to word the error honestly, since the API returns
+exactly 3000 entries when it truncates and never fewer, so exactly 3000
+listed against a larger `changed_files` is the cap and anything else is
+the race. Nothing here tries to eliminate the race: GitHub reruns the
+check on every new push, so a later run corrects it on its own.
 
 **The check itself:** the job runs on every pull request, unconditionally
 - the path match happens inside the one step, not as a job-level `if`,
