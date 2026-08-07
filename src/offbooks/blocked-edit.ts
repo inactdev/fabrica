@@ -35,7 +35,12 @@ function normalize(path: string): string {
 
 /** Which registered project (if any) `cwd` falls under. Null when `cwd`
  * isn't inside any registered project (or projects.toml can't be read at
- * all — never thrown, this is a courtesy lookup, not a gate). */
+ * all — never thrown, this is a courtesy lookup, not a gate).
+ *
+ * The deepest matching project wins, not the first declared one: with both
+ * a repo and a repo/sub-checkout registered, an edit inside the nested one
+ * belongs to the nested one, whatever order projects.toml happens to list
+ * them in. */
 function resolveProjectName(recordHome: string, cwd: string): string | null {
   let projects: Record<string, { path: string }>;
   try {
@@ -45,11 +50,13 @@ function resolveProjectName(recordHome: string, cwd: string): string | null {
   }
 
   const resolvedCwd = normalize(cwd);
+  let best: { name: string; depth: number } | null = null;
   for (const [name, project] of Object.entries(projects)) {
     const projectPath = normalize(project.path);
-    if (resolvedCwd === projectPath || resolvedCwd.startsWith(`${projectPath}${sep}`)) return name;
+    if (resolvedCwd !== projectPath && !resolvedCwd.startsWith(`${projectPath}${sep}`)) continue;
+    if (best === null || projectPath.length > best.depth) best = { name, depth: projectPath.length };
   }
-  return null;
+  return best?.name ?? null;
 }
 
 export function recordBlockedEditAttempt(recordHome: string, attempt: BlockedEditAttempt): void {

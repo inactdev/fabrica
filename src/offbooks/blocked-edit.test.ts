@@ -49,6 +49,24 @@ test("recordBlockedEditAttempt: a project registered through a symlinked path st
   assert.equal((events[0].details as { project: string | null }).project, "spending-app");
 });
 
+test("recordBlockedEditAttempt: a nested project wins over the umbrella one that contains it", () => {
+  const recordHome = tempRecordHome();
+  const umbrella = realpathSync(mkdtempSync(join(tmpdir(), "fabrica-offbooks-umbrella-")));
+  const nested = join(umbrella, "spending-app");
+  mkdirSync(nested);
+  writeFileSync(
+    join(recordHome, "projects.toml"),
+    `[projects.umbrella]\npath = "${umbrella}"\n\n[projects.spending-app]\npath = "${nested}"\n`
+  );
+
+  recordBlockedEditAttempt(recordHome, { tool: "Edit", target: "app.ts", cwd: join(nested, "src") });
+
+  const events = readEvents(recordHome);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].taskId, "project:spending-app");
+  assert.equal((events[0].details as { project: string | null }).project, "spending-app");
+});
+
 test("recordBlockedEditAttempt: a cwd under no registered project still records, unattributed", () => {
   const recordHome = tempRecordHome();
   recordBlockedEditAttempt(recordHome, { tool: "Write", cwd: "/some/other/place" });
