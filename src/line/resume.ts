@@ -36,6 +36,10 @@ export function reopenProductionLine(opts: { project: string; taskId: string; re
   }
 
   const branch = `fabrica/${opts.taskId}`;
+  // refs/heads/ specifically, not any ref that resolves under this name:
+  // a tag called `fabrica/<taskId>` would resolve, and `git worktree add`
+  // would then check it out at a detached HEAD, so the fix round's
+  // commits would land on nothing and be silently orphaned at teardown.
   try {
     execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
       cwd: project,

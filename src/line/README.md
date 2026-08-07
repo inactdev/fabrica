@@ -175,11 +175,14 @@ what triggers each one and what to do about it.
   because the branch `fabrica/<taskId>` already exists from an earlier
   run that used this same id. Read the wrapped git error in the message;
   it names the actual cause.
-- **`no-such-branch`** - `reopenProductionLine` was asked for a task
-  whose `fabrica/<taskId>` branch doesn't exist in `project`. A line can
-  only be reopened for a task that already ran once through
+- **`no-such-branch`** - `reopenProductionLine` was asked for a task with
+  no *local branch* `fabrica/<taskId>` in `project`. A line can only be
+  reopened for a task that already ran once through
   `createProductionLine`; this is the mirror image of `cut-failed`'s
-  usual cause.
+  usual cause. Only `refs/heads/` counts: another kind of ref carrying
+  that same name (a tag, say) is not a branch to commit onto, so it is
+  refused rather than reopened - see `resume.ts` for what checking it out
+  would cost.
 - **`unsafe-teardown`** - `destroyProductionLine` won't touch
   `line.workdir` because it can't confirm, via git's own worktree list,
   that the path is a registered *linked* worktree of `project` and not
