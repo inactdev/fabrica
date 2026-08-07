@@ -197,17 +197,18 @@ quiet sentence (`formatQuietNotice`), the status line, the event line,
 and the transcript line each have exactly one definition, so an edit to
 any of them can't drift between commands.
 
-Both `status` and `watch` read the record once per render:
-`eventsByTask(recordHome)` (one pass, grouped by task id) and
-`stateOf(events)` (the same derivation `foreman.status()` runs) let them
-avoid re-reading and re-parsing the whole log per task, or three times
-per poll - heartbeats make `events.jsonl` grow steadily while a task
-runs.
+Both `status` and `watch` read the record once per render, then derive
+everything else from the events already in hand: `status` takes
+`eventsByTask(recordHome)` (one pass over the whole log, grouped by task
+id) instead of re-reading it per task, and both call `stateOf(events)`
+(the same derivation `foreman.status()` runs) rather than asking the
+record again - heartbeats make `events.jsonl` grow steadily while a task
+runs, so a per-task or per-poll re-read gets expensive fast.
 
 The record home comes from `FABRICA_HOME` for these too, and per this
 module's layering rule they reach the record only through
-`src/index.ts`'s re-exports (`readTranscript`, `transcriptPathOf`,
-`eventsByTask`, `stateOf`, `projectOf`), never `src/record` directly.
+`src/index.ts`'s re-exports (`readTranscript`, `eventsByTask`,
+`stateOf`, and `foreman.events`), never `src/record` directly.
 
 ## Why `bin.mjs` isn't a shebang'd `.ts` file
 
