@@ -113,11 +113,104 @@ export function formatQuietNotice(quietForMs: number): string {
   return `quiet ${formatAge(quietForMs)}, no signal since last heartbeat - not known to be stuck, not known to be fine`;
 }
 
-/** One line for `fabrica log` - timestamp, name, and details compacted to
- * one line each so a whole task's history stays scannable. */
+/** A generic fallback for an event name this file has no specific
+ * rendering for (an unimplemented one like "cap-refused", or a future one
+ * this file hasn't been taught yet) - compact JSON, but capped, so an
+ * event nobody anticipated can never repeat the same unbounded-line
+ * mistake a specific renderer was written to fix. */
+const FALLBACK_DETAIL_LIMIT = 200;
+function fallbackDetail(details: unknown): string {
+  const json = JSON.stringify(details);
+  return json.length > FALLBACK_DETAIL_LIMIT ? `${json.slice(0, FALLBACK_DETAIL_LIMIT)}…` : json;
+}
+
+/** What `fabrica log` shows for one event's `details` - readable prose,
+ * judged per event name, never the stored object dumped raw (issue #12,
+ * Client ruling): a Client re-reading this constantly needs "what
+ * happened", not punctuation. The two events known to carry unbounded
+ * text - "delivered" (a receipt's full check stdout+stderr can run to
+ * 64MB) and, if it ever gets there, "questions-asked" turning a list of
+ * questions into an escaped JSON string - are exactly the ones this
+ * replaces with a judged summary; undefined means "the bare event name
+ * already says it all" (e.g. "task-received" has no details). */
+function describeEventDetails(event: FabricaEvent): string | undefined {
+  const details = event.details;
+  if (details === undefined) return undefined;
+
+  switch (event.name) {
+    case "work-started": {
+      const d = details as { project?: string; verdict?: string };
+      const round = d.verdict === "fix" ? "fix round" : "work";
+      return d.project ? `${round} started on ${d.project}` : `${round} started`;
+    }
+
+    case "check-run": {
+      const d = details as { attempt?: number; phase?: string; green?: boolean };
+      if (d.phase === "started") return `check started (attempt ${d.attempt})`;
+      return `check finished (attempt ${d.attempt}): ${d.green ? "green" : "red"}`;
+    }
+
+    case "delivered": {
+      // Deliberately excludes delivery.evidence and receipts[].checks -
+      // both carry the check's raw stdout+stderr (runCheck's own 64MB
+      // maxBuffer), which is exactly the unbounded-line problem this
+      // rendering exists to fix. "What happened," not the whole output.
+      const d = details as {
+        outcome?: string;
+        delivery?: { confidence?: number; summary?: string; branch?: string; files?: string[]; gateChanges?: string };
+        receipts?: unknown[];
+        totalAttempts?: number;
+      };
+      const delivery = d.delivery;
+      if (!delivery) return d.outcome ? `delivered: ${d.outcome}` : undefined;
+
+      const attempts = d.receipts ? `${d.receipts.length}${d.totalAttempts ? `/${d.totalAttempts}` : ""}` : undefined;
+      const bits: string[] = [`confidence ${delivery.confidence}%`];
+      if (attempts) bits.push(`attempt ${attempts}`);
+      if (delivery.branch) bits.push(`branch ${delivery.branch}`);
+      if (delivery.files) bits.push(`${delivery.files.length} file(s)`);
+      if (delivery.gateChanges) bits.push("gate changes declared");
+
+      const summary = delivery.summary ? ` - ${delivery.summary}` : "";
+      return `delivered: ${d.outcome ?? "?"}${summary} (${bits.join(", ")})`;
+    }
+
+    case "verdict-recorded": {
+      const d = details as { ruling?: string; note?: string };
+      return d.note ? `verdict: ${d.ruling} - ${d.note}` : `verdict: ${d.ruling}`;
+    }
+
+    case "heartbeat": {
+      const d = details as { attempt?: number };
+      return d.attempt !== undefined ? `heartbeat (attempt ${d.attempt})` : "heartbeat";
+    }
+
+    case "questions-asked": {
+      // Not emitted by anything in this codebase yet (issue #8) - shaped
+      // defensively so whichever concrete form lands still reads as
+      // questions, not JSON, the day it exists.
+      const d = details as { questions?: string[] | string };
+      if (Array.isArray(d.questions)) return d.questions.map((q, i) => `${i + 1}) ${q}`).join("; ");
+      if (typeof d.questions === "string") return d.questions;
+      return fallbackDetail(details);
+    }
+
+    case "answers-given": {
+      const d = details as { answer?: string };
+      return d.answer ? `answer: ${d.answer}` : fallbackDetail(details);
+    }
+
+    default:
+      return fallbackDetail(details);
+  }
+}
+
+/** One line for `fabrica log` - timestamp, name, and a judged, readable
+ * rendering of its details, so a whole task's history stays scannable
+ * (issue #12, Client ruling: present it, don't dump it). */
 export function formatEventLine(event: FabricaEvent): string {
-  const details = event.details !== undefined ? `  ${JSON.stringify(event.details)}` : "";
-  return `${event.occurredAt}  ${event.name}${details}`;
+  const detail = describeEventDetails(event);
+  return `${event.occurredAt}  ${event.name}${detail ? `  ${detail}` : ""}`;
 }
 
 /** One transcript line, in the single format `log --transcript` and
