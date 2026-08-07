@@ -294,6 +294,17 @@ protection. Branch protection is what makes a failing check actually
 block a merge — that's a GitHub repository setting, not something this
 code can turn on for you; see the workflow file's own header comment.
 
+**A red check here is sometimes the correct outcome.** A PR that edits
+the workflow, or (since issue #53) touches `contract/` or `CONTRACT.md`,
+fails this check itself - by design, every time. GitHub runs the *base
+branch's* copy of the workflow, so the branch's own version never
+executes and nothing committed on the branch can turn that check green;
+the only thing the running job reads from the PR is the list of
+filenames it changed. Which leaves exactly one way to go green - change
+fewer files - and taking it means deleting the very change the PR exists
+to make. Don't. The Client reviews a protected-path change and merges it
+by hand; that is the whole mechanism, not a gap in it.
+
 **Known v1 limitations, two of them:** this workflow lives only in this
 repository's own `.github/workflows/` — a project Fabrica manages
 elsewhere currently has no gate at all. [Issue #55](https://github.com/inactdev/fabrica/issues/55)

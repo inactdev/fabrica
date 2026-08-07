@@ -42,6 +42,21 @@
 # exactly the kind of change that blocks the merge - the enforcement now
 # protects its own definition the same way it protects check.sh.
 #
+# THE CONSEQUENCE, SPELLED OUT, BECAUSE IT LOOKS LIKE A BROKEN BUILD AND
+# IS NOT: the pull request that changes this file fails this check
+# itself, every single time - and since issue #53, so does any pull
+# request touching `contract/` or `CONTRACT.md`. Since GitHub runs the
+# base branch's copy of this workflow, nothing on the branch can turn
+# that red check green. The branch's own new patterns are not even
+# loaded; the only input the running job takes from the pull request is
+# the list of filenames it changed. So there is exactly one way to make
+# this check pass on such a pull request: change fewer files. NEVER take
+# that way out. Deleting the protected-path change to get a green tick
+# throws away the work and leaves the gate weaker than before. A red
+# `block-protected-path-change` on a pull request that deliberately
+# edits a protected path IS the designed outcome, and the merge is the
+# Client's to make by hand, exactly as the failure messages below say.
+#
 # `pull_request_target` runs with elevated permissions and access to
 # secrets, which is the standard, well-known disaster waiting to happen
 # the moment a workflow checks out and executes code from the pull
