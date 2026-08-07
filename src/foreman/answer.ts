@@ -73,6 +73,12 @@ export async function answerTask(
         `dial is fixed at "ask" for v1) and has moved on. Check \`fabrica status\`.`
     );
   }
+  // Whether THIS taskId, in THIS record home, already has a prior
+  // "answers-given" that never delivered - the only evidence
+  // runProductionRound trusts for choosing reopenProductionLine over
+  // createProductionLine (do.ts's own comment explains why: a branch's
+  // mere existence in the project isn't proof this task ever cut it).
+  const isRetry = answeredIndex !== -1;
 
   if (!answerText || answerText.trim().length === 0) {
     throw new ForemanError(
@@ -103,6 +109,7 @@ export async function answerTask(
     brain: opts.brain,
     totalAttempts: details.totalAttempts,
     explicitAttempts: details.explicitAttempts,
+    isRetry,
   });
 }
 

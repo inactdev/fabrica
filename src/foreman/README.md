@@ -414,10 +414,20 @@ unreachable brain) - if the guard keyed on `"answers-given"` alone, a task
 whose resumed round failed for an infrastructure reason would become
 permanently unresumable the moment the Client tried again, with their
 answer already on record and no way back in. Retrying past a genuinely
-incomplete round reuses the same taskId's `runProductionRound` call, which
-picks `reopenProductionLine` over `createProductionLine` automatically
-(`src/line/README.md`'s `productionLineBranchExists`) once that first
-failed attempt has already left the `fabrica/<taskId>` branch behind.
+incomplete round reuses the same taskId's `runProductionRound` call,
+passing `isRetry: true` (`answerTask`'s own `answeredIndex !== -1` check,
+above) so it picks `reopenProductionLine` over `createProductionLine` -
+the branch that failed attempt already left behind. `isRetry` is an
+explicit signal `answerTask` derives from this exact taskId's own record
+(Client ruling: a same-named `fabrica/<taskId>` branch's mere existence
+in the project used to decide this, and was overturned as the weaker
+evidence - a taskId is unique only within one record home, while
+branches live in the project, so a foreign or leftover branch sharing
+that name could otherwise get silently adopted and committed onto on
+what was actually a task's *first* round, exactly where
+`createProductionLine`'s own loud refusal is supposed to apply; see
+`do.ts`'s own comment on `runProductionRound` for the full reasoning).
+`doTask`'s first-ever call always passes `isRetry: false`.
 What the guard guarantees is that the task stays resumable and keeps
 reporting its true error - not that retrying succeeds. Reopening does
 not re-cut from the project's current HEAD, so a failure baked into the

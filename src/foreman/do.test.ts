@@ -4,11 +4,12 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { doTask } from "./do.ts";
+import { doTask, runProductionRound } from "./do.ts";
 import { ForemanError } from "./errors.ts";
 import { deliveryOf, receiptsOf } from "./queries.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
+import { LineError } from "../line/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 
 function freshHome(): string {
@@ -332,4 +333,61 @@ test("doTask on an unambiguous task is unaffected: ask() is consulted but the ta
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "done");
+});
+
+// Client ruling: runProductionRound's create-vs-reopen choice must come
+// from an explicit isRetry the caller derives from the record - not from
+// whether a same-named branch happens to exist in the project - because
+// a taskId is only unique within one record home, while branches live in
+// the project. A foreign or leftover fabrica/<taskId> branch (a
+// different record home's task, a hand-made branch, a record home
+// recreated while the project's own branches survived) must never be
+// silently adopted just because it shares a name.
+test("runProductionRound on a first-ever round (isRetry: false) refuses loudly even if a same-named branch already exists", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const taskId = "not-actually-a-retry";
+  // A branch that has nothing to do with this call - standing in for a
+  // foreign/leftover branch that merely happens to share this taskId.
+  execSync(`git branch fabrica/${taskId}`, { cwd: project, shell: "/bin/bash" });
+
+  await assert.rejects(
+    () =>
+      runProductionRound(recordHome, taskId, "some brief", {
+        project,
+        brain: fakeBrain(),
+        totalAttempts: 2,
+        explicitAttempts: false,
+        isRetry: false,
+      }),
+    (err: unknown) => err instanceof LineError && err.code === "cut-failed"
+  );
+});
+
+test("runProductionRound with isRetry: true reopens the task's own branch", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const taskId = "a-genuine-retry";
+
+  // First round: a real createProductionLine call, as doTask's own
+  // first-ever call would make - leaves the branch behind once torn down.
+  const first = await runProductionRound(recordHome, taskId, "some brief", {
+    project,
+    brain: fakeBrain(),
+    totalAttempts: 1,
+    explicitAttempts: true,
+    isRetry: false,
+  });
+  assert.equal(first.state, "delivered");
+
+  // Second round for the SAME taskId, declared a retry - must reopen the
+  // branch the first round already cut, not refuse on "already exists".
+  const second = await runProductionRound(recordHome, taskId, "some brief, retried", {
+    project,
+    brain: fakeBrain(),
+    totalAttempts: 1,
+    explicitAttempts: true,
+    isRetry: true,
+  });
+  assert.equal(second.state, "delivered");
 });

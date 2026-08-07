@@ -7,7 +7,7 @@
 // early).
 
 import { appendEvent, appendTaskFile, writeTaskFile } from "../record/index.ts";
-import { createProductionLine, destroyProductionLine, productionLineBranchExists, reopenProductionLine } from "../line/index.ts";
+import { createProductionLine, destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
@@ -43,11 +43,16 @@ export async function doTask(
   // (src/foreman/answer.ts) resumes it, extending this same brief.
   if (questions.length > 0) return { id: taskId, state: "asking" };
 
+  // Always a first-ever round: registerAndAsk just claimed this taskId,
+  // so no ProductionLine for it can exist yet. Never derived from
+  // whether a branch happens to exist (see runProductionRound's own
+  // comment for why that was the weaker, unsafe signal).
   return runProductionRound(recordHome, taskId, brief, {
     project,
     brain: opts.brain!,
     totalAttempts,
     explicitAttempts,
+    isRetry: false,
   });
 }
 
@@ -62,21 +67,30 @@ export async function runProductionRound(
   recordHome: string,
   taskId: string,
   brief: string,
-  ctx: { project: string; brain: Brain; totalAttempts: number; explicitAttempts: boolean }
+  ctx: { project: string; brain: Brain; totalAttempts: number; explicitAttempts: boolean; isRetry: boolean }
 ): Promise<FabricaTask> {
-  const { project, brain, totalAttempts, explicitAttempts } = ctx;
+  const { project, brain, totalAttempts, explicitAttempts, isRetry } = ctx;
   const taskText = brief;
-  // Ordinarily this is this task's first ProductionLine, so the branch
-  // never exists yet and this is just createProductionLine. But
-  // answer.ts (issue #8) can call this a second time for the same
-  // taskId if a prior resumed round threw before finishing -
-  // createProductionLine always cuts a NEW branch, and that first
-  // round's branch still exists (branches survive their own worktree's
-  // teardown by design), so a second createProductionLine call would
-  // fail outright on "a branch named ... already exists". Checking git's
-  // own state, rather than threading "is this a retry" through as
-  // separate params, means this stays correct regardless of why or how
-  // many times runProductionRound gets called again for one taskId.
+  // `isRetry` is an explicit signal the caller derives from the RECORD -
+  // answer.ts sets it true only when this exact taskId, in this exact
+  // record home, already has a prior "answers-given" that never
+  // delivered (a resumed round that threw before finishing - a missing
+  // check command, a moved project path, an unreachable brain).
+  // doTask's first-ever call always passes false.
+  //
+  // This used to be decided by asking git whether a `fabrica/<taskId>`
+  // branch already existed, on the theory that a first-ever round could
+  // never see one. That was the weaker evidence: a taskId is only unique
+  // within one record home (registerTask claims tasks/<id>/), while
+  // branches live in the project - a same-named branch left by a
+  // different record home, a record home recreated while the project's
+  // branches survived, or a hand-made branch, would all have been
+  // silently reopened and committed onto, on what was actually this
+  // task's first round, exactly where createProductionLine's own loud
+  // refusal used to apply. The record - whether this taskId's own
+  // history shows a prior incomplete resume - is a claim only this
+  // task's own retry can make true, so it can't be spoofed by an
+  // unrelated branch happening to share a name.
   //
   // Note what reopening does and doesn't fix. It makes a retry possible
   // at all, and a failure unrelated to the branch's own content (an
@@ -86,7 +100,7 @@ export async function runProductionRound(
   // first cut, so a failure baked into that history - no check.sh in
   // that commit, a project path already wrong then - throws the same
   // error on every retry.
-  const line = productionLineBranchExists(project, taskId)
+  const line = isRetry
     ? reopenProductionLine({ project, taskId, recordHome })
     : createProductionLine({ project, taskId, recordHome });
 

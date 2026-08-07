@@ -72,17 +72,26 @@ Plain boolean, never throws - true if `fabrica/<taskId>` already exists as
 a local branch, false otherwise (including when `project` or `taskId`
 themselves are bad, same as `safety.ts`'s `isKnownWorktree`). This is the
 same `refs/heads/` check `reopenProductionLine` uses internally to refuse
-`no-such-branch`, exported so a caller can decide *which* of
-`createProductionLine`/`reopenProductionLine` to call before finding out
-the hard way. `src/foreman/do.ts`'s `runProductionRound` (issue #8) uses
-it exactly for that: an `answer.ts` retry after a resumed round threw
-before ever delivering needs `reopenProductionLine` (the branch
-already exists, from the failed round's own `createProductionLine` call -
-branches outlive their worktree's teardown by design), while every
-first-ever round for a task needs `createProductionLine` - checking git's
-own state, rather than threading "is this a retry" through as a separate
-parameter, keeps this correct regardless of why or how many times
-`runProductionRound` runs again for one taskId.
+`no-such-branch` - exported so that check has one shared home, not
+duplicated inline.
+
+**Not** what decides `createProductionLine` vs. `reopenProductionLine`
+for a resumed task, on purpose (Client ruling, issue #8): an earlier
+version of `src/foreman/do.ts`'s `runProductionRound` called this
+directly to make that choice, on the theory that a first-ever round
+could never see a branch already there. That was the weaker evidence -
+a taskId is unique only within one record home (`registerTask` claims
+`tasks/<id>/`), while branches live in the *project*, so a same-named
+`fabrica/<taskId>` branch left by a different record home, a record home
+recreated while the project's own branches survived, or a hand-made
+branch, would all have been silently reopened and committed onto on what
+was actually a task's first round - exactly where
+`createProductionLine`'s own loud refusal is supposed to apply.
+`runProductionRound` now takes an explicit `isRetry` the caller derives
+from the *record* instead (`answer.ts`: this exact taskId, in this exact
+record home, already has a prior `"answers-given"` that never
+delivered) - a claim only that task's own retry can make true, unlike a
+branch's mere existence in the project.
 
 ## `destroyProductionLine(line)`
 
