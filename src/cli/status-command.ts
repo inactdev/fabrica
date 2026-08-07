@@ -4,11 +4,14 @@
 // his verdict (CONTRACT rule 6), and nothing else in this listing says
 // that unless this command does.
 
-import { createForeman } from "../index.ts";
+import { eventsByTask, stateOf } from "../index.ts";
+import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { formatStatusLine, isQuietTooLong, lastActivityAt, projectFromEvents } from "./render.ts";
 
-export const STATUS_HELP = `Usage: fabrica status
+export const STATUS_USAGE = "fabrica status";
+
+export const STATUS_HELP = `Usage: ${STATUS_USAGE}
 
 Lists every open task - one line each: id, project, state, age. A
 "delivered" task is flagged as awaiting your verdict (\`fabrica verdict\`)
@@ -28,32 +31,64 @@ export interface RunStatusCommandOptions {
   stderr?: (line: string) => void;
 }
 
+/** `fabrica status` takes nothing: no flags, no positionals. Anything
+ * given is refused with the exact usage line rather than ignored, the
+ * same way log-args.ts and watch-args.ts refuse - a silently swallowed
+ * `--json` reads as a supported flag that did nothing. */
+export function parseStatusArgs(argv: string[]): void {
+  const [first] = argv;
+  if (first === undefined) return;
+  if (first.startsWith("-")) {
+    throw new CliError("bad-usage", `fabrica status: unknown flag "${first}". Usage: ${STATUS_USAGE}`);
+  }
+  throw new CliError(
+    "bad-usage",
+    `fabrica status: unexpected argument "${first}" - status takes none. ` +
+      `Usage: ${STATUS_USAGE}, or \`fabrica log <taskId>\` for one task.`
+  );
+}
+
 /** Returns the process exit code - never throws. */
 export async function runStatusCommand(argv: string[], opts: RunStatusCommandOptions = {}): Promise<number> {
   const stdout = opts.stdout ?? ((line: string) => console.log(line));
+  const stderr = opts.stderr ?? ((line: string) => console.error(line));
   const now = opts.now ?? Date.now();
 
-  const recordHome = opts.recordHome ?? resolveRecordHome();
-  const foreman = createForeman({ recordHome });
+  try {
+    parseStatusArgs(argv);
+    const recordHome = opts.recordHome ?? resolveRecordHome();
 
-  const openTasks = (await foreman.status()).filter((task) => task.state !== "closed");
+    // One pass over events.jsonl for the whole listing. Asking the
+    // Foreman for the task list and then for each task's events would
+    // re-read and re-parse the entire log once per open task.
+    const openTasks = Array.from(eventsByTask(recordHome), ([id, events]) => ({
+      task: { id, state: stateOf(events) },
+      events,
+    })).filter(({ task }) => task.state !== "closed");
 
-  if (openTasks.length === 0) {
-    stdout("No open tasks.");
+    if (openTasks.length === 0) {
+      stdout("No open tasks.");
+      return 0;
+    }
+
+    for (const { task, events } of openTasks) {
+      const project = projectFromEvents(events);
+      const firstEvent = events[0];
+      const ageMs = firstEvent ? now - new Date(firstEvent.occurredAt).getTime() : 0;
+      const quiet = isQuietTooLong(task.state, events, now);
+      const last = lastActivityAt(events);
+      const quietForMs = quiet && last ? now - last.getTime() : null;
+
+      stdout(formatStatusLine(task, { project, ageMs, quietForMs }));
+    }
+
     return 0;
+  } catch (err) {
+    if (err instanceof CliError) {
+      stderr(err.message);
+      return 1;
+    }
+    stderr(err instanceof Error ? err.message : String(err));
+    return 1;
   }
-
-  for (const task of openTasks) {
-    const events = await foreman.events(task.id);
-    const project = projectFromEvents(events);
-    const firstEvent = events[0];
-    const ageMs = firstEvent ? now - new Date(firstEvent.occurredAt).getTime() : 0;
-    const quiet = isQuietTooLong(task.state, events, now);
-    const last = lastActivityAt(events);
-    const quietForMs = quiet && last ? now - last.getTime() : null;
-
-    stdout(formatStatusLine(task, { project, ageMs, quietForMs }));
-  }
-
-  return 0;
 }

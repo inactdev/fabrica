@@ -102,10 +102,11 @@ to use in a script (`id=$(fabrica do "..." --project foo) || exit 1`).
 Once step 4 starts, this process's own exit code no longer reflects the
 task's eventual outcome for the "proceeds" case, which is the nature of
 detachment: by design, nothing is left waiting around to report delivery
-or failure here (see `fabrica status`/`log`/`watch`, issue #12 - not
-built yet). The "asks" and "`ask()` threw" cases are the exceptions:
-this process already knows and reports those outcomes directly (the
-failed one non-zero), since no work was ever started to detach from.
+or failure here - `fabrica status`/`log`/`watch` (below) are how you
+find out what happened. The "asks" and "`ask()` threw" cases are the
+exceptions: this process already knows and reports those outcomes
+directly (the failed one non-zero), since no work was ever started to
+detach from.
 
 ## `fabrica answer <taskId> -m "<text>"`
 
@@ -169,6 +170,44 @@ resolves the record home the same way `do-command.ts` does and calls
 same-process `do()` call for this command to remember a brain from,
 unlike the contract tests - see `src/foreman/README.md`'s "What a fix
 costs" section).
+
+## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
+
+Issue #12 - the Client's eyes on a detached task, without reading record
+files himself. All three are strictly read-only over the record; none of
+them can reach a running worker.
+
+- **`status`** lists every open task, one line each: id, project, state,
+  age. A `delivered` task is flagged as awaiting the Client's verdict -
+  nothing else in the tool says a task is waiting on him. A
+  `working`/`checking` task with no recorded activity for longer than
+  `QUIET_THRESHOLD_MS` is flagged "quiet" rather than left looking
+  identical to progress. It takes no arguments at all, and refuses any
+  it is given (`parseStatusArgs`) instead of ignoring them.
+- **`log <id>`** prints one task's event history in order, plus
+  `--transcript` for the worker's raw transcript entries.
+- **`watch <id>`** polls the record and prints new transcript entries and
+  heartbeats as they land. **Stopping the watch never stops the work**:
+  this command only ever *reads* `events.jsonl` and `transcript.log`, so
+  Ctrl-C ends the polling loop and nothing else. Never add anything here
+  that reaches toward the detached process `fabrica do` spawned.
+
+`render.ts` is why all three agree on wording: age (`formatAge`), the
+quiet sentence (`formatQuietNotice`), the status line, the event line,
+and the transcript line each have exactly one definition, so an edit to
+any of them can't drift between commands.
+
+Both `status` and `watch` read the record once per render:
+`eventsByTask(recordHome)` (one pass, grouped by task id) and
+`stateOf(events)` (the same derivation `foreman.status()` runs) let them
+avoid re-reading and re-parsing the whole log per task, or three times
+per poll - heartbeats make `events.jsonl` grow steadily while a task
+runs.
+
+The record home comes from `FABRICA_HOME` for these too, and per this
+module's layering rule they reach the record only through
+`src/index.ts`'s re-exports (`readTranscript`, `transcriptPathOf`,
+`eventsByTask`, `stateOf`, `projectOf`), never `src/record` directly.
 
 ## Why `bin.mjs` isn't a shebang'd `.ts` file
 
@@ -279,6 +318,12 @@ calls `runTask`.
 | `answer-command.ts` | Resolves the record home and calls `Foreman.answer` for `fabrica answer`; `ANSWER_HELP` is `answer --help`'s text. |
 | `verdict-args.ts` | Parses `fabrica verdict`'s arguments. |
 | `verdict-command.ts` | Resolves the record home and calls `Foreman.verdict` for `fabrica verdict`; `VERDICT_HELP` is `verdict --help`'s text. |
+| `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. |
+| `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
+| `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
+| `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
+| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
+| `render.ts` | The one definition of every line `status`/`log`/`watch` print, plus `formatAge`, `isQuietTooLong`, and `QUIET_THRESHOLD_MS`. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |
@@ -286,5 +331,5 @@ calls `runTask`.
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether the task asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
 | `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`. |
-| `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `project-not-found`, `spawn-failed`, `registration-timeout`. |
+| `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `unknown-task`, `project-not-found`, `spawn-failed`, `registration-timeout`. |
 | `helpers/fake-run-task-entry.ts` | Test-only stand-in for `run-task-entry.ts`, using `fakeBrain()` instead of the real adapter - lets `spawn-detached.test.ts` and `do-command.test.ts` exercise the real spawn-and-discover mechanism as a real separate process, without ever invoking a real coding agent. A taskText containing `ASK_ME_SOMETHING` makes its fake brain ask a clarifying question (issue #8) instead of proceeding, and one containing `ASK_FAILS_SOMETHING` makes its `ask()` throw, since there's no other channel to configure a fake running in a separate process. |

@@ -54,6 +54,26 @@ test("runStatusCommand: a closed task (verdict recorded) drops off the list", as
   assert.deepEqual(io.out, ["No open tasks."]);
 });
 
+test("runStatusCommand: an unknown flag is refused with exact instructions, not ignored", async () => {
+  const io = captureIo();
+  const code = await runStatusCommand(["--json"], { recordHome: tempRecordHome(), ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.match(io.err[0], /unknown flag "--json"/);
+  assert.match(io.err[0], /Usage: fabrica status/);
+});
+
+test("runStatusCommand: a stray positional is refused and points at `fabrica log`", async () => {
+  const io = captureIo();
+  const code = await runStatusCommand(["some-task-id"], { recordHome: tempRecordHome(), ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.match(io.err[0], /unexpected argument "some-task-id"/);
+  assert.match(io.err[0], /fabrica log <taskId>/);
+});
+
 test("runStatusCommand: a red delivery shows failed, not delivered, and carries no verdict flag", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 1");

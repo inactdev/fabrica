@@ -81,18 +81,28 @@ export function projectOf(recordHome: string, taskId: string): string | null {
   return null;
 }
 
-export function statusOf(recordHome: string): FabricaTask[] {
+/** Every task's events, grouped by task id, from a single pass over
+ * events.jsonl. A reader that needs both the task list and each task's
+ * events (`fabrica status`) asks for this once instead of reading the
+ * whole log again per task. */
+export function eventsByTask(recordHome: string): Map<string, FabricaEvent[]> {
   const byTask = new Map<string, FabricaEvent[]>();
   for (const event of readEvents(recordHome)) {
     const list = byTask.get(event.taskId);
     if (list) list.push(event);
     else byTask.set(event.taskId, [event]);
   }
-
-  return Array.from(byTask, ([id, events]) => ({ id, state: deriveState(events) }));
+  return byTask;
 }
 
-function deriveState(events: FabricaEvent[]): FabricaTask["state"] {
+export function statusOf(recordHome: string): FabricaTask[] {
+  return Array.from(eventsByTask(recordHome), ([id, events]) => ({ id, state: stateOf(events) }));
+}
+
+/** Where a task stands, derived from its own events alone - so a caller
+ * already holding them (`fabrica watch`, polling one task) never re-reads
+ * the whole record just to ask. */
+export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
   // The task closes only once the Client's MOST RECENT verdict is "accept"
   // or "wrong" — a "fix" verdict is recorded on the record too (rule 6:
   // "verdict-recorded goes on the record every time"), but it reopens the

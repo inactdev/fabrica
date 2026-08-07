@@ -151,6 +151,33 @@ test("runAttempts: heartbeat stops the instant brain.work resolves", async () =>
   assert.equal(beats, afterCompletion, "no heartbeat should fire once the call has already resolved");
 });
 
+test("runAttempts: a throwing onHeartbeat loses the beat, never the task", async () => {
+  // The tick runs from a timer, not the awaited path, so an unguarded
+  // throw here is an uncaught exception that kills the whole detached
+  // worker process mid-task - no delivery event, orphaned worktree.
+  // appendEvent throws for real on a short write, ENOSPC, or EACCES.
+  let beats = 0;
+
+  const result = await runAttempts({
+    brain: slowBrain(40),
+    brief: "do it",
+    workdir: fastCheckWorkdir(),
+    taskId: "t1",
+    check: "exit 0",
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    heartbeatIntervalMs: 5,
+    onHeartbeat: () => {
+      beats++;
+      throw new Error("record write failed: ENOSPC");
+    },
+  });
+
+  assert.ok(beats >= 2, `the tick should keep firing after a throw, got ${beats}`);
+  assert.equal(result.receipts.length, 1);
+  assert.equal(result.lastGate.green, true);
+});
+
 test("runAttempts: no onHeartbeat given, no timer runs (no crash, no leak)", async () => {
   const result = await runAttempts({
     brain: slowBrain(5),

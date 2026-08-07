@@ -4,7 +4,9 @@ import {
   QUIET_THRESHOLD_MS,
   formatAge,
   formatEventLine,
+  formatQuietNotice,
   formatStatusLine,
+  formatTranscriptLine,
   isQuietTooLong,
   lastActivityAt,
   projectFromEvents,
@@ -94,6 +96,20 @@ test("formatEventLine: timestamp, name, and compacted details", () => {
     details: { attempt: 1, green: true },
   });
   assert.equal(line, '2026-01-01T00:00:00.000Z  check-run  {"attempt":1,"green":true}');
+});
+
+test("formatQuietNotice: one wording, and it's the one formatStatusLine prints", () => {
+  const notice = formatQuietNotice(90_000);
+  assert.equal(notice, "quiet 1m, no signal since last heartbeat - not known to be stuck, not known to be fine");
+  const line = formatStatusLine({ id: "t1", state: "working" }, { project: "/p", ageMs: 600_000, quietForMs: 90_000 });
+  assert.ok(line.endsWith(notice), `status line should end with the shared notice, got: ${line}`);
+});
+
+test("formatTranscriptLine: timestamp, kind, text", () => {
+  assert.equal(
+    formatTranscriptLine({ occurredAt: "2026-01-01T00:00:00.000Z", kind: "text", text: "did a thing" }),
+    "2026-01-01T00:00:00.000Z  [text]  did a thing"
+  );
 });
 
 test("formatEventLine: no details, no trailing blob", () => {

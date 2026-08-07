@@ -147,14 +147,29 @@ export function gateForRecord(gate: GateResult): GateResult {
 
 /** Runs `fn`, calling `tick` on an interval for as long as it's pending.
  * The interval is cleared the instant `fn` settles, success or failure -
- * a heartbeat only ever means "still waiting," never "just finished." */
+ * a heartbeat only ever means "still waiting," never "just finished."
+ *
+ * A throwing `tick` is swallowed on purpose. Every tick runs from a timer
+ * callback, not from the awaited path, so a throw there is an uncaught
+ * exception that kills the whole (detached) worker process mid-task -
+ * skipping the caller's teardown, and leaving the record with no
+ * "delivered"/"failed" event and the ProductionLine's worktree orphaned.
+ * The real trigger is unexceptional: `appendEvent` throws on a short
+ * write, ENOSPC, or EACCES. A missed heartbeat costs nothing more than a
+ * `fabrica status` reading "quiet"; a lost task costs the work. */
 async function withHeartbeat<T>(
   tick: (() => void) | undefined,
   intervalMs: number,
   fn: () => Promise<T>
 ): Promise<T> {
   if (!tick) return fn();
-  const timer = setInterval(tick, intervalMs);
+  const timer = setInterval(() => {
+    try {
+      tick();
+    } catch {
+      // deliberately ignored - see above
+    }
+  }, intervalMs);
   try {
     return await fn();
   } finally {

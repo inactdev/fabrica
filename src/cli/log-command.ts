@@ -6,7 +6,7 @@ import { createForeman, readTranscript } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { LOG_USAGE, parseLogArgs } from "./log-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { formatEventLine } from "./render.ts";
+import { formatEventLine, formatTranscriptLine } from "./render.ts";
 
 export const LOG_HELP = `Usage: ${LOG_USAGE}
 
@@ -50,7 +50,7 @@ export async function runLogCommand(argv: string[], opts: RunLogCommandOptions =
       const entries = readTranscript(recordHome, taskId);
       stdout("");
       stdout(entries.length === 0 ? "--- transcript: nothing written yet ---" : "--- transcript ---");
-      for (const entry of entries) stdout(`${entry.occurredAt}  [${entry.kind}]  ${entry.text}`);
+      for (const entry of entries) stdout(formatTranscriptLine(entry));
     }
 
     return 0;

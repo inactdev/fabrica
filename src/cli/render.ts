@@ -4,7 +4,7 @@
 // home-grown formats.
 
 import { DEFAULT_HEARTBEAT_INTERVAL_MS } from "../index.ts";
-import type { FabricaEvent, FabricaTask } from "../index.ts";
+import type { FabricaEvent, FabricaTask, TranscriptEntry } from "../index.ts";
 
 /** Longer than this since the last recorded event on a still-working task,
  * and silence stops meaning "progress" and starts meaning "quiet too long"
@@ -73,9 +73,17 @@ export function formatStatusLine(
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
   }
   if (opts.quietForMs !== null) {
-    return `${base}  <- quiet ${formatAge(opts.quietForMs)}, no signal since last heartbeat - not known to be stuck, not known to be fine`;
+    return `${base}  <- ${formatQuietNotice(opts.quietForMs)}`;
   }
   return base;
+}
+
+/** The one wording for "this task has gone quiet", shared by `status` and
+ * `watch` so the Client reads the same sentence in both - it says what is
+ * known (nothing has been recorded for this long) and refuses to imply
+ * either of the two things that aren't. */
+export function formatQuietNotice(quietForMs: number): string {
+  return `quiet ${formatAge(quietForMs)}, no signal since last heartbeat - not known to be stuck, not known to be fine`;
 }
 
 /** One line for `fabrica log` - timestamp, name, and details compacted to
@@ -83,4 +91,10 @@ export function formatStatusLine(
 export function formatEventLine(event: FabricaEvent): string {
   const details = event.details !== undefined ? `  ${JSON.stringify(event.details)}` : "";
   return `${event.occurredAt}  ${event.name}${details}`;
+}
+
+/** One transcript line, in the single format `log --transcript` and
+ * `watch` both print - the two views of the same file must not drift. */
+export function formatTranscriptLine(entry: TranscriptEntry): string {
+  return `${entry.occurredAt}  [${entry.kind}]  ${entry.text}`;
 }

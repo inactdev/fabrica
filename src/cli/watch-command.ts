@@ -8,11 +8,11 @@
 // could reach the worker even if it wanted to. See watch-command.test.ts
 // and the PR's own end-to-end proof for that shown, not just asserted.
 
-import { createForeman, readTranscript } from "../index.ts";
+import { createForeman, readTranscript, stateOf } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { WATCH_USAGE, parseWatchArgs } from "./watch-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { formatAge, isQuietTooLong } from "./render.ts";
+import { formatQuietNotice, formatTranscriptLine, isQuietTooLong, lastActivityAt } from "./render.ts";
 
 export const WATCH_HELP = `Usage: ${WATCH_USAGE}
 
@@ -125,27 +125,27 @@ async function streamTranscript(ctx: {
   const poll = async () => {
     const entries = readTranscript(recordHome, taskId);
     for (; printedTranscript < entries.length; printedTranscript++) {
-      const entry = entries[printedTranscript];
-      stdout(`${entry.occurredAt}  [${entry.kind}]  ${entry.text}`);
+      stdout(formatTranscriptLine(entries[printedTranscript]));
     }
 
+    // One read of the record per poll, not three: this task's own events
+    // answer both "what's new" and "where does it stand" (stateOf is the
+    // same derivation foreman.status() runs, given the same events), so
+    // asking foreman.status() as well would re-read and re-parse the
+    // whole log - twice a second, for as long as the Client watches.
     const events = await foreman.events(taskId);
     const heartbeats = events.filter((e) => e.name === "heartbeat");
     for (; printedHeartbeats < heartbeats.length; printedHeartbeats++) {
       stdout(`${heartbeats[printedHeartbeats].occurredAt}  [heartbeat]  still working...`);
     }
 
-    const task = (await foreman.status()).find((t) => t.id === taskId);
-    const state = task?.state ?? "working";
+    const state = events.length > 0 ? stateOf(events) : "working";
 
-    const quiet = isQuietTooLong(state, events);
+    const now = Date.now();
+    const quiet = isQuietTooLong(state, events, now);
     if (quiet !== wasQuiet) {
-      stdout(
-        quiet
-          ? `quiet ${formatAge(Date.now() - Date.parse(events[events.length - 1].occurredAt))}, ` +
-              `no signal since last heartbeat - not known to be stuck, not known to be fine`
-          : "signal resumed"
-      );
+      const last = lastActivityAt(events);
+      stdout(quiet && last ? formatQuietNotice(now - last.getTime()) : "signal resumed");
     }
     wasQuiet = quiet;
 
