@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../index.ts";
+import { appendEvent } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runLogCommand } from "./log-command.ts";
@@ -56,6 +57,22 @@ test("runLogCommand: without --transcript, no transcript section at all", async 
   await runLogCommand([task.id], { recordHome, ...io });
 
   assert.ok(!io.out.some((line) => line.startsWith("--- transcript")));
+});
+
+test("runLogCommand: a run of heartbeats collapses into one line instead of flooding the history", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/repo" } });
+  for (let i = 0; i < 14; i++) appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 1 } });
+  appendEvent(recordHome, { taskId: "t1", name: "check-run", details: { attempt: 1, phase: "started" } });
+
+  const io = captureIo();
+  const code = await runLogCommand(["t1"], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  const heartbeatLines = io.out.filter((line) => line.includes("heartbeat"));
+  assert.equal(heartbeatLines.length, 1, `expected the 14 heartbeats collapsed to one line, got: ${JSON.stringify(io.out)}`);
+  assert.match(heartbeatLines[0], /^\S+  heartbeat  14 heartbeats over/);
 });
 
 test("runLogCommand: an unknown task id refuses plainly", async () => {

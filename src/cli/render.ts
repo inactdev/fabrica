@@ -218,3 +218,33 @@ export function formatEventLine(event: FabricaEvent): string {
 export function formatTranscriptLine(entry: TranscriptEntry): string {
   return `${entry.occurredAt}  [${entry.kind}]  ${entry.text}`;
 }
+
+/** `fabrica log`'s full rendering of a task's history (Client ruling on
+ * issue #12's log-heartbeat-noise finding: collapse, don't hide behind a
+ * flag): a consecutive run of "heartbeat" events folds into one line - "N
+ * heartbeats over <span>" - so the fact worth keeping (the task was alive
+ * for that whole stretch) survives without one line per 15s tick burying
+ * the real events around it. A run of exactly one heartbeat reads as an
+ * ordinary single heartbeat line, not "1 heartbeats over 0s". */
+export function formatEventLines(events: FabricaEvent[]): string[] {
+  const lines: string[] = [];
+  let i = 0;
+  while (i < events.length) {
+    if (events[i].name !== "heartbeat") {
+      lines.push(formatEventLine(events[i]));
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j < events.length && events[j].name === "heartbeat") j++;
+    const run = events.slice(i, j);
+    lines.push(run.length === 1 ? formatEventLine(run[0]) : formatHeartbeatRun(run));
+    i = j;
+  }
+  return lines;
+}
+
+function formatHeartbeatRun(run: FabricaEvent[]): string {
+  const spanMs = Date.parse(run[run.length - 1].occurredAt) - Date.parse(run[0].occurredAt);
+  return `${run[0].occurredAt}  heartbeat  ${run.length} heartbeats over ${formatAge(spanMs)}`;
+}

@@ -5,6 +5,7 @@ import {
   checkStartedAt,
   formatAge,
   formatEventLine,
+  formatEventLines,
   formatQuietNotice,
   formatStatusLine,
   formatTranscriptLine,
@@ -302,4 +303,49 @@ test("formatTranscriptLine: timestamp, kind, text", () => {
 test("formatEventLine: no details, no trailing blob", () => {
   const line = formatEventLine({ occurredAt: "2026-01-01T00:00:00.000Z", taskId: "x", name: "task-received" });
   assert.equal(line, "2026-01-01T00:00:00.000Z  task-received");
+});
+
+function heartbeat(occurredAt: string, attempt = 1): FabricaEvent {
+  return { occurredAt, taskId: "x", name: "heartbeat", details: { attempt } };
+}
+
+test("formatEventLines: a consecutive run of heartbeats collapses into one line with a real span", () => {
+  const events: FabricaEvent[] = [
+    { occurredAt: "2026-01-01T00:00:00.000Z", taskId: "x", name: "work-started", details: { project: "/repo" } },
+    heartbeat("2026-01-01T00:00:15.000Z"),
+    heartbeat("2026-01-01T00:00:30.000Z"),
+    heartbeat("2026-01-01T00:00:45.000Z"),
+    { occurredAt: "2026-01-01T00:00:50.000Z", taskId: "x", name: "check-run", details: { attempt: 1, green: true } },
+  ];
+
+  const lines = formatEventLines(events);
+
+  assert.equal(lines.length, 3, `heartbeats should collapse to one line, got: ${JSON.stringify(lines)}`);
+  assert.equal(lines[0], "2026-01-01T00:00:00.000Z  work-started  work started on /repo");
+  assert.equal(lines[1], "2026-01-01T00:00:15.000Z  heartbeat  3 heartbeats over 30s");
+  assert.equal(lines[2], "2026-01-01T00:00:50.000Z  check-run  check finished (attempt 1): green");
+});
+
+test("formatEventLines: a single isolated heartbeat reads as an ordinary heartbeat line, not a run of one", () => {
+  const events: FabricaEvent[] = [heartbeat("2026-01-01T00:00:15.000Z", 2)];
+  const lines = formatEventLines(events);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0], "2026-01-01T00:00:15.000Z  heartbeat  heartbeat (attempt 2)");
+  assert.doesNotMatch(lines[0], /heartbeats over/);
+});
+
+test("formatEventLines: two separate single-heartbeat gaps, split by a real event, don't merge", () => {
+  const events: FabricaEvent[] = [
+    heartbeat("2026-01-01T00:00:00.000Z"),
+    { occurredAt: "2026-01-01T00:00:05.000Z", taskId: "x", name: "check-run", details: { attempt: 1, green: false } },
+    heartbeat("2026-01-01T00:00:20.000Z"),
+  ];
+  const lines = formatEventLines(events);
+  assert.equal(lines.length, 3);
+  assert.doesNotMatch(lines[0], /heartbeats over/);
+  assert.doesNotMatch(lines[2], /heartbeats over/);
+});
+
+test("formatEventLines: no events, no lines", () => {
+  assert.deepEqual(formatEventLines([]), []);
 });

@@ -6,12 +6,14 @@ import { createForeman, readTranscript } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { LOG_USAGE, parseLogArgs } from "./log-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { formatEventLine, formatTranscriptLine } from "./render.ts";
+import { formatEventLines, formatTranscriptLine } from "./render.ts";
 
 export const LOG_HELP = `Usage: ${LOG_USAGE}
 
-Prints one task's full event history, in order - what the record itself
-holds, not a summary of it.
+Prints one task's full event history, in order, rendered readably rather
+than as raw stored data. A consecutive run of heartbeats collapses into
+one line ("14 heartbeats over 3m") so a long stretch of liveness pings
+doesn't bury the real events around it.
 
   <taskId>       The task to show. See \`fabrica status\` for open ids.
   --transcript   Also print the worker's raw transcript, oldest first.
@@ -44,7 +46,7 @@ export async function runLogCommand(argv: string[], opts: RunLogCommandOptions =
       );
     }
 
-    for (const event of events) stdout(formatEventLine(event));
+    for (const line of formatEventLines(events)) stdout(line);
 
     if (transcript) {
       const entries = readTranscript(recordHome, taskId);
