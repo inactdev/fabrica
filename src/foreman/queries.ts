@@ -68,19 +68,6 @@ export function fixRoundOf(recordHome: string, taskId: string): number {
   ).length;
 }
 
-/** The project a task is running against, or null when it's not known yet
- * (a task with no "work-started" event, e.g. still asking a clarifying
- * question). Every "work-started" and "delivered" event carries `project`
- * in its details, so the latest one that has it wins. */
-export function projectOf(recordHome: string, taskId: string): string | null {
-  const events = readEventsForTask(recordHome, taskId);
-  for (let i = events.length - 1; i >= 0; i--) {
-    const details = events[i].details as { project?: string } | undefined;
-    if (details?.project) return details.project;
-  }
-  return null;
-}
-
 /** Every task's events, grouped by task id, from a single pass over
  * events.jsonl. A reader that needs both the task list and each task's
  * events (`fabrica status`) asks for this once instead of reading the

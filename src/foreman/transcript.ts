@@ -3,13 +3,8 @@
 // in src/cli and, per AGENTS.md's layering rule, reach the record only
 // through src/index.ts, never src/record directly.
 
-import { taskFilePath, readTaskFile } from "../record/index.ts";
+import { readTaskFile } from "../record/index.ts";
 import type { TranscriptEntry } from "../brain/index.ts";
-
-/** Absolute path of a task's transcript.log, whether or not it exists yet. */
-export function transcriptPathOf(recordHome: string, taskId: string): string {
-  return taskFilePath(recordHome, taskId, "transcript.log");
-}
 
 /** Every transcript entry written so far, oldest first. A line that fails
  * to parse (a torn read mid-append) is skipped rather than thrown - the

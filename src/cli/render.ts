@@ -13,8 +13,9 @@ import type { FabricaEvent, FabricaTask, TranscriptEntry } from "../index.ts";
 export const QUIET_THRESHOLD_MS = DEFAULT_HEARTBEAT_INTERVAL_MS * 3;
 
 /** The project a task is running against, read from whichever event last
- * carried it (`work-started`/`delivered` details - see queries.ts's
- * projectOf, which this mirrors for callers already holding the events). */
+ * carried it (`work-started`/`delivered` details). The only implementation
+ * of that lookup: it takes events the caller already holds, so `status`
+ * never re-reads events.jsonl per task just to name the project. */
 export function projectFromEvents(events: FabricaEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const details = events[i].details as { project?: string } | undefined;
