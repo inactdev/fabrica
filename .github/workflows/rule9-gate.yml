@@ -13,6 +13,24 @@
 # still tells the two apart for the Client's benefit; this check does not
 # need to.
 #
+# ISSUE #53 - a second, separate check in this same job blocks anything
+# touching `contract/` or `CONTRACT.md`. This is deliberately NOT folded
+# into PROTECTED_PATHS above, and it is not a third rule-9 case, because
+# it is answering a different question. PROTECTED_PATHS above exists
+# because touching those paths is a violation - the thing being policed
+# is grading its own homework. Touching the contract is not a violation
+# at all; the Client's ruling (2026-08-05) says so explicitly - "that is
+# completely fine if you think it's worth it." What's required is only
+# that such a change never merges itself: it needs the Client's own eyes
+# and his own merge, every time, however green the rest of the PR is.
+# Same reason, different shape: one message would blur "you did something
+# wrong" together with "you did something that needs a human," and an
+# author reading a generic "protected path" failure has no way to tell
+# which one applies or what to do next. So this is a second matching pass
+# over the SAME already-fetched file list (no second API call - the
+# 3000-file cap and the mid-run-push race below apply once, not twice),
+# with its own PATTERNS variable and its own wording.
+#
 # SAFETY-CRITICAL - read before editing this file:
 #
 # This job runs on `pull_request_target`, not `pull_request`, so GitHub
@@ -88,6 +106,13 @@ jobs:
           PROTECTED_PATHS: |
             check.sh
             .github/workflows/**
+          # The ratified answer key (issue #53, Client ruling 2026-08-05):
+          # a PR touching either is legitimate but must never merge
+          # itself. Same one-pattern-per-line, `read -r` handling as
+          # PROTECTED_PATHS above, for the same reason.
+          CONTRACT_PROTECTED_PATHS: |
+            contract/**
+            CONTRACT.md
         run: |
           # The API listing needs no checkout at all - GitHub supplies the
           # file list directly from the pull request, which is also the
@@ -154,4 +179,24 @@ jobs:
               done
             done <<< "$touched"
           done <<< "$PROTECTED_PATHS"
+
+          # Issue #53 - a contract change, unlike a rule-9 violation, is
+          # not wrongdoing: it is allowed, and can be a good idea. What it
+          # can never be is self-merged. Worded differently from the loop
+          # above on purpose, so the author can tell "you broke a rule"
+          # apart from "you changed a rule, and only the Client merges
+          # that."
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            while IFS=$'\t' read -r file previous_file; do
+              for candidate in "$file" "$previous_file"; do
+                [ -n "$candidate" ] || continue
+                if [[ "$candidate" == $pattern ]]; then
+                  echo "::error::This pull request touches \"$candidate\", part of Fabrica's ratified contract (CONTRACT.md / contract/). Changing the contract is allowed - it can be the right call - but it can never merge itself: only the Client reviews and merges a contract change directly, however green everything else is."
+                  exit 1
+                fi
+              done
+            done <<< "$touched"
+          done <<< "$CONTRACT_PROTECTED_PATHS"
+
           echo "No protected path touched."
