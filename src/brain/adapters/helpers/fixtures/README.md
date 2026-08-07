@@ -69,9 +69,8 @@ account that recorded it - real `cwd`, `session_id`, hook/harness chatter
 under the recording machine's temp directory, in both the form handed to
 the CLI and its realpath (on macOS `os.tmpdir()` resolves through a
 `/var` -> `/private/var` symlink, and a tool reports back the resolved
-one) - before it's written here.
-`../record-real-cli-fixture.mjs` does this automatically; see that
-script's own header comment for exactly what it keeps and drops.
+one) - before it's written here. `../record-real-cli-fixture.mjs` does
+this automatically.
 
 ## Re-recording
 

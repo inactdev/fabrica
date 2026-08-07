@@ -1,35 +1,17 @@
 #!/usr/bin/env node
 // Re-records fixtures/real-claude-cli-sample.jsonl from the real `claude`
-// binary. Run this by hand, never in CI, whenever there's reason to think
-// the real CLI's stream-json shape has legitimately changed (a version
-// bump, a changelog entry, or fake-claude-cli.test.ts's shape-parity test
-// failing against the current fixture with a diff that looks like a real
-// rename/removal rather than a bug in this script).
-//
-// Requires an authenticated `claude` on this machine's PATH (`claude auth
-// status` reporting loggedIn: true). Costs one real, small API call.
+// binary. Run by hand, never in CI:
 //
 //   node src/brain/adapters/helpers/record-real-cli-fixture.mjs
 //
-// It drives the real binary once, in a disposable temp directory, on a
-// fixed prompt chosen to exercise the same shapes the adapter reads: an
-// assistant text turn, a tool_use turn, its tool_result, a final assistant
-// text turn, and the terminal "result" line. It then strips every field
-// that isn't either (a) structurally load-bearing for the shape-parity
-// test or (b) needed to keep the file readable as an example - in
-// particular anything that would leak this machine's paths, session ids,
-// or account details (see sanitizeLine below for the exact list).
+// Requires an authenticated `claude` on this machine's PATH (`claude auth
+// status` reporting loggedIn: true) and costs one real, small API call.
+// Refuses to overwrite the fixture if the run didn't exercise every shape
+// the allowlist expects (see coverageGaps below).
 //
-// It refuses to write anything if that run didn't actually exercise
-// every shape the allowlist covers (stream-json-shape.ts's
-// coverageGaps) - a thinner fixture checks less while the parity test
-// stays green, which is the exact failure issue #46 is about.
-//
-// After running, read the diff before committing: `git diff` on the
-// fixture should show only fields the adapter's own claude-code.ts/.md
-// document reading, not a wholesale reshuffle - a fixture that changes in
-// ways nothing here reads is a sign this script over-recorded, not that
-// the real CLI actually changed.
+// For when to re-record, what gets sanitized out, and what to check in
+// the resulting diff before committing, see fixtures/README.md - that
+// file is the one place this guidance lives.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
@@ -178,7 +160,7 @@ try {
   } else {
     writeFileSync(FIXTURE_PATH, payload);
     console.log(`Wrote ${written.length} sanitized lines to ${FIXTURE_PATH}`);
-    console.log("Review the diff before committing - see this script's own header comment.");
+    console.log("Review the diff before committing - see fixtures/README.md.");
   }
 } finally {
   rmSync(workdir, { recursive: true, force: true });
