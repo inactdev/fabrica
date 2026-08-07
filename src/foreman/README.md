@@ -343,8 +343,10 @@ today that means the Client, by hand.
 
 SPEC.md describes `fabrica do` as detached: it prints the task id and
 returns immediately while work continues in the background, streaming to
-the transcript. This module's `do()` does not do that — it runs the
-whole loop to completion before resolving.
+the transcript. This module's `do()` does not do that — once it decides
+to proceed, it runs the whole loop to completion before resolving. (The
+one early return is the ask-first seam below, and it isn't detachment:
+nothing is left running, because no ProductionLine was ever cut.)
 
 That's deliberate, not a shortcut taken by accident: every contract test
 calls `await foreman.do(...)` and immediately inspects `deliveryOf` and
@@ -365,8 +367,8 @@ fixed at "ask" - not built as a setting. "Materially ambiguous" is the
 load-bearing phrase, defined the same way everywhere it's stated in this
 codebase: an ambiguity that would change what gets built, not one a
 reasonable person would resolve the same way every time. Getting this
-cautious - asking about everything - is its own failure (a tool nobody
-uses), so the line is drawn narrow on purpose.
+wrong in the cautious direction - asking about everything - is its own
+failure (a tool nobody uses), so the line is drawn narrow on purpose.
 
 **Why this needed a second `Brain` call, not a flag on `work()`.**
 `Brain.work()` promises that by the time it resolves, the work described

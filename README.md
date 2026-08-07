@@ -52,6 +52,15 @@ registered in `~/.fabrica/projects.toml`:
     path  = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
 
+If the task is ambiguous enough that the answer would change what gets
+built, nothing is started: you get numbered questions instead, and one
+round to answer them.
+
+    fabrica answer <id> -m "<text>"
+
+That folds your answer into the brief and runs the task, this time in
+the foreground.
+
 When the work comes back, you get the last word:
 
     fabrica verdict <id> <accept|fix|wrong> [-m "<note>"]

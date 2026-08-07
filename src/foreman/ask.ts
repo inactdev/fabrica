@@ -1,9 +1,9 @@
 // SPEC.md step 1 ("Registers") and step 2 ("Clarify-or-proceed", issue
-// #8): together because every caller - doTask, and the CLI's own
-// foreground pre-check (src/cli/README.md) - always wants both done
-// before deciding what happens next, and because step 2 needs the
-// taskId step 1 claims in order to write "questions-asked" onto that
-// task's own record.
+// #8): together because doTask always wants both done before deciding
+// what happens next, and because step 2 needs the taskId step 1 claims
+// in order to write "questions-asked" onto that task's own record. The
+// CLI never calls this itself - it reads the outcome back off that
+// record instead (src/cli/wait-for-ask-outcome.ts).
 //
 // Brain.ask takes no workdir - by construction, this call cannot touch
 // any project, so CONTRACT rule 1 ("it never touches your stuff") holds
