@@ -398,14 +398,19 @@ the exact same object, matching the same "events.jsonl is authoritative;
 everything else is a convenience view of it" design `src/record/README.md`
 already documents for `brief.md`.
 
-The one thing a receipt does *not* store whole is its check's output:
+The one thing the record does *not* store whole is a check's output:
 `attempts.ts`'s `gateForRecord` keeps only the tail, behind a marker
 naming what was dropped. Every receipt is re-serialized onto each later
 `"delivered"` event of the same task, and the whole events file is read
 and parsed for every query, so a check free to print up to `check.ts`'s
-64MB buffer can't go in verbatim. The live `GateResult` is left
-untouched - the next attempt's correction brief and the delivery's
-evidence both still get the complete output.
+64MB buffer can't go in verbatim. The same cap applies wherever else
+check output is stored, not just to a receipt's `checks`: `delivery.ts`
+runs `ctx.lastGate` through that same `gateForRecord` before building a
+Delivery's `evidence` (both in `buildDelivery` and in
+`buildCommitFailureDelivery`), since a Delivery is stored on the very
+same event. The live `GateResult` is left untouched - the next attempt's
+correction brief still gets the complete output, because that is what the
+Worker needs to fix the failure, and it is never written to the record.
 
 One consequence: the last attempt's `Receipt.outcome` can't be decided
 until *after* the attempt loop and the rule-9 gate check both finish (an
@@ -488,9 +493,9 @@ whether a task is `"closed"`.
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
-| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output a receipt stores. |
+| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
-| `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. |
+| `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong, re-enters the same line and worker on fix. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. `fixRoundOf` instead counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. |

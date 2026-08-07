@@ -95,13 +95,14 @@ export async function runAttempts(opts: {
   return { receipts, lastGate: lastGate!, declaredGateChanges };
 }
 
-/** How much of a check's output a Receipt keeps. A receipt is stored in
- * the append-only record, re-serialized onto every later "delivered"
- * event of the same task, and the whole events file is read and parsed
- * for every query — so a check free to print up to check.ts's 64MB
- * buffer cannot be stored whole. The live GateResult is left untouched:
- * the next attempt's correction brief and the Delivery's evidence both
- * still get the complete output. */
+/** How much of a check's output anything stored in the record keeps — a
+ * Receipt's `checks`, and (via delivery.ts) a Delivery's `evidence`. Both
+ * land in the append-only record, are re-serialized onto every later
+ * "delivered" event of the same task, and the whole events file is read
+ * and parsed for every query — so a check free to print up to check.ts's
+ * 64MB buffer cannot be stored whole. The live GateResult is left
+ * untouched: the next attempt's correction brief still gets the complete
+ * output. */
 export const MAX_RECEIPT_CHECK_OUTPUT_BYTES = 16 * 1024;
 
 /** Keeps the END of the output — a check announces what failed at the
@@ -117,7 +118,7 @@ export function gateForRecord(gate: GateResult): GateResult {
   const tail = Buffer.from(gate.output, "utf8")
     .subarray(total - MAX_RECEIPT_CHECK_OUTPUT_BYTES)
     .toString("utf8")
-    .replace(/^�+/, "");
+    .replace(/^\uFFFD+/, "");
   const kept = Buffer.byteLength(tail, "utf8");
 
   return {

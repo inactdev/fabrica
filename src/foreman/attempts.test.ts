@@ -80,7 +80,7 @@ test("truncation never stores a half-character left by cutting mid-symbol", () =
 
   const stored = gateForRecord({ green: false, output }).output;
 
-  assert.ok(!stored.includes("�"));
+  assert.ok(!stored.includes("\uFFFD"));
   assert.ok(stored.endsWith(wide));
   assert.match(stored, /^\[truncated, showing last \d+ of 60000 bytes\]\nあ/);
 });
