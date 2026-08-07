@@ -411,6 +411,11 @@ Delivery's `evidence` (both in `buildDelivery` and in
 same event. The live `GateResult` is left untouched - the next attempt's
 correction brief still gets the complete output, because that is what the
 Worker needs to fix the failure, and it is never written to the record.
+The cap is a bound on the re-serialization, not a fix for it: the record's
+shape and the receipt duplication itself are deliberately left alone, filed
+as issue #68 (which also carries the cleaner design - a delivery pointing at
+its receipt instead of copying it), deferred until issue #12's
+`status`/`log`/`watch` lane lands so the two don't collide.
 
 One consequence: the last attempt's `Receipt.outcome` can't be decided
 until *after* the attempt loop and the rule-9 gate check both finish (an
