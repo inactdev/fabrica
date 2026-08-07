@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -171,6 +172,62 @@ test("doTask rejects when no brain is provided", async () => {
     () => doTask(recordHome, "small change", { project }),
     (err: unknown) => err instanceof ForemanError && err.code === "no-brain"
   );
+});
+
+test("doTask on an undeclared gate change keeps the work on the ordinary branch, it does not discard it", async () => {
+  const project = makeFixtureRepo("exit 1");
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      writeFileSync(join(workdir, "check.sh"), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(workdir, "feature.txt"), "possibly good work\n");
+    },
+  });
+
+  const task = await doTask(recordHome, "make it pass", { project, brain });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "discarded-protected-path");
+  const branch = `fabrica/${task.id}`;
+  assert.equal(delivery?.branch, branch, "delivery.branch must stay the ordinary branch");
+  assert.deepEqual(
+    delivery?.files,
+    ["check.sh", "feature.txt"],
+    "the work must land on the branch, not come back empty"
+  );
+
+  const content = execSync(`git show ${branch}:feature.txt`, { cwd: project, encoding: "utf8" });
+  assert.equal(content, "possibly good work\n", "the branch must carry the worker's real content");
+});
+
+test("doTask keeps the work on the ordinary branch on an undeclared gate change even when the worker commits it itself", async () => {
+  const project = makeFixtureRepo("exit 1");
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      writeFileSync(join(workdir, "check.sh"), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(workdir, "feature.txt"), "committed by the worker\n");
+      execSync("git add -A && git -c user.email=w@w -c user.name=w commit -qm worker-commit", {
+        cwd: workdir,
+        shell: "/bin/bash",
+      });
+    },
+  });
+
+  const task = await doTask(recordHome, "make it pass", { project, brain });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "discarded-protected-path");
+  const branch = `fabrica/${task.id}`;
+  assert.equal(delivery?.branch, branch, "delivery.branch must stay the ordinary branch");
+  assert.deepEqual(
+    delivery?.files,
+    ["check.sh", "feature.txt"],
+    "the worker's own commit must still show up on the branch, not vanish"
+  );
+
+  const content = execSync(`git show ${branch}:feature.txt`, { cwd: project, encoding: "utf8" });
+  assert.equal(content, "committed by the worker\n", "the branch must carry the worker's real content");
 });
 
 test("doTask records files touched by the worker in the delivery", async () => {

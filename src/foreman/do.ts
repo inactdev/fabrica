@@ -12,9 +12,10 @@ import { ForemanError } from "./errors.ts";
 import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
 import { resolveCheckCommand } from "./resolve-check.ts";
 import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
-import { listTouchedFiles } from "./files.ts";
+import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
+import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with the
@@ -71,6 +72,12 @@ export async function doTask(
   const line = createProductionLine({ project: opts.project, taskId, recordHome });
 
   try {
+    // Pin the diff's fork point to the exact commit the ProductionLine was
+    // cut from, before any worker attempt runs — so the delivery's `files`
+    // list can't drift if the Client's own checkout moves to a different
+    // branch while the task is still running.
+    const baseCommit = baseCommitOf(line.workdir);
+
     const check = resolveCheckCommand(recordHome, line.project);
     requireCheckCommand(line.workdir, check);
     const protectedPathApplies = check === DEFAULT_CHECK_COMMAND;
@@ -112,14 +119,54 @@ export async function doTask(
       receipts[receipts.length - 1].outcome = "discarded-protected-path";
     }
 
+    // A worker's edits live only as uncommitted changes in this throwaway
+    // worktree, and destroyProductionLine (below, in `finally`) force-
+    // removes it. Left alone, that is PR #43's flagged tension: the
+    // delivery's `files` field could name real work that is about to
+    // vanish, while `branch` points at a branch with nothing ever
+    // committed to it. Committing here, before teardown, resolves it by
+    // construction rather than by validating around it: `files` is then
+    // read back from the branch's own diff (diffFiles), so it and `branch`
+    // describe the same surviving reality, and the Client's `git merge`
+    // has something to merge. This now runs uniformly for every outcome,
+    // discarded-protected-path included — see the rule 9 comment below for
+    // why that outcome no longer skips it. Called unconditionally:
+    // commitWorktreeChanges already asks the index directly and no-ops
+    // when there is nothing staged, so a separate "is there anything to
+    // commit" check here would only re-answer the same question.
+    commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+
+    // CONTRACT rule 9 (Client ruling, superseding the original
+    // force-reset-and-patch design, and then again superseding a
+    // branch-rename design): an undeclared gate change is never force-
+    // reset, thrown away, or specially marked on the branch any more. The
+    // branch stays `fabrica/<taskId>` for every outcome, discarded-
+    // protected-path included - the uniform commit above already put the
+    // work there. Detection stays exactly as it was (`gate-changes.ts`
+    // still forces this outcome, honestly, regardless of how good the
+    // check looked); what moved is enforcement. `.github/workflows/
+    // rule9-gate.yml` blocks the merge by asking the GitHub API which
+    // files the pull request changed and matching them against its
+    // protected paths (`check.sh`, plus the workflow directory itself) -
+    // it needs nothing from Fabrica, so a bug in this detection or a
+    // Worker evading it can't also fool the thing policing it. See
+    // `src/foreman/README.md`'s "Rule 9: blocked by CI, not by Fabrica's
+    // own mark" for the full reasoning, and issue #55 for the limitation
+    // that this check exists only in Fabrica's own repository today.
     const delivery = buildDelivery(outcome, {
       taskText,
       attempts: receipts.length,
       lastGate,
       branch: line.branch,
-      files: listTouchedFiles(line.workdir),
+      files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
     });
+
+    // Never present a malformed delivery as done (rule 4) — prove the
+    // Foreman's own output before anyone else has to. `files` above is
+    // already read straight from the real diff, not a separate claim, so
+    // there is nothing left to verify it against (src/delivery/README.md).
+    validateDelivery(delivery);
 
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
     appendEvent(recordHome, {

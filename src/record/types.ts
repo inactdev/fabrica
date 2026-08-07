@@ -14,7 +14,7 @@ export type { FabricaEvent, FabricaEventName };
 export type NewFabricaEvent = Omit<FabricaEvent, "occurredAt">;
 
 /**
- * The seven files a task folder holds (SPEC.md "The record"). `request.md`
+ * The files a task folder holds (SPEC.md "The record"). `request.md`
  * is the Client's words verbatim, written once and never appended to;
  * `answers.md` holds one section per clarification round; `brief.md` is
  * assembled from request plus every answer, and is the document a Worker

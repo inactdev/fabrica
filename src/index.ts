@@ -11,6 +11,8 @@ export { ForemanError } from "./foreman/index.ts";
 export type { ForemanErrorCode } from "./foreman/index.ts";
 export { DEFAULT_ATTEMPTS } from "./foreman/index.ts";
 export { DEFAULT_CHECK_COMMAND } from "./foreman/index.ts";
+export { validateDelivery, diffFiles, DeliveryError } from "./delivery/index.ts";
+export type { DeliveryErrorCode } from "./delivery/index.ts";
 
 // The brain socket: a CLI never picks an adapter by name (CONTRACT rule
 // 8) - it asks for whichever one v1 wires in by default.

@@ -1,8 +1,8 @@
 // Per-task folders: tasks/<id>/ holding request.md, answers.md, brief.md,
 // plan.md, delivery.md, verdict, transcript.log (SPEC.md "The record").
-// These are a convenience view of events.jsonl, not a second source of
-// truth — registerTask logs the "task-received" event itself so the two
-// never drift apart.
+// Every one of these is a convenience view of events.jsonl, not a second
+// source of truth — registerTask logs the "task-received" event itself so
+// the two never drift apart.
 //
 // Id collisions: claimTaskId (ids.ts) hands out candidates; claiming a
 // directory with mkdir (no `recursive`) is what actually decides

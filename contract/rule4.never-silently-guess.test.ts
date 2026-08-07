@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateDelivery } from "./surface.ts";
+import { validateDelivery } from "../src/index.ts";
 
 const complete = {
   outcome: "done",
@@ -33,3 +33,11 @@ for (const missing of ["confidence", "assumptions", "gaps", "evidence"] as const
     );
   });
 }
+
+// The files-versus-actual-diff assertion that used to live here was
+// removed by Client ruling (issue #9 follow-up): `files` is already
+// computed by do.ts straight from the real diff (src/delivery's
+// diffFiles), so it is ground truth handed to the Client, never a
+// separate claim to weigh against it — comparing it to the diff it was
+// read from compares the diff to itself and cannot fail. See
+// src/delivery/README.md for the full reasoning.

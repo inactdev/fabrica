@@ -75,7 +75,9 @@ One consequence worth knowing: only what was *committed* inside the
 worktree survives destruction, because a branch stores commits, not
 working files. Anything a Worker left uncommitted when
 `destroyProductionLine` runs is gone for good - it does not wait for or
-require a clean tree first.
+require a clean tree first. (That is why the Foreman commits a Worker's
+leftover changes onto the branch before tearing the line down - issue
+#9, see `src/foreman/README.md`.)
 
 ## The `ProductionLine` fields
 

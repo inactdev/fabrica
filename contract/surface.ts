@@ -5,15 +5,8 @@
 // once; src/** imports these as `import type` (erased at compile time, so
 // that creates no runtime dependency on contract/) and implements them.
 // contract/*.test.ts imports types from here and the implementation from
-// src/index.ts. validateDelivery (CONTRACT rule 4) is still unbuilt —
-// that's issue #9's job — so it keeps throwing NotBuiltError below.
-
-export class NotBuiltError extends Error {
-  constructor(phase = "Phase 1") {
-    super(`fabrica is not built yet (${phase})`);
-    this.name = "NotBuiltError";
-  }
-}
+// src/index.ts — validateDelivery included (issue #9): the protection for
+// CONTRACT rule 4 is the ratified test, not the function's location.
 
 /**
  * A created, live ProductionLine: a linked git worktree of `project`
@@ -168,9 +161,4 @@ export interface Foreman {
   events(taskId: string): Promise<FabricaEvent[]>;
   /** Absolute path of the append-only event record (events.jsonl). */
   recordPath(): string;
-}
-
-/** Phase 1 replaces this throw with the real delivery validator (rule 4). */
-export function validateDelivery(_d: unknown): asserts _d is Delivery {
-  throw new NotBuiltError();
 }

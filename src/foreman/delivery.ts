@@ -1,8 +1,7 @@
 // Builds the Delivery block (SPEC.md "The delivery block") and its
-// delivery.md rendering. Structural completeness only — every field the
-// interface requires is always filled — actual field-content *validation*
-// (CONTRACT rule 4) is issue #9's job; validateDelivery still throws
-// NotBuiltError, and do() never calls it.
+// delivery.md rendering. This module only assembles the object — do.ts
+// calls src/delivery's validateDelivery on the result before treating it
+// as real (CONTRACT rule 4, issue #9).
 
 import type { Delivery, GateResult } from "../../contract/surface.ts";
 
@@ -22,17 +21,25 @@ export function buildDelivery(
       ? `Completed: ${ctx.taskText}`
       : outcome === "failure-report"
         ? `The project's check did not pass after ${ctx.attempts} attempt(s).`
-        : "Discarded: the worker changed the project's checks without declaring it.";
+        : "The project's checks changed without a declared gate change (rule 9) - blocked from " +
+          "merging until the Client reviews it and chooses to override.";
 
   const evidence =
     outcome === "discarded-protected-path"
-      ? `check.sh changed without a declared gate change (rule 9). Last check: ${ctx.lastGate.output}`
+      ? "check.sh no longer matches what the ProductionLine started with, and no gateChanges " +
+        `declaration came with it. Last check: ${ctx.lastGate.output}`
       : ctx.lastGate.output;
 
   const gaps =
     outcome === "failure-report"
       ? "The project's check did not pass; see evidence for the failure output."
-      : "";
+      : outcome === "discarded-protected-path"
+        ? `The work is not discarded - it is committed on \`${ctx.branch}\` like any other outcome. ` +
+          "The merge is meant to be blocked by a repository CI gate reading the pull request's diff " +
+          "for the touched protected path - today only Fabrica's own repository has one " +
+          "(https://github.com/inactdev/fabrica/issues/55 tracks giving every managed project its " +
+          "own). Only the Client can review the undeclared change and override that check to merge it."
+        : "";
 
   return {
     outcome,

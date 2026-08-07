@@ -187,13 +187,10 @@ legal cap, not an absent one.
     gaps:       what was not done, or remains confusing
     branch:     fabrica/<id> in <project path>
     files:      files touched
+    gateChanges: declared gate changes (Contract 9), empty when the
+                gate was left alone
 
-A delivery missing any field must not be presented. And one more check
-before presentation (adopted Aug 2026): the tool diffs the worktree
-branch itself and compares reality against the delivery's own claims — a
-delivery whose `files` list disagrees with the actual diff is malformed
-and gets rejected, exactly like a missing field. Claims are verified by
-code, never taken on faith.
+A delivery missing any field must not be presented.
 
 ## The operator's skill
 

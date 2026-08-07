@@ -1,0 +1,157 @@
+# CONTRACT rule 9's CI-visible gate. Reads the pull request's changed-file
+# list via the GitHub API for a touched protected path, rather than
+# trusting any mark Fabrica itself writes about the violation. Fabrica's
+# own detection (gate-changes.ts) stays in place and still records the
+# outcome honestly in the delivery - but that is detection, not
+# enforcement. Diffing the PR needs nothing from Fabrica, so it works the
+# same way for a human contributor's PR as for a Worker's, and can't be
+# defeated by Fabrica misbehaving.
+#
+# This blocks a DECLARED gate change too, not only an undeclared one - a
+# change to the thing that decides whether work passes deserves the
+# Client's eyes every time, declared or not. Fabrica's own delivery record
+# still tells the two apart for the Client's benefit; this check does not
+# need to.
+#
+# SAFETY-CRITICAL - read before editing this file:
+#
+# This job runs on `pull_request_target`, not `pull_request`, so GitHub
+# reads this workflow's DEFINITION from the base branch (master), never
+# from the pull request's head. A pull request can edit this file all it
+# likes; the version that actually runs is still the one already on
+# master, unaffected. `.github/workflows/**` is itself in PROTECTED_PATHS
+# below, so an attempted edit to this file (or any other workflow) is
+# exactly the kind of change that blocks the merge - the enforcement now
+# protects its own definition the same way it protects check.sh.
+#
+# `pull_request_target` runs with elevated permissions and access to
+# secrets, which is the standard, well-known disaster waiting to happen
+# the moment a workflow checks out and executes code from the pull
+# request it's supposed to be policing. THIS JOB MUST NEVER DO THAT. It
+# only asks GitHub's API which files a PR changed and compares names - no
+# `actions/checkout`, no running anything from the branch, ever. If you
+# are reading this because you want to add a checkout step: stop. That is
+# exactly the vulnerability class `pull_request_target` is known for, and
+# it would turn this gate into the thing it exists to prevent.
+#
+# A failing check here does not, by itself, block a merge — GitHub only
+# enforces that once this workflow's job is marked a required status check
+# in the repository's branch protection settings, a manual setting this
+# file cannot turn on for you.
+#
+# The job below deliberately has no job-level `if`. A job an `if` skips
+# reports a "skipped" conclusion, and whether GitHub treats "skipped" as
+# passing for a *required* status check is a known trap, not a documented
+# guarantee. So the job always runs on every pull request; the path
+# inspection happens inside the one step instead — every run reports a
+# real pass or fail, never a skip.
+#
+# Known limitation (github.com/inactdev/fabrica/issues/55): this workflow
+# exists only in Fabrica's own repository. Every other project Fabrica
+# manages currently has no gate at all - closing that is issue #55's job,
+# not this file's.
+#
+# Keep the job name `block-protected-path-change` exactly as it is - that
+# string gets wired into the repository's required-status-check settings,
+# and a rename silently breaks the protection.
+name: rule9-gate
+
+on:
+  pull_request_target:
+
+jobs:
+  block-protected-path-change:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Block merge — protected path touched (CONTRACT rule 9)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # The pull request's own count of changed files, straight from
+          # the event payload GitHub supplies - not from the branch, and
+          # not subject to the listing cap the step checks it against.
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          # Matches what src/foreman/gate-changes.ts watches today (the
+          # check.sh convention) plus this workflow directory itself, so
+          # the enforcement protects its own definition too. A project
+          # registered with a custom check command needs its own entry
+          # here - see the "Known v1 limitation" note in
+          # src/foreman/README.md. One pattern per line, read with
+          # `read -r` rather than word-split: a pattern containing a
+          # space would otherwise split into two patterns that can never
+          # match a real path, and this gate would pass silently on
+          # exactly the change it exists to block. `*` matches any
+          # characters, `/` included, in bash's `[[ ]]` pattern matching.
+          PROTECTED_PATHS: |
+            check.sh
+            .github/workflows/**
+        run: |
+          # The API listing needs no checkout at all - GitHub supplies the
+          # file list directly from the pull request, which is also the
+          # only source that's safe to trust when the workflow definition
+          # itself must not depend on anything the PR controls.
+          #
+          # A pure rename reports as ONE entry: the new filename, plus
+          # previous_filename. Emitting only .filename would let a PR
+          # rename check.sh away undetected - the same rename-evasion gap
+          # this workflow's git-diff predecessor needed --no-renames for.
+          # Emitting previous_filename too (when present) closes it here.
+          #
+          # One tab-separated LINE per entry, deliberately: the line count
+          # is then exactly the number of files GitHub listed, which the
+          # next block compares against the pull request's own
+          # changed_files. That endpoint returns at most 3000 files no
+          # matter how many pages are requested, and the truncation is
+          # silent - the dropped entries simply never appear, nothing
+          # matches, and this gate would report a pass on precisely the
+          # change it exists to block. An API error already fails the job
+          # (the default `bash -e` shell); a short list must too.
+          # per_page=100 is the endpoint's maximum, so the 3000-file cap is
+          # reached in 30 requests instead of the 100 the default page size
+          # of 30 would take - fewer sequential calls, and less chance of
+          # tripping a secondary rate limit and failing an otherwise-fine
+          # pull request closed. The cap itself is 3000 files either way.
+          touched=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" --paginate \
+            --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv')
+
+          if [ -z "$touched" ]; then
+            listed=0
+          else
+            listed=$(printf '%s\n' "$touched" | wc -l | tr -d '[:space:]')
+          fi
+
+          if [ "$listed" != "$CHANGED_FILES" ]; then
+            # The API always returns exactly 3000 entries when it truncates
+            # (never fewer), so that exact count plus a genuinely larger
+            # CHANGED_FILES is the cap, distinguishable from the other cause
+            # this mismatch has: CHANGED_FILES is a snapshot from the event
+            # payload, while $listed is fetched live, so a push landing
+            # mid-run also makes them disagree - a completely different
+            # problem with a completely different fix. Both fail closed
+            # either way; only the message differs, and deliberately: no
+            # machinery here tries to eliminate the race, since a later run
+            # (GitHub reruns checks on every new push) already corrects it.
+            if [ "$listed" -eq 3000 ] && [ "$CHANGED_FILES" -gt 3000 ]; then
+              echo "::error::Could not read this pull request's complete changed-file list: GitHub listed $listed file(s), but the pull request itself reports $CHANGED_FILES changed. The API caps that listing at 3000 files, so this pull request cannot be checked against the project's protected paths (CONTRACT rule 9). Failing closed rather than passing unchecked - split the pull request into smaller ones, or have the Client review it and deliberately override this check."
+            else
+              echo "::error::This pull request's changed-file count changed while this check was running (GitHub listed $listed file(s) just now, but this run started when the pull request reported $CHANGED_FILES) - most likely a new commit was pushed mid-run, not a listing problem. Failing closed rather than checking a stale count (CONTRACT rule 9); a fresh run on the latest push resolves this on its own, or the Client can review and deliberately override this check."
+            fi
+            exit 1
+          fi
+
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            while IFS=$'\t' read -r file previous_file; do
+              for candidate in "$file" "$previous_file"; do
+                [ -n "$candidate" ] || continue
+                if [[ "$candidate" == $pattern ]]; then
+                  echo "::error::This pull request touches \"$candidate\", one of the project's own protected checks (CONTRACT rule 9). Changing the thing that decides whether work passes needs the Client's eyes, declared or not. Only the Client may review this and deliberately override this check to merge it."
+                  exit 1
+                fi
+              done
+            done <<< "$touched"
+          done <<< "$PROTECTED_PATHS"
+          echo "No protected path touched."
