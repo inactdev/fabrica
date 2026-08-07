@@ -1,5 +1,8 @@
-// `fabrica watch <id>` (SPEC.md, issue #12): a live view of a worker's
-// transcript, streamed as it's written. The sharp edge this whole command
+// `fabrica watch <id>` (SPEC.md, issue #12): follows one task while it
+// runs. Heartbeats appear as they happen, so you can see it's alive; the
+// worker's own transcript arrives in a batch at the end of each attempt,
+// not word by word (attempts.ts calls onTranscript only once brain.work
+// has fully resolved - see AGENTS.md). The sharp edge this whole command
 // exists to get right: stopping the watch must never stop the work. This
 // process only ever reads the record (events.jsonl, transcript.log) - it
 // never spawns, signals, or otherwise touches the detached process
@@ -24,10 +27,11 @@ import {
 
 export const WATCH_HELP = `Usage: ${WATCH_USAGE}
 
-Streams one task's transcript live, as the worker writes it - the same
-entries \`fabrica log --transcript\` prints after the fact. Heartbeats show
-as brief liveness lines during a long silent stretch, and a stretch longer
-than that is flagged "quiet" instead of implying progress nobody has
+Follows one task while it runs. Heartbeats appear as they happen, so you
+can see it's alive; the worker's own transcript arrives in a batch at the
+end of each attempt, not word by word - the same entries \`fabrica log
+--transcript\` prints after the fact. A silent stretch longer than a few
+heartbeats is flagged "quiet" instead of implying progress nobody has
 actually observed. A task running its check instead says so plainly -
 "checking, 2m so far" - since that has a real, known start time; it is
 never flagged "quiet".

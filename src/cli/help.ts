@@ -26,8 +26,8 @@ Commands:
       Print one task's full event history; --transcript adds the raw
       agent output.
   watch <taskId>
-      Stream a task's transcript live. Stopping this (Ctrl-C) never
-      stops the work.
+      Follow a task while it runs: heartbeats live, transcript in
+      batches. Stopping this (Ctrl-C) never stops the work.
 
 Run "fabrica <command> --help" for a command's own usage.
 `;

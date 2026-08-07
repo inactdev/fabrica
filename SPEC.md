@@ -22,11 +22,12 @@ the event log are for).
   (Long work runs detached; see `fabrica do`.)
 - Workers are invisible by default and watchable always. Every worker's
   transcript is a sequence of structured entries — each with its own
-  timestamp, a kind, and its text — appended to its transcript file live
-  as they land; the live text stream `fabrica watch` (or your own tail
-  of that file) shows is rendered from those entries, so it shows
-  exactly what a worker is doing right now. Views never control: closing
-  one touches nothing.
+  timestamp, a kind, and its text — appended to its transcript file in one
+  batch per attempt, when that attempt's work concludes, not word by word
+  as it happens. `fabrica watch` (or your own tail of that file) follows a
+  task while it runs: heartbeats appear live, so it's visibly alive
+  between batches, and each attempt's transcript arrives as soon as it
+  lands. Views never control: closing one touches nothing.
 - The coding agent that performs work inside the box is a subprocess
   behind a small adapter interface: the `Brain` seam, whose ratified
   shape lives in `contract/surface.ts` and whose src-side home is
@@ -96,10 +97,11 @@ Prints the task's full event history; `--transcript` includes the raw
 agent output.
 
 ### `fabrica watch <id>`
-Live view of a worker: streams the task's transcript to your terminal
-as it is being written — in any terminal, any window manager, or a
-herdr/tmux pane if that's where you run it. Stopping the watch (Ctrl-C)
-never stops the work. Watching is a window onto the worker, not the
+Follows one task while it runs, in any terminal, any window manager, or a
+herdr/tmux pane if that's where you run it: heartbeats appear live, so
+you can see it's alive, and the worker's own transcript arrives in one
+batch per attempt, not word by word. Stopping the watch (Ctrl-C) never
+stops the work. Watching is a window onto the worker, not the
 room the worker lives in.
 
 ## The record
