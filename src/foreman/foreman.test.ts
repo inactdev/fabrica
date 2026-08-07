@@ -44,13 +44,13 @@ test("status() lists a failed task as failed", async () => {
   assert.equal(mine.state, "failed");
 });
 
-test("verdict() is not built yet (issue #10) and says so plainly", async () => {
+test("verdict() on an unknown task id refuses plainly", async () => {
   const recordHome = freshHome();
   const foreman = createForeman({ recordHome });
 
   await assert.rejects(
     () => foreman.verdict("some-task-id", "accept"),
-    (err: unknown) => err instanceof ForemanError && err.code === "not-built"
+    (err: unknown) => err instanceof ForemanError && err.code === "unknown-task"
   );
 });
 

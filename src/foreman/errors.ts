@@ -6,8 +6,13 @@ export type ForemanErrorCode =
   | "no-brain"
   | "invalid-attempts"
   | "missing-check"
-  | "not-built"
-  | "commit-failed";
+  | "commit-failed"
+  | "unknown-task"
+  | "not-delivered"
+  | "already-closed"
+  | "invalid-verdict"
+  | "missing-note"
+  | "attempts-exhausted";
 
 export class ForemanError extends Error {
   readonly code: ForemanErrorCode;

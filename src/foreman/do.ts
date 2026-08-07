@@ -160,7 +160,7 @@ export async function doTask(
       appendEvent(recordHome, {
         taskId,
         name: "delivered",
-        details: { outcome: delivery.outcome, delivery, receipts },
+        details: { outcome: delivery.outcome, delivery, receipts, project: line.project, totalAttempts, baseCommit },
       });
       return { id: taskId, state: "failed" };
     }
@@ -201,7 +201,7 @@ export async function doTask(
     appendEvent(recordHome, {
       taskId,
       name: "delivered",
-      details: { outcome: delivery.outcome, delivery, receipts },
+      details: { outcome: delivery.outcome, delivery, receipts, project: line.project, totalAttempts, baseCommit },
     });
 
     return { id: taskId, state: outcome === "done" ? "delivered" : "failed" };

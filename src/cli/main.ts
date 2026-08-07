@@ -4,6 +4,7 @@
 // help module, without touching how `do` or `--help` already work.
 
 import { DO_HELP, runDoCommand } from "./do-command.ts";
+import { VERDICT_HELP, runVerdictCommand } from "./verdict-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
 
 export async function main(
@@ -30,6 +31,14 @@ export async function main(
       return 0;
     }
     return runDoCommand(rest, io);
+  }
+
+  if (command === "verdict") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(VERDICT_HELP);
+      return 0;
+    }
+    return runVerdictCommand(rest, io);
   }
 
   io.stderr(`fabrica: unknown command "${command}".\n\n${TOP_LEVEL_HELP}`);

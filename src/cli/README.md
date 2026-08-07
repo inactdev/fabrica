@@ -66,6 +66,24 @@ home is `~/.fabrica`, matching SPEC.md's default; the environment
 variable is what SPEC.md calls "path configurable." Mainly useful for
 scripting against a throwaway record home instead of the real one.
 
+## `fabrica verdict <taskId> <accept|fix|wrong> ["<note>"]`
+
+CONTRACT rule 6 - the Client's ruling on a delivered task, described in
+full in `src/foreman/README.md`. Unlike `fabrica do`, this never
+detaches: `accept` and `wrong` are instant (they only append a record
+event), and a `fix` runs its one extra worker attempt synchronously so
+the command can print that round's outcome directly rather than making
+the Client separately poll for it.
+
+`verdict-args.ts` parses the three positionals (`fix` requires the
+third, since the note is the correction itself); `verdict-command.ts`
+resolves the record home the same way `do-command.ts` does and calls
+`createForeman({ recordHome }).verdict(...)` - no brain override, so a
+`fix` here always uses `defaultBrainAdapter()` (there is no
+same-process `do()` call for this command to remember a brain from,
+unlike the contract tests - see `src/foreman/README.md`'s "What a fix
+costs" section).
+
 ## Why `bin.mjs` isn't a shebang'd `.ts` file
 
 The obvious shebang, `#!/usr/bin/env -S node --import tsx/esm`, works
@@ -167,10 +185,12 @@ calls `runTask`.
 | --- | --- |
 | `bin.mjs` | The installed executable. Two lines of real work - see above. |
 | `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh. |
-| `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. New subcommands (#8, #10, #12) add one branch here. |
+| `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. New subcommands (#8, #12) add one branch here. |
 | `help.ts` | Top-level help text and the list of known commands. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
 | `do-command.ts` | Ties config, project resolution, and the detached spawn together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
+| `verdict-args.ts` | Parses `fabrica verdict`'s arguments. |
+| `verdict-command.ts` | Resolves the record home and calls `Foreman.verdict` for `fabrica verdict`; `VERDICT_HELP` is `verdict --help`'s text. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |

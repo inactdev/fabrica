@@ -51,3 +51,24 @@ test("main: `do -h` also short-circuits to help", async () => {
   assert.equal(code, 0);
   assert.match(io.out[0], /fabrica do "<task text>"/);
 });
+
+test("main: `verdict --help` prints the verdict command's own usage and exits 0, without running anything", async () => {
+  const io = captureIo();
+  const code = await main(["verdict", "--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica verdict <taskId>/);
+});
+
+test("main: `verdict -h` also short-circuits to help", async () => {
+  const io = captureIo();
+  const code = await main(["verdict", "some-task", "-h"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica verdict <taskId>/);
+});
+
+test("main: top-level help mentions the verdict command", async () => {
+  const io = captureIo();
+  const code = await main(["--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /verdict <taskId>/);
+});

@@ -28,17 +28,39 @@ export async function runAttempts(opts: {
   check: string;
   totalAttempts: number;
   stopEarlyOnGreen: boolean;
+  /** Verdict rule 6's "fix" path: resume the same warm worker session
+   * instead of starting cold, so a correction keeps the worker's prior
+   * context rather than re-discovering it. Omitted for an ordinary
+   * do() call, which has no prior session to resume. */
+  initialSession?: string;
+  /** Verdict rule 6's "fix" path: the receipt `attempt` numbers continue
+   * from where the task's prior rounds left off, instead of restarting
+   * at 1, so the record shows one running count across the whole task. */
+  startAttempt?: number;
   onCheckRun?: (attempt: number, gate: GateResult) => void;
   onTranscript?: (transcript: TranscriptEntry[]) => void;
 }): Promise<AttemptLoopResult> {
-  const { brain, brief, workdir, taskId, check, totalAttempts, stopEarlyOnGreen, onCheckRun, onTranscript } = opts;
+  const {
+    brain,
+    brief,
+    workdir,
+    taskId,
+    check,
+    totalAttempts,
+    stopEarlyOnGreen,
+    initialSession,
+    startAttempt,
+    onCheckRun,
+    onTranscript,
+  } = opts;
 
   const receipts: Receipt[] = [];
-  let session: string | undefined;
+  let session: string | undefined = initialSession;
   let lastGate: GateResult | undefined;
   let declaredGateChanges: string | undefined;
 
-  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+  const firstAttempt = startAttempt ?? 1;
+  for (let attempt = firstAttempt; attempt < firstAttempt + totalAttempts; attempt++) {
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
 

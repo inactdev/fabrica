@@ -24,10 +24,13 @@ const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
   enforced here: CONTRACT rule 10 ("It cannot outspend you") is issue
   #11's job, not this loop's. Passing it today has no effect; omitting it
   has no effect either.
+- **`brain`** — only used by `verdict()`'s "fix" path, as a fallback for
+  when this instance never saw a `do()` call for that task. See
+  "`verdict(taskId, ruling, note?)`" below for why `verdict()` itself has
+  no brain parameter of its own.
 
 The return value satisfies `Foreman` (`contract/surface.ts`): `do`,
-`deliveryOf`, `receiptsOf`, `status`, `events`, `recordPath`, and a
-`verdict` stub (see "What's deliberately still a stub" below).
+`deliveryOf`, `receiptsOf`, `verdict`, `status`, `events`, `recordPath`.
 
 ## `do(taskText, { project, attempts?, brain? })`
 
@@ -383,29 +386,74 @@ so `do()` computes every receipt's final `outcome` before it ever calls
 `appendEvent`, and logs the whole batch once, on the single `"delivered"`
 event, already correct.
 
-## What's deliberately still a stub
+## `verdict(taskId, ruling, note?)` — rule 6, "you get the last word"
 
-`verdict()` throws `ForemanError("not-built")`. CONTRACT rule 6 ("You get
-the last word") is issue #10's job — recording a ruling and closing the
-loop on it. `status()`'s state derivation already leaves room for it
-(`"closed"` once a `"verdict-recorded"` event exists), but this module
-doesn't write that event or interpret one; that's left to whoever builds
-#10, including a sibling lane that may already be working on it.
+A delivered task stays open (`status()` still lists it, as `"delivered"`
+or `"failed"`) until this is called. Every ruling appends a
+`"verdict-recorded"` event, unconditionally — that event, not any
+side-channel state, is what `queries.ts`'s `deriveState` reads to decide
+whether a task is `"closed"`.
+
+- **`accept`** — the work is right. Closes the task.
+- **`wrong`** — not what was wanted, and not worth correcting. Closes the
+  task, same as `accept` — a real outcome the record shows plainly, not a
+  failure folded into `"failed"`.
+- **`fix`** — right direction, wrong details. Does **not** close the
+  task. `note` is required (there is nothing to correct without it) and
+  becomes a correction handed back to the *same warm worker on the same
+  line*: `src/line/resume.ts`'s `reopenProductionLine` re-creates the
+  worktree at the exact `<recordHome>/tasks/<taskId>/worktree` path a
+  Brain's session was born in — session resume is scoped to that `cwd`
+  (`src/brain/adapters/`'s own docs) — checked out onto the same
+  `fabrica/<taskId>` branch, which already carries whatever the prior
+  round committed. `runAttempts` (`attempts.ts`) is called with
+  `initialSession` set to the last receipt's session id and
+  `startAttempt` continuing the numbering, so the record shows one
+  running attempt count across the whole task, not a count that resets
+  per fix. A second `"delivered"` event is appended with the fix round's
+  own outcome and the **cumulative** receipts (prior + this round) —
+  `queries.ts`'s `deliveryOf`/`receiptsOf`/`deriveState` all read the
+  *last* `"delivered"` event for exactly this reason, not the first.
+
+  **What a fix costs, precisely**: it consumes one attempt from the
+  task's *original* attempt budget (`do()`'s `totalAttempts` — the
+  default 2, or whatever was passed explicitly), persisted on the
+  `"delivered"` event's `details` alongside `project` and `baseCommit`
+  (`queries.ts`'s `DeliveredDetails`) so a later fix round can still find
+  them without re-deriving anything. Once `receipts.length >=
+  totalAttempts`, `verdict("fix", …)` refuses with
+  `ForemanError("attempts-exhausted")` before touching the worker at
+  all — this is rule 3's "three means three" applied to the whole task's
+  lifetime, not just one `do()` call, and it is what stops a fix loop
+  from running forever.
+
+  A worker's brain is **not** a `verdict()` parameter
+  (`contract/surface.ts`'s `Foreman.verdict` takes only `taskId`,
+  `ruling`, `note`) — `createForeman` remembers which brain a `do()` call
+  on *that same instance* used, per task id, and reuses the exact
+  instance for a same-process fix (this is how the contract tests, which
+  create one `Foreman` and call `do()` then `verdict()` on it, exercise
+  the fix path against `fakeBrain()` without any brain-passing seam in
+  the interface). Across processes — the real shape of `fabrica do` then
+  `fabrica verdict` by hand — that memory doesn't exist, so it falls back
+  to `defaultBrainAdapter()`, the same real adapter `do()` already uses
+  by default via the CLI.
 
 ## Files
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `not-built`, `commit-failed`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`, `attempts-exhausted`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Snapshots and compares `check.sh`, for rule 9's undeclared-change detection. |
-| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. |
+| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. |
 | `do.ts` | `doTask` — the orchestration described above. |
-| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |
-| `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape. |
+| `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong, re-enters the same line and worker on fix. |
+| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. |
+| `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path uses. |
 
 `GateResult`, `Receipt`, `Delivery`, `FabricaTask`, and `Foreman` itself
 are declared once, in `contract/surface.ts`, and imported into this
