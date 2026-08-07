@@ -37,14 +37,14 @@ export function reopenProductionLine(opts: { project: string; taskId: string; re
 
   const branch = `fabrica/${opts.taskId}`;
   try {
-    execFileSync("git", ["rev-parse", "--verify", "--quiet", branch], {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
       cwd: project,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
     throw new LineError(
       "no-such-branch",
-      `Cannot reopen a ProductionLine for ${branch}: that branch does not exist in ${project}. ` +
+      `Cannot reopen a ProductionLine for ${branch}: no local branch of that name exists in ${project}. ` +
         `A line can only be reopened for a task that already ran once with createProductionLine.`
     );
   }

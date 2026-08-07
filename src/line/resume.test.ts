@@ -45,6 +45,41 @@ test("reopenProductionLine refuses a task id whose branch was never cut", () => 
   );
 });
 
+test("reopenProductionLine refuses a tag that carries the branch's name but no branch", () => {
+  const project = makeFixtureProject();
+  const recordHome = makeFixtureHome();
+  execFileSync("git", ["tag", "fabrica/task-tag-only"], { cwd: project });
+
+  assert.throws(
+    () => reopenProductionLine({ project, taskId: "task-tag-only", recordHome }),
+    (err: unknown) => err instanceof LineError && err.code === "no-such-branch"
+  );
+});
+
+test("reopenProductionLine stays on the branch when a tag shares its name", () => {
+  const project = makeFixtureProject();
+  const recordHome = makeFixtureHome();
+
+  const first = createProductionLine({ project, taskId: "task-shadowed", recordHome });
+  writeFileSync(join(first.workdir, "app.txt"), "changed by the first round\n");
+  execFileSync("git", ["add", "-A"], { cwd: first.workdir });
+  execFileSync(
+    "git",
+    ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "first round"],
+    { cwd: first.workdir }
+  );
+  destroyProductionLine(first);
+  execFileSync("git", ["tag", "fabrica/task-shadowed", "HEAD"], { cwd: project });
+
+  const reopened = reopenProductionLine({ project, taskId: "task-shadowed", recordHome });
+
+  assert.equal(
+    execFileSync("git", ["symbolic-ref", "HEAD"], { cwd: reopened.workdir, encoding: "utf8" }).trim(),
+    "refs/heads/fabrica/task-shadowed",
+    "a detached HEAD here would silently orphan the fix round's commits"
+  );
+});
+
 test("reopenProductionLine refuses when a workspace already exists at that path", () => {
   const project = makeFixtureProject();
   const recordHome = makeFixtureHome();
