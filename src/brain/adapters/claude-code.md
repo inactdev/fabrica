@@ -57,12 +57,19 @@ claude -p "<ask prompt>" --output-format stream-json --verbose
 ```
 
 run inside a fresh, empty scratch directory (`mkdtempSync`, deleted again
-after the call) as the container's only mount - no git, no
+after the call), mounted alongside an equally throwaway `homeDir` - no
+git, no
 `readOnlyMounts`, no `--permission-mode bypassPermissions` (this call is
 never asked to edit anything, so it needs none of the tool access that
 flag exists to unlock), no `--resume` (every call is a cold, throwaway
 session; see below for why one never carries into `work()`). `--model` is
-still forwarded when configured, same as `work()`.
+still forwarded when configured, same as `work()`. The home directory is
+not optional even for a call this short: a `--user <uid>` container with
+no mounted home resolves `$HOME` to the read-only `/`
+(`../../containment/README.md`), and the CLI writes startup config/state
+under `$HOME` before it does anything else. `work()` keeps its home
+across calls so `--resume` can find the last session; `ask()` never
+resumes, so its home is minted and deleted per call.
 
 `buildAskPrompt` (`claude-code.ts`) states the same "materially
 ambiguous" line this codebase draws everywhere else - an ambiguity that
@@ -72,8 +79,11 @@ nothing but a JSON object: `{"questions": [...]}`, empty array meaning
 proceed. `parseAskResult` reads the terminal `result` line's `result`
 field (the same field `work()`'s error path already reads), stripping a
 fenced code block if the model wrapped its JSON in one despite the
-instruction. Anything that still isn't parseable, or isn't shaped like
-`{questions: string[]}`, is treated as "nothing to ask" rather than
+instruction. Entries that aren't non-blank strings are dropped from the
+list rather than voiding it, so one stray element can't lose a real
+question (`registerAndAsk` filters the same way). Anything that still
+isn't parseable, or has no usable question left, is treated as
+"nothing to ask" rather than
 failing the task - a formatting slip from the model shouldn't block work
 that was actually clear, matching this issue's own stated bias toward not
 over-asking. A genuine infrastructure failure (docker unreachable, a

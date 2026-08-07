@@ -170,8 +170,12 @@ function parseAskResult(text: string): BrainAskResult {
   try {
     const parsed: unknown = JSON.parse(candidate);
     const questions = (parsed as { questions?: unknown } | null)?.questions;
-    if (Array.isArray(questions) && questions.every((q) => typeof q === "string" && q.trim().length > 0)) {
-      return questions.length > 0 ? { questions } : {};
+    if (Array.isArray(questions)) {
+      // Blank or non-string entries are dropped, not treated as grounds
+      // to throw the whole list away - one stray element must not lose a
+      // real question. registerAndAsk filters the same way.
+      const kept = questions.filter((q): q is string => typeof q === "string" && q.trim().length > 0);
+      return kept.length > 0 ? { questions: kept } : {};
     }
   } catch {
     // Not parseable JSON - fall through to "nothing to ask".
@@ -273,6 +277,14 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       // has no path to anything of the Client's to touch.
       const ownScratchDir = opts.askScratchDir === undefined;
       const scratchDir = opts.askScratchDir ?? mkdtempSync(join(realpathSync(tmpdir()), "fabrica-ask-"));
+      // Without a mounted home, a `--user <uid>` container has no
+      // /etc/passwd entry for that uid and $HOME resolves to "/", which
+      // is read-only - the CLI writes its own startup config/state under
+      // $HOME and would die there (see src/containment/README.md's
+      // "$HOME" note). work() persists its home across calls so a
+      // --resume finds the last session; ask() never resumes, so this
+      // one is throwaway and goes away with the call.
+      const homeDir = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-ask-home-"));
       const args = buildAskArgs(buildAskPrompt(brief), opts);
 
       let stdout: string;
@@ -284,6 +296,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
           network: "allowed",
           image,
           env: opts.env,
+          homeDir,
         }));
       } catch (err) {
         if (err instanceof ContainmentError) {
@@ -295,6 +308,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         throw err;
       } finally {
         if (ownScratchDir) rmSync(scratchDir, { recursive: true, force: true });
+        rmSync(homeDir, { recursive: true, force: true });
       }
 
       const lines = parseLines(stdout);

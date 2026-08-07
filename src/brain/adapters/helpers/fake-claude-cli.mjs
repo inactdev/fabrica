@@ -43,6 +43,8 @@ if (brief?.includes("ASK_SCENARIO_QUESTIONS")) {
   line(resultLine({ result: JSON.stringify({ questions: [] }) }));
 } else if (brief?.includes("ASK_SCENARIO_FENCED")) {
   line(resultLine({ result: "```json\n" + JSON.stringify({ questions: ["Fenced question?"] }) + "\n```" }));
+} else if (brief?.includes("ASK_SCENARIO_MIXED")) {
+  line(resultLine({ result: JSON.stringify({ questions: ["Real question?", "  ", 7] }) }));
 } else if (brief?.includes("ASK_SCENARIO_GARBLED")) {
   line(resultLine({ result: "sure, sounds good, proceeding now" }));
 } else {

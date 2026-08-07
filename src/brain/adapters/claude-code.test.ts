@@ -134,6 +134,18 @@ test("claudeCodeAdapter.ask() strips a fenced code block around the JSON", async
   assert.deepEqual(result.questions, ["Fenced question?"]);
 });
 
+test("claudeCodeAdapter.ask() keeps the usable questions when the list also has junk in it", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    askScratchDir: makeFakeCliScratchDir(),
+  });
+
+  const result = await brain.ask("ASK_SCENARIO_MIXED");
+  assert.deepEqual(result.questions, ["Real question?"]);
+});
+
 test("claudeCodeAdapter.ask() treats an unparseable response as nothing to ask, not a crash", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const brain = claudeCodeAdapter({

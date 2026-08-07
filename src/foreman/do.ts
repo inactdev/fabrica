@@ -17,7 +17,7 @@ import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
-import { registerAndAsk, DEFAULT_ATTEMPTS } from "./ask.ts";
+import { registerAndAsk } from "./ask.ts";
 import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
 export { DEFAULT_ATTEMPTS } from "./ask.ts";
