@@ -83,7 +83,7 @@ export async function recordVerdict(
   const project = details?.project;
   const baseCommit = details?.baseCommit;
 
-  if (ruling === "fix" && (totalAttempts === undefined || project === undefined || baseCommit === undefined)) {
+  if (ruling === "fix" && (project === undefined || baseCommit === undefined)) {
     throw new ForemanError(
       "not-delivered",
       `fabrica verdict: task "${taskId}"'s delivery record is missing what a "fix" needs to reopen its ` +
@@ -104,7 +104,7 @@ export async function recordVerdict(
   await runFixRound(recordHome, taskId, note!, {
     brain: opts.brain,
     project: project!,
-    totalAttempts: totalAttempts!,
+    totalAttempts,
     baseCommit: baseCommit!,
     priorReceipts,
     priorGateChanges: details?.delivery?.gateChanges || undefined,
@@ -141,7 +141,7 @@ async function runFixRound(
   ctx: {
     brain: Brain;
     project: string;
-    totalAttempts: number;
+    totalAttempts: number | undefined;
     baseCommit: string;
     priorReceipts: Receipt[];
     priorGateChanges: string | undefined;

@@ -26,8 +26,10 @@ export interface DeliveredDetails {
    * contract's Delivery shape, so it rides along here instead. */
   project?: string;
   /** The attempt budget `do()` was given for this task (SPEC.md's
-   * default of 2, or whatever was passed explicitly) — the fix path
-   * counts against this same total rather than getting its own. */
+   * default of 2, or whatever was passed explicitly) — persisted purely
+   * as a record of what `do()` ran with, not as a ceiling on anything:
+   * the fix path gets no budget at all (issue #65) and reads this for
+   * no decision. */
   totalAttempts?: number;
   /** The fork point `diffFiles` pins to (src/delivery/diff-files.ts) —
    * carried forward so a fix round's delivery still reports the full

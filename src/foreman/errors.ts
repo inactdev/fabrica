@@ -12,8 +12,7 @@ export type ForemanErrorCode =
   | "not-delivered"
   | "already-closed"
   | "invalid-verdict"
-  | "missing-note"
-  | "attempts-exhausted";
+  | "missing-note";
 
 export class ForemanError extends Error {
   readonly code: ForemanErrorCode;

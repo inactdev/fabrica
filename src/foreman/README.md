@@ -441,13 +441,17 @@ whether a task is `"closed"`.
   trying, failing, and trying again unattended — not a correction the
   Client explicitly asked for; nothing happens until he rules `fix`, so
   he is the stop condition, not a counter. `verdict("fix", …)` has no
-  ceiling and never refuses with `ForemanError("attempts-exhausted")` —
-  that code and error stay in the codebase for what they were built for,
-  `do()`'s own budget, and still fire there. `project`, `baseCommit`, and
-  the *original* `totalAttempts` are still persisted on the `"delivered"`
-  event's `details` (`queries.ts`'s `DeliveredDetails`) so a later fix
-  round can still find what it needs to reopen the line, but nothing
-  reads `totalAttempts` to refuse a fix any more. Each round is counted
+  ceiling and never refuses. The `ForemanError` code it used to refuse
+  with, `attempts-exhausted`, is gone from `errors.ts` entirely: that
+  refusal was its only thrower, and `do()` exhausting its *own* budget
+  never threw it — per rule 2 ("Done means proven") a red final gate is
+  delivered as an honest `failure-report`, never raised as an error, and
+  that stays exactly as it is. `project` and `baseCommit` are still
+  persisted on the `"delivered"` event's `details` (`queries.ts`'s
+  `DeliveredDetails`) so a later fix round can find what it needs to
+  reopen the line; the *original* `totalAttempts` rides along as a record
+  of what `do()` was given, but nothing reads it for any decision — a
+  delivery that somehow lacks it can still be fixed. Each round is counted
   and reported instead: `queries.ts`'s `fixRoundOf` derives the count by
   reading how many `"verdict-recorded"` events with `ruling: "fix"` a
   task has, rather than storing a separate counter that could drift —
@@ -470,7 +474,7 @@ whether a task is `"closed"`.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`, `attempts-exhausted`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
