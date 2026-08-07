@@ -6,36 +6,59 @@ Installed version verified against: **Claude Code 2.1.224.**
 
 ## What's here
 
-- `settings.json` — a permissions template: hard-denies the file-editing tools, and narrows Bash to Fabrica's own command plus a short allowlist of read-only ones.
-- `hooks/log-blocked-edit.ts` — a `PermissionDenied` hook that turns a blocked edit into a durable `edit-attempt-blocked` event on Fabrica's own record.
+- `settings.json` - a permissions template: wires the file-editing tools to a denying `PreToolUse` hook, and narrows Bash to Fabrica's own command plus a short allowlist of read-only ones.
+- `hooks/deny-and-log-edit.ts` - a `PreToolUse` hook that does both halves in one invocation: it denies the edit, and records it as a durable `edit-attempt-blocked` event on Fabrica's own record.
 
 ## Installing it
 
 This is **not** applied automatically to anything — Fabrica registering a project never means Fabrica may silently drop files into that project's own `.claude/` folder; that would be exactly the kind of unrecorded, off-the-books edit this whole issue exists to catch. The Client installs it himself, once per project he wants protected (or once at `~/.claude/settings.json` for every session, project or not — see "Where to put it" below):
 
 1. Copy `settings.json`'s content into the target `.claude/settings.json` (merge its `permissions` and `hooks` keys into an existing file rather than overwriting one that already has content).
-2. Replace both `<ABSOLUTE-PATH-TO-FABRICA-REPO>` placeholders in the `hooks.PermissionDenied` command with wherever this Fabrica checkout actually lives (e.g. `/Users/ari/inkling-umbrella/fabrica`). The command runs Fabrica's own `tsx` against Fabrica's own hook script by absolute path deliberately — it works regardless of whether the *target* project has `tsx` (or any Node dependency) installed at all, since it never depends on that project's own `node_modules`.
+2. Replace both `<ABSOLUTE-PATH-TO-FABRICA-REPO>` placeholders in the single `hooks.PreToolUse` command (there is one hook now, under `hooks.PreToolUse` - not `hooks.PermissionDenied`, which this design no longer uses) with wherever this Fabrica checkout actually lives (e.g. `/Users/ari/inkling-umbrella/fabrica`). The command runs Fabrica's own `tsx` against `hooks/deny-and-log-edit.ts` by absolute path deliberately - it works regardless of whether the *target* project has `tsx` (or any Node dependency) installed at all, since it never depends on that project's own `node_modules`.
 3. Optionally set `FABRICA_HOME` in the environment the hook command's shell sees, if the record home isn't the default `~/.fabrica`.
 
 ### Where to put it
 
 Verified precedence (highest wins): CLI flags > `.claude/settings.local.json` (personal, gitignored) > `.claude/settings.json` (project, shareable) > `~/.claude/settings.json` (every session on the machine). Project-level `.claude/settings.json` is the natural fit for "this registered project's sessions shouldn't edit files directly" and is what the Client would check into that project's own repo if he wants teammates protected too; user-level is the right choice only if he wants it enforced everywhere, Fabrica-registered or not — that's a broader guarantee than this issue asks for, so it's offered as an option, not the default recommendation.
 
-## Exactly what's verified, and how
+## How this design was arrived at, and what's verified
 
-Everything below was checked directly against the installed 2.1.224 binary's own embedded strings (`strings -a` on `~/.local/share/claude/versions/2.1.224`) — not just the hosted docs, since a doc page can drift from what's actually shipped and a subagent summarizing a fetched page can misquote it. Where the binary itself echoes the exact string, that's as close to "verified on this machine" as this task gets without a live end-to-end run against the real product (out of scope here — see "What's not verified" below).
+This template had an earlier design, and it did not work. The history matters, because the failure is the reason the current shape looks the way it does.
 
-| Claim | Verified how |
+### The first design, and how it failed
+
+The first version denied file editing with bare tool names in `permissions.deny` (`"Edit"`, `"Write"`, `"NotebookEdit"`, `"MultiEdit"`) and logged the denial from a separate `PermissionDenied` hook (`hooks/log-blocked-edit.ts`, now deleted). It was built from static verification only: the installed 2.1.224 binary's own embedded strings (`strings -a` on `~/.local/share/claude/versions/2.1.224`) contain the literal `["Edit","Write","NotebookEdit"]` grouping, a `PermissionDenied` hook-event name with the doc string *"When a tool call is denied by the auto mode classifier..."*, that event's payload shape (`{...base, hook_event_name:"PermissionDenied", tool_name, tool_input, tool_use_id, reason}`), and the `matcher` field's `"A|B|C"` alternation over `tool_name`. All of that is real. None of it proved the hook fires.
+
+It was then tested live against the real installed binary in four configurations:
+
+| Configuration | What actually happened |
 | --- | --- |
-| `permissions.deny` accepts bare tool names `"Edit"`, `"Write"`, `"NotebookEdit"` to remove a tool from the session entirely | The binary contains the literal array `["Edit","Write","NotebookEdit"]` as an internal grouping, plus doc strings describing bare-name removal. `"MultiEdit"` also appears as a related tool name elsewhere in the binary; included in `settings.json`'s deny list defensively even though its exposure in 2.1.224's active tool surface wasn't separately confirmed — denying a tool name that doesn't exist is a harmless no-op, omitting one that does would not be. |
-| Bash permission patterns use `Bash(<prefix> *)` / `Bash(<exact command>)` syntax | Confirmed by the hosted docs (`code.claude.com/docs/en/permissions.md`) via a research subagent; not independently re-derived from the binary's strings the way the hook mechanics below were, since pattern-matching logic isn't exposed as a literal string to grep for. |
-| A `PermissionDenied` hook event exists, distinct from `PreToolUse` | The binary's own hook-event-name array includes it; a nearby string spells out its purpose: *"When a tool call is denied by the auto mode classifier. Return `{retry: true}` to tell the model it may retry the denied tool call."* |
-| `PermissionDenied`'s stdin payload shape | The binary constructs it as `{...base, hook_event_name:"PermissionDenied", tool_name, tool_input, tool_use_id, reason}` — read directly from the minified source, not inferred. `cwd` was not confirmed present on this exact payload (it appears on the shared "base" fields for other hook events); `log-blocked-edit.ts` reads `payload.cwd` if present and falls back to the hook process's own `process.cwd()` otherwise. |
-| The hook `matcher` field supports `"A|B|C"` regex-alternation over `tool_name` | The binary's own embedded example doc string is `{"PostToolUse": [{"matcher": "Edit|Write", ...}]}`, with `matcherMetadata:{fieldToMatch:"tool_name",...}` alongside it. |
-| Settings file precedence (CLI flags > `.local.json` > project `.json` > user `.json`) | From the hosted docs via the research subagent; not independently re-derived from the binary. |
+| The shipped bare-name deny list | The editing tools were absent from the session entirely, so no call was ever attempted - and nothing attempted means nothing to log. |
+| A path-form deny (`Edit(//**)`) | The call was attempted and blocked. |
+| No deny rule at all | The call was denied by the permission prompt. |
+| The edit delegated to a spawned subagent | Denied there too. |
+
+The prevention half held in all four - the target file's content was never changed. But the `PermissionDenied` hook fired in **none** of them, so no `edit-attempt-blocked` event was ever produced. A control `SessionStart` hook added to the same settings file did fire, which rules out "hooks from this file are ignored"; the Fabrica-side script itself also recorded correctly when fed a real payload on stdin. The gap was specifically that `PermissionDenied` never fires.
+
+### The current design, and how it was verified
+
+Following an explicit Client decision to try the single-hook alternative, file editing is now denied *and* logged by one `PreToolUse` hook in the same invocation (`hooks/deny-and-log-edit.ts`). Denying through a hook rather than through `permissions.deny` keeps the tool visible to the model, so a real attempt is made every time - which is what makes logging possible at all.
+
+This was verified with two further live, non-bypassed `claude -p` sessions (no `--dangerously-skip-permissions`, real permission evaluation) against the really installed 2.1.224 binary, in a throwaway project with this exact hook wired in:
+
+| Live run | Result |
+| --- | --- |
+| A direct top-level `Edit` attempt | The `tool_use` appears in the transcript, the target file's content was unchanged afterward (genuinely denied, not just claimed-denied), and a real `edit-attempt-blocked` event landed in `events.jsonl`, written by the hook firing during the live session - not a synthetic stdin test. |
+| An `Edit` attempt delegated to a spawned subagent (the Agent tool) | Same result: attempted, file unchanged, event recorded. |
+
+Only `Edit` was independently exercised live, directly and via a subagent. `Write`, `NotebookEdit` and `MultiEdit` were **not** separately live-tested. They are not four code paths - they are four `tool_name` strings matched by the same `matcher` regex into the same hook - so the same result is expected, but expected is not the same as watched.
+
+`MultiEdit` also no longer produces 2.1.224's startup warning *"Permission deny rule "MultiEdit" matches no known tool - check for typos."*, which the old design printed to the Client twice per session. That warning came from `permissions.deny` validating its entries against the known tool names; `MultiEdit` now appears only inside the `PreToolUse` matcher, which is a pattern matched against whatever `tool_name` a call actually carries and is not validated against a tool list.
+
+Two static claims from the first design are still load-bearing and still stand: Bash permission patterns use `Bash(<prefix> *)` / `Bash(<exact command>)` syntax, and settings-file precedence is CLI flags > `.local.json` > project `.json` > user `.json`. Both come from the hosted docs (`code.claude.com/docs/en/permissions.md`) via a research subagent, not independently re-derived from the binary.
 
 ## What's not verified
 
-- **No end-to-end run against the real Claude Code product.** Nothing here was proven by actually opening a Claude Code session, attempting an edit, and watching it get denied and logged — that needs an interactive (or scripted-but-real) Claude Code session, which this build task didn't have the setup for. The string-level verification above is strong evidence the mechanism exists and is shaped as described; it is not the same as having watched it fire.
-- **Bash's allow/deny lists are not a sandbox.** They narrow what auto-approves and hard-block a curated list of destructive patterns, but a determined bypass through Bash (an interpreter's `-c`/`-e` flag, shell redirection through an otherwise-allowed command, etc.) is not something prefix-pattern matching can close completely. The hard guarantee here is the `Edit`/`Write`/`NotebookEdit`/`MultiEdit` tool-level deny; Bash's lists are defense in depth, not a claim of a closed shell.
-- **Whether the session actually runs under a mode where `permissions.deny` is honored at all.** `bypassPermissions` mode exists and, if the Client's own Claude Code invocation uses it, none of `settings.json`'s deny rules apply. This config assumes an ordinary (non-bypass) session.
+- **Only `Edit` was live-tested, not all four tool names.** See above - `Write`, `NotebookEdit` and `MultiEdit` ride the same matcher and the same hook, so they are expected to behave identically, but they were not independently exercised against the real binary.
+- **Bash's allow/deny lists are not a sandbox.** They narrow what auto-approves and hard-block a curated list of destructive patterns, but a determined bypass through Bash (an interpreter's `-c`/`-e` flag, shell redirection through an otherwise-allowed command, etc.) is not something prefix-pattern matching can close completely. Bash's lists are defense in depth, not a claim of a closed shell.
+- **Whether the session actually runs under a mode where hook decisions are honored at all.** `bypassPermissions` mode exists and, if the Client's own Claude Code invocation uses it, neither the hook's deny nor `settings.json`'s deny rules apply. This config assumes an ordinary (non-bypass) session.

@@ -1,10 +1,6 @@
 {
   "permissions": {
     "deny": [
-      "Edit",
-      "Write",
-      "NotebookEdit",
-      "MultiEdit",
       "Bash(rm *)",
       "Bash(mv *)",
       "Bash(cp *)",
@@ -42,13 +38,13 @@
     ]
   },
   "hooks": {
-    "PermissionDenied": [
+    "PreToolUse": [
       {
         "matcher": "Edit|Write|NotebookEdit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "<ABSOLUTE-PATH-TO-FABRICA-REPO>/node_modules/.bin/tsx <ABSOLUTE-PATH-TO-FABRICA-REPO>/skill/claude-code/hooks/log-blocked-edit.ts"
+            "command": "<ABSOLUTE-PATH-TO-FABRICA-REPO>/node_modules/.bin/tsx <ABSOLUTE-PATH-TO-FABRICA-REPO>/skill/claude-code/hooks/deny-and-log-edit.ts"
           }
         ]
       }
