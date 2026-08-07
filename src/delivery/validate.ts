@@ -15,8 +15,8 @@
 // Client sees the real diff either way. "Claims verified by code, never
 // taken on faith" is sound and stays applied where a claim actually
 // exists to distrust: CONTRACT rule 9 never trusts a Worker's word about
-// whether the checks changed — it snapshots the gate before and after and
-// compares (src/foreman/gate-changes.ts).
+// whether the checks changed — it compares the gate against the task's
+// pinned base commit (src/foreman/gate-changes.ts).
 
 import type { Delivery } from "../../contract/surface.ts";
 import { DeliveryError } from "./errors.ts";

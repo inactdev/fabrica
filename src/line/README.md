@@ -44,15 +44,36 @@ returns a `ProductionLine`:
 Everything a Worker or a check does for this task should happen inside
 `workdir` and nowhere else.
 
+## `reopenProductionLine({ project, taskId, recordHome })`
+
+Cuts the worktree again for a task that already ran once, and returns the
+same `ProductionLine` shape. Two things differ from
+`createProductionLine`: the branch `fabrica/<taskId>` must *already*
+exist (it is checked out, not created), and nothing about the project's
+current `HEAD` is involved - the reopened worktree starts from whatever
+the previous round committed on that branch.
+
+Both of those are what CONTRACT rule 6's "fix" verdict needs
+(`src/foreman/README.md`). The workdir lands at the same
+`<recordHome>/tasks/<taskId>/worktree` path as the first round on
+purpose, not as a coincidence of sharing a path formula: a warm Worker's
+resumable session is scoped to the `cwd` it was created in (see
+`src/brain/adapters/`), so "the same warm worker" is only reachable from
+the identical path.
+
+Every refusal `createProductionLine` can raise applies here too, plus
+`no-such-branch` (below) - including `workdir-exists`, which still
+refuses rather than reusing a leftover worktree, so a line has to be
+destroyed before it can be reopened.
+
 ## `destroyProductionLine(line)`
 
 Returns a `TeardownResult`: `{ status: "destroyed" }` when it actually
 removed something, or `{ status: "already-destroyed" }` when there was
 nothing left to remove — see "Idempotent teardown" below. Takes the whole
-`ProductionLine` object `createProductionLine` returned
-- not a loose `taskId`/`recordHome`/`workdir` trio - and removes the
-worktree: the directory at `line.workdir` and git's own bookkeeping for
-it.
+`ProductionLine` object it was handed back - not a loose
+`taskId`/`recordHome`/`workdir` trio - and removes the worktree: the
+directory at `line.workdir` and git's own bookkeeping for it.
 
 It takes the whole object rather than separate parameters because it
 re-derives the worktree path it expects to see, from `line.recordHome`
@@ -62,8 +83,9 @@ refuses to proceed unless that matches `line.workdir` exactly (see
 mismatched trio - a `recordHome` from one task paired with the
 `workdir` of another, say - and delete the wrong directory, on the one
 rule whose failure damages the Client's real work. Passing the object
-`createProductionLine` handed back is the only way to call this
-function, so that mismatch can't happen by construction.
+`createProductionLine` or `reopenProductionLine` handed back is the only
+way to call this function, so that mismatch can't happen by
+construction.
 
 What it deliberately leaves alone is the branch - `fabrica/<taskId>`
 survives destruction exactly where its last commit left it. That's on
@@ -87,10 +109,11 @@ types like `Delivery` and `Receipt` do, not as a local `types.ts` here -
 and this module imports it as a type only, which `import type` erases
 at compile time so it creates no runtime dependency on `contract/`.
 
-`ProductionLine` is what `createProductionLine` hands back - you never
-construct one by hand, so no field is ever "left out." What matters
-instead is what each one is used for, and what breaks if one ever holds
-the wrong value (a hand-edited or stale object, say):
+`ProductionLine` is what `createProductionLine` and
+`reopenProductionLine` hand back - you never construct one by hand, so no
+field is ever "left out." What matters instead is what each one is used
+for, and what breaks if one ever holds the wrong value (a hand-edited or
+stale object, say):
 
 - **`taskId`** - the task id you passed in, unchanged. Builds the branch
   name and the workdir path, and is how `createProductionLine` detects
@@ -152,6 +175,11 @@ what triggers each one and what to do about it.
   because the branch `fabrica/<taskId>` already exists from an earlier
   run that used this same id. Read the wrapped git error in the message;
   it names the actual cause.
+- **`no-such-branch`** - `reopenProductionLine` was asked for a task
+  whose `fabrica/<taskId>` branch doesn't exist in `project`. A line can
+  only be reopened for a task that already ran once through
+  `createProductionLine`; this is the mirror image of `cut-failed`'s
+  usual cause.
 - **`unsafe-teardown`** - `destroyProductionLine` won't touch
   `line.workdir` because it can't confirm, via git's own worktree list,
   that the path is a registered *linked* worktree of `project` and not

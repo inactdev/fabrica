@@ -58,11 +58,11 @@ Each task gets `tasks/<id>/`, holding:
 | `answers.md` | Every clarification round: question asked, answer given | Whatever handles `fabrica answer`, one round appended per call. |
 | `brief.md` | `request.md` plus every answer in `answers.md`, assembled — what a Worker actually receives | The Foreman, at registration, verbatim from the request (no answers exist yet); re-derived and rewritten by `fabrica answer` each time a round is added. |
 | `plan.md` | The agent's plan, on the runs where it proceeds straight to work instead of asking questions | The worker, once. |
-| `delivery.md` | The delivery block, or a failure report | The Foreman, once, after checks run. |
-| `verdict` | The Client's ruling (`accept` / `fix` / `wrong`) plus their note and a timestamp | `fabrica verdict`, once. |
+| `delivery.md` | The delivery block, or a failure report | The Foreman, after checks run - rewritten in place by a `fix` verdict's extra round, so it always shows the latest one. |
+| `verdict` | Every ruling (`accept` / `fix` / `wrong`) plus its note and a timestamp | The Foreman's `recordVerdict`, one line appended per ruling - a `fix` leaves the task open, so a task can collect several before its final one. |
 | `transcript.log` | The worker's transcript entries, one JSON line each (see `src/brain/README.md`'s `TranscriptEntry`) | The Foreman, one append per attempt as the loop runs. |
 
-`registerTask` writes `request.md` and appends the matching `task-received` event to `events.jsonl` in the same call, so the file and the record can't drift apart. `src/foreman/` (issue #7) now writes `brief.md`, `transcript.log`, and `delivery.md` the same way; the remaining files exist for the modules that write them later in the loop to reuse the pattern.
+`registerTask` writes `request.md` and appends the matching `task-received` event to `events.jsonl` in the same call, so the file and the record can't drift apart. `src/foreman/` (issue #7) now writes `brief.md`, `transcript.log`, and `delivery.md` the same way, and its `verdict.ts` (issue #10) writes `verdict`; `answers.md` and `plan.md` are the remaining files, and exist for the modules that write them later in the loop to reuse the pattern.
 
 ## Why there is no edit and no delete
 

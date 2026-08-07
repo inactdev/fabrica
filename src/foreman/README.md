@@ -10,7 +10,7 @@ project's own check, and writes a delivery — wiring `src/record`,
 "fabrica do". It is pure code: it delegates and counts, it never decides
 anything a model should decide instead.
 
-## `createForeman({ recordHome, caps? })`
+## `createForeman({ recordHome, caps?, brain? })`
 
 ```ts
 const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
@@ -142,9 +142,13 @@ line cut.
 
 ### `brain`
 
-Required — v1 has no default adapter to fall back on yet (issue #6 builds
-the first real one). Omitting it raises `ForemanError("no-brain")` before
-anything else happens.
+Required here, with no fallback: omitting it raises
+`ForemanError("no-brain")` before anything else happens. A real adapter
+does exist now (`defaultBrainAdapter()`), but choosing it is the caller's
+job - `src/cli/run-task-entry.ts` passes it for `fabrica do`. Only
+`verdict()`'s fix path falls back on its own, because
+`contract/surface.ts`'s `Foreman.verdict` has no brain parameter to pass
+one through (see "`verdict(taskId, ruling, note?)`" below).
 
 ## Why `check.sh`, not only config
 
@@ -383,8 +387,10 @@ list of Receipts — only markdown/text files a person reads
 (`delivery.md`, `transcript.log`, …). Rather than invent a place to store
 structured data outside the record, `do()` puts the whole `Delivery`
 object and the full `Receipt[]` array straight into the `"delivered"`
-event's `details` field. `deliveryOf` and `receiptsOf` (`queries.ts`)
-read that one event back and return its `details.delivery` /
+event's `details` field (alongside the `project`, `totalAttempts`, and
+`baseCommit` a later fix round needs - `queries.ts`'s
+`DeliveredDetails`). `deliveryOf` and `receiptsOf` (`queries.ts`) read
+the *latest* `"delivered"` event back and return its `details.delivery` /
 `details.receipts` directly — no markdown parsing, no second source of
 truth. `delivery.md` still gets written, as a human-readable rendering of
 the exact same object, matching the same "events.jsonl is authoritative;
@@ -397,8 +403,9 @@ attempt that looked "delivered" the moment its check went green can still
 turn into `"discarded-protected-path"` a moment later). Since
 `events.jsonl` is append-only, that receipt can't be corrected in place —
 so `do()` computes every receipt's final `outcome` before it ever calls
-`appendEvent`, and logs the whole batch once, on the single `"delivered"`
-event, already correct.
+`appendEvent`, and logs the whole batch once, on its `"delivered"` event,
+already correct. A `fix` verdict's round does the same, appending its own
+`"delivered"` event carrying the cumulative receipts.
 
 ## `verdict(taskId, ruling, note?)` — rule 6, "you get the last word"
 

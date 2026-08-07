@@ -1,5 +1,5 @@
 // The top-level `fabrica --help` text and command registration. New
-// subcommands (fabrica answer #8, verdict #10, status/log/watch #12)
+// subcommands (fabrica answer #8, status/log/watch #12)
 // slot in as one more line in COMMANDS and one more entry in this help
 // text - nothing here needs reshaping to add them.
 
