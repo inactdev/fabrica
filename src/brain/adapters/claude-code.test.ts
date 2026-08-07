@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +27,34 @@ function dockerAvailable(): boolean {
     return false;
   }
 }
+
+// Tracks whether this file's capability spike (the one test that drives
+// the real `claude` binary, not the fake) actually ran to completion.
+// Every path that skips it - Docker absent, image not built/authenticated,
+// or the auth probe itself failing - records why here instead of just
+// calling t.skip(), so the after() hook below can print something no one
+// scanning a wall of green dots can miss. A skip is invisible in a normal
+// passing run; this makes it the loudest thing in the output instead.
+let realBinaryCheckRan = false;
+let realBinarySkipReason: string | null = null;
+
+after(() => {
+  if (realBinaryCheckRan) return;
+  const reason = realBinarySkipReason ?? "unknown";
+  console.error(
+    [
+      "",
+      "!".repeat(78),
+      "!! REAL-BINARY CHECK DID NOT RUN",
+      "!! This test run never touched the real `claude` binary.",
+      `!! Reason: ${reason}`,
+      "!! A green run here does NOT mean the fake CLI was verified against",
+      '!! reality - see src/brain/adapters/claude-code.md, "Process containment".',
+      "!".repeat(78),
+      "",
+    ].join("\n")
+  );
+});
 
 // A real ProductionLine worktree, not a plain temp dir: work() has no
 // no-git fallback, so every workdir it runs must resolve real git
@@ -290,7 +318,8 @@ test("claudeCodeAdapter persists $HOME across separate work() calls for the same
 // proving this when that's not true on the machine running it.
 test("claude-code adapter: real binary does real work in a real worktree (capability spike)", async (t) => {
   if (!dockerAvailable()) {
-    t.skip("Docker is not available on this machine");
+    realBinarySkipReason = "Docker is not available on this machine";
+    t.skip(realBinarySkipReason);
     return;
   }
   // This guard probes auth as the image's own default user with the
@@ -309,11 +338,13 @@ test("claude-code adapter: real binary does real work in a real worktree (capabi
       })
     );
     if (status.loggedIn !== true) {
-      t.skip("the containerized real binary is installed but not authenticated");
+      realBinarySkipReason = "the containerized real binary is installed but not authenticated";
+      t.skip(realBinarySkipReason);
       return;
     }
   } catch {
-    t.skip("could not confirm the containerized real binary is built and authenticated on this machine");
+    realBinarySkipReason = "could not confirm the containerized real binary is built and authenticated on this machine";
+    t.skip(realBinarySkipReason);
     return;
   }
 
@@ -348,6 +379,7 @@ test("claude-code adapter: real binary does real work in a real worktree (capabi
       existsSync(join(line.workdir, "second-proof.txt")),
       "the resumed session did not actually do the follow-up work"
     );
+    realBinaryCheckRan = true;
   } finally {
     destroyProductionLine(line);
   }

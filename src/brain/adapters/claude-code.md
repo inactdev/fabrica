@@ -156,12 +156,16 @@ own. Until that's done, real tasks routed through this adapter fail at
 the authentication step; `claude-code.test.ts`'s capability-spike test
 checks the built image's own auth status before attempting real work,
 and skips (does not fail) rather than lie about proving this when it
-isn't true. One caveat on that guard, noted in the test itself: it
-probes auth as the image's own default user and `$HOME`, not the
-`--user`/mounted-home combination `work()` actually runs with -
-equivalent while the credential arrives via the environment, but the
-guard needs realigning if the gap is ever closed by baking a credential
-into the image instead.
+isn't true. That skip is deliberately loud rather than silent - the same
+file's `after()` hook prints a banner naming the reason whenever the
+spike didn't run - and a fixture-parity test covers the fake in the
+meantime; see `README.md`'s "Guarding a fake against drift from the real
+thing" for both and why they exist. One caveat on that guard, noted in
+the test itself: it probes auth as the image's own default user and
+`$HOME`, not the `--user`/mounted-home combination `work()` actually
+runs with - equivalent while the credential arrives via the
+environment, but the guard needs realigning if the gap is ever closed by
+baking a credential into the image instead.
 
 ### Why `--output-format stream-json --verbose`, not `json`
 
