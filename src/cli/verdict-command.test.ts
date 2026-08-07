@@ -1,10 +1,11 @@
-// runVerdictCommand end to end for accept/wrong - the CLI's own argument
-// parsing, config-free record home, and message wording. Deliberately
-// does not exercise "fix" through this layer: runVerdictCommand builds
-// its own createForeman() with no brain override, so a "fix" here would
-// reach for the real default adapter - the fix path itself (session
-// resume, attempt counting) is proven against a fake brain directly in
-// src/foreman/verdict.test.ts instead. The "fix" cases below all refuse
+// runVerdictCommand end to end - the CLI's own argument parsing,
+// config-free record home, and message wording, for every ruling. A
+// successful "fix" is the one case that wakes a worker, so it runs
+// through the command's `brain` seam against a fake brain (the same
+// shape do-command.test.ts uses `entryScript` for); what that proves
+// here is the line the Client reads back, since the fix mechanism
+// itself - session resume, attempt counting - is proven in
+// src/foreman/verdict.test.ts. The refusing "fix" cases below stop
 // before any worker can run, which is precisely where an error from a
 // lower layer has to reach the Client instead of escaping.
 
@@ -95,6 +96,37 @@ test("runVerdictCommand: the spec's `fix -m \"<note>\"` form reaches the Foreman
     .filter((e) => e.name === "verdict-recorded")
     .at(-1);
   assert.equal(verdictEvent, undefined, "a refused fix records no verdict");
+});
+
+// The one success path that actually runs a worker, and the only place
+// the fix-success line the Client reads is produced. A fresh
+// createForeman inside runVerdictCommand has no memory of the do() call,
+// so the brain it hands the fix round is exactly the one this option
+// supplies - the same substitution do-command.test.ts makes with
+// entryScript.
+test("runVerdictCommand: a fix that runs reports the round's outcome and that the task stays open", async () => {
+  const recordHome = tempRecordHome();
+  const brain = fakeBrain();
+  // Attempts omitted, so the default budget of 2 applies and the green
+  // first attempt leaves one unspent for the fix round to consume.
+  const task = await createForeman({ recordHome }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain,
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "fix", "-m", "wrong button spot"], { recordHome, brain, ...io });
+
+  assert.equal(code, 0, io.err[0]);
+  assert.deepEqual(io.err, []);
+  assert.deepEqual(io.out, [
+    `fix recorded: ${task.id} ran again with your note - outcome: done. ` +
+      `Still open; run \`fabrica verdict ${task.id} accept|fix|wrong\` once you've reviewed it.`,
+  ]);
+  assert.equal(brain.calls, 2, "the fix round woke the worker exactly once more");
+
+  const mine = (await createForeman({ recordHome }).status()).find((t) => t.id === task.id);
+  assert.notEqual(mine?.state, "closed", "a fix leaves the task open for the Client's next word");
 });
 
 test("runVerdictCommand: bad usage refuses with exact instructions and exit 1", async () => {

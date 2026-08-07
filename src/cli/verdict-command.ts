@@ -7,6 +7,7 @@
 // outcome directly instead of the Client having to separately poll for it.
 
 import { createForeman } from "../index.ts";
+import type { Brain } from "../index.ts";
 import { parseVerdictArgs, VERDICT_USAGE } from "./verdict-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 
@@ -34,6 +35,11 @@ Environment:
 
 export interface RunVerdictCommandOptions {
   recordHome?: string;
+  /** Test-only: forwarded to createForeman so a test can run a real "fix"
+   * round - the one path here that wakes a worker - against a fake brain.
+   * Omitted, createForeman falls back to defaultBrainAdapter(), which is
+   * what every real invocation does. */
+  brain?: Brain;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -46,7 +52,7 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
   try {
     const { taskId, ruling, note } = parseVerdictArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
-    const foreman = createForeman({ recordHome });
+    const foreman = createForeman({ recordHome, brain: opts.brain });
 
     await foreman.verdict(taskId, ruling, note);
 
