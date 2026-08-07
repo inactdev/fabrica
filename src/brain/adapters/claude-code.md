@@ -44,6 +44,65 @@ that guarantees and the one thing it doesn't yet. Four optional fields:
   nothing from this process's own environment (API keys, tokens) leaks
   in.
 
+## `ask(brief)` — SPEC.md step 2 (issue #8)
+
+Judges whether `brief` is materially ambiguous, before any ProductionLine
+exists. Since there's no `workdir` at this point in the loop (`Brain.ask`
+takes none - see `../README.md`), this can't reuse `work()`'s containment
+setup, which mounts a real ProductionLine's git history back in
+(`resolveGitMounts`). Instead:
+
+```
+claude -p "<ask prompt>" --output-format stream-json --verbose
+```
+
+run inside a fresh, empty scratch directory (`mkdtempSync`, deleted again
+after the call) as the container's only mount - no git, no
+`readOnlyMounts`, no `--permission-mode bypassPermissions` (this call is
+never asked to edit anything, so it needs none of the tool access that
+flag exists to unlock), no `--resume` (every call is a cold, throwaway
+session; see below for why one never carries into `work()`). `--model` is
+still forwarded when configured, same as `work()`.
+
+`buildAskPrompt` (`claude-code.ts`) states the same "materially
+ambiguous" line this codebase draws everywhere else - an ambiguity that
+would change what gets built, not something a reasonable person would
+fill in the same way every time - and instructs the model to answer with
+nothing but a JSON object: `{"questions": [...]}`, empty array meaning
+proceed. `parseAskResult` reads the terminal `result` line's `result`
+field (the same field `work()`'s error path already reads), stripping a
+fenced code block if the model wrapped its JSON in one despite the
+instruction. Anything that still isn't parseable, or isn't shaped like
+`{questions: string[]}`, is treated as "nothing to ask" rather than
+failing the task - a formatting slip from the model shouldn't block work
+that was actually clear, matching this issue's own stated bias toward not
+over-asking. A genuine infrastructure failure (docker unreachable, a
+non-zero exit, no `result` line at all) still throws `ClaudeCodeError`
+exactly like `work()`'s equivalent failures - the defensive fallback
+covers unparseable *content*, never a broken call.
+
+**Why no session carries between `ask()` and `work()`.** A session can
+only be resumed from the `cwd` it was created in (see "Warm sessions"
+below) - `ask()`'s scratch directory and `work()`'s ProductionLine
+`workdir` are never the same path, so a session id from one could never
+be resumed by the other even if this adapter tried to thread one through.
+`Brain.ask`'s own contract (`../README.md`) reflects this: no session
+parameter, no session on the way back.
+
+**Testing this without a real call.** `ask()` mints its own scratch
+directory per call (there being no ProductionLine to run inside yet), so
+unlike `work()`'s tests - which copy the fake CLI into a real
+`makeFixtureRepo` worktree's `workdir` before calling it - a test has
+nowhere to seed the fake binary ahead of time. `askScratchDir` on
+`ClaudeCodeAdapterOptions` exists for exactly this: the same purpose as
+`binPath`/`image` above, a test-only override so `claude-code.test.ts`
+can point `ask()` at a directory it already copied `fake-claude-cli.mjs`
+into. The fake CLI matches ask() scenarios by substring on the full
+prompt (`ASK_SCENARIO_QUESTIONS`, `_NONE`, `_FENCED`, `_GARBLED`) rather
+than the exact-string switch its other scenarios use, since `brief` here
+is the caller's marker wrapped inside `buildAskPrompt`'s fixed template,
+never the marker alone.
+
 ## The command it runs
 
 For a cold call with no options:

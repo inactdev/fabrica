@@ -72,6 +72,80 @@ function makeFakeCliWorkdir(): string {
   return line.workdir;
 }
 
+// ask() mints its own scratch dir per call (there's no ProductionLine
+// yet to run inside), so - unlike work() - a test has nowhere to copy
+// the fake CLI into unless it seeds one itself via askScratchDir.
+let fakeAskScratchCounter = 0;
+function makeFakeCliScratchDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), `fabrica-ask-scratch-${fakeAskScratchCounter++}-`));
+  const dest = join(dir, "fake-claude-cli.mjs");
+  copyFileSync(FAKE_CLI_SOURCE, dest);
+  chmodSync(dest, 0o755);
+  return dir;
+}
+
+test("claudeCodeAdapter.ask() sends the task text and no --resume/--permission-mode", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    askScratchDir: makeFakeCliScratchDir(),
+  });
+
+  await brain.ask("ASK_SCENARIO_NONE");
+  // Nothing to assert on the args directly (ASK_SCENARIO_NONE isn't
+  // ECHO_ARGS) - covered instead by the questions-parsing tests below,
+  // which prove the whole round trip end to end.
+});
+
+test("claudeCodeAdapter.ask() returns the questions a materially ambiguous task gets back", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    askScratchDir: makeFakeCliScratchDir(),
+  });
+
+  const result = await brain.ask("ASK_SCENARIO_QUESTIONS");
+  assert.deepEqual(result.questions, ["What database?", "Multi-tenant?"]);
+});
+
+test("claudeCodeAdapter.ask() returns no questions for a clear task", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    askScratchDir: makeFakeCliScratchDir(),
+  });
+
+  const result = await brain.ask("ASK_SCENARIO_NONE");
+  assert.deepEqual(result, {});
+});
+
+test("claudeCodeAdapter.ask() strips a fenced code block around the JSON", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    askScratchDir: makeFakeCliScratchDir(),
+  });
+
+  const result = await brain.ask("ASK_SCENARIO_FENCED");
+  assert.deepEqual(result.questions, ["Fenced question?"]);
+});
+
+test("claudeCodeAdapter.ask() treats an unparseable response as nothing to ask, not a crash", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    askScratchDir: makeFakeCliScratchDir(),
+  });
+
+  const result = await brain.ask("ASK_SCENARIO_GARBLED");
+  assert.deepEqual(result, {});
+});
+
 test("claudeCodeAdapter always passes bypassPermissions and forwards --resume, --model, --effort", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const brain = claudeCodeAdapter({

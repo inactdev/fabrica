@@ -1,11 +1,12 @@
 // The loop: SPEC.md "fabrica do". Wires src/record, src/line, src/brain,
-// and src/config together — register the task, cut a ProductionLine, run
-// the worker for a counted number of attempts, verify with the project's
-// check, and deliver. See README.md for the design decisions this file
-// leans on (why check.sh, why attempts behaves the way it does, why the
-// promise doesn't resolve early).
+// and src/config together — register the task, ask-or-proceed (issue #8,
+// ask.ts), cut a ProductionLine, run the worker for a counted number of
+// attempts, verify with the project's check, and deliver. See README.md
+// for the design decisions this file leans on (why check.sh, why
+// attempts behaves the way it does, why the promise doesn't resolve
+// early).
 
-import { appendEvent, appendTaskFile, registerTask, writeTaskFile } from "../record/index.ts";
+import { appendEvent, appendTaskFile, writeTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
@@ -16,60 +17,56 @@ import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
+import { registerAndAsk, DEFAULT_ATTEMPTS } from "./ask.ts";
 import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
-/** SPEC.md step 5's default: one attempt, and on red one fix pass with the
- * failure output, then re-check — a ceiling of 2 worker runs. */
-export const DEFAULT_ATTEMPTS = 2;
+export { DEFAULT_ATTEMPTS } from "./ask.ts";
 
 export async function doTask(
   recordHome: string,
   taskText: string,
   opts: { project: string; attempts?: number; brain?: Brain }
 ): Promise<FabricaTask> {
-  const brain = opts.brain;
-  if (!brain) {
-    throw new ForemanError(
-      "no-brain",
-      "fabrica do: no brain was provided, and v1 has no default adapter wired in yet " +
-        "(issue #6 builds the first one). Pass one explicitly."
-    );
-  }
+  // SPEC.md steps 1-2: register the task, then give the brain one pass
+  // at the bare task text (issue #8) before any ProductionLine exists.
+  // registerAndAsk raises ForemanError("no-brain"/"invalid-attempts")
+  // up front, same as this function always has, before anything is
+  // registered.
+  const { taskId, brief, questions, project, totalAttempts, explicitAttempts } = await registerAndAsk(
+    recordHome,
+    taskText,
+    opts
+  );
 
-  const explicitAttempts = opts.attempts !== undefined;
-  if (explicitAttempts && (!Number.isInteger(opts.attempts) || opts.attempts! < 1)) {
-    throw new ForemanError(
-      "invalid-attempts",
-      `fabrica do: attempts must be a positive integer, got ${opts.attempts}.`
-    );
-  }
-  const totalAttempts = opts.attempts ?? DEFAULT_ATTEMPTS;
+  // A materially ambiguous task stops here - no ProductionLine is ever
+  // cut, no Worker ever runs. `fabrica answer <id> "<text>"`
+  // (src/foreman/answer.ts) resumes it, extending this same brief.
+  if (questions.length > 0) return { id: taskId, state: "asking" };
 
-  const { id: taskId } = registerTask(recordHome, taskText);
-  // Ownership split: registerTask (src/record) writes request.md as part
-  // of registration — the record owns what the Client said. The Foreman
-  // writes brief.md here, afterwards — the Foreman owns what a Worker is
-  // actually given.
-  //
-  // Two complementary reasons to write it now, upfront, rather than
-  // deriving it on demand later:
-  //   - #8 is why it exists NOW: brief.md is written here so fabrica
-  //     answer only has to append a round to answers.md and re-derive
-  //     brief.md from what's already there, instead of having to create
-  //     the file itself and reshape this path.
-  //   - #19 is why it must be STORED rather than derived LATER: once
-  //     per-project lessons get primed into the brief, brief.md becomes
-  //     the record of what was actually handed to a Worker, not a cache
-  //     of request.md — a brief will contain material that cannot be
-  //     reconstructed later from request.md + answers.md alone, because
-  //     lessons change over time. Storing it is evidence, not a
-  //     convenience.
-  // Today brief.md is byte-identical to request.md — v1 neither asks a
-  // clarifying question (#8) nor primes lessons (#19) yet — and that
-  // sameness is expected to end the moment either one lands.
-  writeTaskFile(recordHome, taskId, "brief.md", taskText);
+  return runProductionRound(recordHome, taskId, brief, {
+    project,
+    brain: opts.brain!,
+    totalAttempts,
+    explicitAttempts,
+  });
+}
 
-  const line = createProductionLine({ project: opts.project, taskId, recordHome });
+/**
+ * SPEC.md steps 3-6: isolate, work, verify, deliver. Shared by a task
+ * proceeding straight out of `doTask` and one resuming after `fabrica
+ * answer` (answer.ts) - `brief` is whatever the brain should actually
+ * receive: the bare task text in doTask's case, request.md plus every
+ * answer so far in answer.ts's.
+ */
+export async function runProductionRound(
+  recordHome: string,
+  taskId: string,
+  brief: string,
+  ctx: { project: string; brain: Brain; totalAttempts: number; explicitAttempts: boolean }
+): Promise<FabricaTask> {
+  const { project, brain, totalAttempts, explicitAttempts } = ctx;
+  const taskText = brief;
+  const line = createProductionLine({ project, taskId, recordHome });
 
   try {
     // Pin the diff's fork point to the exact commit the ProductionLine was

@@ -39,11 +39,16 @@ possibly retry, deliver, tear down — and only then resolves. That is a
 deliberate simplification, not an oversight: see "Why `do()` doesn't
 return early" below.
 
-1. **Registers** the task via `src/record`'s `registerTask`: a new
-   `taskId`, `request.md` written verbatim, a `task-received` event.
-   `brief.md` is written too, identical to the request — v1 never asks a
-   clarifying question (see "The ask-first seam" below), so there are no
-   answers yet to fold in.
+1. **Registers and asks-or-proceeds** (`ask.ts`'s `registerAndAsk` -
+   issue #8): a new `taskId`, `request.md` written verbatim via
+   `src/record`'s `registerTask`, a `task-received` event, then
+   `brief.md` written (identical to the request at this point - there
+   are no answers yet to fold in). The brain then gets one pass at the
+   bare task text, no `workdir` (see "The ask-first seam" below). If it
+   comes back materially ambiguous, `questions-asked` is appended and
+   `do()` returns `{ id, state: "asking" }` right here — steps 2 onward
+   never run, and no ProductionLine is ever cut. `fabrica answer <id>
+   "<text>"` (`answer.ts`) is what resumes a task that stopped here.
 2. **Cuts a ProductionLine** via `src/line`'s `createProductionLine`,
    passing `project` straight through as a filesystem path — the root of
    the Client's own git checkout. The Client's checkout is never written
@@ -352,33 +357,70 @@ programmatic seam can have while staying testable synchronously.
 wraps this same `do()` in a detached child process without reshaping
 anything here - `src/cli/README.md` owns the mechanism.
 
-## The ask-first seam
+## The ask-first seam (issue #8)
 
-SPEC.md step 2 says v1's default is to ask a clarifying question before
-working on a materially ambiguous task. This module always proceeds
-straight to work instead. Two things make that the honest choice for
-now, not a corner cut:
+SPEC.md step 2: v1's default is to ask a clarifying question before
+working on a materially ambiguous task, and the ask-first dial itself is
+fixed at "ask" - not built as a setting. "Materially ambiguous" is the
+load-bearing phrase, defined the same way everywhere it's stated in this
+codebase: an ambiguity that would change what gets built, not one a
+reasonable person would resolve the same way every time. Getting this
+cautious - asking about everything - is its own failure (a tool nobody
+uses), so the line is drawn narrow on purpose.
 
-- The `Brain` interface (`src/brain/README.md`) has no way for a Worker
-  to hand back "I have questions" instead of doing work — only a
-  transcript, an optional gate declaration, and an optional session id.
-  There is nothing to route yet.
-- `rule5.total-recall.test.ts`'s expected event order —
-  `task-received`, `work-started`, `check-run`, `delivered` — has no
-  `questions-asked` step in it. The loop as ratified today goes straight
-  through.
+**Why this needed a second `Brain` call, not a flag on `work()`.**
+`Brain.work()` promises that by the time it resolves, the work described
+in `brief` has actually been done inside `workdir` (`src/brain/README.md`)
+- it is not a "maybe ask, maybe work" call, and SPEC.md's own step
+ordering places "Clarify-or-proceed" (step 2) *before* "Isolates" (step
+3): a materially ambiguous task should never pay for a ProductionLine at
+all. So `Brain.ask(brief)` is a second, narrower socket: no `workdir`
+parameter, because at this point in the loop there is no ProductionLine
+yet to hand one from - CONTRACT rule 1 holds here by construction, not by
+trusting a brain's good behavior. It returns `{ questions?: string[] }`;
+empty or omitted means proceed straight to work.
 
-`brief.md` is written on every task regardless — see the comment above
-the `writeTaskFile` call in `do.ts` for the full reasoning, which is two
-complementary halves. `fabrica answer` (issue #8) is why it's written
-*now*, upfront: so a clarify round only has to append to `answers.md` and
-re-derive `brief.md`, instead of creating the file itself. Per-project
-lessons (issue #19) are why it must be *stored* rather than derived on
-demand later: once lessons get primed into it, `brief.md` becomes the
-record of what was actually handed to a Worker, not a cache of
-`request.md` — material `request.md` + `answers.md` can no longer
-reconstruct on their own, because lessons change over time. Today the two
-files are byte-identical, because v1 does neither yet.
+**`ask.ts`'s `registerAndAsk`** owns steps 1-2 of `do()`: register the
+task, then call `brain.ask(taskText)`. A non-empty result gets recorded
+as `"questions-asked"` (details: the questions, plus `project`,
+`totalAttempts`, and `explicitAttempts` - a later `fabrica answer` has no
+ProductionLine to remember these on, since none was ever cut, so they
+ride on this event instead) and `doTask` returns `{ id, state: "asking" }`
+immediately - no ProductionLine, no Worker, no check ever runs. An empty
+result falls through to `runProductionRound` (do.ts), the exact same
+isolate/work/verify/deliver pipeline this file always ran, now factored
+out so `answer.ts` can reach it too.
+
+**`answer.ts`'s `answerTask`** is what `fabrica answer <id> "<text>"`
+calls: find the task's last `"questions-asked"` event (refuses with
+`ForemanError("no-questions-pending")` if there isn't one, or
+`ForemanError("already-answered")` if a round already resumed it - v1's
+"one clarification round by default" is enforced here, not left to
+silently re-ask), append the round to `answers.md`, re-derive `brief.md`
+as `request.md` plus every answer so far, append `"answers-given"`, then
+call `runProductionRound` with the extended brief. It never calls
+`brain.ask()` again, regardless of whether the extended brief would still
+look ambiguous - the dial is fixed, not a negotiation loop.
+`contract/surface.ts`'s `Foreman.answer(taskId, text)` has no `brain`
+parameter, the same reasoning as `verdict()`'s fix path below: a
+same-process `do()` call that ended up `"asking"` already had its brain
+remembered by `createForeman`'s per-task map; a fresh process (the real
+shape of `fabrica do` then `fabrica answer` by hand) falls back to
+`defaultBrainAdapter()`.
+
+`brief.md` is written upfront, before asking, for two complementary
+reasons — see the comment above the `writeTaskFile` call in `ask.ts`:
+`fabrica answer` (issue #8) is why it exists *now*, so a clarify round
+only has to append to `answers.md` and re-derive `brief.md`, instead of
+creating the file itself; per-project lessons (issue #19) are why it must
+be *stored* rather than derived on demand later. Today, for a task that
+never asks, `brief.md` stays byte-identical to `request.md`, because v1
+doesn't prime lessons yet.
+
+The CLI side of this (`src/cli/README.md`): `fabrica do` waits, bounded,
+for the task to reach either `"asking"` or `"work-started"` before
+deciding whether to print numbered questions and stop, or just the task
+id as before.
 
 ## Why receipts and deliveries live on `events.jsonl`, not their own file
 
@@ -494,19 +536,21 @@ whether a task is `"closed"`.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. |
-| `do.ts` | `doTask` — the orchestration described above. |
+| `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous. See "The ask-first seam" above. |
+| `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/deliver — shared with `answer.ts`'s resume path). |
+| `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong, re-enters the same line and worker on fix. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. `fixRoundOf` instead counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. |
-| `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path uses. |
+| `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path and `answer()` both use. |
 
-`GateResult`, `Receipt`, `Delivery`, `FabricaTask`, and `Foreman` itself
-are declared once, in `contract/surface.ts`, and imported into this
-module's files as types (issue #45) — there is no local `types.ts` here
-to keep in sync by hand any more.
+`GateResult`, `Receipt`, `Delivery`, `FabricaTask`, `BrainAskResult`, and
+`Foreman` itself are declared once, in `contract/surface.ts`, and
+imported into this module's files as types (issue #45) — there is no
+local `types.ts` here to keep in sync by hand any more.

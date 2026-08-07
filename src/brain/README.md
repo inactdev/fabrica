@@ -24,10 +24,36 @@ one model. `name` stays fixed; `model` is what changes if you switch
 which model that same adapter drives, without touching anything outside
 the adapter.
 
+## `ask(brief)` — SPEC.md step 2, "Clarify-or-proceed" (issue #8)
+
+Called once, before any ProductionLine exists, with only the bare task
+text - no `workdir`. It's the brain's one pass at deciding whether
+`brief` is *materially ambiguous*: an ambiguity that would change what
+actually gets built, not something a reasonable person would fill in the
+same way every time. Getting this wrong in the cautious direction is its
+own failure - a brain that asks about everything makes the tool nobody
+wants to use - so drawing that line narrowly is the brain's job, not
+something callers second-guess.
+
+Returns `{ questions?: string[] }`. Non-empty means "stop and ask
+these" - numbered, Client-facing, worth quoting back verbatim. Empty or
+omitted means "clear enough, proceed to `work()`."
+
+No `workdir` is a deliberate part of the contract, not an oversight: it
+means this call structurally cannot read or write anything of the
+Client's, so CONTRACT rule 1 ("it never touches your stuff") holds here
+by construction - there's nothing to trust a brain's own good behavior
+about. It also means there's nothing to resume `work()`'s warm session
+from: `ask()` never receives or returns a session id, and a real call
+during `work()` never resumes one from a prior `ask()` either - see the
+reference adapter's own doc for why a session can't cross that boundary
+even if this interface tried to smuggle one through (it's scoped to the
+`cwd` it was born in, and `ask()`/`work()` never share one).
+
 ## `work(brief, workdir, opts?)`
 
-This is the one call the rest of Fabrica ever makes. Everything a brain
-does happens inside it.
+The other call the rest of Fabrica makes, and the one that actually does
+the work. Everything a brain builds, edits, or runs happens inside it.
 
 - `brief` is the task, in plain text - what the worker is being asked to
   do, written the way you'd write it for a person. It's the same
@@ -157,9 +183,10 @@ session produced which result.
 ## Writing an adapter
 
 A real adapter is anything that implements `Brain` honestly: pick a
-`name`, report the `model` it's actually using, and make `work()` really
-do the requested work inside `workdir`, returning a transcript and, when
-they apply, a session id and a gate declaration. See
+`name`, report the `model` it's actually using, make `ask()` genuinely
+judge ambiguity rather than always returning `{}`, and make `work()`
+really do the requested work inside `workdir`, returning a transcript
+and, when they apply, a session id and a gate declaration. See
 [`adapters/README.md`](./adapters/README.md) for the written adapters,
 further candidates, and a sketch of the shape.
 

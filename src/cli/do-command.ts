@@ -18,6 +18,7 @@ import { DO_USAGE, parseDoArgs } from "./do-args.ts";
 import { resolveProjectPath } from "./resolve-project.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { spawnDetachedTask } from "./spawn-detached.ts";
+import { waitForAskOutcome } from "./wait-for-ask-outcome.ts";
 
 /** A record home with no projects.toml yet has no registered projects
  * and no caps - not an error. do()'s own resolveCheckCommand treats a
@@ -35,9 +36,13 @@ function loadConfigOrDefault(recordHome: string): FabricaConfig {
 
 export const DO_HELP = `Usage: ${DO_USAGE}
 
-Runs a task against a project, detached: prints the task id and returns
-immediately while the work continues in the background. The transcript
-streams live to the task's record as it runs.
+Runs a task against a project. If the task is materially ambiguous, the
+worker's first pass produces numbered questions instead of doing any
+work - they print here and the command stops; answer with
+\`fabrica answer <id> "<text>"\` to resume it. Otherwise runs detached:
+prints the task id and returns immediately while the work continues in
+the background. The transcript streams live to the task's record as it
+runs.
 
   <task text>              What to do, in plain words. Quote it.
   --project <path-or-name> A project's own path, or a name already
@@ -53,6 +58,11 @@ export interface RunDoCommandOptions {
    * real spawn-and-discover mechanism against a fake brain. */
   entryScript?: string;
   timeoutMs?: number;
+  /** Test-only: how long to wait for the task to reach "asking" or
+   * "work-started" before giving up and printing just the id, and how
+   * often to poll while waiting. See wait-for-ask-outcome.ts. */
+  askTimeoutMs?: number;
+  askPollMs?: number;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -75,6 +85,27 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
       entryScript: opts.entryScript,
       timeoutMs: opts.timeoutMs,
     });
+
+    // SPEC.md step 2 (issue #8): the task's own first pass, running
+    // inside the detached process, decides ask-or-proceed before any
+    // ProductionLine is cut. This waits (bounded) to find out which, so
+    // an ambiguous task's questions print here and the command stops,
+    // rather than only ever printing the id and leaving the Client to
+    // discover the stop some other way.
+    const outcome = await waitForAskOutcome(recordHome, taskId, {
+      timeoutMs: opts.askTimeoutMs,
+      pollMs: opts.askPollMs,
+    });
+
+    if (outcome.status === "asking") {
+      stdout(taskId);
+      stdout("");
+      stdout("This task is materially ambiguous - answer before any work starts:");
+      outcome.questions.forEach((question, i) => stdout(`  ${i + 1}. ${question}`));
+      stdout("");
+      stdout(`  fabrica answer ${taskId} "<text>"`);
+      return 0;
+    }
 
     stdout(taskId);
     return 0;

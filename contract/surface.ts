@@ -68,11 +68,28 @@ export interface BrainWorkResult {
   session?: string;
 }
 
+/**
+ * A brain's judgment on whether a task needs clarification before any
+ * ProductionLine exists (issue #8, SPEC.md step 2 "Clarify-or-proceed").
+ */
+export interface BrainAskResult {
+  /** Numbered, Client-facing questions whose answers would change what
+   * gets built - "materially ambiguous," not merely something a
+   * reasonable person would fill in the same way every time. Empty or
+   * omitted means the task is clear enough to proceed straight to work. */
+  questions?: string[];
+}
+
 /** The brain socket (contract rule 8). The ONLY place a real AI plugs in. */
 export interface Brain {
   name: string;
   model: string;
   work(brief: string, workdir: string, opts?: BrainWorkOptions): Promise<BrainWorkResult>;
+  /** SPEC.md step 2: one pass over the bare task text, before any
+   * ProductionLine is cut. Takes no `workdir` - by construction, this
+   * call cannot touch any project, so CONTRACT rule 1 holds here without
+   * relying on the brain's own good behavior. See BrainAskResult. */
+  ask(brief: string): Promise<BrainAskResult>;
 }
 
 export interface GateResult {
@@ -150,6 +167,10 @@ export interface Foreman {
     taskText: string,
     opts: { project: string; attempts?: number; brain?: Brain }
   ): Promise<FabricaTask>;
+  /** `fabrica answer <id> "<text>"` (issue #8): appends a clarification
+   * round to a task stopped for questions, re-derives its brief, and
+   * resumes it - the extended brief is what a Worker actually receives. */
+  answer(taskId: string, text: string): Promise<FabricaTask>;
   deliveryOf(taskId: string): Promise<Delivery | null>;
   receiptsOf(taskId: string): Promise<Receipt[]>;
   verdict(

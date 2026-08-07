@@ -6,6 +6,7 @@
 
 import { recordPath as eventsPath } from "../record/index.ts";
 import { doTask } from "./do.ts";
+import { answerTask } from "./answer.ts";
 import { recordVerdict } from "./verdict.ts";
 import { defaultBrainAdapter } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
@@ -23,12 +24,13 @@ export interface ForemanOptions {
    * contract/surface.ts's Foreman; not enforced here — that's issue #11's
    * job, not this loop's. */
   caps?: { perTaskUsd?: number; perDayUsd?: number };
-  /** Fallback for a "fix" verdict's brain when this Foreman instance never
-   * saw a do() call for that task (a fresh process running `fabrica
-   * verdict` on its own, the real CLI's shape) — omitting this uses
-   * defaultBrainAdapter(). When a do() call on THIS instance registered
-   * the task, its exact brain is remembered and reused instead (below),
-   * so a fix picks up the same warm worker within one process even
+  /** Fallback for a "fix" verdict's or an answer()'s brain when this
+   * Foreman instance never saw a do() call for that task (a fresh
+   * process running `fabrica verdict` or `fabrica answer` on its own,
+   * the real CLI's shape) — omitting this uses defaultBrainAdapter().
+   * When a do() call on THIS instance registered the task, its exact
+   * brain is remembered and reused instead (below), so a fix or an
+   * answer picks up the same warm worker within one process even
    * without this option; this is only the across-process fallback. */
   brain?: Brain;
 }
@@ -47,6 +49,15 @@ export function createForeman(opts: ForemanOptions): Foreman {
       const task = await doTask(recordHome, taskText, callOpts);
       if (callOpts.brain) brainByTask.set(task.id, callOpts.brain);
       return task;
+    },
+    async answer(taskId, text) {
+      // Same per-instance memory verdict()'s "fix" path uses below: a
+      // same-process `do()` call that ended up "asking" already
+      // remembered its brain by taskId; a fresh process (the real shape
+      // of `fabrica do` then `fabrica answer` by hand) falls back the
+      // same way verdict() does.
+      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter();
+      return answerTask(recordHome, taskId, text, { brain });
     },
     async deliveryOf(taskId) {
       return lookupDelivery(recordHome, taskId);

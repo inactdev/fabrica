@@ -99,3 +99,29 @@ test("fakeBrain: reasoningEffort is passed through to onWork alongside brief and
 
   assert.deepEqual(seen, ["low"]);
 });
+
+test("fakeBrain: ask() has nothing to ask by default - proceed straight to work", async () => {
+  const brain = fakeBrain();
+
+  const result = await brain.ask("do the thing");
+
+  assert.deepEqual(result, {});
+});
+
+test("fakeBrain: ask() returns the configured questions every time it's called", async () => {
+  const brain = fakeBrain({ askQuestions: ["What database?", "Multi-tenant?"] });
+
+  assert.deepEqual(await brain.ask("first brief"), { questions: ["What database?", "Multi-tenant?"] });
+  assert.deepEqual(await brain.ask("second brief"), { questions: ["What database?", "Multi-tenant?"] });
+});
+
+test("fakeBrain: ask() calls are tracked separately from work() calls", async () => {
+  const brain = fakeBrain();
+
+  await brain.ask("first brief");
+  await brain.ask("second brief");
+  await brain.work("do the thing", "/workdir");
+
+  assert.deepEqual(brain.askCalls, ["first brief", "second brief"]);
+  assert.equal(brain.calls, 1, "work() calls stay counted separately from ask() calls");
+});

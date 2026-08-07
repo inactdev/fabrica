@@ -5,7 +5,7 @@
 // prove the warm-session guarantee from SPEC.md: a retry into the same
 // session id continues that session's history rather than restarting it.
 
-import type { Brain, BrainWorkResult, TranscriptEntry } from "../types.ts";
+import type { Brain, BrainAskResult, BrainWorkResult, TranscriptEntry } from "../types.ts";
 
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
@@ -18,18 +18,25 @@ export interface FakeBrainHandle extends Brain {
    * as requested even when this fake, like any adapter, does not
    * recognize it and ignores it rather than failing. */
   readonly reasoningEffortsRequested: readonly (string | undefined)[];
+  /** Every brief passed to ask(), in call order. */
+  readonly askCalls: readonly string[];
 }
 
 export function fakeBrain(
   opts: {
     onWork?: (brief: string, workdir: string, reasoningEffort?: string) => void;
     gateChanges?: string;
+    /** ask() returns these questions every time it's called. Omitted
+     * (the default) means the task always looks clear enough to
+     * proceed - matching a brain that has nothing to ask. */
+    askQuestions?: string[];
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
   let nextSessionId = 0;
   const historyBySession = new Map<string, string[]>();
   const reasoningEffortsRequested: (string | undefined)[] = [];
+  const askCalls: string[] = [];
 
   return {
     name: "fake",
@@ -42,6 +49,13 @@ export function fakeBrain(
     },
     get reasoningEffortsRequested() {
       return reasoningEffortsRequested;
+    },
+    get askCalls() {
+      return askCalls;
+    },
+    async ask(brief: string): Promise<BrainAskResult> {
+      askCalls.push(brief);
+      return opts.askQuestions ? { questions: opts.askQuestions } : {};
     },
     async work(brief, workdir, workOpts) {
       calls += 1;

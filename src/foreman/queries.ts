@@ -101,6 +101,11 @@ function deriveState(events: FabricaEvent[]): FabricaTask["state"] {
 
   if (events.some((e) => e.name === "check-run")) return "checking";
   if (events.some((e) => e.name === "work-started")) return "working";
+  // The Client already answered (issue #8) - even if runProductionRound
+  // then failed before ever reaching "work-started" (e.g. a missing
+  // check command), "asking" below would wrongly suggest the answer
+  // never registered.
+  if (events.some((e) => e.name === "answers-given")) return "working";
   if (events.some((e) => e.name === "questions-asked")) return "asking";
   return "working";
 }

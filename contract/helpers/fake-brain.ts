@@ -3,7 +3,7 @@
 // times it is asked to work, and can be told to misbehave on purpose —
 // e.g. touching protected paths (rule 9) or doing nothing at all.
 
-import type { Brain } from "../surface.ts";
+import type { Brain, BrainAskResult } from "../surface.ts";
 import type { TranscriptEntry } from "../surface.ts";
 
 export interface FakeBrainHandle extends Brain {
@@ -11,7 +11,13 @@ export interface FakeBrainHandle extends Brain {
 }
 
 export function fakeBrain(
-  opts: { onWork?: (workdir: string) => void; gateChanges?: string } = {}
+  opts: {
+    onWork?: (workdir: string) => void;
+    gateChanges?: string;
+    /** ask() returns these questions every time it's called. Omitted
+     * means the task always looks clear enough to proceed. */
+    askQuestions?: string[];
+  } = {}
 ): FakeBrainHandle {
   let calls = 0;
   return {
@@ -19,6 +25,9 @@ export function fakeBrain(
     model: "fake-1",
     get calls() {
       return calls;
+    },
+    async ask(_brief: string): Promise<BrainAskResult> {
+      return opts.askQuestions ? { questions: opts.askQuestions } : {};
     },
     async work(brief: string, workdir: string) {
       calls += 1;

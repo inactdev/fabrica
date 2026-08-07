@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { doTask } from "./do.ts";
 import { ForemanError } from "./errors.ts";
 import { deliveryOf, receiptsOf } from "./queries.ts";
-import { readTaskFile } from "../record/index.ts";
+import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 
@@ -279,4 +279,57 @@ test("doTask records an honest failure-report, not silence, when the pre-teardow
 
   const receipts = receiptsOf(recordHome, task.id);
   assert.equal(receipts[receipts.length - 1].outcome, "failed");
+});
+
+// Issue #8's own definition of done, scenario 1: a materially ambiguous
+// task returns numbered questions and starts no worker.
+test("doTask stops and returns 'asking' when the brain finds the task materially ambiguous, without starting a worker", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const brain = fakeBrain({ askQuestions: ["What database should this use?", "Multi-tenant?"] });
+
+  const task = await doTask(recordHome, "build me an app", { project, brain });
+
+  assert.equal(task.state, "asking");
+  assert.equal(brain.calls, 0, "no worker should run before the Client answers");
+
+  const events = readEventsForTask(recordHome, task.id);
+  assert.deepEqual(
+    events.map((e) => e.name),
+    ["task-received", "questions-asked"]
+  );
+
+  // No ProductionLine was ever cut - rule 1 holds trivially since there
+  // was never anything to isolate in the first place.
+  const worktrees = execSync("git worktree list", { cwd: project, encoding: "utf8" });
+  assert.equal(worktrees.trim().split("\n").length, 1, "only the main worktree should exist");
+
+  // No delivery exists yet for an asking task.
+  assert.equal(deliveryOf(recordHome, task.id), null);
+});
+
+// Issue #8's own definition of done, scenario 3: an unambiguous task is
+// unaffected and runs exactly as it did before this issue - the brain is
+// still consulted (ask() is called once), but nothing about the outcome
+// changes.
+test("doTask on an unambiguous task is unaffected: ask() is consulted but the task runs exactly as before", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const brain = fakeBrain(); // no askQuestions configured - nothing to ask
+
+  const task = await doTask(recordHome, "small change", { project, brain });
+
+  assert.equal(task.state, "delivered");
+  assert.deepEqual(brain.askCalls, ["small change"], "the brain's first pass still runs");
+  assert.equal(brain.calls, 1, "exactly one work() call, same as before issue #8");
+
+  const events = readEventsForTask(recordHome, task.id);
+  assert.deepEqual(
+    events.map((e) => e.name),
+    ["task-received", "work-started", "check-run", "delivered"],
+    "no questions-asked/answers-given events for a task nothing needed to ask about"
+  );
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "done");
 });
