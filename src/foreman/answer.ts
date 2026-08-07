@@ -9,6 +9,12 @@
 // clarification round by default"; the dial itself is out of scope for
 // issue #8) - resuming here never calls brain.ask() again, regardless
 // of whether the extended brief would still look ambiguous to it.
+//
+// "Already answered" means a round that actually DELIVERED, not merely
+// one that was recorded: if runProductionRound throws before finishing
+// (a missing check command, a moved project path, an unreachable brain),
+// the task must stay resumable, not get stuck forever with the Client's
+// answer on record and no way back in - see the guard below.
 
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTaskFile } from "../record/index.ts";
 import type { Brain } from "../brain/index.ts";
@@ -31,10 +37,17 @@ export async function answerTask(
     );
   }
 
-  // The LAST "questions-asked" is the round awaiting an answer; anything
-  // after it (an "answers-given" from an earlier `fabrica answer` call)
-  // means this round is already spent - v1's one-clarification-round
-  // default, enforced here rather than left to silently re-ask.
+  // The LAST "questions-asked" is the round awaiting an answer; a prior
+  // "answers-given" that went on to actually deliver means this round is
+  // already spent - v1's one-clarification-round default, enforced here
+  // rather than left to silently re-ask. The guard keys on a COMPLETED
+  // round (answers-given followed by delivered), not merely on
+  // answers-given existing: if a previous `fabrica answer` call recorded
+  // the answer but then runProductionRound threw before finishing (a
+  // missing check command, a moved project path, an unreachable brain),
+  // the task must stay resumable - refusing here on the mere presence of
+  // answers-given would leave it permanently stuck, with the Client's
+  // own words already recorded but no way back in.
   const askedIndex = events.map((e) => e.name).lastIndexOf("questions-asked");
   if (askedIndex === -1) {
     throw new ForemanError(
@@ -43,7 +56,9 @@ export async function answerTask(
         `Check \`fabrica status\`.`
     );
   }
-  if (events.slice(askedIndex + 1).some((e) => e.name === "answers-given")) {
+  const eventsSinceAsked = events.slice(askedIndex + 1);
+  const answeredIndex = eventsSinceAsked.map((e) => e.name).lastIndexOf("answers-given");
+  if (answeredIndex !== -1 && eventsSinceAsked.slice(answeredIndex + 1).some((e) => e.name === "delivered")) {
     throw new ForemanError(
       "already-answered",
       `fabrica answer: task "${taskId}" already got its one clarification round (SPEC.md's ask-first ` +

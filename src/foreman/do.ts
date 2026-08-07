@@ -7,7 +7,7 @@
 // early).
 
 import { appendEvent, appendTaskFile, writeTaskFile } from "../record/index.ts";
-import { createProductionLine, destroyProductionLine } from "../line/index.ts";
+import { createProductionLine, destroyProductionLine, productionLineBranchExists, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
@@ -66,7 +66,22 @@ export async function runProductionRound(
 ): Promise<FabricaTask> {
   const { project, brain, totalAttempts, explicitAttempts } = ctx;
   const taskText = brief;
-  const line = createProductionLine({ project, taskId, recordHome });
+  // Ordinarily this is this task's first ProductionLine, so the branch
+  // never exists yet and this is just createProductionLine. But
+  // answer.ts (issue #8) can call this a second time for the same
+  // taskId if a prior resumed round threw before ever committing
+  // anything (a missing check command, a moved project path, an
+  // unreachable brain) - createProductionLine always cuts a NEW branch,
+  // and that first round's branch still exists (branches survive their
+  // own worktree's teardown by design), so a second createProductionLine
+  // call would fail outright on "a branch named ... already exists".
+  // Checking git's own state, rather than threading "is this a retry"
+  // through as separate params, means this stays correct regardless of
+  // why or how many times runProductionRound gets called again for one
+  // taskId.
+  const line = productionLineBranchExists(project, taskId)
+    ? reopenProductionLine({ project, taskId, recordHome })
+    : createProductionLine({ project, taskId, recordHome });
 
   try {
     // Pin the diff's fork point to the exact commit the ProductionLine was

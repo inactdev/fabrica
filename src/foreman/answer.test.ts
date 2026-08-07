@@ -9,6 +9,7 @@ import { ForemanError } from "./errors.ts";
 import { deliveryOf } from "./queries.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
+import type { Brain } from "../brain/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 
 function freshHome(): string {
@@ -115,6 +116,69 @@ test("answerTask rejects a second answer for the same task - the dial is fixed a
     () => answerTask(recordHome, asked.id, "Second answer.", { brain: fakeBrain() }),
     (err: unknown) => err instanceof ForemanError && err.code === "already-answered"
   );
+});
+
+// A resumed round can throw before ever reaching "delivered" - e.g. the
+// brain itself is unreachable (docker down, a network blip) and work()
+// rejects mid-attempt. The task must stay resumable rather than getting
+// permanently stuck once "answers-given" is on the record with nothing
+// to show for it: the ProductionLine's branch survives the failed
+// attempt's own teardown (branches always outlive their worktree), so a
+// second createProductionLine call for the same taskId would otherwise
+// fail outright on "a branch named ... already exists" - the retry has
+// to reopen that same branch instead.
+test("answerTask allows a retry when the previous resume attempt threw before ever completing", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const askBrain = fakeBrain({ askQuestions: ["Which?"] });
+  const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
+  assert.equal(asked.state, "asking");
+
+  const unreachableBrain: Brain = {
+    name: "fake",
+    model: "fake-1",
+    async ask() {
+      return {};
+    },
+    async work() {
+      throw new Error("simulated: the brain is unreachable");
+    },
+  };
+
+  await assert.rejects(
+    () => answerTask(recordHome, asked.id, "First attempt.", { brain: unreachableBrain }),
+    /simulated: the brain is unreachable/
+  );
+
+  // The Client fixes the underlying problem (here: the brain becomes
+  // reachable again) and retries - this must not be refused as
+  // already-answered, since the first attempt never delivered.
+  const workBrain = fakeBrain();
+  const task = await answerTask(recordHome, asked.id, "Second attempt.", { brain: workBrain });
+
+  assert.equal(task.state, "delivered");
+  assert.equal(workBrain.calls, 1);
+
+  // Each `fabrica answer` call appends its own "answers-given" - the
+  // retry is a second, real call, not a hidden replay, so the record
+  // shows both attempts honestly (rule 5: nothing happens off the
+  // books). The first attempt's own "work-started" is on the record too
+  // - it genuinely started, it just never finished.
+  const events = readEventsForTask(recordHome, asked.id).map((e) => e.name);
+  assert.deepEqual(events, [
+    "task-received",
+    "questions-asked",
+    "answers-given",
+    "work-started",
+    "answers-given",
+    "work-started",
+    "check-run",
+    "delivered",
+  ]);
+
+  const answers = readTaskFile(recordHome, asked.id, "answers.md");
+  assert.match(answers ?? "", /First attempt\./);
+  assert.match(answers ?? "", /Second attempt\./);
 });
 
 test("answerTask rejects a blank answer", async () => {

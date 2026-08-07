@@ -395,14 +395,27 @@ out so `answer.ts` can reach it too.
 
 **`answer.ts`'s `answerTask`** is what `fabrica answer <id> -m "<text>"`
 calls: find the task's last `"questions-asked"` event (refuses with
-`ForemanError("no-questions-pending")` if there isn't one, or
-`ForemanError("already-answered")` if a round already resumed it - v1's
-"one clarification round by default" is enforced here, not left to
-silently re-ask), append the round to `answers.md`, re-derive `brief.md`
-as `request.md` plus every answer so far, append `"answers-given"`, then
-call `runProductionRound` with the extended brief. It never calls
-`brain.ask()` again, regardless of whether the extended brief would still
-look ambiguous - the dial is fixed, not a negotiation loop.
+`ForemanError("no-questions-pending")` if there isn't one), append the
+round to `answers.md`, re-derive `brief.md` as `request.md` plus every
+answer so far, append `"answers-given"`, then call `runProductionRound`
+with the extended brief. It never calls `brain.ask()` again, regardless
+of whether the extended brief would still look ambiguous - the dial is
+fixed, not a negotiation loop.
+
+`ForemanError("already-answered")` - v1's "one clarification round by
+default," enforced here rather than left to silently re-ask - fires only
+for a round that actually *completed*: a `"delivered"` event after the
+last `"answers-given"`, not merely `"answers-given"` existing. That
+distinction matters because `runProductionRound` can throw before ever
+reaching `"delivered"` (a missing check command, a moved project path, an
+unreachable brain) - if the guard keyed on `"answers-given"` alone, a task
+whose resumed round failed for an infrastructure reason would become
+permanently unresumable the moment the Client tried again, with their
+answer already on record and no way back in. Retrying past a genuinely
+incomplete round reuses the same taskId's `runProductionRound` call, which
+picks `reopenProductionLine` over `createProductionLine` automatically
+(`src/line/README.md`'s `productionLineBranchExists`) once that first
+failed attempt has already left the `fabrica/<taskId>` branch behind.
 `contract/surface.ts`'s `Foreman.answer(taskId, text)` has no `brain`
 parameter, the same reasoning as `verdict()`'s fix path below: a
 same-process `do()` call that ended up `"asking"` already had its brain

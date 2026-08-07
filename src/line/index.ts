@@ -1,5 +1,5 @@
 export { createProductionLine } from "./cut.ts";
-export { reopenProductionLine } from "./resume.ts";
+export { reopenProductionLine, productionLineBranchExists } from "./resume.ts";
 export { destroyProductionLine } from "./teardown.ts";
 export type { TeardownResult } from "./teardown.ts";
 export { LineError } from "./errors.ts";

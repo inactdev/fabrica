@@ -66,6 +66,24 @@ Every refusal `createProductionLine` can raise applies here too, plus
 refuses rather than reusing a leftover worktree, so a line has to be
 destroyed before it can be reopened.
 
+### `productionLineBranchExists(project, taskId)`
+
+Plain boolean, never throws - true if `fabrica/<taskId>` already exists as
+a local branch, false otherwise (including when `project` or `taskId`
+themselves are bad, same as `safety.ts`'s `isKnownWorktree`). This is the
+same `refs/heads/` check `reopenProductionLine` uses internally to refuse
+`no-such-branch`, exported so a caller can decide *which* of
+`createProductionLine`/`reopenProductionLine` to call before finding out
+the hard way. `src/foreman/do.ts`'s `runProductionRound` (issue #8) uses
+it exactly for that: an `answer.ts` retry after a resumed round threw
+before ever committing anything needs `reopenProductionLine` (the branch
+already exists, from the failed round's own `createProductionLine` call -
+branches outlive their worktree's teardown by design), while every
+first-ever round for a task needs `createProductionLine` - checking git's
+own state, rather than threading "is this a retry" through as a separate
+parameter, keeps this correct regardless of why or how many times
+`runProductionRound` runs again for one taskId.
+
 ## `destroyProductionLine(line)`
 
 Returns a `TeardownResult`: `{ status: "destroyed" }` when it actually
