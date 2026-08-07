@@ -3,10 +3,14 @@
 // real outcome, not a failure of the system, and the record shows it
 // plainly rather than folding it into "failed". `fix` does not close the
 // task: the Client's note re-enters the SAME warm worker on the SAME line
-// (src/line/resume.ts) as a correction, counted against the task's
-// original attempt budget (src/foreman/attempts.ts) so a fix loop cannot
-// run forever. `verdict-recorded` lands on the record for every ruling,
-// per rule 6, before any of "fix"'s follow-up work happens.
+// (src/line/resume.ts) as a correction. Unlike Fabrica's own retry loop
+// (src/foreman/attempts.ts, rule 3's "three means three"), a `fix` has no
+// budget and no refusal - the Client asked for it, so the Client is the
+// stop condition, not a counter (issue #65). Each round is still counted
+// and reported, derived from the record rather than stored separately -
+// see `fixRoundOf` in queries.ts. `verdict-recorded` lands on the record
+// for every ruling, per rule 6, before any of "fix"'s follow-up work
+// happens.
 
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTaskFile } from "../record/index.ts";
 import { destroyProductionLine, reopenProductionLine } from "../line/index.ts";
@@ -84,14 +88,6 @@ export async function recordVerdict(
       "not-delivered",
       `fabrica verdict: task "${taskId}"'s delivery record is missing what a "fix" needs to reopen its ` +
         `line. Record "accept" or "wrong" instead.`
-    );
-  }
-
-  if (ruling === "fix" && priorReceipts.length >= (totalAttempts as number)) {
-    throw new ForemanError(
-      "attempts-exhausted",
-      `fabrica verdict: task "${taskId}" has already used all ${totalAttempts} attempt(s) in its budget ` +
-        `(rule 3) - there is no attempt left for a "fix". Record "accept" or "wrong" instead.`
     );
   }
 

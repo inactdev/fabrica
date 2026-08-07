@@ -1,13 +1,15 @@
 // runVerdictCommand end to end - the CLI's own argument parsing,
 // config-free record home, and message wording, for every ruling. A
-// successful "fix" is the one case that wakes a worker, so it runs
-// through the command's `brain` seam against a fake brain (the same
-// shape do-command.test.ts uses `entryScript` for); what that proves
-// here is the line the Client reads back, since the fix mechanism
-// itself - session resume, attempt counting - is proven in
-// src/foreman/verdict.test.ts. The refusing "fix" cases below stop
-// before any worker can run, which is precisely where an error from a
-// lower layer has to reach the Client instead of escaping.
+// successful "fix" wakes a worker, so it runs through the command's
+// `brain` seam against a fake brain (the same shape do-command.test.ts
+// uses `entryScript` for); what that proves here is the line the Client
+// reads back, since the fix mechanism itself - session resume, round
+// counting - is proven in src/foreman/verdict.test.ts. The refusing
+// "fix" cases below stop before any worker can run, which is precisely
+// where an error from a lower layer has to reach the Client instead of
+// escaping - "fix" has no attempt budget of its own any more (issue
+// #65), so what's left to refuse it is a missing note or a task with no
+// delivery to reopen.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -71,12 +73,11 @@ test("runVerdictCommand: wrong closes the task and reports so", async () => {
   );
 });
 
-// SPEC.md's own example command, argument for argument. The budget is
-// spent on purpose so the Foreman refuses before reaching for a brain -
-// what this proves is the shape: `fix` plus `-m "<note>"` parses and
-// reaches recordVerdict with its note, since a missing note would refuse
-// earlier and differently.
-test("runVerdictCommand: the spec's `fix -m \"<note>\"` form reaches the Foreman with its note", async () => {
+// SPEC.md's own example command, argument for argument, run against a
+// task whose original attempt budget was 1 and already spent - issue
+// #65's whole point: this used to refuse with "attempts-exhausted" and
+// now succeeds, since a fix the Client asks for draws from no budget.
+test("runVerdictCommand: the spec's `fix -m \"<note>\"` form succeeds past the task's original attempt budget", async () => {
   const recordHome = tempRecordHome();
   const brain = fakeBrain();
   const task = await createForeman({ recordHome }).do("small change", {
@@ -86,16 +87,24 @@ test("runVerdictCommand: the spec's `fix -m \"<note>\"` form reaches the Foreman
   });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "fix", "-m", "wrong button spot"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "fix", "-m", "wrong button spot"], { recordHome, brain, ...io });
 
-  assert.equal(code, 1);
-  assert.match(io.err[0], /has already used all 1 attempt\(s\)/);
-  assert.equal(brain.calls, 1, "no worker ran");
+  assert.equal(code, 0, io.err[0]);
+  assert.deepEqual(io.err, []);
+  assert.deepEqual(io.out, [
+    `fix round 1 recorded: ${task.id} ran again with your note - outcome: done. ` +
+      `Still open; run \`fabrica verdict ${task.id} accept|fix|wrong\` once you've reviewed it.`,
+  ]);
+  assert.equal(brain.calls, 2, "the fix round woke the worker despite the original budget of 1 being spent");
 
   const verdictEvent = (await createForeman({ recordHome }).events(task.id))
     .filter((e) => e.name === "verdict-recorded")
     .at(-1);
-  assert.equal(verdictEvent, undefined, "a refused fix records no verdict");
+  assert.equal(
+    (verdictEvent?.details as { note?: string } | undefined)?.note,
+    "wrong button spot",
+    "the -m note reaches the record verbatim"
+  );
 });
 
 // The one success path that actually runs a worker, and the only place
@@ -120,7 +129,7 @@ test("runVerdictCommand: a fix that runs reports the round's outcome and that th
   assert.equal(code, 0, io.err[0]);
   assert.deepEqual(io.err, []);
   assert.deepEqual(io.out, [
-    `fix recorded: ${task.id} ran again with your note - outcome: done. ` +
+    `fix round 1 recorded: ${task.id} ran again with your note - outcome: done. ` +
       `Still open; run \`fabrica verdict ${task.id} accept|fix|wrong\` once you've reviewed it.`,
   ]);
   assert.equal(brain.calls, 2, "the fix round woke the worker exactly once more");

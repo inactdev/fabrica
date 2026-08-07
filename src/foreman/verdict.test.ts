@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
-import { deliveryOf, receiptsOf } from "./queries.ts";
+import { deliveryOf, fixRoundOf, receiptsOf } from "./queries.ts";
 import { recordVerdict } from "./verdict.ts";
 import { readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
@@ -87,22 +87,32 @@ test("fix re-enters the same warm worker session on the same line", async () => 
   assert.equal(delivery?.outcome, "done");
 });
 
-test("fix is counted against the task's original attempt budget, and refuses once it's spent", async () => {
+test("fix draws from no budget of its own - the Client can rule it any number of times (issue #65)", async () => {
   const recordHome = freshHome();
   const brain = fakeBrain();
   const foreman = createForeman({ recordHome });
-  // Default budget is 2 attempts; a green first attempt stops early
-  // (1 used), leaving exactly 1 attempt for a single fix.
+  // Default budget is 2 attempts; a green first attempt stops early (1
+  // used), leaving exactly 1 attempt in do()'s own budget - which used
+  // to cap fix at exactly one round. A third round here proves there is
+  // no ceiling any more: the Client, not the machine's budget, decides
+  // when to stop.
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
+  assert.equal(fixRoundOf(recordHome, task.id), 0, "no fix ruled yet");
 
   await foreman.verdict(task.id, "fix", "one more pass");
-  assert.equal(brain.calls, 2, "budget of 2 allowed exactly one fix");
+  assert.equal(brain.calls, 2, "first fix round ran");
+  assert.equal(fixRoundOf(recordHome, task.id), 1);
 
-  await assert.rejects(
-    () => foreman.verdict(task.id, "fix", "another pass, please"),
-    (err: unknown) => err instanceof ForemanError && err.code === "attempts-exhausted"
-  );
-  assert.equal(brain.calls, 2, "the exhausted fix never touched the worker");
+  await foreman.verdict(task.id, "fix", "another pass, please");
+  assert.equal(brain.calls, 3, "a second fix round ran past what the old budget would have allowed");
+  assert.equal(fixRoundOf(recordHome, task.id), 2);
+
+  await foreman.verdict(task.id, "fix", "and one more still");
+  assert.equal(brain.calls, 4, "a third fix round ran too - no ceiling, no refusal");
+  assert.equal(fixRoundOf(recordHome, task.id), 3, "each round is counted and reported, unlimited");
+
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "delivered", "still open after three fix rounds");
 });
 
 test("a verdict on an already-closed task refuses", async () => {
@@ -216,17 +226,15 @@ test("a gate change declared in an earlier round still counts for the fix round 
   assert.match(delivery?.gateChanges ?? "", /echoes before exiting/);
 });
 
-test("a red do() run that already spent both default attempts leaves no budget for a fix", async () => {
+test("a fix still runs after a red do() run already spent both default attempts", async () => {
   const recordHome = freshHome();
   const brain = fakeBrain();
   const foreman = createForeman({ recordHome });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 1"), brain });
   assert.equal(brain.calls, 2, "default policy: one attempt, one fix pass on red, both spent already");
 
-  await assert.rejects(
-    () => foreman.verdict(task.id, "fix", "try again"),
-    (err: unknown) => err instanceof ForemanError && err.code === "attempts-exhausted"
-  );
+  await foreman.verdict(task.id, "fix", "try again");
+  assert.equal(brain.calls, 3, "the fix ran despite do()'s own budget being fully spent");
 });
 
 test("the human-readable verdict file is written before the closing record event, so a crash between the two never hides what the Client said", async () => {

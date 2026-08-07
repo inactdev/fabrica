@@ -6,7 +6,7 @@
 // extra worker attempt synchronously, so the command can report its
 // outcome directly instead of the Client having to separately poll for it.
 
-import { createForeman } from "../index.ts";
+import { createForeman, fixRoundOf } from "../index.ts";
 import type { Brain } from "../index.ts";
 import { parseVerdictArgs, VERDICT_USAGE } from "./verdict-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
@@ -19,8 +19,9 @@ rule 6 requires before a task can close. A task stays open and listed in
 
   accept   The work is right. Closes the task.
   fix      Right direction, wrong details. The note becomes a correction
-           handed back to the same warm worker on the same line, counted
-           against this task's attempt budget. The task stays open.
+           handed back to the same warm worker on the same line. No limit
+           on how many times you can rule fix; each round reports which
+           one it is. The task stays open.
   wrong    Not what was wanted, and not worth correcting. Closes the
            task - a real outcome, not a failure of the system.
 
@@ -58,8 +59,9 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
 
     if (ruling === "fix") {
       const delivery = await foreman.deliveryOf(taskId);
+      const round = fixRoundOf(recordHome, taskId);
       stdout(
-        `fix recorded: ${taskId} ran again with your note - outcome: ${delivery?.outcome ?? "unknown"}. ` +
+        `fix round ${round} recorded: ${taskId} ran again with your note - outcome: ${delivery?.outcome ?? "unknown"}. ` +
           `Still open; run \`fabrica verdict ${taskId} accept|fix|wrong\` once you've reviewed it.`
       );
     } else {

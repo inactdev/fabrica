@@ -436,17 +436,23 @@ whether a task is `"closed"`.
   `queries.ts`'s `deliveryOf`/`receiptsOf`/`deriveState` all read the
   *last* `"delivered"` event for exactly this reason, not the first.
 
-  **What a fix costs, precisely**: it consumes one attempt from the
-  task's *original* attempt budget (`do()`'s `totalAttempts` — the
-  default 2, or whatever was passed explicitly), persisted on the
-  `"delivered"` event's `details` alongside `project` and `baseCommit`
-  (`queries.ts`'s `DeliveredDetails`) so a later fix round can still find
-  them without re-deriving anything. Once `receipts.length >=
-  totalAttempts`, `verdict("fix", …)` refuses with
-  `ForemanError("attempts-exhausted")` before touching the worker at
-  all — this is rule 3's "three means three" applied to the whole task's
-  lifetime, not just one `do()` call, and it is what stops a fix loop
-  from running forever.
+  **What a fix costs, precisely**: nothing, on purpose (issue #65). Rule
+  3's "three means three" bounds `do()`'s own retry loop — a *machine*
+  trying, failing, and trying again unattended — not a correction the
+  Client explicitly asked for; nothing happens until he rules `fix`, so
+  he is the stop condition, not a counter. `verdict("fix", …)` has no
+  ceiling and never refuses with `ForemanError("attempts-exhausted")` —
+  that code and error stay in the codebase for what they were built for,
+  `do()`'s own budget, and still fire there. `project`, `baseCommit`, and
+  the *original* `totalAttempts` are still persisted on the `"delivered"`
+  event's `details` (`queries.ts`'s `DeliveredDetails`) so a later fix
+  round can still find what it needs to reopen the line, but nothing
+  reads `totalAttempts` to refuse a fix any more. Each round is counted
+  and reported instead: `queries.ts`'s `fixRoundOf` derives the count by
+  reading how many `"verdict-recorded"` events with `ruling: "fix"` a
+  task has, rather than storing a separate counter that could drift —
+  the CLI's `fix round N recorded: …` line (`verdict-command.ts`) is
+  where the Client sees it.
 
   A worker's brain is **not** a `verdict()` parameter
   (`contract/surface.ts`'s `Foreman.verdict` takes only `taskId`,
@@ -473,7 +479,7 @@ whether a task is `"closed"`.
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong, re-enters the same line and worker on fix. |
-| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. |
+| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. `fixRoundOf` instead counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path uses. |
 
 `GateResult`, `Receipt`, `Delivery`, `FabricaTask`, and `Foreman` itself

@@ -55,6 +55,17 @@ export function latestDeliveredDetails(recordHome: string, taskId: string): Deli
   return delivered?.details as DeliveredDetails | undefined;
 }
 
+/** How many "fix" verdicts a task has had so far, including the most
+ * recent one — rule 6's fix path has no attempt budget (issue #65: "he
+ * is the stop condition", not a counter), but each round still reports
+ * which one it is. Derived from the record's own verdict-recorded
+ * events rather than stored separately, so there is nothing to drift. */
+export function fixRoundOf(recordHome: string, taskId: string): number {
+  return readEventsForTask(recordHome, taskId).filter(
+    (e) => e.name === "verdict-recorded" && (e.details as { ruling?: string } | undefined)?.ruling === "fix"
+  ).length;
+}
+
 export function statusOf(recordHome: string): FabricaTask[] {
   const byTask = new Map<string, FabricaEvent[]>();
   for (const event of readEvents(recordHome)) {
