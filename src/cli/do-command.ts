@@ -39,10 +39,12 @@ export const DO_HELP = `Usage: ${DO_USAGE}
 Runs a task against a project. If the task is materially ambiguous, the
 worker's first pass produces numbered questions instead of doing any
 work - they print here and the command stops; answer with
-\`fabrica answer <id> -m "<text>"\` to resume it. Otherwise runs detached:
-prints the task id and returns immediately while the work continues in
-the background. The transcript streams live to the task's record as it
-runs.
+\`fabrica answer <id> -m "<text>"\` to resume it. That case still exits 0.
+If that first pass fails outright, before any work starts, the real
+reason prints here and the command exits non-zero. Otherwise runs
+detached: prints the task id and returns immediately while the work
+continues in the background. The transcript streams live to the task's
+record as it runs.
 
   <task text>              What to do, in plain words. Quote it.
   --project <path-or-name> A project's own path, or a name already
