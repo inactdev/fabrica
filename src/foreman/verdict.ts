@@ -95,8 +95,13 @@ export async function recordVerdict(
     );
   }
 
-  appendEvent(recordHome, { taskId, name: "verdict-recorded", details: { ruling, note: note ?? "" } });
+  // Write the human-readable verdict file before the record event that
+  // closes (or reopens) the loop on it — same principle as the
+  // commit-failure delivery in do.ts writing delivery.md before its
+  // "delivered" event: a failure between the two must never leave a task
+  // showing as ruled on with no record of what the Client actually said.
   appendTaskFile(recordHome, taskId, "verdict", `${new Date().toISOString()} ${ruling}${note ? `: ${note}` : ""}\n`);
+  appendEvent(recordHome, { taskId, name: "verdict-recorded", details: { ruling, note: note ?? "" } });
 
   if (ruling !== "fix") return;
 

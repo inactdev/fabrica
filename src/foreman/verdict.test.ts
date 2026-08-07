@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
 import { deliveryOf, receiptsOf } from "./queries.ts";
 import { recordVerdict } from "./verdict.ts";
+import { readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 
@@ -226,4 +227,26 @@ test("a red do() run that already spent both default attempts leaves no budget f
     () => foreman.verdict(task.id, "fix", "try again"),
     (err: unknown) => err instanceof ForemanError && err.code === "attempts-exhausted"
   );
+});
+
+test("the human-readable verdict file is written before the closing record event, so a crash between the two never hides what the Client said", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
+
+  // Force the record event write to fail deterministically, without
+  // touching production code to add a testability seam: reads of
+  // events.jsonl (recordVerdict's own lookups happen first) still work
+  // read-only, but appendEvent's open-for-append fails. Stands in for
+  // any real crash between the two writes (a full disk, a killed
+  // process) - the same principle as do.ts's commit-failure delivery
+  // writing delivery.md before its "delivered" event.
+  const eventsPath = join(recordHome, "events.jsonl");
+  chmodSync(eventsPath, 0o444);
+
+  await assert.rejects(() => foreman.verdict(task.id, "accept", "looks right"));
+
+  const verdictFile = readTaskFile(recordHome, task.id, "verdict");
+  assert.ok(verdictFile, "the verdict file must exist even though the closing event never landed");
+  assert.match(verdictFile!, /accept: looks right/);
 });
