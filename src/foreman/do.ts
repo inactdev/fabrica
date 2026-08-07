@@ -39,7 +39,7 @@ export async function doTask(
   );
 
   // A materially ambiguous task stops here - no ProductionLine is ever
-  // cut, no Worker ever runs. `fabrica answer <id> "<text>"`
+  // cut, no Worker ever runs. `fabrica answer <id> -m "<text>"`
   // (src/foreman/answer.ts) resumes it, extending this same brief.
   if (questions.length > 0) return { id: taskId, state: "asking" };
 

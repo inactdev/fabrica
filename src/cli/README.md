@@ -57,7 +57,7 @@ The one command this issue builds. What it does, in order:
    polls that task's own record for whichever of `"questions-asked"` or
    `"work-started"` lands first:
    - **Materially ambiguous** → prints the task id, then the numbered
-     questions and how to answer them (`fabrica answer <id> "<text>"`),
+     questions and how to answer them (`fabrica answer <id> -m "<text>"`),
      and stops. No Worker ever ran; nothing keeps running in the
      background for this task until answered.
    - **Otherwise, or if the wait times out** → prints just the task id,
@@ -83,7 +83,7 @@ built yet). The "asks" case is the one exception: this process already
 knows and reports that outcome directly, since nothing was ever spawned
 to detach from.
 
-## `fabrica answer <taskId> "<text>"`
+## `fabrica answer <taskId> -m "<text>"`
 
 Answers the clarifying questions `fabrica do` printed and stopped on
 (issue #8), and resumes the task. Like `fabrica verdict`, this never
@@ -92,8 +92,13 @@ synchronously (`src/foreman/answer.ts`'s `answerTask`, the same
 `runProductionRound` `do()` itself uses once it decides to proceed), so
 the command can report the outcome directly.
 
-`answer-args.ts` parses the two positionals (taskId, then the answer
-text - quote it) with no flags; `answer-command.ts` resolves the record
+`answer-args.ts` parses one positional (the taskId) plus a required
+`-m "<text>"`, mirroring `verdict-args.ts` - Client ruling: the two
+commands where the Client types free prose should behave identically,
+in `git commit -m`'s already-familiar shape, and a flag (unlike a bare
+positional) takes an answer that starts with a dash, e.g. `-1 means
+unlimited`, without mistaking it for a flag of its own.
+`answer-command.ts` resolves the record
 home the same way `do-command.ts`/`verdict-command.ts` do and calls
 `createForeman({ recordHome }).answer(taskId, text)` - no brain override
 in real use, so this always uses `defaultBrainAdapter()` unless the same

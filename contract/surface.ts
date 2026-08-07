@@ -167,7 +167,7 @@ export interface Foreman {
     taskText: string,
     opts: { project: string; attempts?: number; brain?: Brain }
   ): Promise<FabricaTask>;
-  /** `fabrica answer <id> "<text>"` (issue #8): appends a clarification
+  /** `fabrica answer <id> -m "<text>"` (issue #8): appends a clarification
    * round to a task stopped for questions, re-derives its brief, and
    * resumes it - the extended brief is what a Worker actually receives. */
   answer(taskId: string, text: string): Promise<FabricaTask>;

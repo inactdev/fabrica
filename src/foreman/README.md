@@ -48,7 +48,7 @@ return early" below.
    comes back materially ambiguous, `questions-asked` is appended and
    `do()` returns `{ id, state: "asking" }` right here — steps 2 onward
    never run, and no ProductionLine is ever cut. `fabrica answer <id>
-   "<text>"` (`answer.ts`) is what resumes a task that stopped here.
+   -m "<text>"` (`answer.ts`) is what resumes a task that stopped here.
 2. **Cuts a ProductionLine** via `src/line`'s `createProductionLine`,
    passing `project` straight through as a filesystem path — the root of
    the Client's own git checkout. The Client's checkout is never written
@@ -391,7 +391,7 @@ result falls through to `runProductionRound` (do.ts), the exact same
 isolate/work/verify/deliver pipeline this file always ran, now factored
 out so `answer.ts` can reach it too.
 
-**`answer.ts`'s `answerTask`** is what `fabrica answer <id> "<text>"`
+**`answer.ts`'s `answerTask`** is what `fabrica answer <id> -m "<text>"`
 calls: find the task's last `"questions-asked"` event (refuses with
 `ForemanError("no-questions-pending")` if there isn't one, or
 `ForemanError("already-answered")` if a round already resumed it - v1's

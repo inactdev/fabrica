@@ -14,7 +14,7 @@ Commands:
       Run a task against a project. If it's materially ambiguous, prints
       numbered questions and stops - answer with \`fabrica answer\`.
       Otherwise runs detached: prints the task id and returns immediately.
-  answer <taskId> "<text>"
+  answer <taskId> -m "<text>"
       Answer a task's clarifying questions and resume it.
   verdict <taskId> <accept|fix|wrong> [-m "<note>"]
       Record your ruling on a delivered task - closes it (accept/wrong)

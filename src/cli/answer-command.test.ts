@@ -34,7 +34,7 @@ test("runAnswerCommand: resumes an asking task and reports the outcome", async (
   const brain = fakeBrain();
   const io = captureIo();
 
-  const code = await runAnswerCommand([task.id, "Use Postgres."], { recordHome, brain, ...io });
+  const code = await runAnswerCommand([task.id, "-m", "Use Postgres."], { recordHome, brain, ...io });
 
   assert.equal(code, 0, io.err[0]);
   assert.deepEqual(io.err, []);
@@ -63,7 +63,7 @@ test("runAnswerCommand: an unknown task id refuses with the Foreman's own messag
   const recordHome = tempRecordHome();
   const io = captureIo();
 
-  const code = await runAnswerCommand(["no-such-task", "an answer"], { recordHome, ...io });
+  const code = await runAnswerCommand(["no-such-task", "-m", "an answer"], { recordHome, ...io });
 
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
@@ -78,7 +78,7 @@ test("runAnswerCommand: a task with no pending questions refuses", async () => {
   });
   const io = captureIo();
 
-  const code = await runAnswerCommand([task.id, "an answer"], { recordHome, ...io });
+  const code = await runAnswerCommand([task.id, "-m", "an answer"], { recordHome, ...io });
 
   assert.equal(code, 1);
   assert.match(io.err[0], /never asked a clarifying question/);
@@ -90,10 +90,10 @@ test("runAnswerCommand: answering the same task twice refuses the second time", 
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain({ askQuestions: ["Which?"] }),
   });
-  await runAnswerCommand([task.id, "First answer."], { recordHome, brain: fakeBrain(), ...captureIo() });
+  await runAnswerCommand([task.id, "-m", "First answer."], { recordHome, brain: fakeBrain(), ...captureIo() });
   const io = captureIo();
 
-  const code = await runAnswerCommand([task.id, "Second answer."], { recordHome, brain: fakeBrain(), ...io });
+  const code = await runAnswerCommand([task.id, "-m", "Second answer."], { recordHome, brain: fakeBrain(), ...io });
 
   assert.equal(code, 1);
   assert.match(io.err[0], /already got its one clarification round/);

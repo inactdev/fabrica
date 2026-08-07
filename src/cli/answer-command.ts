@@ -21,7 +21,9 @@ clarification round - the ask-first dial is fixed at "ask" for v1, so
 this can't be called again for the same task.
 
   <taskId>   The task's id, from \`fabrica do\`'s output.
-  <text>     Your answer, in plain words. Quote it.
+  -m <text>  Your answer, in plain words. Quote it. Same shape as
+             \`fabrica verdict -m\`, so an answer starting with a dash
+             ("-1 means unlimited") goes through as written.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).

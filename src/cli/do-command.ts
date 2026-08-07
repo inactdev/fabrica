@@ -39,7 +39,7 @@ export const DO_HELP = `Usage: ${DO_USAGE}
 Runs a task against a project. If the task is materially ambiguous, the
 worker's first pass produces numbered questions instead of doing any
 work - they print here and the command stops; answer with
-\`fabrica answer <id> "<text>"\` to resume it. Otherwise runs detached:
+\`fabrica answer <id> -m "<text>"\` to resume it. Otherwise runs detached:
 prints the task id and returns immediately while the work continues in
 the background. The transcript streams live to the task's record as it
 runs.
@@ -103,7 +103,7 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
       stdout("This task is materially ambiguous - answer before any work starts:");
       outcome.questions.forEach((question, i) => stdout(`  ${i + 1}. ${question}`));
       stdout("");
-      stdout(`  fabrica answer ${taskId} "<text>"`);
+      stdout(`  fabrica answer ${taskId} -m "<text>"`);
       return 0;
     }
 

@@ -74,7 +74,7 @@ test("runDoCommand: a materially ambiguous task prints numbered questions and st
   assert.match(io.out.join("\n"), /materially ambiguous/);
   assert.match(io.out.join("\n"), /1\. What database should this use\?/);
   assert.match(io.out.join("\n"), /2\. Should it support multi-tenancy\?/);
-  assert.match(io.out.join("\n"), new RegExp(`fabrica answer ${taskId} "<text>"`));
+  assert.match(io.out.join("\n"), new RegExp(`fabrica answer ${taskId} -m "<text>"`));
 
   // No worker ran - nothing beyond registration and the ask itself is on
   // the record yet.

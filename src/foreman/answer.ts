@@ -1,4 +1,4 @@
-// SPEC.md's `fabrica answer <id> "<text>"` (issue #8): appends a
+// SPEC.md's `fabrica answer <id> -m "<text>"` (issue #8): appends a
 // clarification round to a task that stopped for questions, re-derives
 // brief.md from request.md plus every answer so far, and resumes the
 // task through the same pipeline `doTask` would have run if it had
@@ -55,7 +55,7 @@ export async function answerTask(
     throw new ForemanError(
       "missing-answer",
       `fabrica answer: an answer needs actual text - it becomes part of the brief the worker receives. ` +
-        `Usage: fabrica answer ${taskId} "<text>"`
+        `Usage: fabrica answer ${taskId} -m "<text>"`
     );
   }
 
