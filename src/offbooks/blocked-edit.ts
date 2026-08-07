@@ -21,10 +21,6 @@ export interface BlockedEditAttempt {
   reason?: string;
 }
 
-/** Which registered project (if any) `cwd` falls under, so this event
- * keys the same way unattributed-change's does. Null when `cwd` isn't
- * inside any registered project (or projects.toml can't be read at all —
- * never thrown, this is a courtesy lookup, not a gate). */
 /** Symlinks resolved on both sides before comparing, matching src/line/
  * safety.ts's `normalize` — a project registered through a symlinked path
  * (macOS's /var -> /private/var, or a ~/work symlink) would otherwise never
@@ -38,6 +34,10 @@ function normalize(path: string): string {
   }
 }
 
+/** Which registered project (if any) `cwd` falls under, so this event
+ * keys the same way unattributed-change's does. Null when `cwd` isn't
+ * inside any registered project (or projects.toml can't be read at all —
+ * never thrown, this is a courtesy lookup, not a gate). */
 function resolveProjectName(recordHome: string, cwd: string): string | null {
   let projects: Record<string, { path: string }>;
   try {

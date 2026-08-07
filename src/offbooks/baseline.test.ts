@@ -60,7 +60,10 @@ test("writeBaseline: a reader during concurrent writes from separate OS processe
     });
 
   let writing = true;
-  const workers = Promise.all(["w0", "w1", "w2", "w3"].map(runWorker)).then(() => (writing = false));
+  let workerError: unknown = null;
+  const workers = Promise.all(["w0", "w1", "w2", "w3"].map(runWorker))
+    .catch((err) => (workerError = err))
+    .finally(() => (writing = false));
 
   // A torn read shows up as readBaseline returning null (invalid JSON), which
   // detect.ts would treat as "never seen" and silently swallow a real change.
@@ -74,6 +77,7 @@ test("writeBaseline: a reader during concurrent writes from separate OS processe
     await new Promise((done) => setImmediate(done));
   }
   await workers;
+  if (workerError) throw workerError;
 
   assert.ok(reads > 100, `expected reads to overlap the writers, got ${reads}`);
   assert.equal(torn, 0, "a baseline read mid-write must never come back unreadable");
