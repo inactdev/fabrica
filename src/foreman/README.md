@@ -278,7 +278,13 @@ treats that as passing a *required* status check is a known trap, not a
 documented guarantee. So every run reports a real pass or fail: a PR
 touching `check.sh` (or `.github/workflows/**`) fails on purpose, naming
 the file and stating plainly that only the Client may review and
-override; any other PR passes. The job's `permissions:` are scoped to
+override; any other PR clears that check. The same job also runs a second,
+separately-worded pass over the same file list for `contract/**` and
+`CONTRACT.md` (`CONTRACT_PROTECTED_PATHS`, issue #53) - not a third rule
+9 case, since changing the contract is allowed and only needs to never
+merge itself; the workflow file's own header comment owns that reasoning,
+and `contract/rule9-gate.contract-paths.test.ts` proves the pattern list
+and its distinct wording are there. The job's `permissions:` are scoped to
 `pull-requests: read` only, the minimum the API call needs, rather than
 inheriting the default token scope. The job name stays
 `block-protected-path-change` regardless of any other change to this
