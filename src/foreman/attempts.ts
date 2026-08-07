@@ -45,6 +45,12 @@ export async function runAttempts(opts: {
    * from where the task's prior rounds left off, instead of restarting
    * at 1, so the record shows one running count across the whole task. */
   startAttempt?: number;
+  /** Fires the instant a check starts running, before its (synchronous,
+   * blocking) result is known - issue #12's "say what it's doing": with
+   * this, status/watch can report "checking, Xm so far" using a real
+   * recorded start time instead of guessing, and correctly stay silent
+   * about "quiet too long" for a check that is simply still running. */
+  onCheckStarted?: (attempt: number) => void;
   onCheckRun?: (attempt: number, gate: GateResult) => void;
   onTranscript?: (transcript: TranscriptEntry[]) => void;
   /** Fires roughly every `heartbeatIntervalMs` while a `brain.work` call
@@ -64,6 +70,7 @@ export async function runAttempts(opts: {
     stopEarlyOnGreen,
     initialSession,
     startAttempt,
+    onCheckStarted,
     onCheckRun,
     onTranscript,
     onHeartbeat,
@@ -89,6 +96,7 @@ export async function runAttempts(opts: {
     if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
 
     const durationMs = Date.now() - t0;
+    onCheckStarted?.(attempt);
     const gate = runCheck(workdir, check);
     onCheckRun?.(attempt, gate);
     lastGate = gate;

@@ -179,6 +179,9 @@ async function runFixRound(
       stopEarlyOnGreen: true,
       initialSession: lastSession,
       startAttempt: priorReceipts.length + 1,
+      onCheckStarted: (attempt) => {
+        appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, phase: "started" } });
+      },
       onCheckRun: (attempt, gate) => {
         appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, green: gate.green } });
       },

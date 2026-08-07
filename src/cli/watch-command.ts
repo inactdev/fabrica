@@ -12,7 +12,15 @@ import { createForeman, readTranscript, stateOf } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { WATCH_USAGE, parseWatchArgs } from "./watch-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { formatQuietNotice, formatTranscriptLine, isQuietTooLong, lastActivityAt } from "./render.ts";
+import {
+  QUIET_THRESHOLD_MS,
+  checkStartedAt,
+  formatAge,
+  formatQuietNotice,
+  formatTranscriptLine,
+  isQuietTooLong,
+  lastActivityAt,
+} from "./render.ts";
 
 export const WATCH_HELP = `Usage: ${WATCH_USAGE}
 
@@ -20,7 +28,9 @@ Streams one task's transcript live, as the worker writes it - the same
 entries \`fabrica log --transcript\` prints after the fact. Heartbeats show
 as brief liveness lines during a long silent stretch, and a stretch longer
 than that is flagged "quiet" instead of implying progress nobody has
-actually observed.
+actually observed. A task running its check instead says so plainly -
+"checking, 2m so far" - since that has a real, known start time; it is
+never flagged "quiet".
 
 Stopping this (Ctrl-C) only stops watching. The task itself runs in a
 separate, already-detached process (\`fabrica do\` starts it that way) that
@@ -120,6 +130,8 @@ async function streamTranscript(ctx: {
   let printedTranscript = 0;
   let printedHeartbeats = 0;
   let wasQuiet = false;
+  let wasChecking = false;
+  let lastCheckingPace = -1;
   let noticedTerminal = false;
 
   const poll = async () => {
@@ -142,6 +154,26 @@ async function streamTranscript(ctx: {
     const state = events.length > 0 ? stateOf(events) : "working";
 
     const now = Date.now();
+
+    // Say what it's doing (issue #12, the Client's own ruling): a check
+    // has a real, recorded start time, so a task mid-check says so
+    // plainly - on the same cadence QUIET_THRESHOLD_MS already sets - and
+    // isQuietTooLong (below) never raises an alarm for it, since there is
+    // nothing unexplained about this silence.
+    const checking = state === "checking";
+    if (checking) {
+      const startedAt = checkStartedAt(events);
+      const elapsedMs = startedAt ? now - startedAt.getTime() : 0;
+      const pace = Math.floor(elapsedMs / QUIET_THRESHOLD_MS);
+      if (!wasChecking || pace > lastCheckingPace) {
+        stdout(`checking, ${formatAge(elapsedMs)} so far`);
+        lastCheckingPace = pace;
+      }
+    } else {
+      lastCheckingPace = -1;
+    }
+    wasChecking = checking;
+
     const quiet = isQuietTooLong(state, events, now);
     if (quiet !== wasQuiet) {
       const last = lastActivityAt(events);

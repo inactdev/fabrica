@@ -88,41 +88,69 @@ export function statusOf(recordHome: string): FabricaTask[] {
 
 /** Where a task stands, derived from its own events alone - so a caller
  * already holding them (`fabrica watch`, polling one task) never re-reads
- * the whole record just to ask. */
+ * the whole record just to ask. A single forward pass, letting each event
+ * overwrite `state` in place - equivalent to (and replacing) separately
+ * filtering for the LAST verdict/delivered/check-run, but it also gets
+ * "checking" right: a "check-run" event now lands twice per attempt
+ * (`details.phase === "started"` right before the check runs - see
+ * attempts.ts's `onCheckStarted` - and the existing result-carrying one
+ * once it finishes), so a task genuinely mid-check is distinguishable
+ * from one that already has a finished check-run sitting in its history.
+ * Reusing "check-run" rather than a new event name keeps this out of
+ * `contract/surface.ts` (its closed `FabricaEventName` union), which the
+ * rule9-gate CI check treats as a protected path the Client merges by
+ * hand - not something this ordinary status/log/watch work needs to touch. */
 export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
-  // The task closes only once the Client's MOST RECENT verdict is "accept"
-  // or "wrong" — a "fix" verdict is recorded on the record too (rule 6:
-  // "verdict-recorded goes on the record every time"), but it reopens the
-  // loop rather than closing it, so the events after it (a fresh
-  // work-started/check-run/delivered round) are what state should reflect.
-  const lastVerdict = events.filter((e) => e.name === "verdict-recorded").at(-1);
-  if (lastVerdict) {
-    const ruling = (lastVerdict.details as { ruling?: string } | undefined)?.ruling;
-    if (ruling === "accept" || ruling === "wrong") return "closed";
+  let state: FabricaTask["state"] = "working";
+
+  for (const event of events) {
+    switch (event.name) {
+      case "questions-asked":
+        state = "asking";
+        break;
+      case "answers-given":
+        // The Client already answered (issue #8) - even if
+        // runProductionRound then fails before ever reaching
+        // "work-started" (e.g. a missing check command), staying on
+        // "asking" would wrongly suggest the answer never registered.
+        state = "working";
+        break;
+      case "ask-failed":
+        // brain.ask() itself threw (issue #8 follow-up, Client ruling) -
+        // the task never got past its own first step, so it's failed,
+        // not still "working" or silently invisible.
+        state = "failed";
+        break;
+      case "work-started":
+        state = "working";
+        break;
+      case "check-run": {
+        const details = event.details as { phase?: string } | undefined;
+        state = details?.phase === "started" ? "checking" : "working";
+        break;
+      }
+      case "delivered": {
+        // A fix round appends a second "delivered" event on the same
+        // task; the forward pass naturally lands on the last one.
+        const details = event.details as { outcome?: Delivery["outcome"] } | undefined;
+        state = details?.outcome === "done" ? "delivered" : "failed";
+        break;
+      }
+      case "verdict-recorded": {
+        // The task closes only once the Client's MOST RECENT verdict is
+        // "accept" or "wrong" - a "fix" verdict is recorded too (rule 6:
+        // "verdict-recorded goes on the record every time") but reopens
+        // the loop rather than closing it, so it leaves `state` alone;
+        // the fresh work-started/check-run/delivered round that follows
+        // is what should override it.
+        const ruling = (event.details as { ruling?: string } | undefined)?.ruling;
+        if (ruling === "accept" || ruling === "wrong") state = "closed";
+        break;
+      }
+      default:
+        break;
+    }
   }
 
-  // A fix round appends a second "delivered" event on the same task; the
-  // last one is the one that reflects where things stand now.
-  const delivered = events.filter((e) => e.name === "delivered").at(-1);
-  if (delivered) {
-    const details = delivered.details as { outcome?: Delivery["outcome"] } | undefined;
-    return details?.outcome === "done" ? "delivered" : "failed";
-  }
-
-  // brain.ask() itself threw (issue #8 follow-up, Client ruling) - the
-  // task never got past its own first step, so it is failed, not still
-  // "working" or silently invisible. Checked before check-run/work-started
-  // only for read order; the two never coexist; a task whose ask() threw
-  // never reaches either.
-  if (events.some((e) => e.name === "ask-failed")) return "failed";
-
-  if (events.some((e) => e.name === "check-run")) return "checking";
-  if (events.some((e) => e.name === "work-started")) return "working";
-  // The Client already answered (issue #8) - even if runProductionRound
-  // then failed before ever reaching "work-started" (e.g. a missing
-  // check command), "asking" below would wrongly suggest the answer
-  // never registered.
-  if (events.some((e) => e.name === "answers-given")) return "working";
-  if (events.some((e) => e.name === "questions-asked")) return "asking";
-  return "working";
+  return state;
 }

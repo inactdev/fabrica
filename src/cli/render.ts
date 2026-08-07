@@ -32,11 +32,33 @@ export function lastActivityAt(events: FabricaEvent[]): Date | null {
   return new Date(events[events.length - 1].occurredAt);
 }
 
-/** True only for a task still in flight (working/checking) whose silence
- * has run past QUIET_THRESHOLD_MS - a delivered, failed, or closed task is
- * quiet by definition and that's not the same fact. */
+/** When the check currently running started, or null when the task isn't
+ * mid-check. A "check-run" event now lands twice per attempt - once with
+ * `details.phase === "started"` right before the check runs (see
+ * attempts.ts's `onCheckStarted`), once with its result once it finishes -
+ * so the latest "started" one, if nothing has finished since, is a real
+ * recorded start time, not a guess (the Client's own call on issue #12's
+ * quiet-detection finding: say what it's doing, don't estimate). */
+export function checkStartedAt(events: FabricaEvent[]): Date | null {
+  let startedAt: Date | null = null;
+  for (const event of events) {
+    if (event.name !== "check-run") continue;
+    const details = event.details as { phase?: string } | undefined;
+    startedAt = details?.phase === "started" ? new Date(event.occurredAt) : null;
+  }
+  return startedAt;
+}
+
+/** True only for a task still WORKING (a brain.work call in flight) whose
+ * silence has run past QUIET_THRESHOLD_MS - a delivered, failed, or closed
+ * task is quiet by definition and that's not the same fact. A task that is
+ * "checking" is never quiet-too-long: Fabrica knows exactly what it's
+ * doing and since when (checkStartedAt), so status/watch say that plainly
+ * instead of raising an alarm about a silence that has a known, honest
+ * explanation - the alarm stays fully meaningful for the case it actually
+ * means something: a "working" task whose worker has truly gone silent. */
 export function isQuietTooLong(state: FabricaTask["state"], events: FabricaEvent[], now: number = Date.now()): boolean {
-  if (state !== "working" && state !== "checking") return false;
+  if (state !== "working") return false;
   const last = lastActivityAt(events);
   if (!last) return false;
   return now - last.getTime() > QUIET_THRESHOLD_MS;
@@ -59,12 +81,13 @@ export function formatAge(ms: number): string {
 
 /** One line for `fabrica status` - dense, scannable, and honest: a
  * delivered task is flagged as awaiting the Client's verdict (the single
- * most important thing status has to surface, per issue #12), and a
- * working/checking task gone quiet too long says so instead of implying
- * progress nobody has actually observed. */
+ * most important thing status has to surface, per issue #12), a task mid-
+ * check says so plainly with its real elapsed time, and a working task
+ * gone quiet too long says so instead of implying progress nobody has
+ * actually observed. */
 export function formatStatusLine(
   task: FabricaTask,
-  opts: { project: string | null; ageMs: number; quietForMs: number | null }
+  opts: { project: string | null; ageMs: number; quietForMs: number | null; checkingForMs: number | null }
 ): string {
   const project = opts.project ?? "unknown project";
   const age = formatAge(opts.ageMs);
@@ -72,6 +95,9 @@ export function formatStatusLine(
 
   if (task.state === "delivered") {
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
+  }
+  if (task.state === "checking" && opts.checkingForMs !== null) {
+    return `${base}  <- checking, ${formatAge(opts.checkingForMs)} so far`;
   }
   if (opts.quietForMs !== null) {
     return `${base}  <- ${formatQuietNotice(opts.quietForMs)}`;

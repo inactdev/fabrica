@@ -156,6 +156,9 @@ export async function runProductionRound(
       check,
       totalAttempts,
       stopEarlyOnGreen: !explicitAttempts,
+      onCheckStarted: (attempt) => {
+        appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, phase: "started" } });
+      },
       onCheckRun: (attempt, gate) => {
         appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, green: gate.green } });
       },

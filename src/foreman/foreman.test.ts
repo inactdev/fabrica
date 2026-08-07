@@ -66,7 +66,9 @@ test("events() returns this task's events only, in order", async () => {
   assert.ok(eventsA.every((e) => e.taskId === taskA.id));
   assert.deepEqual(
     eventsA.map((e) => e.name),
-    ["task-received", "line-cut", "work-started", "check-run", "delivered"]
+    // "check-run" lands twice per attempt: once when the check starts
+    // (details.phase === "started", issue #12) and once with its result.
+    ["task-received", "line-cut", "work-started", "check-run", "check-run", "delivered"]
   );
 
   const eventsB = await foreman.events(taskB.id);

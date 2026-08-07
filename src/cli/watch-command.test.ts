@@ -9,14 +9,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../index.ts";
 import { appendEvent } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { runDoCommand } from "./do-command.ts";
 import { runWatchCommand } from "./watch-command.ts";
 import type { Brain } from "../index.ts";
+
+// See status-command.test.ts's matching test: runCheck is synchronous
+// execSync, so a slow check blocks its own process's event loop start to
+// finish - a real, separate detached process (not just an unawaited
+// in-process promise) is what lets this test's own polling run at all
+// while a check is genuinely in flight.
+const FAKE_ENTRY = fileURLToPath(new URL("./helpers/fake-run-task-entry.ts", import.meta.url));
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-watch-command-"));
@@ -125,6 +134,35 @@ test("runWatchCommand: heartbeat events show as liveness lines", async () => {
 
   const heartbeatLines = io.out.filter((line) => line.includes("[heartbeat]"));
   assert.equal(heartbeatLines.length, 2);
+});
+
+test("runWatchCommand: a task mid-check streams its real elapsed time live, never a quiet alarm", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("sleep 2 && exit 0");
+
+  const doIo = { out: [] as string[], stdout: (l: string) => doIo.out.push(l), stderr: () => {} };
+  await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...doIo });
+  const taskId = doIo.out[0];
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand([taskId], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 50,
+    ...io,
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  controller.abort();
+  await watchPromise;
+
+  assert.ok(
+    io.out.some((line) => /^checking, \d+s so far$/.test(line)),
+    `expected a live "checking, Xs so far" line, got: ${JSON.stringify(io.out)}`
+  );
+  assert.ok(!io.out.some((line) => line.includes("quiet")), "a mid-check task is never flagged quiet");
 });
 
 test("runWatchCommand: an unknown task id refuses plainly", async () => {

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   QUIET_THRESHOLD_MS,
+  checkStartedAt,
   formatAge,
   formatEventLine,
   formatQuietNotice,
@@ -57,10 +58,48 @@ test("isQuietTooLong: true only once a working task's silence exceeds the thresh
   assert.equal(isQuietTooLong("working", events, start + QUIET_THRESHOLD_MS + 1), true);
 });
 
+test("isQuietTooLong: never true for a checking task, no matter how long - it has a known explanation", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "x", name: "check-run", details: { phase: "started" } },
+  ];
+  assert.equal(isQuietTooLong("checking", events, start + QUIET_THRESHOLD_MS * 10), false);
+});
+
+test("checkStartedAt: the latest started check-run, when nothing has finished it yet", () => {
+  const events: FabricaEvent[] = [
+    { occurredAt: "2026-01-01T00:00:00.000Z", taskId: "x", name: "work-started" },
+    { occurredAt: "2026-01-01T00:00:05.000Z", taskId: "x", name: "check-run", details: { attempt: 1, phase: "started" } },
+  ];
+  assert.equal(checkStartedAt(events)!.toISOString(), "2026-01-01T00:00:05.000Z");
+});
+
+test("checkStartedAt: null once that check has finished", () => {
+  const events: FabricaEvent[] = [
+    { occurredAt: "2026-01-01T00:00:05.000Z", taskId: "x", name: "check-run", details: { attempt: 1, phase: "started" } },
+    { occurredAt: "2026-01-01T00:00:08.000Z", taskId: "x", name: "check-run", details: { attempt: 1, green: true } },
+  ];
+  assert.equal(checkStartedAt(events), null);
+});
+
+test("checkStartedAt: null when no check has ever started", () => {
+  const events: FabricaEvent[] = [{ occurredAt: "t0", taskId: "x", name: "work-started" }];
+  assert.equal(checkStartedAt(events), null);
+});
+
+test("checkStartedAt: a second attempt's start, after the first attempt's check finished", () => {
+  const events: FabricaEvent[] = [
+    { occurredAt: "2026-01-01T00:00:05.000Z", taskId: "x", name: "check-run", details: { attempt: 1, phase: "started" } },
+    { occurredAt: "2026-01-01T00:00:08.000Z", taskId: "x", name: "check-run", details: { attempt: 1, green: false } },
+    { occurredAt: "2026-01-01T00:00:20.000Z", taskId: "x", name: "check-run", details: { attempt: 2, phase: "started" } },
+  ];
+  assert.equal(checkStartedAt(events)!.toISOString(), "2026-01-01T00:00:20.000Z");
+});
+
 test("formatStatusLine: flags a delivered task as awaiting verdict", () => {
   const line = formatStatusLine(
     { id: "t1", state: "delivered" },
-    { project: "/proj", ageMs: 60_000, quietForMs: null }
+    { project: "/proj", ageMs: 60_000, quietForMs: null, checkingForMs: null }
   );
   assert.match(line, /AWAITING YOUR VERDICT/);
   assert.match(line, /fabrica verdict t1 accept\|fix\|wrong/);
@@ -69,7 +108,7 @@ test("formatStatusLine: flags a delivered task as awaiting verdict", () => {
 test("formatStatusLine: flags a quiet working task without implying it's stuck or fine", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    { project: "/proj", ageMs: 600_000, quietForMs: 90_000 }
+    { project: "/proj", ageMs: 600_000, quietForMs: 90_000, checkingForMs: null }
   );
   assert.match(line, /quiet/);
   assert.match(line, /not known to be stuck/);
@@ -78,14 +117,26 @@ test("formatStatusLine: flags a quiet working task without implying it's stuck o
 test("formatStatusLine: a plain working task with recent activity has no flag", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    { project: "/proj", ageMs: 5_000, quietForMs: null }
+    { project: "/proj", ageMs: 5_000, quietForMs: null, checkingForMs: null }
   );
   assert.doesNotMatch(line, /<-/);
 });
 
 test("formatStatusLine: unknown project is said plainly, not left blank", () => {
-  const line = formatStatusLine({ id: "t1", state: "working" }, { project: null, ageMs: 1_000, quietForMs: null });
+  const line = formatStatusLine(
+    { id: "t1", state: "working" },
+    { project: null, ageMs: 1_000, quietForMs: null, checkingForMs: null }
+  );
   assert.match(line, /unknown project/);
+});
+
+test("formatStatusLine: a checking task says so plainly with its real elapsed time, never quiet", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "checking" },
+    { project: "/proj", ageMs: 600_000, quietForMs: null, checkingForMs: 120_000 }
+  );
+  assert.match(line, /checking, 2m so far/);
+  assert.doesNotMatch(line, /quiet/);
 });
 
 test("formatEventLine: timestamp, name, and compacted details", () => {
@@ -101,7 +152,10 @@ test("formatEventLine: timestamp, name, and compacted details", () => {
 test("formatQuietNotice: one wording, and it's the one formatStatusLine prints", () => {
   const notice = formatQuietNotice(90_000);
   assert.equal(notice, "quiet 1m, no signal since last heartbeat - not known to be stuck, not known to be fine");
-  const line = formatStatusLine({ id: "t1", state: "working" }, { project: "/p", ageMs: 600_000, quietForMs: 90_000 });
+  const line = formatStatusLine(
+    { id: "t1", state: "working" },
+    { project: "/p", ageMs: 600_000, quietForMs: 90_000, checkingForMs: null }
+  );
   assert.ok(line.endsWith(notice), `status line should end with the shared notice, got: ${line}`);
 });
 

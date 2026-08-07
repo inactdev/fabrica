@@ -7,7 +7,7 @@
 import { eventsByTask, stateOf } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { formatStatusLine, isQuietTooLong, lastActivityAt, projectFromEvents } from "./render.ts";
+import { checkStartedAt, formatStatusLine, isQuietTooLong, lastActivityAt, projectFromEvents } from "./render.ts";
 
 export const STATUS_USAGE = "fabrica status";
 
@@ -15,10 +15,13 @@ export const STATUS_HELP = `Usage: ${STATUS_USAGE}
 
 Lists every open task - one line each: id, project, state, age. A
 "delivered" task is flagged as awaiting your verdict (\`fabrica verdict\`)
-since nothing else tells you it's waiting. A "working"/"checking" task
-with no recorded activity in a while is flagged "quiet" rather than
-implying progress nobody has actually observed. A closed task (verdict
-recorded) drops off this list - see \`fabrica log <id>\` for its history.
+since nothing else tells you it's waiting. A "checking" task shows its
+real elapsed time ("checking, 2m so far") instead of a quiet alarm - the
+check itself has a known start time, so there's no need to guess. A
+"working" task with no recorded activity in a while is flagged "quiet"
+rather than implying progress nobody has actually observed. A closed task
+(verdict recorded) drops off this list - see \`fabrica log <id>\` for its
+history.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -78,8 +81,10 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
       const quiet = isQuietTooLong(task.state, events, now);
       const last = lastActivityAt(events);
       const quietForMs = quiet && last ? now - last.getTime() : null;
+      const checkStarted = task.state === "checking" ? checkStartedAt(events) : null;
+      const checkingForMs = checkStarted ? now - checkStarted.getTime() : null;
 
-      stdout(formatStatusLine(task, { project, ageMs, quietForMs }));
+      stdout(formatStatusLine(task, { project, ageMs, quietForMs, checkingForMs }));
     }
 
     return 0;

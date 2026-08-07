@@ -29,7 +29,9 @@ test("runLogCommand: prints the task's full event history, in order", async () =
   assert.equal(code, 0);
   assert.deepEqual(io.err, []);
   const names = io.out.map((line) => line.split(/\s+/)[1]);
-  assert.deepEqual(names, ["task-received", "line-cut", "work-started", "check-run", "delivered"]);
+  // "check-run" lands twice per attempt: once when the check starts
+  // (details.phase === "started", issue #12) and once with its result.
+  assert.deepEqual(names, ["task-received", "line-cut", "work-started", "check-run", "check-run", "delivered"]);
 });
 
 test("runLogCommand: --transcript appends the worker's raw transcript", async () => {

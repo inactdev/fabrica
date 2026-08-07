@@ -1,12 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { runDoCommand } from "./do-command.ts";
 import { runStatusCommand } from "./status-command.ts";
+
+// A real, separate detached process (see do-command.test.ts): runCheck is
+// synchronous execSync, so a slow check blocks that process's own event
+// loop start to finish - polling `fabrica status` from THIS test process
+// concurrently, while it's mid-check, needs a genuinely different OS
+// process, not just an unawaited in-process promise.
+const FAKE_ENTRY = fileURLToPath(new URL("./helpers/fake-run-task-entry.ts", import.meta.url));
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-status-command-"));
@@ -72,6 +81,29 @@ test("runStatusCommand: a stray positional is refused and points at `fabrica log
   assert.deepEqual(io.out, []);
   assert.match(io.err[0], /unexpected argument "some-task-id"/);
   assert.match(io.err[0], /fabrica log <taskId>/);
+});
+
+test("runStatusCommand: a task mid-check says so plainly, with real elapsed time, never quiet", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("sleep 2 && exit 0");
+  const io = captureIo();
+
+  const doIo = { out: [] as string[], err: [] as string[], stdout: (l: string) => doIo.out.push(l), stderr: () => {} };
+  await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...doIo });
+  const taskId = doIo.out[0];
+
+  // Give the detached process time to register, start work (instant, via
+  // fakeBrain), and get into its check - long before the 2s sleep ends.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 1);
+  assert.match(io.out[0], new RegExp(`^${taskId}\\s`));
+  assert.match(io.out[0], /checking/);
+  assert.match(io.out[0], /checking, \d+s so far/);
+  assert.doesNotMatch(io.out[0], /quiet/);
 });
 
 test("runStatusCommand: a red delivery shows failed, not delivered, and carries no verdict flag", async () => {
