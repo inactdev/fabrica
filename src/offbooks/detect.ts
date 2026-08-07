@@ -32,9 +32,11 @@ function sameLines(a: string[], b: string[]): boolean {
 }
 
 function dirtyFileDiff(baseline: ProjectGitState, current: ProjectGitState): string[] {
+  const baselineLines = new Set(baseline.dirty);
+  const currentLines = new Set(current.dirty);
   const files = new Set<string>();
-  for (const line of current.dirty) if (!baseline.dirty.includes(line)) files.add(pathFromPorcelainLine(line));
-  for (const line of baseline.dirty) if (!current.dirty.includes(line)) files.add(pathFromPorcelainLine(line));
+  for (const line of current.dirty) if (!baselineLines.has(line)) files.add(pathFromPorcelainLine(line));
+  for (const line of baseline.dirty) if (!currentLines.has(line)) files.add(pathFromPorcelainLine(line));
   return [...files];
 }
 
@@ -63,9 +65,16 @@ export function detectUnattributedChange(recordHome: string, projectName: string
   if (!dirtyChanged && !headMoved) return; // genuinely nothing new since last time
 
   const files = new Set<string>(dirtyFileDiff(baseline, current));
+  let filesUnknown = false;
   if (headMoved) {
-    for (const file of filesChangedBetween(projectPath, baseline.headCommit, current.headCommit)) {
-      files.add(file);
+    const moved = filesChangedBetween(projectPath, baseline.headCommit, current.headCommit);
+    if (moved === null) {
+      // A rewritten history (rebase, force-push) can make the old commit
+      // unreachable. Something still changed and still gets recorded — the
+      // event says so rather than showing an empty list as if it knew.
+      filesUnknown = true;
+    } else {
+      for (const file of moved) files.add(file);
     }
   }
 
@@ -79,6 +88,7 @@ export function detectUnattributedChange(recordHome: string, projectName: string
       path: projectPath,
       branch: current.branch,
       files: [...files].sort(),
+      ...(filesUnknown ? { filesUnknown: true } : {}),
     },
   });
 }

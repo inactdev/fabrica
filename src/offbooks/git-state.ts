@@ -57,9 +57,11 @@ export function pathFromPorcelainLine(line: string): string {
 }
 
 /** Files touched between two commits of the same project — best-effort:
- * a rewritten history (rebase, force-push) can make `oldCommit` unreachable,
- * and that failure is reported as "unknown," never thrown. */
-export function filesChangedBetween(path: string, oldCommit: string, newCommit: string): string[] {
+ * a rewritten history (rebase, force-push) can make `oldCommit` unreachable.
+ * That failure is reported as `null` ("unknown"), never thrown, and never as
+ * an empty list — an empty list means the diff genuinely named no files, and
+ * callers put the difference on the record (detect.ts's `filesUnknown`). */
+export function filesChangedBetween(path: string, oldCommit: string, newCommit: string): string[] | null {
   try {
     const raw = execFileSync("git", ["diff", "--name-only", "-z", oldCommit, newCommit], {
       cwd: path,
@@ -69,6 +71,6 @@ export function filesChangedBetween(path: string, oldCommit: string, newCommit: 
     });
     return raw.split("\0").filter((p) => p.length > 0);
   } catch {
-    return [];
+    return null;
   }
 }

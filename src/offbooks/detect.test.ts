@@ -11,7 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { readEvents } from "../record/index.ts";
+import { writeBaseline } from "./baseline.ts";
 import { detectUnattributedChange } from "./detect.ts";
+import { readProjectGitState } from "./git-state.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-offbooks-detect-"));
@@ -147,6 +149,36 @@ test("detect: a tracked manifest-file change (e.g. a lockfile) is not special-ca
   const events = readEvents(recordHome);
   assert.equal(events.length, 1);
   assert.deepEqual((events[0].details as { files: string[] }).files, ["package-lock.json"]);
+});
+
+test("detect: a HEAD the diff can't reach (rewritten history) still fires, and says the file list is unknown", () => {
+  const recordHome = tempRecordHome();
+  const repo = makeFixtureRepo();
+  const current = readProjectGitState(repo);
+  assert.ok(current);
+  // A rebase/force-push leaves a baseline commit that no longer exists.
+  writeBaseline(recordHome, "proj", { ...current, headCommit: "0".repeat(40) });
+
+  detectUnattributedChange(recordHome, "proj", repo);
+
+  const events = readEvents(recordHome);
+  assert.equal(events.length, 1);
+  const details = events[0].details as { files: string[]; filesUnknown?: boolean };
+  assert.deepEqual(details.files, []);
+  assert.equal(details.filesUnknown, true);
+});
+
+test("detect: an ordinary fire names its files and carries no filesUnknown flag", () => {
+  const recordHome = tempRecordHome();
+  const repo = makeFixtureRepo();
+  detectUnattributedChange(recordHome, "proj", repo);
+
+  writeFileSync(join(repo, "app.txt"), "edited by hand\n");
+  detectUnattributedChange(recordHome, "proj", repo);
+
+  const details = readEvents(recordHome)[0].details as { files: string[]; filesUnknown?: boolean };
+  assert.deepEqual(details.files, ["app.txt"]);
+  assert.equal(details.filesUnknown, undefined);
 });
 
 test("detect: a project path that doesn't exist is skipped quietly, never throws", () => {

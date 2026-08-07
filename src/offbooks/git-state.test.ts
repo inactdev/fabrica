@@ -79,10 +79,17 @@ test("filesChangedBetween: lists files touched by real commits", () => {
   const after = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
 
   const files = filesChangedBetween(repo, before, after);
+  assert.ok(files);
   assert.deepEqual(files.sort(), ["app.txt", "second.txt"]);
 });
 
-test("filesChangedBetween: an unreachable old commit resolves to an empty list, never throws", () => {
+test("filesChangedBetween: an unreachable old commit resolves to null (unknown), never throws and never an empty list", () => {
   const repo = makeFixtureRepo();
-  assert.deepEqual(filesChangedBetween(repo, "0000000000000000000000000000000000000000", "HEAD"), []);
+  assert.equal(filesChangedBetween(repo, "0000000000000000000000000000000000000000", "HEAD"), null);
+});
+
+test("filesChangedBetween: two commits that touch nothing between them is an empty list, not null", () => {
+  const repo = makeFixtureRepo();
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  assert.deepEqual(filesChangedBetween(repo, head, head), []);
 });

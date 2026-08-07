@@ -7,6 +7,7 @@
 // convention (detect.ts) for the same reason: no task is involved, so
 // both key off the registered project instead.
 
+import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { loadConfig } from "../config/index.ts";
 import { appendEvent } from "../record/index.ts";
@@ -24,6 +25,19 @@ export interface BlockedEditAttempt {
  * keys the same way unattributed-change's does. Null when `cwd` isn't
  * inside any registered project (or projects.toml can't be read at all —
  * never thrown, this is a courtesy lookup, not a gate). */
+/** Symlinks resolved on both sides before comparing, matching src/line/
+ * safety.ts's `normalize` — a project registered through a symlinked path
+ * (macOS's /var -> /private/var, or a ~/work symlink) would otherwise never
+ * match its own cwd, and every blocked edit inside it would lose its
+ * attribution. Falls back to the plain resolved path when it doesn't exist. */
+function normalize(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 function resolveProjectName(recordHome: string, cwd: string): string | null {
   let projects: Record<string, { path: string }>;
   try {
@@ -32,9 +46,9 @@ function resolveProjectName(recordHome: string, cwd: string): string | null {
     return null;
   }
 
-  const resolvedCwd = resolve(cwd);
+  const resolvedCwd = normalize(cwd);
   for (const [name, project] of Object.entries(projects)) {
-    const projectPath = resolve(project.path);
+    const projectPath = normalize(project.path);
     if (resolvedCwd === projectPath || resolvedCwd.startsWith(`${projectPath}${sep}`)) return name;
   }
   return null;

@@ -11,6 +11,8 @@
 // as much an "outermost layer" as src/cli/ is, so it follows the same
 // AGENTS.md rule).
 
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { recordBlockedEditAttempt } from "../../../src/index.ts";
 
 interface PermissionDeniedPayload {
@@ -27,11 +29,12 @@ interface PermissionDeniedPayload {
 function resolveRecordHome(): string {
   const override = process.env.FABRICA_HOME;
   if (override !== undefined && override.trim().length > 0) return override;
-  // Mirrors src/cli/record-home.ts's default exactly (SPEC.md: "~/.fabrica/
-  // (path configurable)") — not imported from there because that module is
+  // Mirrors src/cli/record-home.ts's default exactly, homedir() included
+  // (an unset HOME would otherwise make this the filesystem root's
+  // /.fabrica) — not imported from there because that module is
   // deliberately CLI-only (AGENTS.md: "the record home is never hardcoded
   // past the outermost CLI layer"), and this hook is its own such layer.
-  return `${process.env.HOME ?? ""}/.fabrica`;
+  return join(homedir(), ".fabrica");
 }
 
 async function readStdin(): Promise<string> {

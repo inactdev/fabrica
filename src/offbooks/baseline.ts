@@ -6,7 +6,7 @@
 // its only job is deciding whether the NEXT check should fire, and a
 // missing baseline just means "treat this project as newly seen."
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProjectGitState } from "./types.ts";
 
@@ -36,7 +36,21 @@ export function readBaseline(recordHome: string, projectName: string): ProjectGi
   }
 }
 
+/** Written via a sibling temp file and an atomic rename, never in place:
+ * every `fabrica` command runs a check at startup, so two commands can
+ * overlap, and a reader that caught a half-written file would parse-fail,
+ * read as "never seen," and silently swallow a real change (readBaseline's
+ * fallback above). A rename means a reader sees the old baseline or the new
+ * one, never a torn one. */
 export function writeBaseline(recordHome: string, projectName: string, state: ProjectGitState): void {
   mkdirSync(offBooksDir(recordHome), { recursive: true });
-  writeFileSync(baselinePath(recordHome, projectName), `${JSON.stringify(state, null, 2)}\n`);
+  const finalPath = baselinePath(recordHome, projectName);
+  const tempPath = `${finalPath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`);
+    renameSync(tempPath, finalPath);
+  } catch (err) {
+    rmSync(tempPath, { force: true });
+    throw err;
+  }
 }
