@@ -19,16 +19,22 @@ interface HookEntry {
   hooks?: { type?: string; command?: string }[];
 }
 
-function harnessTemplates(): { harness: string; matchers: string[] }[] {
+function harnessTemplates(): { harness: string; matchers: string[]; commands: string[]; allow: string[] }[] {
   return readdirSync(skillDir)
     .filter((name) => statSync(join(skillDir, name)).isDirectory())
     .filter((harness) => existsSync(join(skillDir, harness, "settings.json")))
     .map((harness) => {
       const settings = JSON.parse(readFileSync(join(skillDir, harness, "settings.json"), "utf8")) as {
         hooks?: { PreToolUse?: HookEntry[] };
+        permissions?: { allow?: string[] };
       };
       const entries = settings.hooks?.PreToolUse ?? [];
-      return { harness, matchers: entries.map((entry) => entry.matcher ?? "") };
+      return {
+        harness,
+        matchers: entries.map((entry) => entry.matcher ?? ""),
+        commands: entries.flatMap((entry) => (entry.hooks ?? []).map((hook) => hook.command ?? "")),
+        allow: settings.permissions?.allow ?? [],
+      };
     });
 }
 
@@ -60,6 +66,38 @@ test("a shipped matcher never catches a tool whose name merely contains an editi
           `${harness}: matcher ${matcher} also denies the unrelated ${tool} tool - anchor it with ^(...)$`
         );
       }
+    }
+  }
+});
+
+test("a shipped hook command is the installed fabrica command, never a hand-typed path", () => {
+  // The design this replaced substituted an absolute path into a checkout by
+  // hand, which fails open the moment that path goes stale (see the harness's
+  // own README under skill/). A path here is that failure mode coming back.
+  for (const { harness, commands } of harnessTemplates()) {
+    assert.ok(commands.length > 0, `${harness}: settings.json wires no hook command at all`);
+    for (const command of commands) {
+      assert.match(command, /^fabrica /, `${harness}: hook command ${command} must invoke fabrica off PATH`);
+      assert.equal(
+        /[/\\]|<[A-Z-]+>/.test(command),
+        false,
+        `${harness}: hook command ${command} names a path or placeholder - it must resolve on PATH instead`
+      );
+    }
+  }
+});
+
+test("no shipped Bash allow entry auto-approves find", () => {
+  // Client ruling (issue #13 follow-up): removed outright, not narrowed -
+  // `find -delete`/`-exec` mutates the filesystem without ever becoming a
+  // commit, so nothing downstream sees it. Allow means no prompt at all.
+  for (const { harness, allow } of harnessTemplates()) {
+    for (const entry of allow) {
+      assert.equal(
+        /^Bash\(\s*find\b/.test(entry),
+        false,
+        `${harness}: allow entry ${entry} auto-approves find - removed by ruling, see that harness's README`
+      );
     }
   }
 });

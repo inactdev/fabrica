@@ -6,7 +6,7 @@ SPEC.md's "operator's skill": the manual and session setup for whatever AI the C
 
 - `claude-code/` — the one harness with a shipped, verified config right now. See its own README for exactly what's verified, how, and what isn't.
 
-Each harness gets its own subfolder, named after the harness, holding whatever its own permission/settings/hook mechanism needs — these are inherently harness-specific (SPEC.md: "the skill folder ships a **per-harness** session setup"), so nothing here is shared across them beyond the one Fabrica-side event every harness's hook reports into: `edit-attempt-blocked` (`src/offbooks/blocked-edit.ts`'s `recordBlockedEditAttempt`).
+Each harness gets its own subfolder, named after the harness, holding only what is inherently specific to it (SPEC.md: "the skill folder ships a **per-harness** session setup"): its own permission/settings/hook wiring, and a `verify.ts` exporting the real session spawn `fabrica verify-hook` drives. Everything else is shared and lives in Fabrica itself, not here — the hook logic a harness's config points at is the installed `fabrica deny-and-log-edit` command, and the event it records is `edit-attempt-blocked` (`src/offbooks/blocked-edit.ts`'s `recordBlockedEditAttempt`).
 
 ## Why nothing here installs itself
 

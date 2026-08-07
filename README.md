@@ -94,4 +94,12 @@ Set `FABRICA_HOME` to use a record home other than `~/.fabrica`. Run
 
 To stop the AI you talk to from editing files at all, install the
 session config for your harness by hand -
-`skill/claude-code/README.md` has the steps and what is verified.
+`skill/claude-code/README.md` has the steps and what is verified. Then,
+from the directory you installed it into:
+
+    fabrica verify-hook
+
+It asks your chat agent, right now and with no permission bypass, to
+create a throwaway file there, and reports whether the edit was denied
+and whether the attempt was recorded - so "is this working" is something
+you prove rather than assume.
