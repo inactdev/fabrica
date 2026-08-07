@@ -12,7 +12,6 @@ import { ForemanError } from "./errors.ts";
 import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
 import { resolveCheckCommand } from "./resolve-check.ts";
 import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
-import { listTouchedFiles } from "./files.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
@@ -131,10 +130,11 @@ export async function doTask(
     // describe the same surviving reality, and the Client's `git merge`
     // has something to merge. This now runs uniformly for every outcome,
     // discarded-protected-path included — see the rule 9 comment below for
-    // why that outcome no longer skips it.
-    if (listTouchedFiles(line.workdir).length > 0) {
-      commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
-    }
+    // why that outcome no longer skips it. Called unconditionally:
+    // commitWorktreeChanges already asks the index directly and no-ops
+    // when there is nothing staged, so a separate "is there anything to
+    // commit" check here would only re-answer the same question.
+    commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
 
     // CONTRACT rule 9 (Client ruling, superseding the original
     // force-reset-and-patch design, and then again superseding a

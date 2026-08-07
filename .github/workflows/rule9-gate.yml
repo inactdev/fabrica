@@ -119,7 +119,21 @@ jobs:
           fi
 
           if [ "$listed" != "$CHANGED_FILES" ]; then
-            echo "::error::Could not read this pull request's complete changed-file list: GitHub listed $listed file(s), but the pull request itself reports $CHANGED_FILES changed. The API caps that listing at 3000 files, so this pull request cannot be checked against the project's protected paths (CONTRACT rule 9). Failing closed rather than passing unchecked - split the pull request into smaller ones, or have the Client review it and deliberately override this check."
+            # The API always returns exactly 3000 entries when it truncates
+            # (never fewer), so that exact count plus a genuinely larger
+            # CHANGED_FILES is the cap, distinguishable from the other cause
+            # this mismatch has: CHANGED_FILES is a snapshot from the event
+            # payload, while $listed is fetched live, so a push landing
+            # mid-run also makes them disagree - a completely different
+            # problem with a completely different fix. Both fail closed
+            # either way; only the message differs, and deliberately: no
+            # machinery here tries to eliminate the race, since a later run
+            # (GitHub reruns checks on every new push) already corrects it.
+            if [ "$listed" -eq 3000 ] && [ "$CHANGED_FILES" -gt 3000 ]; then
+              echo "::error::Could not read this pull request's complete changed-file list: GitHub listed $listed file(s), but the pull request itself reports $CHANGED_FILES changed. The API caps that listing at 3000 files, so this pull request cannot be checked against the project's protected paths (CONTRACT rule 9). Failing closed rather than passing unchecked - split the pull request into smaller ones, or have the Client review it and deliberately override this check."
+            else
+              echo "::error::This pull request's changed-file count changed while this check was running (GitHub listed $listed file(s) just now, but this run started when the pull request reported $CHANGED_FILES) - most likely a new commit was pushed mid-run, not a listing problem. Failing closed rather than checking a stale count (CONTRACT rule 9); a fresh run on the latest push resolves this on its own, or the Client can review and deliberately override this check."
+            fi
             exit 1
           fi
 

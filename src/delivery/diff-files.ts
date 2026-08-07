@@ -55,8 +55,8 @@ export function diffFiles(project: string, branch: string, base?: string): strin
         stdio: ["ignore", "pipe", "pipe"],
       }).trim();
 
-    // -z gives NUL-separated, never-quoted paths, matching files.ts's
-    // listTouchedFiles — non-ASCII and quote-bearing names come back exact.
+    // -z gives NUL-separated, never-quoted paths — non-ASCII and
+    // quote-bearing names come back exact.
     // Node's default maxBuffer (1 MiB) is too small to trust for git
     // output that scales with the changeset - a huge file list must not
     // abort delivery mid-flight.
