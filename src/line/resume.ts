@@ -16,16 +16,19 @@ import { LineError } from "./errors.ts";
 import type { ProductionLine } from "../../contract/surface.ts";
 import { assertSafeId, describeGitError, requireRepoRoot } from "./safety.ts";
 
-/** True if a branch `fabrica/<taskId>` already exists in `project` - i.e.
- * createProductionLine already ran once for this task, whether or not
- * that run ever delivered. Never throws (matches safety.ts's
- * isKnownWorktree's style); lets a caller choose createProductionLine vs
- * reopenProductionLine by what git actually has on record, rather than
- * by tracking "is this a first attempt or a retry" as separate state
- * that could drift from reality. issue #8's answer.ts uses this so a
- * resumed round that threw before ever delivering (a missing check
- * command, a moved project path, an unreachable brain) can be retried
- * instead of failing forever on "a branch named ... already exists". */
+/** True if a branch `fabrica/<taskId>` already exists in `project`. Never
+ * throws (matches safety.ts's isKnownWorktree's style). This is the same
+ * `refs/heads/` check reopenProductionLine uses below to refuse
+ * `no-such-branch` - exported so that check has one shared home rather
+ * than being duplicated inline.
+ *
+ * **Not** what decides createProductionLine vs. reopenProductionLine for
+ * a resumed task (Client ruling, issue #8): src/foreman/do.ts's
+ * runProductionRound takes an explicit `isRetry` its caller derives from
+ * the record, never from git state, because a taskId is only unique
+ * within one record home - a same-named branch from another record home
+ * or a hand-made one would otherwise be silently adopted on a task's
+ * actual first round. See src/line/README.md for the full reasoning. */
 export function productionLineBranchExists(project: string, taskId: string): boolean {
   try {
     execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/fabrica/${taskId}`], {
