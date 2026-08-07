@@ -63,7 +63,8 @@ export interface RunVerifyHookOptions {
   stderr?: (line: string) => void;
   /** Test seam: bypasses the real harness discovery/spawn entirely. One
    * object, not two callbacks, so half a seam - a fake edit paired with
-   * the real `claude --version` probe - can't be supplied by accident. */
+   * the real availability probe against the installed binary - can't be
+   * supplied by accident. */
   harness?: HarnessVerifier;
 }
 
