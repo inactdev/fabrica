@@ -55,7 +55,11 @@ return early" below.
    passing `project` straight through as a filesystem path — the root of
    the Client's own git checkout. The Client's checkout is never written
    to (CONTRACT rule 1); everything from here on happens in the
-   ProductionLine's `workdir`.
+   ProductionLine's `workdir`. A `"line-cut"` event is appended the
+   moment the line genuinely exists (details: `branch`, `reopened`) —
+   that event, and nothing else, is what tells a later resume it must
+   reopen this branch rather than cut a new one; see "The ask-first
+   seam" below.
 3. **Resolves the check command** (`resolve-check.ts`) and refuses before
    any Worker runs if there isn't one (`check.ts`'s `requireCheckCommand`)
    — CONTRACT rule 2 allows no path around the gate, so a task with
