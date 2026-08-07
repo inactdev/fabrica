@@ -174,12 +174,26 @@ two — only which command `runCheck` executes.
 
 ## What CONTRACT rule 9 protects, and what it doesn't yet
 
-`gate-changes.ts` snapshots `check.sh`'s content the moment the
-ProductionLine is cut, and compares it again after the attempt loop.
-Differ with no `gateChanges` declared on any attempt, and the outcome is
-forced to `"discarded-protected-path"` — overriding even a green check,
-exactly as CONTRACT rule 9 requires ("no matter how good the result
-looks").
+`gate-changes.ts` asks git, after the attempt loop, whether `check.sh` in
+the workdir differs from its content at the task's pinned `baseCommit`.
+Differ with no `gateChanges` declared, and the outcome is forced to
+`"discarded-protected-path"` — overriding even a green check, exactly as
+CONTRACT rule 9 requires ("no matter how good the result looks").
+
+The baseline is the *pinned base commit*, never the file the round found
+in the workdir when it started. A rule 6 "fix" round reopens a worktree
+on `fabrica/<taskId>`, which already carries whatever the previous round
+committed, so a round-local snapshot would make round 1's tampered gate
+round 2's idea of "pristine": the tamper would read as clean, and a
+worker honestly putting `check.sh` back would be accused of changing it.
+The same reason is why `verdict.ts` carries the previous round's
+`gateChanges` declaration forward (`mergeGateDeclarations`) — the
+comparison is cumulative since `baseCommit`, so the declaration covering
+a change still on the branch has to be cumulative too, or a round that
+merely leaves a legitimately declared change alone would be flagged for
+it. Because the whole comparison rests on that commit being readable,
+`requireGateBaseline` proves it is before any Worker runs, rather than
+discovering it after an attempt has been spent.
 
 **Known v1 limitation:** this protection only applies when the check
 command in use is the `check.sh` convention above. A project registered
@@ -443,10 +457,10 @@ whether a task is `"closed"`.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`, `attempts-exhausted`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`, `attempts-exhausted`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
-| `gate-changes.ts` | Snapshots and compares `check.sh`, for rule 9's undeclared-change detection. |
+| `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. |

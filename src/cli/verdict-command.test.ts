@@ -4,11 +4,13 @@
 // its own createForeman() with no brain override, so a "fix" here would
 // reach for the real default adapter - the fix path itself (session
 // resume, attempt counting) is proven against a fake brain directly in
-// src/foreman/verdict.test.ts instead.
+// src/foreman/verdict.test.ts instead. The one exception below is a
+// "fix" that refuses before any worker can run, which is precisely the
+// case where an error from a lower layer has to reach the Client.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../index.ts";
@@ -80,6 +82,25 @@ test("runVerdictCommand: an unknown task id refuses with the Foreman's own messa
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
   assert.match(io.err[0], /no task "no-such-task"/);
+});
+
+test("runVerdictCommand: a ProductionLine refusal is printed, not thrown as a stack trace", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  // Something already sitting where a fix round would reopen the line -
+  // reopenProductionLine refuses to reuse or overwrite it, with a
+  // LineError, before any worker runs.
+  mkdirSync(join(recordHome, "tasks", task.id, "worktree"), { recursive: true });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "fix", "one more pass"], { recordHome, ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.match(io.err[0], /workspace already exists/i);
 });
 
 test("runVerdictCommand: a verdict on an already-closed task refuses", async () => {

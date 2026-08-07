@@ -1,16 +1,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
 import { deliveryOf, receiptsOf } from "./queries.ts";
+import { recordVerdict } from "./verdict.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-verdict-home-"));
+}
+
+/** Exactly what makeFixtureRepo("exit 0") commits as check.sh. */
+const PRISTINE_CHECK = "#!/bin/sh\nexit 0\n";
+
+/** A worker that rewrites the gate without declaring it, and does some
+ * real work alongside it - rule 9's discarded-protected-path case. */
+function tamperingBrain() {
+  return fakeBrain({
+    onWork: (_brief, workdir) => {
+      writeFileSync(join(workdir, "check.sh"), "#!/bin/sh\n# quietly rewritten\nexit 0\n");
+      writeFileSync(join(workdir, "feature.txt"), "possibly good work\n");
+    },
+  });
 }
 
 test("accept closes the task and leaves the delivery untouched", async () => {
@@ -133,6 +148,71 @@ test("an unrecognized ruling refuses rather than silently doing nothing", async 
     () => verdict(task.id, "maybe", "note"),
     (err: unknown) => err instanceof ForemanError && err.code === "invalid-verdict"
   );
+});
+
+test("a fix round measures rule 9 against the task's pristine base, not what the last round left on the branch", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  const foreman = createForeman({ recordHome });
+
+  const task = await foreman.do("small change", { project, brain: tamperingBrain() });
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "discarded-protected-path");
+
+  // The fix round's worker never touches check.sh - but the tampered one
+  // round 1 committed is still on the branch, so the delivery must still
+  // say so rather than reporting a clean "done" over it.
+  const innocent = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "more.txt"), "the correction\n"),
+  });
+  await recordVerdict(recordHome, task.id, "fix", "also add more.txt", { brain: innocent });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(
+    delivery?.outcome,
+    "discarded-protected-path",
+    "an undeclared gate change carried over from round 1 must not read as clean in round 2"
+  );
+  assert.equal(receiptsOf(recordHome, task.id).at(-1)?.outcome, "discarded-protected-path");
+});
+
+test("a fix round that puts the gate back the way it was is not flagged for it", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  const foreman = createForeman({ recordHome });
+
+  const task = await foreman.do("small change", { project, brain: tamperingBrain() });
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "discarded-protected-path");
+
+  const honest = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "check.sh"), PRISTINE_CHECK),
+  });
+  await recordVerdict(recordHome, task.id, "fix", "put check.sh back the way it was", { brain: honest });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "done", "restoring the gate to its base state is not a gate change");
+  assert.deepEqual(delivery?.files, ["feature.txt"], "the round's real work still lands on the branch");
+});
+
+test("a gate change declared in an earlier round still counts for the fix round that inherits it", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  const foreman = createForeman({ recordHome });
+
+  const declarer = fakeBrain({
+    gateChanges: "check.sh now echoes before exiting, as the Client asked",
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "check.sh"), "#!/bin/sh\necho checking\nexit 0\n"),
+  });
+  const task = await foreman.do("small change", { project, brain: declarer });
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "done");
+
+  const quiet = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "more.txt"), "the correction\n"),
+  });
+  await recordVerdict(recordHome, task.id, "fix", "also add more.txt", { brain: quiet });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "done", "a declaration made for a change still on the branch travels with it");
+  assert.match(delivery?.gateChanges ?? "", /echoes before exiting/);
 });
 
 test("a red do() run that already spent both default attempts leaves no budget for a fix", async () => {

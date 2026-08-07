@@ -6,7 +6,7 @@
 // extra worker attempt synchronously, so the command can report its
 // outcome directly instead of the Client having to separately poll for it.
 
-import { createForeman, ForemanError } from "../index.ts";
+import { ConfigError, createForeman, DeliveryError, ForemanError, LineError } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { parseVerdictArgs, VERDICT_USAGE } from "./verdict-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
@@ -57,7 +57,21 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
     }
     return 0;
   } catch (err) {
-    if (err instanceof CliError || err instanceof ForemanError) {
+    // Every layer a verdict reaches, not just the two nearest ones: a
+    // "fix" reopens a ProductionLine (LineError), resolves the project's
+    // check command from projects.toml (ConfigError), and validates the
+    // delivery it builds (DeliveryError). All four of these speak the
+    // Client directly, and `verdict-recorded` is already on the record by
+    // the time any of them can fire - so an escaped one would replace an
+    // instruction the Client can act on with a stack trace, on a task
+    // that then looks unruled.
+    if (
+      err instanceof CliError ||
+      err instanceof ForemanError ||
+      err instanceof LineError ||
+      err instanceof ConfigError ||
+      err instanceof DeliveryError
+    ) {
       stderr(err.message);
       return 1;
     }

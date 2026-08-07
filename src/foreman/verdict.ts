@@ -15,7 +15,7 @@ import { ForemanError } from "./errors.ts";
 import { latestDeliveredDetails } from "./queries.ts";
 import { DEFAULT_CHECK_COMMAND, requireCheckCommand } from "./check.ts";
 import { resolveCheckCommand } from "./resolve-check.ts";
-import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
+import { gateWasTouched, requireGateBaseline } from "./gate-changes.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
@@ -106,6 +106,7 @@ export async function recordVerdict(
     totalAttempts: totalAttempts!,
     baseCommit: baseCommit!,
     priorReceipts,
+    priorGateChanges: details?.delivery?.gateChanges || undefined,
   });
 }
 
@@ -119,13 +120,33 @@ function buildFixBrief(originalBrief: string, note: string): string {
   );
 }
 
+/** Rule 9 across rounds: the gate is compared against the task's pinned
+ * baseCommit, so a declaration an earlier round made for a change that is
+ * still on the branch has to travel with it — otherwise a round whose
+ * worker simply leaves the (declared, legitimate) gate change alone would
+ * be reported as an undeclared one. Both rounds' declarations are kept
+ * when they differ; the delivery reports the whole cumulative diff, so it
+ * must account for all of it. */
+function mergeGateDeclarations(prior: string | undefined, current: string | undefined): string | undefined {
+  if (!prior) return current;
+  if (!current || current === prior) return prior;
+  return `${prior}\n\n${current}`;
+}
+
 async function runFixRound(
   recordHome: string,
   taskId: string,
   note: string,
-  ctx: { brain: Brain; project: string; totalAttempts: number; baseCommit: string; priorReceipts: Receipt[] }
+  ctx: {
+    brain: Brain;
+    project: string;
+    totalAttempts: number;
+    baseCommit: string;
+    priorReceipts: Receipt[];
+    priorGateChanges: string | undefined;
+  }
 ): Promise<void> {
-  const { brain, project, totalAttempts, baseCommit, priorReceipts } = ctx;
+  const { brain, project, totalAttempts, baseCommit, priorReceipts, priorGateChanges } = ctx;
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
@@ -136,11 +157,11 @@ async function runFixRound(
     const check = resolveCheckCommand(recordHome, line.project);
     requireCheckCommand(line.workdir, check);
     const protectedPathApplies = check === DEFAULT_CHECK_COMMAND;
-    const gateBefore = protectedPathApplies ? snapshotGate(line.workdir) : null;
+    if (protectedPathApplies) requireGateBaseline(line.workdir, baseCommit);
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix" } });
 
-    const { receipts: newReceipts, lastGate, declaredGateChanges } = await runAttempts({
+    const { receipts: newReceipts, lastGate, declaredGateChanges: roundGateChanges } = await runAttempts({
       brain,
       brief: buildFixBrief(originalBrief, note),
       workdir: line.workdir,
@@ -163,8 +184,10 @@ async function runFixRound(
       },
     });
 
+    const declaredGateChanges = mergeGateDeclarations(priorGateChanges, roundGateChanges);
+
     const undeclaredGateChange =
-      gateBefore !== null && gateWasTouched(line.workdir, gateBefore) && !declaredGateChanges;
+      protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;
 
     const outcome: Delivery["outcome"] = undeclaredGateChange
       ? "discarded-protected-path"

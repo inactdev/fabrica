@@ -14,6 +14,13 @@ export { DEFAULT_CHECK_COMMAND } from "./foreman/index.ts";
 export { validateDelivery, diffFiles, DeliveryError } from "./delivery/index.ts";
 export type { DeliveryErrorCode } from "./delivery/index.ts";
 
+// The ProductionLine's own refusals (a workspace already in the way, a
+// branch that no longer exists, a teardown that failed): a "fix" verdict
+// reopens a line, so the CLI has to be able to recognize and print these
+// rather than letting one escape as a stack trace.
+export { LineError } from "./line/index.ts";
+export type { LineErrorCode } from "./line/index.ts";
+
 // The brain socket: a CLI never picks an adapter by name (CONTRACT rule
 // 8) - it asks for whichever one v1 wires in by default.
 export { defaultBrainAdapter } from "./brain/index.ts";

@@ -11,7 +11,7 @@ import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
 import { resolveCheckCommand } from "./resolve-check.ts";
-import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
+import { gateWasTouched, requireGateBaseline } from "./gate-changes.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } from "./delivery.ts";
@@ -81,7 +81,7 @@ export async function doTask(
     const check = resolveCheckCommand(recordHome, line.project);
     requireCheckCommand(line.workdir, check);
     const protectedPathApplies = check === DEFAULT_CHECK_COMMAND;
-    const gateBefore = protectedPathApplies ? snapshotGate(line.workdir) : null;
+    if (protectedPathApplies) requireGateBaseline(line.workdir, baseCommit);
 
     appendEvent(recordHome, { taskId, name: "work-started" });
 
@@ -107,7 +107,7 @@ export async function doTask(
     });
 
     const undeclaredGateChange =
-      gateBefore !== null && gateWasTouched(line.workdir, gateBefore) && !declaredGateChanges;
+      protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;
 
     const outcome: Delivery["outcome"] = undeclaredGateChange
       ? "discarded-protected-path"
