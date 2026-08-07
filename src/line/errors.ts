@@ -8,6 +8,7 @@ export type LineErrorCode =
   | "not-a-repo"
   | "workdir-exists"
   | "cut-failed"
+  | "no-such-branch"
   | "unsafe-teardown"
   | "teardown-failed"
   | "not-a-worktree"

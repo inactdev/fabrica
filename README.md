@@ -52,5 +52,13 @@ registered in `~/.fabrica/projects.toml`:
     path  = "~/inkling-umbrella/spending-app"
     check = "bin/ci"
 
+When the work comes back, you get the last word:
+
+    fabrica verdict <id> <accept|fix|wrong> [-m "<note>"]
+
+`accept` and `wrong` close the task. `fix` keeps it open and hands your
+note back to the same worker on the same branch, spending one attempt
+from that task's budget (`src/foreman/README.md` has the exact rules).
+
 Set `FABRICA_HOME` to use a record home other than `~/.fabrica`. Run
-`fabrica --help` or `fabrica do --help` for the rest.
+`fabrica --help` or `fabrica <command> --help` for the rest.

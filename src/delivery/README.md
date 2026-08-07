@@ -58,9 +58,9 @@ that's what `files` *is*. All such a check could ever have revealed is
 
 The principle is still sound, and stays applied where a claim actually
 exists to distrust: CONTRACT rule 9 never trusts a Worker's word about
-whether the checks changed - `gate-changes.ts` snapshots the gate before
-and after and compares, rather than reading a declaration. See "Rule 9
-and this module" below.
+whether the checks changed - `gate-changes.ts` compares the gate against
+the task's pinned base commit, rather than reading a declaration. See
+"Rule 9 and this module" below.
 
 ## `diffFiles(project, branch, base?)`
 

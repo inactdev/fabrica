@@ -1,9 +1,11 @@
 // Top-level dispatch: `fabrica <command> [args]`. This is the whole
-// command registration issue #47 asks for - #8, #10, and #12 each add
+// command registration issue #47 asks for - #8 and #12 each add
 // one more `if (command === "...")` branch below and their own args/
-// help module, without touching how `do` or `--help` already work.
+// help module, without touching how `do`, `verdict`, or `--help`
+// already work.
 
 import { DO_HELP, runDoCommand } from "./do-command.ts";
+import { VERDICT_HELP, runVerdictCommand } from "./verdict-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
 
 export async function main(
@@ -30,6 +32,14 @@ export async function main(
       return 0;
     }
     return runDoCommand(rest, io);
+  }
+
+  if (command === "verdict") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(VERDICT_HELP);
+      return 0;
+    }
+    return runVerdictCommand(rest, io);
   }
 
   io.stderr(`fabrica: unknown command "${command}".\n\n${TOP_LEVEL_HELP}`);
