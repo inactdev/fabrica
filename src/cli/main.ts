@@ -4,6 +4,7 @@
 // without touching how `do`, `verdict`, or `--help` already work; #12
 // (status/log/watch) will do the same.
 
+import { checkForOffBooksChanges } from "../index.ts";
 import { DO_HELP, runDoCommand } from "./do-command.ts";
 import { VERDICT_HELP, runVerdictCommand } from "./verdict-command.ts";
 import { ANSWER_HELP, runAnswerCommand } from "./answer-command.ts";
@@ -11,14 +12,22 @@ import { STATUS_HELP, runStatusCommand } from "./status-command.ts";
 import { LOG_HELP, runLogCommand } from "./log-command.ts";
 import { WATCH_HELP, runWatchCommand } from "./watch-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
+import { resolveRecordHome } from "./record-home.ts";
 
 export async function main(
   argv: string[],
   io: { stdout: (line: string) => void; stderr: (line: string) => void } = {
     stdout: (line) => console.log(line),
     stderr: (line) => console.error(line),
-  }
+  },
+  opts: { recordHome?: string } = {}
 ): Promise<number> {
+  // SPEC.md "Catching off-the-books work": every command run checks the
+  // registered projects for changes no task explains. A courtesy, never
+  // a gate — checkForOffBooksChanges swallows its own failures, so this
+  // can never stop a command from running.
+  checkForOffBooksChanges(opts.recordHome ?? resolveRecordHome());
+
   const [command, ...rest] = argv;
 
   if (command === undefined) {

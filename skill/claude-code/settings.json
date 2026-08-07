@@ -1,0 +1,57 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "MultiEdit",
+      "Bash(rm *)",
+      "Bash(mv *)",
+      "Bash(cp *)",
+      "Bash(chmod *)",
+      "Bash(chown *)",
+      "Bash(sudo *)",
+      "Bash(dd *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git reset *)",
+      "Bash(git checkout -- *)",
+      "Bash(git clean *)",
+      "Bash(npm install *)",
+      "Bash(npm uninstall *)",
+      "Bash(curl *)",
+      "Bash(wget *)"
+    ],
+    "allow": [
+      "Bash(fabrica *)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(pwd)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)"
+    ]
+  },
+  "hooks": {
+    "PermissionDenied": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<ABSOLUTE-PATH-TO-FABRICA-REPO>/node_modules/.bin/tsx <ABSOLUTE-PATH-TO-FABRICA-REPO>/skill/claude-code/hooks/log-blocked-edit.ts"
+          }
+        ]
+      }
+    ]
+  }
+}

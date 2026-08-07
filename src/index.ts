@@ -32,3 +32,13 @@ export type { Brain } from "../contract/surface.ts";
 export { loadConfig, projectsTomlPath, requireProject } from "./config/index.ts";
 export { ConfigError } from "./config/index.ts";
 export type { ConfigErrorCode, Caps, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
+
+// Off-the-books nets (issue #13): on every command, flag registered-project
+// changes no task explains. A courtesy check, not a gate — see
+// src/offbooks/README.md for what "explained" means and why.
+export { checkForOffBooksChanges } from "./offbooks/index.ts";
+// recordBlockedEditAttempt is the other half: a harness-specific hook
+// script under skill/ imports it from here, the same way the CLI imports
+// everything else it needs — never straight from src/offbooks/.
+export { recordBlockedEditAttempt } from "./offbooks/index.ts";
+export type { BlockedEditAttempt } from "./offbooks/index.ts";

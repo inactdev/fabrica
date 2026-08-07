@@ -8,5 +8,5 @@
     "strict": true,
     "types": ["node"]
   },
-  "include": ["contract/**/*.ts", "src/**/*.ts"]
+  "include": ["contract/**/*.ts", "src/**/*.ts", "skill/**/*.ts"]
 }
