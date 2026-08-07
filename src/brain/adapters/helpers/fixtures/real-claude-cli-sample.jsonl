@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","cwd":"/workdir","session_id":"fixture-session"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/private/workdir/sample.txt"}}]},"session_id":"fixture-session"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"1\thello from the fixture recording\n2\t"}]},"session_id":"fixture-session"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"GOT: hello from the fixture recording"}]},"session_id":"fixture-session"}
+{"type":"result","is_error":false,"session_id":"fixture-session","total_cost_usd":0.13852599999999998,"duration_ms":4903,"usage":{"input_tokens":4,"output_tokens":119,"cache_read_input_tokens":42602,"cache_creation_input_tokens":11423},"result":"GOT: hello from the fixture recording","api_error_status":null}

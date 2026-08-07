@@ -57,6 +57,50 @@ CLI family comes first - issue #6 built the first CLI adapter, listed
 below - and direct API adapters arrive later, behind that deliberate
 switch.
 
+## Guarding a fake against drift from the real thing
+
+Every CLI adapter's fast tests need a controllable fake standing in for
+the real binary (`claude-code.ts` has `helpers/fake-claude-cli.mjs`) -
+right for testing the adapter's own parsing logic deterministically, but
+nothing stops that fake silently drifting from what the real tool emits
+once written (issue #46). The pattern this reference adapter settled on,
+meant to be copied by the next one:
+
+1. **A loud skip, not a silent one.** Whatever test drives the real
+   binary (`claude-code.test.ts`'s capability spike) must make it
+   unmissable when it *didn't* run - Docker absent, image missing,
+   nothing authenticated. `claude-code.test.ts`'s `after()` hook prints an
+   `!!!`-bordered banner at the end of the run if that test skipped for
+   any reason, so a wall of green dots can never be read as "verified
+   against reality." Copy that hook, not just the idea of one - a
+   comment saying "this skips silently" is exactly the failure mode
+   issue #46 was raised about.
+2. **A fixture-parity test that always runs.** `helpers/fake-claude-cli.test.ts`
+   spawns the fake directly (no Docker) and compares its output's
+   *shape* - not bytes - against `helpers/fixtures/real-claude-cli-sample.jsonl`,
+   a real sample recorded once and committed. See
+   `helpers/fixtures/README.md` for exactly where the shape-vs-bytes line
+   was drawn and why, and `helpers/stream-json-shape.ts` for the
+   allowlist-based comparison itself.
+3. **What a second adapter has to build, concretely:** its own fixture
+   file (recorded from its own real binary, with its own re-record
+   script, sanitized of that machine's paths/session data the same way),
+   its own shape-allowlist (the field names differ per tool, so
+   `stream-json-shape.ts`'s allowlist is `claude-code.ts`-specific, not
+   reusable as-is), and its own loud-skip hook on whatever test of its
+   drives the real binary. None of the three is generic infrastructure
+   worth extracting yet with only one adapter written - copy the pattern,
+   not a shared module, until a second adapter exists to prove what's
+   actually common.
+
+Running the real binary in CI - closing the loop all the way, rather than
+comparing against a fixture that ages between recordings - was
+deliberately **not** built here: it needs an authenticated install and
+real spend in CI, a decision for whoever configures Fabrica's CI, not
+something an adapter's own tests take on themselves. The loud skip above
+exists precisely so that decision stays visible instead of getting quietly
+assumed to be handled.
+
 ## Written adapters
 
 - **`claude-code.ts`** - the Client's own daily coding agent, driven

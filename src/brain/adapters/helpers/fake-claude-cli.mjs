@@ -26,6 +26,10 @@ const resultLine = (overrides) => ({
   duration_ms: 1234,
   usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 5, cache_creation_input_tokens: 1 },
   result: "done",
+  // The real binary always emits this key, null on a successful call -
+  // see fake-claude-cli.test.ts's shape-parity test, which caught this
+  // field's earlier absence here as drift from the real shape.
+  api_error_status: null,
   ...overrides,
 });
 
