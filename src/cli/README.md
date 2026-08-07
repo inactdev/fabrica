@@ -107,8 +107,13 @@ the real CLI, where `fabrica do` and `fabrica answer` are always separate
 invocations - see `src/foreman/README.md`'s "The ask-first seam" for the
 per-instance brain memory this falls back from). SPEC.md's "one
 clarification round by default" is enforced by the Foreman, not this
-file: a second `fabrica answer` on the same task refuses with
-`ForemanError("already-answered")`.
+file: once a round has actually *delivered*, a second `fabrica answer`
+on the same task refuses with `ForemanError("already-answered")`. A
+round that threw before delivering does not spend the clarification
+round - the command can be run again, and reports whatever the retry
+does (see `src/foreman/README.md`'s "The ask-first seam" for why the
+guard keys on a delivered round rather than on the answer being
+recorded).
 
 ### `FABRICA_HOME`
 

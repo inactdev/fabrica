@@ -69,16 +69,23 @@ export async function runProductionRound(
   // Ordinarily this is this task's first ProductionLine, so the branch
   // never exists yet and this is just createProductionLine. But
   // answer.ts (issue #8) can call this a second time for the same
-  // taskId if a prior resumed round threw before ever committing
-  // anything (a missing check command, a moved project path, an
-  // unreachable brain) - createProductionLine always cuts a NEW branch,
-  // and that first round's branch still exists (branches survive their
-  // own worktree's teardown by design), so a second createProductionLine
-  // call would fail outright on "a branch named ... already exists".
-  // Checking git's own state, rather than threading "is this a retry"
-  // through as separate params, means this stays correct regardless of
-  // why or how many times runProductionRound gets called again for one
-  // taskId.
+  // taskId if a prior resumed round threw before finishing -
+  // createProductionLine always cuts a NEW branch, and that first
+  // round's branch still exists (branches survive their own worktree's
+  // teardown by design), so a second createProductionLine call would
+  // fail outright on "a branch named ... already exists". Checking git's
+  // own state, rather than threading "is this a retry" through as
+  // separate params, means this stays correct regardless of why or how
+  // many times runProductionRound gets called again for one taskId.
+  //
+  // Note what reopening does and doesn't fix. It makes a retry possible
+  // at all, and a failure unrelated to the branch's own content (an
+  // unreachable brain, a transient error) then succeeds once that
+  // condition clears. It does NOT re-cut from the project's current
+  // HEAD: the reopened branch is still forked from wherever it was
+  // first cut, so a failure baked into that history - no check.sh in
+  // that commit, a project path already wrong then - throws the same
+  // error on every retry.
   const line = productionLineBranchExists(project, taskId)
     ? reopenProductionLine({ project, taskId, recordHome })
     : createProductionLine({ project, taskId, recordHome });

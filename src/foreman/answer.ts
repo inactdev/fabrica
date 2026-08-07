@@ -11,10 +11,17 @@
 // of whether the extended brief would still look ambiguous to it.
 //
 // "Already answered" means a round that actually DELIVERED, not merely
-// one that was recorded: if runProductionRound throws before finishing
-// (a missing check command, a moved project path, an unreachable brain),
+// one that was recorded: if runProductionRound throws before finishing,
 // the task must stay resumable, not get stuck forever with the Client's
-// answer on record and no way back in - see the guard below.
+// answer on record and no way back in - see the guard below. What that
+// buys is resumability and an honest error every time, NOT a guarantee
+// that retrying works: a failure unrelated to the branch's own content
+// (an unreachable brain, a transient error) clears once the underlying
+// condition does, but one baked into the branch's history at the point
+// it was first cut - no check.sh in that commit, a project path already
+// wrong when the branch was made - throws identically on every retry,
+// since answering again changes nothing about what is already committed
+// there.
 
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTaskFile } from "../record/index.ts";
 import type { Brain } from "../brain/index.ts";
@@ -43,11 +50,12 @@ export async function answerTask(
   // rather than left to silently re-ask. The guard keys on a COMPLETED
   // round (answers-given followed by delivered), not merely on
   // answers-given existing: if a previous `fabrica answer` call recorded
-  // the answer but then runProductionRound threw before finishing (a
-  // missing check command, a moved project path, an unreachable brain),
-  // the task must stay resumable - refusing here on the mere presence of
+  // the answer but then runProductionRound threw before finishing, the
+  // task must stay resumable - refusing here on the mere presence of
   // answers-given would leave it permanently stuck, with the Client's
-  // own words already recorded but no way back in.
+  // own words already recorded but no way back in. Staying resumable is
+  // all this promises; whether the retry then succeeds depends on the
+  // failure (see the note at the top of this file).
   const askedIndex = events.map((e) => e.name).lastIndexOf("questions-asked");
   if (askedIndex === -1) {
     throw new ForemanError(

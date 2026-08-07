@@ -27,7 +27,13 @@ export async function waitForAskOutcome(
   taskId: string,
   opts: { timeoutMs?: number; pollMs?: number } = {}
 ): Promise<AskOutcome> {
-  const { timeoutMs = 60_000, pollMs = 50 } = opts;
+  // Each poll is a full read+parse of the record home's whole
+  // events.jsonl (every task, "delivered" payloads included), so the
+  // interval is deliberately coarse: a few hundred milliseconds is
+  // imperceptible to someone waiting on a real model call, and keeps
+  // this from re-parsing the entire history a thousand times per
+  // `fabrica do`.
+  const { timeoutMs = 60_000, pollMs = 250 } = opts;
   const foreman = createForeman({ recordHome });
   const deadline = Date.now() + timeoutMs;
 

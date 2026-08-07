@@ -18,7 +18,10 @@ Answers the clarifying questions \`fabrica do\` printed and stopped on,
 and resumes the task: the brief is extended with your answer, and the
 task runs exactly as it would have if it had never needed to ask. One
 clarification round - the ask-first dial is fixed at "ask" for v1, so
-this can't be called again for the same task.
+once a round has actually delivered, this refuses to run again for the
+same task. A round that failed before delivering is not spent: call
+this again to retry it (the same error comes back until whatever
+caused it is dealt with).
 
   <taskId>   The task's id, from \`fabrica do\`'s output.
   -m <text>  Your answer, in plain words. Quote it. Same shape as

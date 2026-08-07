@@ -416,6 +416,13 @@ incomplete round reuses the same taskId's `runProductionRound` call, which
 picks `reopenProductionLine` over `createProductionLine` automatically
 (`src/line/README.md`'s `productionLineBranchExists`) once that first
 failed attempt has already left the `fabrica/<taskId>` branch behind.
+What the guard guarantees is that the task stays resumable and keeps
+reporting its true error - not that retrying succeeds. Reopening does
+not re-cut from the project's current HEAD, so a failure baked into the
+branch's history at the point it was first cut (no `check.sh` in that
+commit, a project path already wrong then) throws identically every
+time; only a failure unrelated to that history (an unreachable brain, a
+transient error) clears on retry.
 `contract/surface.ts`'s `Foreman.answer(taskId, text)` has no `brain`
 parameter, the same reasoning as `verdict()`'s fix path below: a
 same-process `do()` call that ended up `"asking"` already had its brain
