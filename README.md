@@ -90,13 +90,7 @@ has the exact rules).
 Set `FABRICA_HOME` to use a record home other than `~/.fabrica`. Run
 `fabrica --help` or `fabrica <command> --help` for the rest.
 
-## Changes no task explains
-
-Every `fabrica` command first checks each registered project for changes
-that no task accounts for - your own edits, or an agent editing the
-checkout directly - and writes an `unattributed-change` event to the
-record. It only records: a false positive never blocks a command. See
-`src/offbooks/README.md` for exactly what fires and what stays quiet.
+## Stopping the AI you talk to from editing files
 
 To stop the AI you talk to from editing files at all, install the
 session config for your harness by hand -

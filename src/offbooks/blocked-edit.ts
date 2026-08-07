@@ -3,9 +3,8 @@
 // edit-attempt-blocked event"). Called by each harness's own blocked-edit
 // hook script under skill/<harness>/hooks/ — kept here, not duplicated
 // there, so there is exactly one definition of what this event looks
-// like, shared with unattributed-change's "project:<name>" taskId
-// convention (detect.ts) for the same reason: no task is involved, so
-// both key off the registered project instead.
+// like. No real task is behind this event, so it keys `taskId` as
+// "project:<name>" (or "project:unregistered") instead of a real task id.
 
 import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
@@ -34,10 +33,9 @@ function normalize(path: string): string {
   }
 }
 
-/** Which registered project (if any) `cwd` falls under, so this event
- * keys the same way unattributed-change's does. Null when `cwd` isn't
- * inside any registered project (or projects.toml can't be read at all —
- * never thrown, this is a courtesy lookup, not a gate). */
+/** Which registered project (if any) `cwd` falls under. Null when `cwd`
+ * isn't inside any registered project (or projects.toml can't be read at
+ * all — never thrown, this is a courtesy lookup, not a gate). */
 function resolveProjectName(recordHome: string, cwd: string): string | null {
   let projects: Record<string, { path: string }>;
   try {
