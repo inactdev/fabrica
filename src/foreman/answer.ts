@@ -21,7 +21,9 @@
 // it was first cut - no check.sh in that commit, a project path already
 // wrong when the branch was made - throws identically on every retry,
 // since answering again changes nothing about what is already committed
-// there.
+// there. A failure BEFORE the line was ever cut is the one case that is
+// fully clean: nothing is committed anywhere yet, so the retry runs as a
+// genuine first round (see `isRetry` below).
 
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTaskFile } from "../record/index.ts";
 import type { Brain } from "../brain/index.ts";
@@ -73,12 +75,21 @@ export async function answerTask(
         `dial is fixed at "ask" for v1) and has moved on. Check \`fabrica status\`.`
     );
   }
-  // Whether THIS taskId, in THIS record home, already has a prior
-  // "answers-given" that never delivered - the only evidence
-  // runProductionRound trusts for choosing reopenProductionLine over
-  // createProductionLine (do.ts's own comment explains why: a branch's
-  // mere existence in the project isn't proof this task ever cut it).
-  const isRetry = answeredIndex !== -1;
+  // Proof, from THIS taskId's own record in THIS record home, that a
+  // ProductionLine was genuinely cut for it once - "line-cut", which
+  // runProductionRound appends the moment createProductionLine returns.
+  // That is the only evidence it trusts for choosing
+  // reopenProductionLine over createProductionLine (do.ts's own comment
+  // explains why: a branch's mere existence in the project isn't proof
+  // this task ever cut it).
+  //
+  // Deliberately not "answers-given", which is appended below, BEFORE
+  // the line is cut: a resume that died on the cut itself (a moved
+  // project path, a stale .git/index.lock) leaves no branch behind, so
+  // it has to retry as a genuine first round. Keyed on the answer, it
+  // would instead reopen a branch that never existed and fail with
+  // `no-such-branch` on every later attempt, stuck for good.
+  const isRetry = events.some((e) => e.name === "line-cut");
 
   if (!answerText || answerText.trim().length === 0) {
     throw new ForemanError(

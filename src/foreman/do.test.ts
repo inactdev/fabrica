@@ -327,7 +327,7 @@ test("doTask on an unambiguous task is unaffected: ask() is consulted but the ta
   const events = readEventsForTask(recordHome, task.id);
   assert.deepEqual(
     events.map((e) => e.name),
-    ["task-received", "work-started", "check-run", "delivered"],
+    ["task-received", "line-cut", "work-started", "check-run", "delivered"],
     "no questions-asked/answers-given events for a task nothing needed to ask about"
   );
 

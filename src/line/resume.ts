@@ -17,10 +17,10 @@ import type { ProductionLine } from "../../contract/surface.ts";
 import { assertSafeId, describeGitError, requireRepoRoot } from "./safety.ts";
 
 /** True if a branch `fabrica/<taskId>` already exists in `project`. Never
- * throws (matches safety.ts's isKnownWorktree's style). This is the same
+ * throws (matches safety.ts's isKnownWorktree's style). This is the
  * `refs/heads/` check reopenProductionLine uses below to refuse
- * `no-such-branch` - exported so that check has one shared home rather
- * than being duplicated inline.
+ * `no-such-branch`, and nothing else - module-private on purpose, not
+ * exported from src/line's barrel.
  *
  * **Not** what decides createProductionLine vs. reopenProductionLine for
  * a resumed task (Client ruling, issue #8): src/foreman/do.ts's
@@ -28,8 +28,10 @@ import { assertSafeId, describeGitError, requireRepoRoot } from "./safety.ts";
  * the record, never from git state, because a taskId is only unique
  * within one record home - a same-named branch from another record home
  * or a hand-made one would otherwise be silently adopted on a task's
- * actual first round. See src/line/README.md for the full reasoning. */
-export function productionLineBranchExists(project: string, taskId: string): boolean {
+ * actual first round. Keeping this unexported is part of that ruling:
+ * the rejected signal shouldn't be one import away. See
+ * src/line/README.md for the full reasoning. */
+function productionLineBranchExists(project: string, taskId: string): boolean {
   try {
     execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/fabrica/${taskId}`], {
       cwd: project,

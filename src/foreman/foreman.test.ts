@@ -66,7 +66,7 @@ test("events() returns this task's events only, in order", async () => {
   assert.ok(eventsA.every((e) => e.taskId === taskA.id));
   assert.deepEqual(
     eventsA.map((e) => e.name),
-    ["task-received", "work-started", "check-run", "delivered"]
+    ["task-received", "line-cut", "work-started", "check-run", "delivered"]
   );
 
   const eventsB = await foreman.events(taskB.id);

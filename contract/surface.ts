@@ -144,6 +144,7 @@ export type FabricaEventName =
   | "questions-asked"
   | "ask-failed"
   | "answers-given"
+  | "line-cut"
   | "work-started"
   | "check-run"
   | "delivered"

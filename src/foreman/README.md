@@ -437,26 +437,47 @@ whose resumed round failed for an infrastructure reason would become
 permanently unresumable the moment the Client tried again, with their
 answer already on record and no way back in. Retrying past a genuinely
 incomplete round reuses the same taskId's `runProductionRound` call,
-passing `isRetry: true` (`answerTask`'s own `answeredIndex !== -1` check,
-above) so it picks `reopenProductionLine` over `createProductionLine` -
-the branch that failed attempt already left behind. `isRetry` is an
-explicit signal `answerTask` derives from this exact taskId's own record
-(Client ruling: a same-named `fabrica/<taskId>` branch's mere existence
-in the project used to decide this, and was overturned as the weaker
-evidence - a taskId is unique only within one record home, while
-branches live in the project, so a foreign or leftover branch sharing
-that name could otherwise get silently adopted and committed onto on
-what was actually a task's *first* round, exactly where
-`createProductionLine`'s own loud refusal is supposed to apply; see
-`do.ts`'s own comment on `runProductionRound` for the full reasoning).
-`doTask`'s first-ever call always passes `isRetry: false`.
+passing `isRetry: true` so it picks `reopenProductionLine` over
+`createProductionLine` - the branch that failed attempt already left
+behind. `isRetry` is an explicit signal `answerTask` derives from this
+exact taskId's own record (Client ruling: a same-named
+`fabrica/<taskId>` branch's mere existence in the project used to decide
+this, and was overturned as the weaker evidence - a taskId is unique
+only within one record home, while branches live in the project, so a
+foreign or leftover branch sharing that name could otherwise get
+silently adopted and committed onto on what was actually a task's
+*first* round, exactly where `createProductionLine`'s own loud refusal
+is supposed to apply; see `do.ts`'s own comment on `runProductionRound`
+for the full reasoning). `doTask`'s first-ever call always passes
+`isRetry: false`.
+
+The record entry it keys on is `"line-cut"`, which `runProductionRound`
+appends the moment `createProductionLine`/`reopenProductionLine`
+returns - proof the line genuinely exists - and **not**
+`"answers-given"`, which `answerTask` writes *before* calling
+`runProductionRound` at all (Client ruling, PR #69 review). The two come
+apart in exactly one place, and it strands the task: a resume that dies
+on the cut itself (the project moved or was renamed, a stale
+`.git/index.lock`, any other `git worktree add` failure) leaves
+`"answers-given"` on the record with no branch anywhere to match it.
+Keyed on the answer, `isRetry` would then be permanently true, so every
+later `fabrica answer` would reopen a line that was never cut and fail
+with `LineError("no-such-branch")` forever, even once the Client fixed
+the real cause - the same permanently-stuck-task shape the
+`"already-answered"` guard above exists to prevent, one step earlier.
+Moving the `"answers-given"` append after the cut instead was considered
+and rejected: a second answer would then append a duplicate round to
+`answers.md`.
+
 What the guard guarantees is that the task stays resumable and keeps
 reporting its true error - not that retrying succeeds. Reopening does
 not re-cut from the project's current HEAD, so a failure baked into the
 branch's history at the point it was first cut (no `check.sh` in that
 commit, a project path already wrong then) throws identically every
 time; only a failure unrelated to that history (an unreachable brain, a
-transient error) clears on retry.
+transient error) clears on retry. A failure *before* the cut is the one
+fully clean case - nothing is committed anywhere yet, so the retry runs
+as a genuine first round.
 `contract/surface.ts`'s `Foreman.answer(taskId, text)` has no `brain`
 parameter, the same reasoning as `verdict()`'s fix path below: a
 same-process `do()` call that ended up `"asking"` already had its brain

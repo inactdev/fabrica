@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doTask } from "./do.ts";
@@ -10,6 +10,7 @@ import { deliveryOf } from "./queries.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import type { Brain } from "../brain/index.ts";
+import { LineError } from "../line/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 
 function freshHome(): string {
@@ -53,7 +54,7 @@ test("answerTask resumes an asking task, extends the brief, and delivers", async
   const events = readEventsForTask(recordHome, asked.id);
   assert.deepEqual(
     events.map((e) => e.name),
-    ["task-received", "questions-asked", "answers-given", "work-started", "check-run", "delivered"]
+    ["task-received", "questions-asked", "answers-given", "line-cut", "work-started", "check-run", "delivered"]
   );
 
   const delivery = deliveryOf(recordHome, asked.id);
@@ -191,8 +192,10 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     "task-received",
     "questions-asked",
     "answers-given",
+    "line-cut",
     "work-started",
     "answers-given",
+    "line-cut",
     "work-started",
     "check-run",
     "delivered",
@@ -201,6 +204,59 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
   const answers = readTaskFile(recordHome, asked.id, "answers.md");
   assert.match(answers ?? "", /First attempt\./);
   assert.match(answers ?? "", /Second attempt\./);
+});
+
+// The narrower version of the same permanently-stuck-task bug: a resume
+// can also die BEFORE the ProductionLine is ever cut - the Client moved
+// or renamed the project, a stale .git/index.lock makes `git worktree
+// add` fail. "answers-given" is on the record by then, but no
+// `fabrica/<taskId>` branch exists anywhere, so the retry has to run as
+// a genuine FIRST round. Deciding that from the answer's mere presence
+// would send every later attempt to reopenProductionLine, dying on
+// `no-such-branch` even after the Client put the project back - stuck
+// for good. The record's "line-cut" event is what says which it is.
+test("answerTask retries as a first round when the previous resume died before the line was ever cut", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const askBrain = fakeBrain({ askQuestions: ["Which?"] });
+  const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
+  assert.equal(asked.state, "asking");
+
+  // The project is no longer where it was when the task was registered,
+  // so the cut itself fails - before any branch or worktree is made.
+  const moved = `${project}-moved`;
+  renameSync(project, moved);
+
+  const firstBrain = fakeBrain();
+  await assert.rejects(
+    () => answerTask(recordHome, asked.id, "First attempt.", { brain: firstBrain }),
+    (err: unknown) => err instanceof LineError && err.code === "not-a-repo"
+  );
+  assert.equal(firstBrain.calls, 0, "no worker can have run without a line to run it on");
+  assert.ok(
+    !readEventsForTask(recordHome, asked.id).some((e) => e.name === "line-cut"),
+    "nothing may claim a line was cut when none was"
+  );
+
+  // The Client puts the project back and answers again - this must cut a
+  // fresh line, not try to reopen one that never existed.
+  renameSync(moved, project);
+  const workBrain = fakeBrain();
+  const task = await answerTask(recordHome, asked.id, "Second attempt.", { brain: workBrain });
+
+  assert.equal(task.state, "delivered");
+  assert.equal(workBrain.calls, 1);
+
+  const cuts = readEventsForTask(recordHome, asked.id).filter((e) => e.name === "line-cut");
+  assert.equal(cuts.length, 1);
+  assert.equal(
+    (cuts[0].details as { reopened?: boolean }).reopened,
+    false,
+    "the retry ran as a genuine first round, not a reopen"
+  );
+
+  const delivery = deliveryOf(recordHome, asked.id);
+  assert.equal(delivery?.outcome, "done");
 });
 
 test("answerTask rejects a blank answer", async () => {

@@ -81,10 +81,20 @@ export async function runProductionRound(
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? brief;
   // `isRetry` is an explicit signal the caller derives from the RECORD -
   // answer.ts sets it true only when this exact taskId, in this exact
-  // record home, already has a prior "answers-given" that never
-  // delivered (a resumed round that threw before finishing - a missing
-  // check command, a moved project path, an unreachable brain).
+  // record home, already has a "line-cut" event: proof that
+  // createProductionLine genuinely returned for this task once, so the
+  // `fabrica/<taskId>` branch out there is this task's own.
   // doTask's first-ever call always passes false.
+  //
+  // Proof of the cut specifically, not proof the Client answered: a
+  // resume records "answers-given" before this function ever runs, so a
+  // round that died on the cut itself (a moved project path, a stale
+  // .git/index.lock) leaves that event behind with no branch to match
+  // it. Keyed on "answers-given", every later `fabrica answer` would
+  // then reopen a line that was never cut and die on `no-such-branch`
+  // forever, even after the Client fixed the real cause - the task
+  // permanently stuck, which is exactly what staying resumable is
+  // supposed to prevent.
   //
   // This used to be decided by asking git whether a `fabrica/<taskId>`
   // branch already existed, on the theory that a first-ever round could
@@ -113,6 +123,14 @@ export async function runProductionRound(
     : createProductionLine({ project, taskId, recordHome });
 
   try {
+    // The line demonstrably exists now - recorded here, inside the try,
+    // so teardown still runs if this append itself fails, and before
+    // anything that can throw between the cut and "work-started"
+    // (requireCheckCommand, requireGateBaseline). A later resume reads
+    // this event and nothing else to know it must reopen this branch
+    // rather than cut a new one.
+    appendEvent(recordHome, { taskId, name: "line-cut", details: { branch: line.branch, reopened: isRetry } });
+
     // Pin the diff's fork point to the exact commit the ProductionLine was
     // cut from, before any worker attempt runs — so the delivery's `files`
     // list can't drift if the Client's own checkout moves to a different
