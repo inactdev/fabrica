@@ -37,6 +37,15 @@ function captureIo() {
   return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
 }
 
+async function waitFor(condition: () => boolean, timeoutMs = 20_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return condition();
+}
+
 function slowBrain(delayMs: number): Brain {
   return {
     name: "slow",
@@ -154,14 +163,11 @@ test("runWatchCommand: a task mid-check streams its real elapsed time live, neve
     ...io,
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 900));
+  const sawChecking = await waitFor(() => io.out.some((line) => /^checking, \d+s so far$/.test(line)));
   controller.abort();
   await watchPromise;
 
-  assert.ok(
-    io.out.some((line) => /^checking, \d+s so far$/.test(line)),
-    `expected a live "checking, Xs so far" line, got: ${JSON.stringify(io.out)}`
-  );
+  assert.ok(sawChecking, `expected a live "checking, Xs so far" line, got: ${JSON.stringify(io.out)}`);
   assert.ok(!io.out.some((line) => line.includes("quiet")), "a mid-check task is never flagged quiet");
 });
 

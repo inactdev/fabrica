@@ -83,27 +83,37 @@ test("runStatusCommand: a stray positional is refused and points at `fabrica log
   assert.match(io.err[0], /fabrica log <taskId>/);
 });
 
+// Runs `fabrica status` until one of its lines matches, and returns that
+// very output - how long the detached process takes to boot tsx, register
+// and reach its check is not something a fixed wait can predict.
+async function statusUntil(recordHome: string, wanted: RegExp, timeoutMs = 20_000): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs;
+  let last: string[] = [];
+  while (Date.now() < deadline) {
+    const io = captureIo();
+    const code = await runStatusCommand([], { recordHome, ...io });
+    assert.equal(code, 0);
+    if (io.out.some((line) => wanted.test(line))) return io.out;
+    last = io.out;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`timed out waiting for ${wanted} in \`fabrica status\`; last output: ${JSON.stringify(last)}`);
+}
+
 test("runStatusCommand: a task mid-check says so plainly, with real elapsed time, never quiet", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("sleep 2 && exit 0");
-  const io = captureIo();
 
   const doIo = { out: [] as string[], err: [] as string[], stdout: (l: string) => doIo.out.push(l), stderr: () => {} };
   await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...doIo });
   const taskId = doIo.out[0];
 
-  // Give the detached process time to register, start work (instant, via
-  // fakeBrain), and get into its check - long before the 2s sleep ends.
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  const out = await statusUntil(recordHome, /checking/);
 
-  const code = await runStatusCommand([], { recordHome, ...io });
-
-  assert.equal(code, 0);
-  assert.equal(io.out.length, 1);
-  assert.match(io.out[0], new RegExp(`^${taskId}\\s`));
-  assert.match(io.out[0], /checking/);
-  assert.match(io.out[0], /checking, \d+s so far/);
-  assert.doesNotMatch(io.out[0], /quiet/);
+  assert.equal(out.length, 1);
+  assert.match(out[0], new RegExp(`^${taskId}\\s`));
+  assert.match(out[0], /checking, \d+s so far/);
+  assert.doesNotMatch(out[0], /quiet/);
 });
 
 test("runStatusCommand: a red delivery shows failed, not delivered, and carries no verdict flag", async () => {

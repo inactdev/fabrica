@@ -13,6 +13,7 @@
 
 import { createForeman, readTranscript, stateOf } from "../index.ts";
 import { CliError } from "./errors.ts";
+import { delay } from "./delay.ts";
 import { WATCH_USAGE, parseWatchArgs } from "./watch-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import {
@@ -82,9 +83,11 @@ export async function runWatchCommand(argv: string[], opts: RunWatchCommandOptio
     }
 
     const controller = new AbortController();
-    if (opts.signal) {
-      if (opts.signal.aborted) controller.abort();
-      else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    const callerSignal = opts.signal;
+    const onCallerAbort = () => controller.abort();
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener("abort", onCallerAbort, { once: true });
     }
 
     const installSigint = opts.installSigintHandler ?? true;
@@ -109,6 +112,7 @@ export async function runWatchCommand(argv: string[], opts: RunWatchCommandOptio
       });
     } finally {
       if (installSigint) process.off("SIGINT", onSigint);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
     }
 
     return 0;
@@ -199,22 +203,4 @@ async function streamTranscript(ctx: {
     if (signal.aborted) break;
     await poll();
   }
-}
-
-function delay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true }
-    );
-  });
 }
