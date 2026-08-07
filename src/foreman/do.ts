@@ -14,7 +14,7 @@ import { resolveCheckCommand } from "./resolve-check.ts";
 import { gateWasTouched, snapshotGate } from "./gate-changes.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
-import { buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
+import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
@@ -134,7 +134,36 @@ export async function doTask(
     // commitWorktreeChanges already asks the index directly and no-ops
     // when there is nothing staged, so a separate "is there anything to
     // commit" check here would only re-answer the same question.
-    commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+    try {
+      commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+    } catch (err) {
+      if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
+      // A commit failure here (a stale lock, a full disk, a read-only
+      // mount) used to propagate straight out of doTask: `finally` below
+      // still force-removes the worktree, destroying the Worker's
+      // uncommitted work, and nothing was ever written to the record - a
+      // task vanishing without a trace, the worst version of losing work
+      // (Client ruling, PR #54 follow-up). The record must always say
+      // what happened, so this is caught and turned into a delivery of
+      // its own instead - scoped minimally, no retry machinery, just an
+      // honest failure report.
+      receipts[receipts.length - 1].outcome = "failed";
+      const delivery = buildCommitFailureDelivery({
+        attempts: receipts.length,
+        lastGate,
+        branch: line.branch,
+        declaredGateChanges,
+        error: err.message,
+      });
+      validateDelivery(delivery);
+      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
+      appendEvent(recordHome, {
+        taskId,
+        name: "delivered",
+        details: { outcome: delivery.outcome, delivery, receipts },
+      });
+      return { id: taskId, state: "failed" };
+    }
 
     // CONTRACT rule 9 (Client ruling, superseding the original
     // force-reset-and-patch design, and then again superseding a

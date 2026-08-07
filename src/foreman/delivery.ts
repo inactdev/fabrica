@@ -54,6 +54,42 @@ export function buildDelivery(
   };
 }
 
+/**
+ * A `Delivery` for the one path `buildDelivery` above doesn't cover: the
+ * pre-teardown commit itself failed (a stale `.git/index.lock`, a full
+ * disk, a read-only mount) and there is no branch content or check
+ * outcome left to describe honestly the usual way. Reuses the
+ * `failure-report` outcome rather than adding a new one to the contract
+ * type - Client ruling (PR #54 follow-up), scoped minimally: the record
+ * must always say what happened, not add retry machinery. `files` is
+ * always `[]` here: a failed commit means nothing landed on the branch.
+ */
+export function buildCommitFailureDelivery(ctx: {
+  attempts: number;
+  lastGate: GateResult;
+  branch: string;
+  declaredGateChanges: string | undefined;
+  error: string;
+}): Delivery {
+  return {
+    outcome: "failure-report",
+    confidence: 0,
+    summary:
+      `The project's check ran, but the Worker's changes could not be committed onto the branch ` +
+      `after ${ctx.attempts} attempt(s).`,
+    evidence: `Last check: ${ctx.lastGate.output}`,
+    assumptions: "",
+    gaps:
+      `Committing the Worker's changes onto \`${ctx.branch}\` failed: ${ctx.error}. The throwaway ` +
+      "workspace is destroyed regardless of outcome, so nothing survived to hand over - this is a " +
+      "host environment failure (a stale lock file, a full disk, a read-only mount), not something " +
+      "the Worker or the project's checks caused. Retrying the task from scratch is the only recovery.",
+    branch: ctx.branch,
+    files: [],
+    gateChanges: ctx.declaredGateChanges ?? "",
+  };
+}
+
 /** Human-readable rendering of a Delivery (SPEC.md's field order), for
  * `delivery.md` — a convenience view; the "delivered" event's `details`
  * carries the structured object deliveryOf() actually reads. */

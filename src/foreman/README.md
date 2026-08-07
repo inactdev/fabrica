@@ -82,6 +82,18 @@ return early" below.
    against the branch's real diff"). `delivery.md` is written for a human
    to read; the same structured `Delivery` object lands on the
    `"delivered"` event for `deliveryOf` to read back exactly.
+
+   If the commit itself fails (`ForemanError("commit-failed")` - a stale
+   `.git/index.lock`, a full disk, a read-only mount) this step diverges:
+   `finally` below still force-removes the worktree, so there is no
+   branch content or check outcome left to describe the usual way. Client
+   ruling (PR #54 follow-up) - a task must never vanish from the record
+   without a trace, even when the host environment is what failed, not
+   the Worker or the project's checks. `delivery.ts`'s
+   `buildCommitFailureDelivery` builds a `failure-report` naming the git
+   error instead, `doTask` still writes `delivery.md` and appends
+   `"delivered"`, and returns early - scoped minimally, no retry
+   machinery, just an honest record of what happened.
 7. **Destroys the ProductionLine** in every case — success, failure, or a
    thrown error — via a single `finally`.
 
@@ -373,7 +385,7 @@ doesn't write that event or interpret one; that's left to whoever builds
 | `gate-changes.ts` | Snapshots and compares `check.sh`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
-| `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering. |
+| `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf` — all read from `events.jsonl`. |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape. |
