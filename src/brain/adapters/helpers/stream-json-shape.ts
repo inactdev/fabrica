@@ -19,7 +19,22 @@ const BLOCK_KEYS: Record<string, string[]> = {
   text: ["text"],
   thinking: ["thinking"],
   tool_use: ["name", "input"],
-  tool_result: ["content", "is_error"], // is_error is only present when true - absence is a valid shape, not a gap.
+  tool_result: ["content", "is_error"],
+};
+
+// shapeDiff() is driven entirely by the reference side, so an allowlist
+// key the recorded sample never demonstrates is never compared against
+// the fake at all. These are the only allowlist keys a real recording
+// isn't expected to prove, each with the reason it can't be demanded of
+// one. Anything else missing from a recording is a silently narrowed
+// guard: coverageGaps() names it, fake-claude-cli.test.ts fails on it
+// for the committed fixture, and record-real-cli-fixture.mjs refuses to
+// overwrite the fixture with it.
+export const UNPROVABLE_BY_RECORDING: Record<string, string> = {
+  "thinking.thinking":
+    "the real CLI emits a thinking block only when the model actually thinks, which no fixed recording prompt can demand",
+  "tool_result.is_error":
+    "the real CLI omits it unless the tool call failed, and the recording prompt deliberately succeeds",
 };
 
 function typeOf(value: unknown): string {
@@ -67,12 +82,18 @@ export function extractShape(lines: unknown[]): StreamJsonShape {
   return { lineTypes, result, blocks };
 }
 
-// Every result key and block-type/key pair present in `reference` (the
-// real, recorded sample) must also be present in `candidate` (the fake),
-// with the same JS type. A key `reference` never demonstrated having is
-// not checked - the fixture only proves what it actually exercised.
+// Every line type, result key and block-type/key pair present in
+// `reference` (the real, recorded sample) must also be present in
+// `candidate` (the fake), with the same JS type. A key `reference` never
+// demonstrated having is not checked - the fixture only proves what it
+// actually exercised, which is what coverageGaps() below is for.
 export function shapeDiff(reference: StreamJsonShape, candidate: StreamJsonShape): string[] {
   const problems: string[] = [];
+
+  for (const lineType of reference.lineTypes) {
+    if (!candidate.lineTypes.has(lineType))
+      problems.push(`line type "${lineType}": present in reference, missing in candidate`);
+  }
 
   if (reference.result) {
     if (!candidate.result) {
@@ -103,4 +124,31 @@ export function shapeDiff(reference: StreamJsonShape, candidate: StreamJsonShape
   }
 
   return problems;
+}
+
+// What a recorded sample fails to demonstrate, and therefore what
+// shapeDiff() would never compare if that sample were used as the
+// reference. Empty means the recording exercises every allowlist key
+// except the ones UNPROVABLE_BY_RECORDING explains away.
+export function coverageGaps(shape: StreamJsonShape): string[] {
+  const gaps: string[] = [];
+
+  if (!shape.result) {
+    gaps.push('no "result" line at all');
+  } else {
+    for (const key of [...RESULT_KEYS, ...USAGE_KEYS.map((k) => `usage.${k}`)]) {
+      if (`result.${key}` in UNPROVABLE_BY_RECORDING) continue;
+      if (!(key in shape.result)) gaps.push(`result.${key}`);
+    }
+  }
+
+  for (const [blockType, keys] of Object.entries(BLOCK_KEYS)) {
+    const blockShape = shape.blocks[blockType];
+    for (const key of keys) {
+      if (`${blockType}.${key}` in UNPROVABLE_BY_RECORDING) continue;
+      if (!blockShape || !(key in blockShape)) gaps.push(`block ${blockType}.${key}`);
+    }
+  }
+
+  return gaps;
 }

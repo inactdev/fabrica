@@ -20,6 +20,11 @@
 // particular anything that would leak this machine's paths, session ids,
 // or account details (see sanitizeLine below for the exact list).
 //
+// It refuses to write anything if that run didn't actually exercise
+// every shape the allowlist covers (stream-json-shape.ts's
+// coverageGaps) - a thinner fixture checks less while the parity test
+// stays green, which is the exact failure issue #46 is about.
+//
 // After running, read the diff before committing: `git diff` on the
 // fixture should show only fields the adapter's own claude-code.ts/.md
 // document reading, not a wholesale reshuffle - a fixture that changes in
@@ -27,10 +32,18 @@
 // the real CLI actually changed.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// Same trick as src/cli/bin.mjs: teach this process to load a .ts file
+// with a real `import "tsx/esm"` resolved against this file's own
+// location. The coverage rule has to come from stream-json-shape.ts
+// itself - a second copy of the allowlist here would be one more thing
+// that can drift.
+await import("tsx/esm");
+const { extractShape, coverageGaps } = await import(new URL("./stream-json-shape.ts", import.meta.url).href);
 
 const FIXTURE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -119,8 +132,14 @@ try {
   );
   // Blank out this machine's own throwaway temp path before it can reach
   // any tool_use "input" field (e.g. Read's file_path) - not sensitive,
-  // just noise that would make every re-recording a spurious diff.
-  const stdout = rawStdout.split(workdir).join("/workdir");
+  // just noise that would make every re-recording a spurious diff. Both
+  // the path as handed to the CLI and its realpath: on macOS os.tmpdir()
+  // resolves through a /var -> /private/var symlink, and the tool that
+  // reports back a path reports the resolved one. Longest first, or
+  // replacing the short form leaves "/private" stranded in front of the
+  // placeholder.
+  const tempPaths = [...new Set([workdir, realpathSync(workdir)])].sort((a, b) => b.length - a.length);
+  const stdout = tempPaths.reduce((text, path) => text.split(path).join("/workdir"), rawStdout);
 
   const sanitized = stdout
     .split("\n")
@@ -129,9 +148,26 @@ try {
     .map(sanitizeLine)
     .filter(Boolean);
 
-  writeFileSync(FIXTURE_PATH, sanitized.map((l) => JSON.stringify(l)).join("\n") + "\n");
-  console.log(`Wrote ${sanitized.length} sanitized lines to ${FIXTURE_PATH}`);
-  console.log("Review the diff before committing - see this script's own header comment.");
+  // A recording that didn't exercise every shape the allowlist covers is
+  // a weaker guard than the one already committed, and nothing
+  // downstream would say so: the parity test compares only what its
+  // reference demonstrates, so it would stay green while checking less.
+  const gaps = coverageGaps(extractShape(sanitized));
+  if (gaps.length > 0) {
+    console.error(
+      `Refusing to overwrite ${FIXTURE_PATH}: this recording never demonstrated\n` +
+        `${gaps.map((gap) => `  - ${gap}`).join("\n")}\n` +
+        "so committing it would silently narrow what the shape-parity test checks.\n" +
+        "Usually the model just answered without making the tool call - re-run this script.\n" +
+        "If the real CLI genuinely stopped emitting one of these, change the allowlist in\n" +
+        "stream-json-shape.ts deliberately (and say why), rather than accepting a thinner fixture."
+    );
+    process.exitCode = 1;
+  } else {
+    writeFileSync(FIXTURE_PATH, sanitized.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    console.log(`Wrote ${sanitized.length} sanitized lines to ${FIXTURE_PATH}`);
+    console.log("Review the diff before committing - see this script's own header comment.");
+  }
 } finally {
   rmSync(workdir, { recursive: true, force: true });
 }

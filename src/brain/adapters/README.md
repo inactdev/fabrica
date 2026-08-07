@@ -81,7 +81,11 @@ meant to be copied by the next one:
    a real sample recorded once and committed. See
    `helpers/fixtures/README.md` for exactly where the shape-vs-bytes line
    was drawn and why, and `helpers/stream-json-shape.ts` for the
-   allowlist-based comparison itself.
+   allowlist-based comparison itself. The fixture's own coverage is
+   asserted as well (`coverageGaps()`), because the comparison runs
+   *from* the fixture: a sample that stopped demonstrating a shape would
+   silently check less while staying green, so both that test and the
+   re-record script fail rather than accept one.
 3. **What a second adapter has to build, concretely:** its own fixture
    file (recorded from its own real binary, with its own re-record
    script, sanitized of that machine's paths/session data the same way),

@@ -24,6 +24,27 @@ drawing the line there:
   `content`) fails loudly, because that's exactly the shape the adapter's
   own parsing logic depends on.
 
+## What this fixture must keep proving
+
+The comparison runs *from* the fixture: `shapeDiff()` only checks keys
+the fixture itself demonstrates, so a sample that lost a block type (a
+re-recording where the model answered without calling a tool, say)
+would quietly check less while staying green - the same "green means
+verified" failure as the fake drifting in the first place. So the
+fixture's own coverage is asserted too: `coverageGaps()` in
+`../stream-json-shape.ts` requires it to demonstrate every allowlisted
+key, `../fake-claude-cli.test.ts` fails if the committed fixture ever
+stops doing so, and `../record-real-cli-fixture.mjs` refuses to
+overwrite it with a recording that would.
+
+Two keys are exempt, listed with their reasons in that file's
+`UNPROVABLE_BY_RECORDING`: `thinking.thinking` (the real CLI emits a
+thinking block only when the model actually thinks) and
+`tool_result.is_error` (omitted unless a tool call failed, and the
+recording prompt deliberately succeeds). They are exempt from being
+*demanded of a recording*, not dropped from the allowlist - a fixture
+that does happen to contain them still compares them against the fake.
+
 Byte-for-byte equality was rejected as the standard: it would break on
 every real-CLI patch release regardless of whether anything the adapter
 reads actually changed, which teaches everyone to stop trusting a failure
@@ -41,7 +62,10 @@ this fixture's sanitization.
 The recorded sample is stripped of anything specific to the machine or
 account that recorded it - real `cwd`, `session_id`, hook/harness chatter
 (`system` lines other than `init`, `rate_limit_event`), and any file path
-under the recording machine's temp directory - before it's written here.
+under the recording machine's temp directory, in both the form handed to
+the CLI and its realpath (on macOS `os.tmpdir()` resolves through a
+`/var` -> `/private/var` symlink, and a tool reports back the resolved
+one) - before it's written here.
 `../record-real-cli-fixture.mjs` does this automatically; see that
 script's own header comment for exactly what it keeps and drops.
 

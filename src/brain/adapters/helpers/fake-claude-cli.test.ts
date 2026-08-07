@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractShape, shapeDiff } from "./stream-json-shape.ts";
+import { coverageGaps, extractShape, shapeDiff, UNPROVABLE_BY_RECORDING } from "./stream-json-shape.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(HERE, "fake-claude-cli.mjs");
@@ -46,6 +46,27 @@ function runFakeCli(brief: string) {
     .map((l) => JSON.parse(l));
   return extractShape(lines);
 }
+
+// The parity test below can only ever check what its reference actually
+// demonstrates, so a fixture that lost a block type - a re-recording
+// where the model answered without calling a tool, say - would keep it
+// green while checking strictly less. That narrowing has to fail here
+// too, not just in the hand-run re-record script, or it arrives by
+// commit and nobody hears it.
+test("the committed fixture still demonstrates every shape the allowlist covers", () => {
+  const gaps = coverageGaps(loadFixtureShape());
+
+  assert.deepEqual(
+    gaps,
+    [],
+    "the recorded real sample no longer exercises every field the adapter reads, so the shape-parity " +
+      "test below silently stopped checking these:\n" +
+      gaps.join("\n") +
+      "\nRe-record the fixture (helpers/record-real-cli-fixture.mjs) rather than deleting the check. " +
+      "The only keys exempt from this are the ones stream-json-shape.ts's UNPROVABLE_BY_RECORDING " +
+      `explains: ${Object.keys(UNPROVABLE_BY_RECORDING).join(", ")}.`
+  );
+});
 
 test("fake-claude-cli.mjs's SUCCESS_WITH_TOOLS output matches the shape of a recorded real sample", () => {
   const real = loadFixtureShape();
