@@ -19,9 +19,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { readEvents } from "../index.ts";
+import type { FabricaEvent } from "../index.ts";
 import { resolveRecordHome } from "./record-home.ts";
 
-interface HarnessVerifier {
+export interface HarnessVerifier {
   attemptRealEdit(cwd: string, targetFileName: string): void;
   harnessAvailable(): boolean;
 }
@@ -60,10 +61,21 @@ export interface RunVerifyHookOptions {
   recordHome?: string;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
-  /** Test seam: bypasses the real harness discovery/spawn entirely. Both
-   * must be given together, or neither is used. */
-  attemptEdit?: (cwd: string, targetFileName: string) => void;
-  harnessAvailable?: () => boolean;
+  /** Test seam: bypasses the real harness discovery/spawn entirely. One
+   * object, not two callbacks, so half a seam - a fake edit paired with
+   * the real `claude --version` probe - can't be supplied by accident. */
+  harness?: HarnessVerifier;
+}
+
+/** Whether an `edit-attempt-blocked` event is *this* attempt's. The
+ * throwaway file name carries a random slice, and the hook payload puts
+ * the blocked call's file path (or shell command) on `details.target`, so
+ * this is what separates the attempt just made here from one an unrelated
+ * session appended to the same shared record while this command ran. */
+function isAttemptOn(event: FabricaEvent, targetFileName: string): boolean {
+  if (event.name !== "edit-attempt-blocked") return false;
+  const target = (event.details as { target?: unknown } | undefined)?.target;
+  return typeof target === "string" && target.includes(targetFileName);
 }
 
 /** Returns 0 only when the edit was both denied and recorded; 1 otherwise
@@ -73,19 +85,13 @@ export async function runVerifyHookCommand(opts: RunVerifyHookOptions = {}): Pro
   const stdout = opts.stdout ?? ((line: string) => console.log(line));
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
-  let isHarnessAvailable = opts.harnessAvailable;
-  let attempt = opts.attemptEdit;
-  if (!isHarnessAvailable || !attempt) {
-    const verifier = await loadHarnessVerifier();
-    if (!verifier) {
-      stderr("No per-harness verify script found under skill/ - nothing to run.");
-      return 1;
-    }
-    isHarnessAvailable = isHarnessAvailable ?? verifier.harnessAvailable;
-    attempt = attempt ?? verifier.attemptRealEdit;
+  const verifier = opts.harness ?? (await loadHarnessVerifier());
+  if (!verifier) {
+    stderr("No per-harness verify script found under skill/ - nothing to run.");
+    return 1;
   }
 
-  if (!isHarnessAvailable()) {
+  if (!verifier.harnessAvailable()) {
     stderr("Could not find or run your chat agent - is it installed and on your PATH?");
     return 1;
   }
@@ -98,14 +104,14 @@ export async function runVerifyHookCommand(opts: RunVerifyHookOptions = {}): Pro
   const eventsBefore = readEvents(recordHome).length;
 
   stdout("Attempting a real edit in this directory, through your installed session config...");
-  attempt(cwd, targetFileName);
+  verifier.attemptRealEdit(cwd, targetFileName);
 
   const created = existsSync(targetPath);
   if (created) rmSync(targetPath, { force: true }); // never leave the throwaway file behind, pass or fail
 
   const newlyLogged = readEvents(recordHome)
     .slice(eventsBefore)
-    .some((event) => event.name === "edit-attempt-blocked");
+    .some((event) => isAttemptOn(event, targetFileName));
 
   const denied = !created;
   stdout(`  edit denied:    ${denied ? "yes" : "no - the file was actually created!"}`);

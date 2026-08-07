@@ -1,10 +1,11 @@
 // The harness-specific half of `fabrica verify-hook`
-// (src/cli/verify-hook-command.ts imports this by relative path, a plain
-// in-repo import - no hand-typed absolute path involved, unlike the
-// hook command an external project's settings.json carries). Actually
-// spawns a real, non-bypassed session here and asks it to create a
-// throwaway file, so the CLI command can observe whether the session's
-// own installed config denies it.
+// (src/cli/verify-hook-command.ts finds this by scanning skill/ at
+// runtime and dynamically importing whichever subfolder has a verify.ts,
+// rather than a literal import specifier - which would name a harness
+// inside src/ and trip rule 8's brain-word scan exactly like a comment
+// would). Actually spawns a real, non-bypassed session here and asks it
+// to create a throwaway file, so the CLI command can observe whether the
+// session's own installed config denies it.
 //
 // This is the one place allowed to name the harness at all - confined to
 // this per-harness folder like everything else specific to it, the same

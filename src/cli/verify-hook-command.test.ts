@@ -25,9 +25,11 @@ test("runVerifyHookCommand: reports failure when the harness itself can't be rea
   const code = await runVerifyHookCommand({
     cwd: tempCwd(),
     recordHome: tempRecordHome(),
-    harnessAvailable: () => false,
-    attemptEdit: () => {
-      throw new Error("must not be called when the harness is unavailable");
+    harness: {
+      harnessAvailable: () => false,
+      attemptRealEdit: () => {
+        throw new Error("must not be called when the harness is unavailable");
+      },
     },
     ...io,
   });
@@ -44,11 +46,17 @@ test("runVerifyHookCommand: a properly denied and logged attempt passes", async 
   const code = await runVerifyHookCommand({
     cwd,
     recordHome,
-    harnessAvailable: () => true,
-    // Simulates a working hook: nothing written to disk, but it logs the
-    // attempt, exactly like the real hook does in the same invocation.
-    attemptEdit: () => {
-      appendEvent(recordHome, { taskId: "project:unregistered", name: "edit-attempt-blocked", details: {} });
+    harness: {
+      harnessAvailable: () => true,
+      // Simulates a working hook: nothing written to disk, but it logs the
+      // attempt, exactly like the real hook does in the same invocation.
+      attemptRealEdit: (attemptCwd, targetFileName) => {
+        appendEvent(recordHome, {
+          taskId: "project:unregistered",
+          name: "edit-attempt-blocked",
+          details: { target: join(attemptCwd, targetFileName) },
+        });
+      },
     },
     ...io,
   });
@@ -68,11 +76,13 @@ test("runVerifyHookCommand: a silently allowed edit fails, and the throwaway fil
   const code = await runVerifyHookCommand({
     cwd,
     recordHome,
-    harnessAvailable: () => true,
-    // Simulates a broken/misconfigured hook: the edit actually happens.
-    attemptEdit: (attemptCwd, targetFileName) => {
-      seenFileName = targetFileName;
-      writeFileSync(join(attemptCwd, targetFileName), "verify\n");
+    harness: {
+      harnessAvailable: () => true,
+      // Simulates a broken/misconfigured hook: the edit actually happens.
+      attemptRealEdit: (attemptCwd, targetFileName) => {
+        seenFileName = targetFileName;
+        writeFileSync(join(attemptCwd, targetFileName), "verify\n");
+      },
     },
     ...io,
   });
@@ -90,10 +100,12 @@ test("runVerifyHookCommand: denied but never logged (the fail-open case) still f
   const code = await runVerifyHookCommand({
     cwd,
     recordHome,
-    harnessAvailable: () => true,
-    // Simulates the hook command failing to launch at all: nothing
-    // written, but nothing logged either.
-    attemptEdit: () => {},
+    harness: {
+      harnessAvailable: () => true,
+      // Simulates the hook command failing to launch at all: nothing
+      // written, but nothing logged either.
+      attemptRealEdit: () => {},
+    },
     ...io,
   });
 
@@ -101,4 +113,33 @@ test("runVerifyHookCommand: denied but never logged (the fail-open case) still f
   assert.match(io.out.join("\n"), /edit denied:\s+yes/);
   assert.match(io.out.join("\n"), /attempt logged:\s+no/);
   assert.match(io.out.join("\n"), /not fully working/i);
+});
+
+test("runVerifyHookCommand: another session's blocked edit doesn't count as this attempt's", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // The session under test never gets as far as attempting the edit
+      // (unauthenticated, rate-limited, timed out); meanwhile an unrelated
+      // session elsewhere blocks an edit of its own and appends it to the
+      // same shared record. That must not read as a pass here.
+      attemptRealEdit: () => {
+        appendEvent(recordHome, {
+          taskId: "project:somewhere-else",
+          name: "edit-attempt-blocked",
+          details: { target: "/some/other/project/src/unrelated.ts" },
+        });
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.out.join("\n"), /attempt logged:\s+no/);
 });

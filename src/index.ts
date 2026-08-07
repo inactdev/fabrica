@@ -34,7 +34,8 @@ export { ConfigError } from "./config/index.ts";
 export type { ConfigErrorCode, Caps, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
 
 // Off-the-books nets (issue #13), prevention half: recordBlockedEditAttempt
-// is what a harness-specific hook script under skill/<harness>/hooks/
+// is what `fabrica deny-and-log-edit` (src/cli/deny-and-log-edit-command.ts,
+// the command a harness's session config wires its file-editing hook to)
 // imports from here, the same way the CLI imports everything else it
 // needs — never straight from src/offbooks/. (Issue #13 also specified a
 // detection half; it was built, tested, then cut by Client ruling — see

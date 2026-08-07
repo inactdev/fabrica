@@ -1,9 +1,10 @@
 // Records a blocked file-edit attempt (SPEC.md "Catching off-the-books
 // work": "the session setup also logs every blocked edit attempt as an
-// edit-attempt-blocked event"). Called by each harness's own blocked-edit
-// hook script under skill/<harness>/hooks/ — kept here, not duplicated
-// there, so there is exactly one definition of what this event looks
-// like. No real task is behind this event, so it keys `taskId` as
+// edit-attempt-blocked event"). Called by the CLI's `deny-and-log-edit`
+// command, which every harness's session config wires its file-editing
+// hook to — kept here, not duplicated per harness, so there is exactly
+// one definition of what this event looks like. No real task is behind
+// this event, so it keys `taskId` as
 // "project:<name>" (or "project:unregistered") instead of a real task id.
 
 import { realpathSync } from "node:fs";
