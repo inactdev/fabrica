@@ -10,6 +10,8 @@ import { ANSWER_HELP, runAnswerCommand } from "./answer-command.ts";
 import { STATUS_HELP, runStatusCommand } from "./status-command.ts";
 import { LOG_HELP, runLogCommand } from "./log-command.ts";
 import { WATCH_HELP, runWatchCommand } from "./watch-command.ts";
+import { DENY_AND_LOG_EDIT_HELP, runDenyAndLogEditCommand } from "./deny-and-log-edit-command.ts";
+import { VERIFY_HOOK_HELP, runVerifyHookCommand } from "./verify-hook-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
 
 export async function main(
@@ -76,6 +78,22 @@ export async function main(
       return 0;
     }
     return runWatchCommand(rest, io);
+  }
+
+  if (command === "deny-and-log-edit") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(DENY_AND_LOG_EDIT_HELP);
+      return 0;
+    }
+    return runDenyAndLogEditCommand(io);
+  }
+
+  if (command === "verify-hook") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(VERIFY_HOOK_HELP);
+      return 0;
+    }
+    return runVerifyHookCommand(io);
   }
 
   io.stderr(`fabrica: unknown command "${command}".\n\n${TOP_LEVEL_HELP}`);

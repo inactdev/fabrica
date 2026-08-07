@@ -30,7 +30,6 @@
       "Bash(cat *)",
       "Bash(grep *)",
       "Bash(rg *)",
-      "Bash(find *)",
       "Bash(pwd)",
       "Bash(head *)",
       "Bash(tail *)",
@@ -44,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "<ABSOLUTE-PATH-TO-FABRICA-REPO>/node_modules/.bin/tsx <ABSOLUTE-PATH-TO-FABRICA-REPO>/skill/claude-code/hooks/deny-and-log-edit.ts"
+            "command": "fabrica deny-and-log-edit"
           }
         ]
       }

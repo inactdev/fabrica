@@ -41,3 +41,10 @@ export type { ConfigErrorCode, Caps, ProjectConfig, FabricaConfig, CheckedProjec
 // AGENTS.md.)
 export { recordBlockedEditAttempt } from "./offbooks/index.ts";
 export type { BlockedEditAttempt } from "./offbooks/index.ts";
+
+// The record's read side: `fabrica verify-hook` (src/cli/) reads back the
+// events an attempt should have produced, to prove it rather than assume it.
+// (`eventsByTask` above is grouped by task; this is the flat, whole-record
+// list `readEvents(...).length`/`.slice(...)` needs - a different shape,
+// not a duplicate. `FabricaEvent` itself is already exported above.)
+export { readEvents } from "./record/index.ts";
