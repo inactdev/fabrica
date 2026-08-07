@@ -82,7 +82,7 @@ function sanitizeLine(raw) {
         cache_creation_input_tokens: obj.usage?.cache_creation_input_tokens,
       },
       result: obj.result,
-      api_error_status: obj.api_error_status ?? null,
+      api_error_status: obj.api_error_status,
     };
   }
 
