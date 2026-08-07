@@ -68,6 +68,19 @@ export function fixRoundOf(recordHome: string, taskId: string): number {
   ).length;
 }
 
+/** The project a task is running against, or null when it's not known yet
+ * (a task with no "work-started" event, e.g. still asking a clarifying
+ * question). Every "work-started" and "delivered" event carries `project`
+ * in its details, so the latest one that has it wins. */
+export function projectOf(recordHome: string, taskId: string): string | null {
+  const events = readEventsForTask(recordHome, taskId);
+  for (let i = events.length - 1; i >= 0; i--) {
+    const details = events[i].details as { project?: string } | undefined;
+    if (details?.project) return details.project;
+  }
+  return null;
+}
+
 export function statusOf(recordHome: string): FabricaTask[] {
   const byTask = new Map<string, FabricaEvent[]>();
   for (const event of readEvents(recordHome)) {

@@ -1,0 +1,184 @@
+// `fabrica watch <id>` (SPEC.md, issue #12): a live view of a worker's
+// transcript, streamed as it's written. The sharp edge this whole command
+// exists to get right: stopping the watch must never stop the work. This
+// process only ever reads the record (events.jsonl, transcript.log) - it
+// never spawns, signals, or otherwise touches the detached process
+// `fabrica do` started (src/cli/spawn-detached.ts). Ctrl-C here can only
+// ever end this process's own polling; there is nothing in this file that
+// could reach the worker even if it wanted to. See watch-command.test.ts
+// and the PR's own end-to-end proof for that shown, not just asserted.
+
+import { createForeman, readTranscript } from "../index.ts";
+import { CliError } from "./errors.ts";
+import { WATCH_USAGE, parseWatchArgs } from "./watch-args.ts";
+import { resolveRecordHome } from "./record-home.ts";
+import { formatAge, isQuietTooLong } from "./render.ts";
+
+export const WATCH_HELP = `Usage: ${WATCH_USAGE}
+
+Streams one task's transcript live, as the worker writes it - the same
+entries \`fabrica log --transcript\` prints after the fact. Heartbeats show
+as brief liveness lines during a long silent stretch, and a stretch longer
+than that is flagged "quiet" instead of implying progress nobody has
+actually observed.
+
+Stopping this (Ctrl-C) only stops watching. The task itself runs in a
+separate, already-detached process (\`fabrica do\` starts it that way) that
+this command never touches - closing the view never touches the room.
+
+  <taskId>   The task to watch. See \`fabrica status\` for open ids.
+
+Environment:
+  FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
+`;
+
+const DEFAULT_POLL_INTERVAL_MS = 500;
+
+export interface RunWatchCommandOptions {
+  recordHome?: string;
+  pollIntervalMs?: number;
+  /** Aborting stops the poll loop and returns. Combined with (not
+   * replaced by) the real SIGINT handler this installs by default. */
+  signal?: AbortSignal;
+  /** Test-only: skip installing the real `process.on("SIGINT", ...)`
+   * handler, so a test can drive stopping purely through `signal`
+   * without sending the test runner's own process a signal. Real CLI use
+   * always leaves this true. */
+  installSigintHandler?: boolean;
+  stdout?: (line: string) => void;
+  stderr?: (line: string) => void;
+}
+
+/** Returns the process exit code - never throws. */
+export async function runWatchCommand(argv: string[], opts: RunWatchCommandOptions = {}): Promise<number> {
+  const stdout = opts.stdout ?? ((line: string) => console.log(line));
+  const stderr = opts.stderr ?? ((line: string) => console.error(line));
+
+  try {
+    const { taskId } = parseWatchArgs(argv);
+    const recordHome = opts.recordHome ?? resolveRecordHome();
+    const foreman = createForeman({ recordHome });
+
+    const initialEvents = await foreman.events(taskId);
+    if (initialEvents.length === 0) {
+      throw new CliError(
+        "unknown-task",
+        `fabrica watch: no task "${taskId}" in this record. Check the id with \`fabrica status\`.`
+      );
+    }
+
+    const controller = new AbortController();
+    if (opts.signal) {
+      if (opts.signal.aborted) controller.abort();
+      else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+
+    const installSigint = opts.installSigintHandler ?? true;
+    const onSigint = () => {
+      stdout("");
+      stdout(
+        "stopped watching - the task keeps running in the background, untouched; " +
+          "nothing here can stop it. Check `fabrica status` any time."
+      );
+      controller.abort();
+    };
+    if (installSigint) process.on("SIGINT", onSigint);
+
+    try {
+      await streamTranscript({
+        recordHome,
+        taskId,
+        foreman,
+        stdout,
+        signal: controller.signal,
+        pollIntervalMs: opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      });
+    } finally {
+      if (installSigint) process.off("SIGINT", onSigint);
+    }
+
+    return 0;
+  } catch (err) {
+    if (err instanceof CliError) {
+      stderr(err.message);
+      return 1;
+    }
+    stderr(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+}
+
+async function streamTranscript(ctx: {
+  recordHome: string;
+  taskId: string;
+  foreman: ReturnType<typeof createForeman>;
+  stdout: (line: string) => void;
+  signal: AbortSignal;
+  pollIntervalMs: number;
+}): Promise<void> {
+  const { recordHome, taskId, foreman, stdout, signal, pollIntervalMs } = ctx;
+  let printedTranscript = 0;
+  let printedHeartbeats = 0;
+  let wasQuiet = false;
+  let noticedTerminal = false;
+
+  const poll = async () => {
+    const entries = readTranscript(recordHome, taskId);
+    for (; printedTranscript < entries.length; printedTranscript++) {
+      const entry = entries[printedTranscript];
+      stdout(`${entry.occurredAt}  [${entry.kind}]  ${entry.text}`);
+    }
+
+    const events = await foreman.events(taskId);
+    const heartbeats = events.filter((e) => e.name === "heartbeat");
+    for (; printedHeartbeats < heartbeats.length; printedHeartbeats++) {
+      stdout(`${heartbeats[printedHeartbeats].occurredAt}  [heartbeat]  still working...`);
+    }
+
+    const task = (await foreman.status()).find((t) => t.id === taskId);
+    const state = task?.state ?? "working";
+
+    const quiet = isQuietTooLong(state, events);
+    if (quiet !== wasQuiet) {
+      stdout(
+        quiet
+          ? `quiet ${formatAge(Date.now() - Date.parse(events[events.length - 1].occurredAt))}, ` +
+              `no signal since last heartbeat - not known to be stuck, not known to be fine`
+          : "signal resumed"
+      );
+    }
+    wasQuiet = quiet;
+
+    if (!noticedTerminal && (state === "delivered" || state === "failed")) {
+      noticedTerminal = true;
+      stdout(
+        `-- task ${state} - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`
+      );
+    }
+  };
+
+  await poll();
+  while (!signal.aborted) {
+    await delay(pollIntervalMs, signal);
+    if (signal.aborted) break;
+    await poll();
+  }
+}
+
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
+  });
+}

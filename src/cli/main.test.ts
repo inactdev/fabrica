@@ -100,3 +100,47 @@ test("main: `answer` with bad usage refuses without touching the record", async 
   assert.equal(code, 1);
   assert.match(io.err[0], /<taskId>/);
 });
+
+test("main: top-level help mentions status, log, and watch", async () => {
+  const io = captureIo();
+  const code = await main(["--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /status\n/);
+  assert.match(io.out[0], /log <taskId>/);
+  assert.match(io.out[0], /watch <taskId>/);
+});
+
+test("main: `status --help` prints the status command's own usage and exits 0, without running anything", async () => {
+  const io = captureIo();
+  const code = await main(["status", "--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /Usage: fabrica status/);
+});
+
+test("main: `log --help` prints the log command's own usage and exits 0, without running anything", async () => {
+  const io = captureIo();
+  const code = await main(["log", "--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica log <taskId>/);
+});
+
+test("main: `log -h` also short-circuits to help", async () => {
+  const io = captureIo();
+  const code = await main(["log", "some-task", "-h"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica log <taskId>/);
+});
+
+test("main: `watch --help` prints the watch command's own usage and exits 0, without running anything", async () => {
+  const io = captureIo();
+  const code = await main(["watch", "--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica watch <taskId>/);
+});
+
+test("main: `watch -h` also short-circuits to help", async () => {
+  const io = captureIo();
+  const code = await main(["watch", "some-task", "-h"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica watch <taskId>/);
+});

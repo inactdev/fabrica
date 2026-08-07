@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAttempts, gateForRecord, MAX_RECEIPT_CHECK_OUTPUT_BYTES } from "./attempts.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
+import type { Brain } from "../brain/index.ts";
 
 const HEAD_MARKER = "FIRST-LINE-OF-CHECK-OUTPUT";
 const TAIL_MARKER = "LAST-LINE-OF-CHECK-OUTPUT";
@@ -83,4 +84,83 @@ test("truncation never stores a half-character left by cutting mid-symbol", () =
   assert.ok(!stored.includes("\uFFFD"));
   assert.ok(stored.endsWith(wide));
   assert.match(stored, /^\[truncated, showing last \d+ of 60000 bytes\]\nあ/);
+});
+
+// Heartbeat coverage for the attempt loop (issue #12): a `brain.work` call
+// is one long opaque await with nothing incremental to report, so
+// `onHeartbeat` is the only signal `fabrica status`/`watch` get that a
+// silent stretch is still progress and not a stuck worker.
+
+function slowBrain(delayMs: number): Brain {
+  return {
+    name: "slow",
+    model: "slow-1",
+    async work() {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return { transcript: [], session: "s1" };
+    },
+    async ask() {
+      return {};
+    },
+  };
+}
+
+function fastCheckWorkdir(): string {
+  return mkdtempSync(join(tmpdir(), "fabrica-attempts-"));
+}
+
+test("runAttempts: onHeartbeat fires repeatedly while brain.work is in flight", async () => {
+  const beats: number[] = [];
+
+  await runAttempts({
+    brain: slowBrain(55),
+    brief: "do it",
+    workdir: fastCheckWorkdir(),
+    taskId: "t1",
+    check: "exit 0",
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    heartbeatIntervalMs: 10,
+    onHeartbeat: (attempt) => beats.push(attempt),
+  });
+
+  assert.ok(beats.length >= 3, `expected several heartbeats, got ${beats.length}`);
+  assert.ok(
+    beats.every((a) => a === 1),
+    `every heartbeat should report attempt 1, got ${JSON.stringify(beats)}`
+  );
+});
+
+test("runAttempts: heartbeat stops the instant brain.work resolves", async () => {
+  let beats = 0;
+
+  await runAttempts({
+    brain: slowBrain(20),
+    brief: "do it",
+    workdir: fastCheckWorkdir(),
+    taskId: "t1",
+    check: "exit 0",
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    heartbeatIntervalMs: 5,
+    onHeartbeat: () => beats++,
+  });
+
+  const afterCompletion = beats;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(beats, afterCompletion, "no heartbeat should fire once the call has already resolved");
+});
+
+test("runAttempts: no onHeartbeat given, no timer runs (no crash, no leak)", async () => {
+  const result = await runAttempts({
+    brain: slowBrain(5),
+    brief: "do it",
+    workdir: fastCheckWorkdir(),
+    taskId: "t1",
+    check: "exit 0",
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+  });
+
+  assert.equal(result.receipts.length, 1);
 });

@@ -7,6 +7,9 @@
 import { DO_HELP, runDoCommand } from "./do-command.ts";
 import { VERDICT_HELP, runVerdictCommand } from "./verdict-command.ts";
 import { ANSWER_HELP, runAnswerCommand } from "./answer-command.ts";
+import { STATUS_HELP, runStatusCommand } from "./status-command.ts";
+import { LOG_HELP, runLogCommand } from "./log-command.ts";
+import { WATCH_HELP, runWatchCommand } from "./watch-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
 
 export async function main(
@@ -49,6 +52,30 @@ export async function main(
       return 0;
     }
     return runAnswerCommand(rest, io);
+  }
+
+  if (command === "status") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(STATUS_HELP);
+      return 0;
+    }
+    return runStatusCommand(rest, io);
+  }
+
+  if (command === "log") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(LOG_HELP);
+      return 0;
+    }
+    return runLogCommand(rest, io);
+  }
+
+  if (command === "watch") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(WATCH_HELP);
+      return 0;
+    }
+    return runWatchCommand(rest, io);
   }
 
   io.stderr(`fabrica: unknown command "${command}".\n\n${TOP_LEVEL_HELP}`);

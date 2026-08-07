@@ -142,7 +142,11 @@ export async function runProductionRound(
     const protectedPathApplies = check === DEFAULT_CHECK_COMMAND;
     if (protectedPathApplies) requireGateBaseline(line.workdir, baseCommit);
 
-    appendEvent(recordHome, { taskId, name: "work-started" });
+    // `project` rides on work-started's details, not a dedicated event -
+    // it's the earliest point in the loop the resolved project path is
+    // known, and issue #12's `fabrica status`/`log` need it to label an
+    // open task without waiting for delivery.
+    appendEvent(recordHome, { taskId, name: "work-started", details: { project: line.project } });
 
     const { receipts, lastGate, declaredGateChanges } = await runAttempts({
       brain,
@@ -154,6 +158,9 @@ export async function runProductionRound(
       stopEarlyOnGreen: !explicitAttempts,
       onCheckRun: (attempt, gate) => {
         appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, green: gate.green } });
+      },
+      onHeartbeat: (attempt) => {
+        appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
       },
       onTranscript: (transcript) => {
         appendTaskFile(
