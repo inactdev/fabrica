@@ -38,13 +38,17 @@ export function commitWorktreeChanges(workdir: string, message: string): void {
     if (!hasStagedChanges(workdir)) return;
     // -c user.*: a throwaway worktree has no reason to inherit (or require)
     // the Client's own git identity — every commit here is machine-made.
-    // -c commit.gpgsign=false and --no-verify: same reasoning, applied to the
-    // Client's signing config and the project's own commit hooks. A hook that
-    // expects installed dependencies (routinely absent in a fresh worktree),
-    // or signing that wants a key this machine-made commit has no claim to,
-    // would make this commit throw — and a throw here means the finally-block
-    // teardown force-removes the worktree with the work still uncommitted,
-    // the exact loss this commit exists to prevent.
+    // -c commit.gpgsign=false and the two hook settings: same reasoning,
+    // applied to the Client's signing config and the project's own commit
+    // hooks. A hook that expects installed dependencies (routinely absent in
+    // a fresh worktree), or signing that wants a key this machine-made commit
+    // has no claim to, would make this commit throw — and a throw here means
+    // the finally-block teardown force-removes the worktree with the work
+    // still uncommitted, the exact loss this commit exists to prevent.
+    // --no-verify is not enough on its own: it only bypasses pre-commit and
+    // commit-msg, so a prepare-commit-msg hook still runs and can still abort
+    // the commit. Pointing core.hooksPath at a non-directory leaves no hook
+    // of any kind discoverable.
     execFileSync(
       "git",
       [
@@ -54,6 +58,8 @@ export function commitWorktreeChanges(workdir: string, message: string): void {
         "user.email=fabrica@local",
         "-c",
         "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
         "commit",
         "--no-verify",
         "-qm",

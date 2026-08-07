@@ -109,7 +109,12 @@ jobs:
           # matches, and this gate would report a pass on precisely the
           # change it exists to block. An API error already fails the job
           # (the default `bash -e` shell); a short list must too.
-          touched=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+          # per_page=100 is the endpoint's maximum, so the 3000-file cap is
+          # reached in 30 requests instead of the 100 the default page size
+          # of 30 would take - fewer sequential calls, and less chance of
+          # tripping a secondary rate limit and failing an otherwise-fine
+          # pull request closed. The cap itself is 3000 files either way.
+          touched=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" --paginate \
             --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv')
 
           if [ -z "$touched" ]; then
