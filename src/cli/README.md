@@ -71,9 +71,11 @@ scripting against a throwaway record home instead of the real one.
 CONTRACT rule 6 - the Client's ruling on a delivered task, described in
 full in `src/foreman/README.md`. Unlike `fabrica do`, this never
 detaches: `accept` and `wrong` are instant (they only append a record
-event), and a `fix` runs its one extra worker attempt synchronously so
-the command can print that round's outcome directly rather than making
-the Client separately poll for it.
+event), and a `fix` runs its one worker round synchronously so the
+command can print that round's number and outcome directly rather than
+making the Client separately poll for it. There is no limit on how many
+`fix` rounds a task can have; the number in the printed line comes from
+`fixRoundOf`.
 
 `verdict-args.ts` parses the two positionals plus `-m "<note>"` (`fix`
 requires the note, since it is the correction itself). The note has

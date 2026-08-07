@@ -387,15 +387,35 @@ list of Receipts — only markdown/text files a person reads
 (`delivery.md`, `transcript.log`, …). Rather than invent a place to store
 structured data outside the record, `do()` puts the whole `Delivery`
 object and the full `Receipt[]` array straight into the `"delivered"`
-event's `details` field (alongside the `project`, `totalAttempts`, and
-`baseCommit` a later fix round needs - `queries.ts`'s
-`DeliveredDetails`). `deliveryOf` and `receiptsOf` (`queries.ts`) read
-the *latest* `"delivered"` event back and return its `details.delivery` /
+event's `details` field (alongside the `project` and `baseCommit` a later
+fix round needs, plus the `totalAttempts` `do()` ran with, kept as a
+record only - `queries.ts`'s `DeliveredDetails`, and "What a fix costs"
+below). `deliveryOf` and `receiptsOf` (`queries.ts`) read the *latest*
+`"delivered"` event back and return its `details.delivery` /
 `details.receipts` directly — no markdown parsing, no second source of
 truth. `delivery.md` still gets written, as a human-readable rendering of
 the exact same object, matching the same "events.jsonl is authoritative;
 everything else is a convenience view of it" design `src/record/README.md`
 already documents for `brief.md`.
+
+The one thing the record does *not* store whole is a check's output:
+`attempts.ts`'s `gateForRecord` keeps only the tail, behind a marker
+naming what was dropped. Every receipt is re-serialized onto each later
+`"delivered"` event of the same task, and the whole events file is read
+and parsed for every query, so a check free to print up to `check.ts`'s
+64MB buffer can't go in verbatim. The same cap applies wherever else
+check output is stored, not just to a receipt's `checks`: `delivery.ts`
+runs `ctx.lastGate` through that same `gateForRecord` before building a
+Delivery's `evidence` (both in `buildDelivery` and in
+`buildCommitFailureDelivery`), since a Delivery is stored on the very
+same event. The live `GateResult` is left untouched - the next attempt's
+correction brief still gets the complete output, because that is what the
+Worker needs to fix the failure, and it is never written to the record.
+The cap is a bound on the re-serialization, not a fix for it: the record's
+shape and the receipt duplication itself are deliberately left alone, filed
+as issue #68 (which also carries the cleaner design - a delivery pointing at
+its receipt instead of copying it), deferred until issue #12's
+`status`/`log`/`watch` lane lands so the two don't collide.
 
 One consequence: the last attempt's `Receipt.outcome` can't be decided
 until *after* the attempt loop and the rule-9 gate check both finish (an
@@ -436,17 +456,27 @@ whether a task is `"closed"`.
   `queries.ts`'s `deliveryOf`/`receiptsOf`/`deriveState` all read the
   *last* `"delivered"` event for exactly this reason, not the first.
 
-  **What a fix costs, precisely**: it consumes one attempt from the
-  task's *original* attempt budget (`do()`'s `totalAttempts` — the
-  default 2, or whatever was passed explicitly), persisted on the
-  `"delivered"` event's `details` alongside `project` and `baseCommit`
-  (`queries.ts`'s `DeliveredDetails`) so a later fix round can still find
-  them without re-deriving anything. Once `receipts.length >=
-  totalAttempts`, `verdict("fix", …)` refuses with
-  `ForemanError("attempts-exhausted")` before touching the worker at
-  all — this is rule 3's "three means three" applied to the whole task's
-  lifetime, not just one `do()` call, and it is what stops a fix loop
-  from running forever.
+  **What a fix costs, precisely**: nothing, on purpose (issue #65). Rule
+  3's "three means three" bounds `do()`'s own retry loop — a *machine*
+  trying, failing, and trying again unattended — not a correction the
+  Client explicitly asked for; nothing happens until he rules `fix`, so
+  he is the stop condition, not a counter. `verdict("fix", …)` has no
+  ceiling and never refuses. The `ForemanError` code it used to refuse
+  with, `attempts-exhausted`, is gone from `errors.ts` entirely: that
+  refusal was its only thrower, and `do()` exhausting its *own* budget
+  never threw it — per rule 2 ("Done means proven") a red final gate is
+  delivered as an honest `failure-report`, never raised as an error, and
+  that stays exactly as it is. `project` and `baseCommit` are still
+  persisted on the `"delivered"` event's `details` (`queries.ts`'s
+  `DeliveredDetails`) so a later fix round can find what it needs to
+  reopen the line; the *original* `totalAttempts` rides along as a record
+  of what `do()` was given, but nothing reads it for any decision — a
+  delivery that somehow lacks it can still be fixed. Each round is counted
+  and reported instead: `queries.ts`'s `fixRoundOf` derives the count by
+  reading how many `"verdict-recorded"` events with `ruling: "fix"` a
+  task has, rather than storing a separate counter that could drift —
+  the CLI's `fix round N recorded: …` line (`verdict-command.ts`) is
+  where the Client sees it.
 
   A worker's brain is **not** a `verdict()` parameter
   (`contract/surface.ts`'s `Foreman.verdict` takes only `taskId`,
@@ -464,16 +494,16 @@ whether a task is `"closed"`.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`, `attempts-exhausted`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
-| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. |
+| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
-| `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. |
+| `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. |
 | `do.ts` | `doTask` — the orchestration described above. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong, re-enters the same line and worker on fix. |
-| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. |
+| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. `fixRoundOf` instead counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path uses. |
 
 `GateResult`, `Receipt`, `Delivery`, `FabricaTask`, and `Foreman` itself

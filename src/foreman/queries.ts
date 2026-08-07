@@ -26,8 +26,10 @@ export interface DeliveredDetails {
    * contract's Delivery shape, so it rides along here instead. */
   project?: string;
   /** The attempt budget `do()` was given for this task (SPEC.md's
-   * default of 2, or whatever was passed explicitly) — the fix path
-   * counts against this same total rather than getting its own. */
+   * default of 2, or whatever was passed explicitly) — persisted purely
+   * as a record of what `do()` ran with, not as a ceiling on anything:
+   * the fix path gets no budget at all (issue #65) and reads this for
+   * no decision. */
   totalAttempts?: number;
   /** The fork point `diffFiles` pins to (src/delivery/diff-files.ts) —
    * carried forward so a fix round's delivery still reports the full
@@ -53,6 +55,17 @@ export function latestDeliveredDetails(recordHome: string, taskId: string): Deli
     .filter((e) => e.name === "delivered")
     .at(-1);
   return delivered?.details as DeliveredDetails | undefined;
+}
+
+/** How many "fix" verdicts a task has had so far, including the most
+ * recent one — rule 6's fix path has no attempt budget (issue #65: "he
+ * is the stop condition", not a counter), but each round still reports
+ * which one it is. Derived from the record's own verdict-recorded
+ * events rather than stored separately, so there is nothing to drift. */
+export function fixRoundOf(recordHome: string, taskId: string): number {
+  return readEventsForTask(recordHome, taskId).filter(
+    (e) => e.name === "verdict-recorded" && (e.details as { ruling?: string } | undefined)?.ruling === "fix"
+  ).length;
 }
 
 export function statusOf(recordHome: string): FabricaTask[] {

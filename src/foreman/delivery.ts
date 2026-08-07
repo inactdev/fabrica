@@ -4,6 +4,7 @@
 // as real (CONTRACT rule 4, issue #9).
 
 import type { Delivery, GateResult } from "../../contract/surface.ts";
+import { gateForRecord } from "./attempts.ts";
 
 export function buildDelivery(
   outcome: Delivery["outcome"],
@@ -24,11 +25,13 @@ export function buildDelivery(
         : "The project's checks changed without a declared gate change (rule 9) - blocked from " +
           "merging until the Client reviews it and chooses to override.";
 
+  const checkOutput = gateForRecord(ctx.lastGate).output;
+
   const evidence =
     outcome === "discarded-protected-path"
       ? "check.sh no longer matches what the ProductionLine started with, and no gateChanges " +
-        `declaration came with it. Last check: ${ctx.lastGate.output}`
-      : ctx.lastGate.output;
+        `declaration came with it. Last check: ${checkOutput}`
+      : checkOutput;
 
   const gaps =
     outcome === "failure-report"
@@ -77,7 +80,7 @@ export function buildCommitFailureDelivery(ctx: {
     summary:
       `The project's check ran, but the Worker's changes could not be committed onto the branch ` +
       `after ${ctx.attempts} attempt(s).`,
-    evidence: `Last check: ${ctx.lastGate.output}`,
+    evidence: `Last check: ${gateForRecord(ctx.lastGate).output}`,
     assumptions: "",
     gaps:
       `Committing the Worker's changes onto \`${ctx.branch}\` failed: ${ctx.error}. The throwaway ` +

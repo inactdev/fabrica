@@ -85,7 +85,7 @@ export async function runAttempts(opts: {
       costUsd: null,
       session: session ?? null,
       reasoningEffort: null,
-      checks: gate,
+      checks: gateForRecord(gate),
       outcome: gate.green ? "delivered" : "failed",
     });
 
@@ -93,6 +93,38 @@ export async function runAttempts(opts: {
   }
 
   return { receipts, lastGate: lastGate!, declaredGateChanges };
+}
+
+/** How much of a check's output anything stored in the record keeps — a
+ * Receipt's `checks`, and (via delivery.ts) a Delivery's `evidence`. Both
+ * land in the append-only record, are re-serialized onto every later
+ * "delivered" event of the same task, and the whole events file is read
+ * and parsed for every query — so a check free to print up to check.ts's
+ * 64MB buffer cannot be stored whole. The live GateResult is left
+ * untouched: the next attempt's correction brief still gets the complete
+ * output. */
+export const MAX_RECEIPT_CHECK_OUTPUT_BYTES = 16 * 1024;
+
+/** Keeps the END of the output — a check announces what failed at the
+ * end — behind a marker naming what was dropped, so the stored value is
+ * never mistaken for the complete one. */
+export function gateForRecord(gate: GateResult): GateResult {
+  const total = Buffer.byteLength(gate.output, "utf8");
+  if (total <= MAX_RECEIPT_CHECK_OUTPUT_BYTES) return gate;
+
+  // Cutting at a byte offset can land mid-character; the decoder marks
+  // the orphaned leading bytes with U+FFFD, which is dropped here rather
+  // than stored as mojibake.
+  const tail = Buffer.from(gate.output, "utf8")
+    .subarray(total - MAX_RECEIPT_CHECK_OUTPUT_BYTES)
+    .toString("utf8")
+    .replace(/^\uFFFD+/, "");
+  const kept = Buffer.byteLength(tail, "utf8");
+
+  return {
+    green: gate.green,
+    output: `[truncated, showing last ${kept} of ${total} bytes]\n${tail}`,
+  };
 }
 
 /** Told exactly what failed (SPEC.md step 5), never a bare "try again." */
