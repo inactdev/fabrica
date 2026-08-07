@@ -573,8 +573,9 @@ Worker needs to fix the failure, and it is never written to the record.
 The cap is a bound on the re-serialization, not a fix for it: the record's
 shape and the receipt duplication itself are deliberately left alone, filed
 as issue #68 (which also carries the cleaner design - a delivery pointing at
-its receipt instead of copying it), deferred until issue #12's
-`status`/`log`/`watch` lane lands so the two don't collide.
+its receipt instead of copying it). It was deferred so it wouldn't collide
+with issue #12's `status`/`log`/`watch` lane; that lane has since landed,
+so #68 is now only waiting on being picked up.
 
 One consequence: the last attempt's `Receipt.outcome` can't be decided
 until *after* the attempt loop and the rule-9 gate check both finish (an

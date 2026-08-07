@@ -65,8 +65,9 @@ The whole tool in one command.
    (Contract 1).
 4. **Works.** Runs the agent adapter in the worktree with the brief.
    Detached from the terminal: `fabrica do` prints the id and returns
-   immediately; work continues in the background. Full agent output
-   streams to the task's transcript file.
+   immediately; work continues in the background. Full agent output goes
+   to the task's transcript file, one batch per attempt (see "Workers are
+   invisible by default and watchable always" above).
 5. **Verifies.** Runs the project's check command (see Config below)
    inside the worktree. Green → delivery. Red → one fix pass by the agent
    with the failure output, then re-check. Still red → failure report

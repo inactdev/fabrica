@@ -121,8 +121,10 @@ record shows what was asked for.
 
 A list of `TranscriptEntry` objects: the record of what the brain did
 during this call, in order. It's what a human watching the worker sees -
-`fabrica watch` renders its live stream from these entries as they land,
-and `fabrica log --transcript` shows the same entries after the fact.
+`fabrica watch` prints these entries as they reach the record, which is
+one batch at the end of each attempt (the Foreman appends them once this
+call resolves), and `fabrica log --transcript` shows the same entries
+after the fact.
 Nothing downstream parses an entry's `text` to make decisions; it's for
 a person to read.
 

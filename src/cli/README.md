@@ -179,15 +179,23 @@ them can reach a running worker.
 
 - **`status`** lists every open task, one line each: id, project, state,
   age. A `delivered` task is flagged as awaiting the Client's verdict -
-  nothing else in the tool says a task is waiting on him. A
-  `working`/`checking` task with no recorded activity for longer than
-  `QUIET_THRESHOLD_MS` is flagged "quiet" rather than left looking
-  identical to progress. It takes no arguments at all, and refuses any
-  it is given (`parseStatusArgs`) instead of ignoring them.
-- **`log <id>`** prints one task's event history in order, plus
-  `--transcript` for the worker's raw transcript entries.
+  nothing else in the tool says a task is waiting on him. A `working`
+  task with no recorded activity for longer than `QUIET_THRESHOLD_MS` is
+  flagged "quiet" rather than left looking identical to progress; a
+  `checking` task instead says so with its real elapsed time and is never
+  flagged quiet (`isQuietTooLong` refuses that state outright), since
+  that silence has a known, honest explanation. It takes no arguments at
+  all, and refuses any it is given (`parseStatusArgs`) instead of
+  ignoring them.
+- **`log <id>`** prints one task's event history in order, each event
+  rendered as prose judged per event name rather than its stored
+  `details` dumped raw, and a consecutive run of heartbeats collapsed
+  into one "14 heartbeats over 3m" line (a lone heartbeat still
+  reads as an ordinary one). `--transcript` adds the worker's raw
+  transcript entries.
 - **`watch <id>`** polls the record and prints new transcript entries and
-  heartbeats as they land. **Stopping the watch never stops the work**:
+  heartbeats as they land, plus the same quiet and mid-check notices
+  `status` uses. **Stopping the watch never stops the work**:
   this command only ever *reads* `events.jsonl` and `transcript.log`, so
   Ctrl-C ends the polling loop and nothing else. Never add anything here
   that reaches toward the detached process `fabrica do` spawned.
@@ -260,8 +268,8 @@ any Worker runs, is `registerTask`: it claims
 `<recordHome>/tasks/<id>/` and writes `request.md` verbatim
 (`src/record/tasks.ts`) - synchronous, milliseconds, long before any
 real work starts. `watch-for-task-id.ts` watches that directory from
-outside (the same append-only record any future `fabrica status`/`log`/
-`watch` will read) for a new folder whose `request.md` matches the task
+outside (the same append-only record `fabrica status`/`log`/`watch`
+read) for a new folder whose `request.md` matches the task
 text just submitted, and resolves with its name. This is deliberately
 an outside observer, not a change to `doTask` - it costs nothing at the
 library layer and means detachment can be built, and later removed or
@@ -324,7 +332,8 @@ calls `runTask`.
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
 | `watch-command.ts` | The read-only poll loop behind `fabrica watch`, and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
-| `render.ts` | The one definition of every line `status`/`log`/`watch` print, plus `formatAge`, `isQuietTooLong`, and `QUIET_THRESHOLD_MS`. |
+| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including `log`'s per-event-name prose and its heartbeat-run collapsing - plus `formatAge`, `isQuietTooLong`, `checkStartedAt`, and `QUIET_THRESHOLD_MS`. |
+| `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |
