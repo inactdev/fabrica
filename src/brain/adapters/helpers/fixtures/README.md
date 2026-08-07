@@ -33,9 +33,13 @@ would quietly check less while staying green - the same "green means
 verified" failure as the fake drifting in the first place. So the
 fixture's own coverage is asserted too: `coverageGaps()` in
 `../stream-json-shape.ts` requires it to demonstrate every allowlisted
-key, `../fake-claude-cli.test.ts` fails if the committed fixture ever
-stops doing so, and `../record-real-cli-fixture.mjs` refuses to
-overwrite it with a recording that would.
+key and every line type the comparison walks, `../fake-claude-cli.test.ts`
+fails if the committed fixture ever stops doing so, and
+`../record-real-cli-fixture.mjs` refuses to overwrite it with a
+recording that would - checking the serialized lines it is about to
+write, not the in-memory objects behind them, so a key that only
+survives as `undefined` until `JSON.stringify` can't pass the gate and
+then vanish from the file.
 
 Two keys are exempt, listed with their reasons in that file's
 `UNPROVABLE_BY_RECORDING`: `thinking.thinking` (the real CLI emits a

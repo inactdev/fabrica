@@ -21,6 +21,11 @@ const BLOCK_KEYS: Record<string, string[]> = {
   tool_use: ["name", "input"],
   tool_result: ["content", "is_error"],
 };
+// The line types a recording has to contain for shapeDiff()'s line-type
+// comparison to mean anything. "system" is noise the adapter skips, but
+// the fake has to keep emitting it so that skip path is exercised at
+// all - and a recording that lost it would take the comparison with it.
+const LINE_TYPES = ["system", "assistant", "user", "result"];
 
 // shapeDiff() is driven entirely by the reference side, so an allowlist
 // key the recorded sample never demonstrates is never compared against
@@ -41,6 +46,15 @@ function typeOf(value: unknown): string {
   return value === null ? "null" : typeof value;
 }
 
+// A key whose value is `undefined` is not a key: nothing parsed from
+// JSON can ever hold one, and an in-memory object on its way to
+// JSON.stringify loses that key entirely when written. Treating it as
+// present would let a shape claim coverage the serialized form doesn't
+// have.
+function has(container: Record<string, unknown>, key: string): boolean {
+  return key in container && container[key] !== undefined;
+}
+
 export function extractShape(lines: unknown[]): StreamJsonShape {
   const lineTypes = new Set<string>();
   let result: Record<string, string> | null = null;
@@ -54,12 +68,12 @@ export function extractShape(lines: unknown[]): StreamJsonShape {
     if (line.type === "result") {
       const shape: Record<string, string> = {};
       for (const key of RESULT_KEYS) {
-        if (key in line) shape[key] = typeOf(line[key]);
+        if (has(line, key)) shape[key] = typeOf(line[key]);
       }
       const usage = line.usage as Record<string, unknown> | undefined;
       if (usage) {
         for (const key of USAGE_KEYS) {
-          if (key in usage) shape[`usage.${key}`] = typeOf(usage[key]);
+          if (has(usage, key)) shape[`usage.${key}`] = typeOf(usage[key]);
         }
       }
       result = shape;
@@ -73,7 +87,7 @@ export function extractShape(lines: unknown[]): StreamJsonShape {
         if (!keys) continue;
         const shape = blocks[block.type] ?? (blocks[block.type] = {});
         for (const key of keys) {
-          if (key in block) shape[key] = typeOf(block[key]);
+          if (has(block, key)) shape[key] = typeOf(block[key]);
         }
       }
     }
@@ -132,6 +146,10 @@ export function shapeDiff(reference: StreamJsonShape, candidate: StreamJsonShape
 // except the ones UNPROVABLE_BY_RECORDING explains away.
 export function coverageGaps(shape: StreamJsonShape): string[] {
   const gaps: string[] = [];
+
+  for (const lineType of LINE_TYPES) {
+    if (!shape.lineTypes.has(lineType)) gaps.push(`line type ${lineType}`);
+  }
 
   if (!shape.result) {
     gaps.push('no "result" line at all');

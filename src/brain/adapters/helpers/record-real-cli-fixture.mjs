@@ -152,7 +152,19 @@ try {
   // a weaker guard than the one already committed, and nothing
   // downstream would say so: the parity test compares only what its
   // reference demonstrates, so it would stay green while checking less.
-  const gaps = coverageGaps(extractShape(sanitized));
+  //
+  // Gated on the serialized payload, then written verbatim, so what's
+  // checked is byte-for-byte what lands on disk - sanitizeLine() names
+  // every result key unconditionally, so a key the real CLI stopped
+  // emitting survives as `undefined` in memory and disappears only at
+  // JSON.stringify.
+  const payload = sanitized.map((l) => JSON.stringify(l)).join("\n") + "\n";
+  const written = payload
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+
+  const gaps = coverageGaps(extractShape(written));
   if (gaps.length > 0) {
     console.error(
       `Refusing to overwrite ${FIXTURE_PATH}: this recording never demonstrated\n` +
@@ -164,8 +176,8 @@ try {
     );
     process.exitCode = 1;
   } else {
-    writeFileSync(FIXTURE_PATH, sanitized.map((l) => JSON.stringify(l)).join("\n") + "\n");
-    console.log(`Wrote ${sanitized.length} sanitized lines to ${FIXTURE_PATH}`);
+    writeFileSync(FIXTURE_PATH, payload);
+    console.log(`Wrote ${written.length} sanitized lines to ${FIXTURE_PATH}`);
     console.log("Review the diff before committing - see this script's own header comment.");
   }
 } finally {
