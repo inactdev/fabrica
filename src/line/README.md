@@ -76,7 +76,7 @@ same `refs/heads/` check `reopenProductionLine` uses internally to refuse
 `createProductionLine`/`reopenProductionLine` to call before finding out
 the hard way. `src/foreman/do.ts`'s `runProductionRound` (issue #8) uses
 it exactly for that: an `answer.ts` retry after a resumed round threw
-before ever committing anything needs `reopenProductionLine` (the branch
+before ever delivering needs `reopenProductionLine` (the branch
 already exists, from the failed round's own `createProductionLine` call -
 branches outlive their worktree's teardown by design), while every
 first-ever round for a task needs `createProductionLine` - checking git's

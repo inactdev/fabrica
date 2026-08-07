@@ -24,13 +24,15 @@ const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
   enforced here: CONTRACT rule 10 ("It cannot outspend you") is issue
   #11's job, not this loop's. Passing it today has no effect; omitting it
   has no effect either.
-- **`brain`** — only used by `verdict()`'s "fix" path, as a fallback for
-  when this instance never saw a `do()` call for that task. See
-  "`verdict(taskId, ruling, note?)`" below for why `verdict()` itself has
-  no brain parameter of its own.
+- **`brain`** — used by `verdict()`'s "fix" path and by `answer()`, as a
+  fallback for when this instance never saw a `do()` call for that task.
+  See "`verdict(taskId, ruling, note?)`" below for why `verdict()` itself
+  has no brain parameter of its own, and "The ask-first seam" for
+  `answer()`'s identical reasoning.
 
 The return value satisfies `Foreman` (`contract/surface.ts`): `do`,
-`deliveryOf`, `receiptsOf`, `verdict`, `status`, `events`, `recordPath`.
+`answer`, `deliveryOf`, `receiptsOf`, `verdict`, `status`, `events`,
+`recordPath`.
 
 ## `do(taskText, { project, attempts?, brain? })`
 
