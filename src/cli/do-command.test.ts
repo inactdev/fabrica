@@ -55,7 +55,15 @@ test("runDoCommand: a literal project path registers a task and prints just its 
 // Issue #8's own definition of done, scenario 1, exercised end to end
 // through the real CLI: a materially ambiguous task prints numbered
 // questions and stops.
-test("runDoCommand: a materially ambiguous task prints numbered questions and stops", async () => {
+//
+// Client ruling (issue #8 follow-up): stdout stays exactly the task id,
+// one line, nothing else, in every case - including the asking one -
+// so `id=$(fabrica do "..." --project foo) || exit 1` (src/cli/README.md)
+// keeps working verbatim. The explanation and questions are guidance for
+// the Client's own screen, so they go to stderr instead; no separate
+// exit code for this case, since restoring the documented stdout
+// contract already covers scripting.
+test("runDoCommand: a materially ambiguous task's stdout is exactly the task id, nothing else", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
   const io = captureIo();
@@ -68,18 +76,34 @@ test("runDoCommand: a materially ambiguous task prints numbered questions and st
   });
 
   assert.equal(code, 0);
-  assert.deepEqual(io.err, []);
+  assert.equal(io.out.length, 1, "stdout must be exactly one line, the id, same as any other outcome");
   assert.match(io.out[0], /^\d{8}-/);
   const taskId = io.out[0];
-  assert.match(io.out.join("\n"), /materially ambiguous/);
-  assert.match(io.out.join("\n"), /1\. What database should this use\?/);
-  assert.match(io.out.join("\n"), /2\. Should it support multi-tenancy\?/);
-  assert.match(io.out.join("\n"), new RegExp(`fabrica answer ${taskId} -m "<text>"`));
 
   // No worker ran - nothing beyond registration and the ask itself is on
   // the record yet.
   const events = readEventsForTask(recordHome, taskId).map((e) => e.name);
   assert.deepEqual(events, ["task-received", "questions-asked"]);
+});
+
+test("runDoCommand: a materially ambiguous task prints the numbered questions and how to answer them, to stderr", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["ASK_ME_SOMETHING build an app", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  const taskId = io.out[0];
+  assert.match(io.err.join("\n"), /materially ambiguous/);
+  assert.match(io.err.join("\n"), /1\. What database should this use\?/);
+  assert.match(io.err.join("\n"), /2\. Should it support multi-tenancy\?/);
+  assert.match(io.err.join("\n"), new RegExp(`fabrica answer ${taskId} -m "<text>"`));
 });
 
 // Issue #8's own definition of done, scenario 3, exercised end to end:

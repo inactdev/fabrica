@@ -97,17 +97,28 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
       pollMs: opts.askPollMs,
     });
 
+    // stdout stays exactly the task id, one line, nothing else, in every
+    // case - that contract is what makes `id=$(fabrica do "..." --project
+    // foo) || exit 1` (src/cli/README.md) safe to script against. The
+    // asking case's explanation and questions are guidance for the
+    // Client's screen, not data a script should ever have to parse, so
+    // they go to stderr instead - Client ruling (issue #8 follow-up):
+    // no separate exit code for this case either, since restoring the
+    // documented stdout contract already fixes every script this could
+    // have broken. The questions themselves are never only on the
+    // terminal: they are already on the record, in the "questions-asked"
+    // event's own details, recoverable long after this output has
+    // scrolled away - this is a convenience view of that, not the source.
+    stdout(taskId);
+
     if (outcome.status === "asking") {
-      stdout(taskId);
-      stdout("");
-      stdout("This task is materially ambiguous - answer before any work starts:");
-      outcome.questions.forEach((question, i) => stdout(`  ${i + 1}. ${question}`));
-      stdout("");
-      stdout(`  fabrica answer ${taskId} -m "<text>"`);
-      return 0;
+      stderr("");
+      stderr("This task is materially ambiguous - answer before any work starts:");
+      outcome.questions.forEach((question, i) => stderr(`  ${i + 1}. ${question}`));
+      stderr("");
+      stderr(`  fabrica answer ${taskId} -m "<text>"`);
     }
 
-    stdout(taskId);
     return 0;
   } catch (err) {
     if (err instanceof CliError || err instanceof ConfigError) {

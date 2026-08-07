@@ -56,22 +56,33 @@ The one command this issue builds. What it does, in order:
    proceed" - see `src/foreman/README.md`'s "The ask-first seam"). This
    polls that task's own record for whichever of `"questions-asked"` or
    `"work-started"` lands first:
-   - **Materially ambiguous** → prints the task id, then the numbered
-     questions and how to answer them (`fabrica answer <id> -m "<text>"`),
-     and stops. No Worker ever ran; nothing keeps running in the
+   - **Materially ambiguous** → stops, printing the numbered questions
+     and how to answer them (`fabrica answer <id> -m "<text>"`) to
+     **stderr**. No Worker ever ran; nothing keeps running in the
      background for this task until answered.
-   - **Otherwise, or if the wait times out** → prints just the task id,
-     exactly as before issue #8. This process then exits; the task keeps
-     running in the background. See "Why detached execution needs its
-     own file" below for the spawn mechanism.
+   - **Otherwise, or if the wait times out** → nothing further to print;
+     this process then exits, and the task keeps running in the
+     background. See "Why detached execution needs its own file" below
+     for the spawn mechanism.
 
    The wait is bounded, not indefinite, on purpose: `ask()` is a real
    call to whichever brain is wired in, and a slow or already-failed
    call (e.g. a missing check command, which fails before ever reaching
-   `"work-started"`) must never hang the terminal - timing out just falls
-   back to printing the id, the same as if this step didn't exist. The
-   task itself is never affected by what this observes; it keeps running
-   (or having already stopped) regardless.
+   `"work-started"`) must never hang the terminal - timing out just moves
+   on with nothing more to report, the same as if this step didn't exist.
+   The task itself is never affected by what this observes; it keeps
+   running (or having already stopped) regardless.
+
+**stdout is always exactly the task id, one line, nothing else** -
+Client ruling (issue #8 follow-up): an earlier version also put the
+asking case's explanation and questions on stdout, which broke the
+documented contract below by putting prose ahead of `$id` in the output
+a script reads. The questions are guidance for the Client's own screen,
+not data - they go to stderr, and there is no separate exit code for the
+asking case either, since restoring the plain stdout contract already
+covers scripting (`fabrica answer` and the task's own `"questions-asked"`
+event carry the real content regardless of what the terminal still
+shows).
 
 A refusal at steps 1-3 exits non-zero with the message on stderr - safe
 to use in a script (`id=$(fabrica do "..." --project foo) || exit 1`).
