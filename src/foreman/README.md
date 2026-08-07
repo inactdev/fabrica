@@ -473,10 +473,9 @@ be *stored* rather than derived on demand later. Today, for a task that
 never asks, `brief.md` stays byte-identical to `request.md`, because v1
 doesn't prime lessons yet.
 
-The CLI side of this (`src/cli/README.md`): `fabrica do` waits, bounded,
-for the task to reach either `"asking"` or `"work-started"` before
-deciding whether to print numbered questions and stop, or just the task
-id as before.
+The CLI side of this - what `fabrica do` prints, on which stream, and
+with which exit code, once a task asks, fails to ask, or proceeds - is
+owned by `src/cli/README.md`'s step 5, not restated here.
 
 ## Why receipts and deliveries live on `events.jsonl`, not their own file
 

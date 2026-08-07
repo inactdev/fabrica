@@ -103,9 +103,9 @@ Once step 4 starts, this process's own exit code no longer reflects the
 task's eventual outcome for the "proceeds" case, which is the nature of
 detachment: by design, nothing is left waiting around to report delivery
 or failure here (see `fabrica status`/`log`/`watch`, issue #12 - not
-built yet). The "asks" case is the one exception: this process already
-knows and reports that outcome directly, since nothing was ever spawned
-to detach from.
+built yet). The "asks" and "`ask()` threw" cases are the exceptions:
+this process already knows and reports those outcomes directly (the
+failed one non-zero), since no work was ever started to detach from.
 
 ## `fabrica answer <taskId> -m "<text>"`
 
@@ -283,8 +283,8 @@ calls `runTask`.
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
-| `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"questions-asked"` or `"work-started"`, bounded, so `fabrica do` knows whether to print questions and stop or just the id. |
+| `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether the task asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
 | `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`. |
 | `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `project-not-found`, `spawn-failed`, `registration-timeout`. |
-| `helpers/fake-run-task-entry.ts` | Test-only stand-in for `run-task-entry.ts`, using `fakeBrain()` instead of the real adapter - lets `spawn-detached.test.ts` and `do-command.test.ts` exercise the real spawn-and-discover mechanism as a real separate process, without ever invoking a real coding agent. A taskText containing `ASK_ME_SOMETHING` makes its fake brain ask a clarifying question (issue #8) instead of proceeding, since there's no other channel to configure a fake running in a separate process. |
+| `helpers/fake-run-task-entry.ts` | Test-only stand-in for `run-task-entry.ts`, using `fakeBrain()` instead of the real adapter - lets `spawn-detached.test.ts` and `do-command.test.ts` exercise the real spawn-and-discover mechanism as a real separate process, without ever invoking a real coding agent. A taskText containing `ASK_ME_SOMETHING` makes its fake brain ask a clarifying question (issue #8) instead of proceeding, and one containing `ASK_FAILS_SOMETHING` makes its `ask()` throw, since there's no other channel to configure a fake running in a separate process. |

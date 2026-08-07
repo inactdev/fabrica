@@ -58,9 +58,9 @@ export interface RunDoCommandOptions {
    * real spawn-and-discover mechanism against a fake brain. */
   entryScript?: string;
   timeoutMs?: number;
-  /** Test-only: how long to wait for the task to reach "asking" or
-   * "work-started" before giving up and printing just the id, and how
-   * often to poll while waiting. See wait-for-ask-outcome.ts. */
+  /** Test-only: how long to wait for the task to ask, fail, or reach
+   * "work-started" before giving up and treating it as proceeding, and
+   * how often to poll while waiting. See wait-for-ask-outcome.ts. */
   askTimeoutMs?: number;
   askPollMs?: number;
   stdout?: (line: string) => void;
