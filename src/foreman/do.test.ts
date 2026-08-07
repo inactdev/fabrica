@@ -247,3 +247,36 @@ test("doTask records files touched by the worker in the delivery", async () => {
   // rule 1: none of this reached the Client's real checkout.
   assert.equal(readFileSync(join(project, "app.txt"), "utf8"), "hello from the fixture app\n");
 });
+
+// A commit failure used to propagate straight out of doTask: `finally`
+// still force-removed the worktree, destroying the Worker's uncommitted
+// work, and nothing was ever written to the record - a task vanishing
+// without a trace. Client ruling (option A, commit-failure-loses-work-
+// and-record): the record must always say what happened.
+test("doTask records an honest failure-report, not silence, when the pre-teardown commit itself fails", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      writeFileSync(join(workdir, "feature.txt"), "good work\n");
+      // A stale index.lock is a real-world case: a Worker's own git
+      // process left one behind. --git-path resolves the correct lock
+      // for a linked worktree, not the main repo's own .git/index.lock.
+      const lockPath = execSync("git rev-parse --git-path index.lock", { cwd: workdir, encoding: "utf8" }).trim();
+      writeFileSync(lockPath, "");
+    },
+  });
+
+  const task = await doTask(recordHome, "make it pass", { project, brain });
+
+  assert.equal(task.state, "failed");
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "failure-report");
+  assert.deepEqual(delivery?.files, [], "a failed commit means nothing landed on the branch");
+  assert.match(delivery?.gaps ?? "", /could not commit/);
+  assert.match(delivery?.gaps ?? "", /index\.lock/);
+
+  const receipts = receiptsOf(recordHome, task.id);
+  assert.equal(receipts[receipts.length - 1].outcome, "failed");
+});
