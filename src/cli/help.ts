@@ -13,7 +13,7 @@ Commands:
   do "<task text>" --project <path-or-name>
       Run a task against a project, detached. Prints the task id and
       returns immediately.
-  verdict <taskId> <accept|fix|wrong> ["<note>"]
+  verdict <taskId> <accept|fix|wrong> [-m "<note>"]
       Record your ruling on a delivered task - closes it (accept/wrong)
       or sends a correction back to the same worker (fix).
 

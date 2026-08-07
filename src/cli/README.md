@@ -66,7 +66,7 @@ home is `~/.fabrica`, matching SPEC.md's default; the environment
 variable is what SPEC.md calls "path configurable." Mainly useful for
 scripting against a throwaway record home instead of the real one.
 
-## `fabrica verdict <taskId> <accept|fix|wrong> ["<note>"]`
+## `fabrica verdict <taskId> <accept|fix|wrong> [-m "<note>"]`
 
 CONTRACT rule 6 - the Client's ruling on a delivered task, described in
 full in `src/foreman/README.md`. Unlike `fabrica do`, this never
@@ -75,8 +75,12 @@ event), and a `fix` runs its one extra worker attempt synchronously so
 the command can print that round's outcome directly rather than making
 the Client separately poll for it.
 
-`verdict-args.ts` parses the three positionals (`fix` requires the
-third, since the note is the correction itself); `verdict-command.ts`
+`verdict-args.ts` parses the two positionals plus `-m "<note>"` (`fix`
+requires the note, since it is the correction itself). The note has
+exactly one spelling, the one SPEC.md documents and `git commit -m`
+already taught every Client - a bare positional note is refused with a
+message naming the flag, rather than quietly accepted as a second way to
+say the same thing (Client ruling). `verdict-command.ts`
 resolves the record home the same way `do-command.ts` does and calls
 `createForeman({ recordHome }).verdict(...)` - no brain override, so a
 `fix` here always uses `defaultBrainAdapter()` (there is no

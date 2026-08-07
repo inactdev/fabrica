@@ -69,7 +69,7 @@ export async function recordVerdict(
     throw new ForemanError(
       "missing-note",
       `fabrica verdict: a "fix" verdict needs a note saying what to change - it becomes the correction ` +
-        `handed back to the worker. Usage: fabrica verdict ${taskId} fix "<what to fix>"`
+        `handed back to the worker. Usage: fabrica verdict ${taskId} fix -m "<what to fix>"`
     );
   }
 

@@ -4,9 +4,9 @@
 // its own createForeman() with no brain override, so a "fix" here would
 // reach for the real default adapter - the fix path itself (session
 // resume, attempt counting) is proven against a fake brain directly in
-// src/foreman/verdict.test.ts instead. The one exception below is a
-// "fix" that refuses before any worker can run, which is precisely the
-// case where an error from a lower layer has to reach the Client.
+// src/foreman/verdict.test.ts instead. The "fix" cases below all refuse
+// before any worker can run, which is precisely where an error from a
+// lower layer has to reach the Client instead of escaping.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -36,7 +36,7 @@ test("runVerdictCommand: accept closes the task and reports so", async () => {
   });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "accept", "looks right"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "accept", "-m", "looks right"], { recordHome, ...io });
 
   assert.equal(code, 0);
   assert.deepEqual(io.err, []);
@@ -55,10 +55,46 @@ test("runVerdictCommand: wrong closes the task and reports so", async () => {
   });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "wrong", "not what I asked for"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "wrong", "-m", "not what I asked for"], { recordHome, ...io });
 
   assert.equal(code, 0);
   assert.match(io.out[0], new RegExp(`^wrong recorded: ${task.id} is closed\\.$`));
+
+  const verdictEvent = (await createForeman({ recordHome }).events(task.id))
+    .filter((e) => e.name === "verdict-recorded")
+    .at(-1);
+  assert.equal(
+    (verdictEvent?.details as { note?: string } | undefined)?.note,
+    "not what I asked for",
+    "the -m note reaches the record verbatim"
+  );
+});
+
+// SPEC.md's own example command, argument for argument. The budget is
+// spent on purpose so the Foreman refuses before reaching for a brain -
+// what this proves is the shape: `fix` plus `-m "<note>"` parses and
+// reaches recordVerdict with its note, since a missing note would refuse
+// earlier and differently.
+test("runVerdictCommand: the spec's `fix -m \"<note>\"` form reaches the Foreman with its note", async () => {
+  const recordHome = tempRecordHome();
+  const brain = fakeBrain();
+  const task = await createForeman({ recordHome }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain,
+    attempts: 1,
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "fix", "-m", "wrong button spot"], { recordHome, ...io });
+
+  assert.equal(code, 1);
+  assert.match(io.err[0], /has already used all 1 attempt\(s\)/);
+  assert.equal(brain.calls, 1, "no worker ran");
+
+  const verdictEvent = (await createForeman({ recordHome }).events(task.id))
+    .filter((e) => e.name === "verdict-recorded")
+    .at(-1);
+  assert.equal(verdictEvent, undefined, "a refused fix records no verdict");
 });
 
 test("runVerdictCommand: bad usage refuses with exact instructions and exit 1", async () => {
@@ -96,11 +132,35 @@ test("runVerdictCommand: a ProductionLine refusal is printed, not thrown as a st
   mkdirSync(join(recordHome, "tasks", task.id, "worktree"), { recursive: true });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "fix", "one more pass"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "fix", "-m", "one more pass"], { recordHome, ...io });
 
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
   assert.match(io.err[0], /workspace already exists/i);
+});
+
+// The point isn't this particular failure - it's that the command owns
+// no list of error types to keep up to date. Rule 8 makes the brain
+// pluggable, so the class thrown from inside a fix round is not knowable
+// here; whatever it is, the Client gets its message and exit 1, on a
+// task that already carries a verdict.
+test("runVerdictCommand: an error from a layer it knows nothing about is still printed, not thrown", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  // A directory where the task's verdict file has to be written: the
+  // record layer's own append fails, with a plain filesystem error.
+  mkdirSync(join(recordHome, "tasks", task.id, "verdict"), { recursive: true });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "accept", "-m", "looks right"], { recordHome, ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.equal(io.err.length, 1);
+  assert.match(io.err[0], /EISDIR|illegal operation on a directory/i);
 });
 
 test("runVerdictCommand: a verdict on an already-closed task refuses", async () => {
@@ -112,7 +172,7 @@ test("runVerdictCommand: a verdict on an already-closed task refuses", async () 
   await createForeman({ recordHome }).verdict(task.id, "accept", "good");
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "wrong", "actually no"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "wrong", "-m", "actually no"], { recordHome, ...io });
 
   assert.equal(code, 1);
   assert.match(io.err[0], /already has a final verdict/);
