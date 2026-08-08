@@ -199,6 +199,9 @@ what triggers each one and what to do about it.
   generate a new one rather than reusing an old id, and if this is
   leftover state from a crashed run, look at that specific task folder
   before touching anything - this module never silently overwrites one.
+  For that crashed-run case, `src/foreman/README.md`'s crash-window
+  paragraph gives the concrete recovery: `git worktree remove`/`prune`
+  the leftover worktree *and* `git branch -D fabrica/<taskId>`.
 - **`cut-failed`** - `git worktree add` itself failed, most often
   because the branch `fabrica/<taskId>` already exists from an earlier
   run that used this same id. Read the wrapped git error in the message;
