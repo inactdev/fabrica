@@ -112,7 +112,8 @@ export async function runDenyAndLogEditCommand(opts: RunDenyAndLogEditOptions = 
     payload = parsed as PreToolUsePayload;
   } catch {
     // Malformed input from the harness itself - still deny below.
-    if (raw !== "") stderr("deny-and-log-edit: stdin payload was not valid JSON - denying anyway, logged as unknown.");
+    if (raw !== "")
+      stderr("deny-and-log-edit: stdin payload was not a JSON object - denying anyway, logged as unknown.");
   }
 
   try {

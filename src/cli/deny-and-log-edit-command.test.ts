@@ -61,7 +61,7 @@ test("runDenyAndLogEditCommand: a malformed stdin payload still denies, never th
   assert.equal(code, 0);
   const decision = JSON.parse(out.join(""));
   assert.equal(decision.hookSpecificOutput.permissionDecision, "deny");
-  assert.match(err.join("\n"), /not valid JSON/i);
+  assert.match(err.join("\n"), /not a JSON object/i);
 });
 
 test("runDenyAndLogEditCommand: valid JSON that isn't an object still denies and logs", async () => {
@@ -77,7 +77,7 @@ test("runDenyAndLogEditCommand: valid JSON that isn't an object still denies and
 
   assert.equal(code, 0);
   assert.equal(JSON.parse(out.join("")).hookSpecificOutput.permissionDecision, "deny");
-  assert.match(err.join("\n"), /not valid JSON/i);
+  assert.match(err.join("\n"), /not a JSON object/i);
 
   const events = readEvents(recordHome);
   assert.equal(events.length, 1);
