@@ -35,7 +35,10 @@ interface PreToolUsePayload {
  * ever expires when one doesn't - and waiting there until the harness's own
  * hook timeout fires is a *non-blocking* error, i.e. the edit is allowed and
  * never logged. Giving up early and denying anyway keeps this command's
- * fail-closed promise. */
+ * fail-closed promise. Whatever already arrived is kept and parsed: a
+ * harness that writes the whole payload and then leaves stdin open is the
+ * likeliest way to reach the deadline at all, and dropping the bytes there
+ * would log the attempt with no tool or target. */
 const STDIN_READ_TIMEOUT_MS = 5_000;
 
 async function readStdin(stream: NodeJS.ReadableStream, timeoutMs: number): Promise<string> {
@@ -56,7 +59,7 @@ async function readStdin(stream: NodeJS.ReadableStream, timeoutMs: number): Prom
   const outcome = await Promise.race([read, deadline]);
   clearTimeout(timer);
   if (outcome === "timed-out") (stream as Partial<NodeJS.ReadStream>).destroy?.();
-  return outcome === "timed-out" ? "" : Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function denyDecision(): string {

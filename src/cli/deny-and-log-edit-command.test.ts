@@ -84,6 +84,32 @@ test("runDenyAndLogEditCommand: stdin that never closes still denies and still l
   assert.equal((events[0].details as { tool: string }).tool, "unknown");
 });
 
+test("runDenyAndLogEditCommand: a payload that arrived before the deadline is kept, not discarded", async () => {
+  const recordHome = tempRecordHome();
+  const out: string[] = [];
+  const held = new Readable({ read() {} });
+  held.push(
+    Buffer.from(JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "/x/app.txt" }, cwd: "/x" }))
+  );
+
+  const code = await runDenyAndLogEditCommand({
+    recordHome,
+    stdin: held,
+    stdinTimeoutMs: 25,
+    stdout: (line) => out.push(line),
+    stderr: () => {},
+  });
+
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(out.join("")).hookSpecificOutput.permissionDecision, "deny");
+
+  const events = readEvents(recordHome);
+  assert.equal(events.length, 1);
+  const details = events[0].details as { tool: string; target: string };
+  assert.equal(details.tool, "Edit");
+  assert.equal(details.target, "/x/app.txt");
+});
+
 test("runDenyAndLogEditCommand: falls back to Bash's command field when no file path is given", async () => {
   const recordHome = tempRecordHome();
   await runDenyAndLogEditCommand({
