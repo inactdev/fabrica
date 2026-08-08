@@ -232,10 +232,22 @@ id) instead of re-reading it per task, and both call `stateOf(events)`
 record again - heartbeats make `events.jsonl` grow steadily while a task
 runs, so a per-task or per-poll re-read gets expensive fast.
 
+`watch` goes one step further, because once per render is still twice a
+second for as long as the Client watches: it holds one `followTask`
+follower (`src/foreman/follow.ts`, over `src/record/tail.ts`'s byte-offset
+line reader) for the whole run, so each line of `transcript.log` and
+`events.jsonl` is read and parsed exactly once no matter how long the
+watch lasts, and a poll costs the bytes that landed since the last one
+rather than the whole file. It still gets the task's *full* history back
+every poll - `stateOf`, `isQuietTooLong` and the terminal notice are all
+derived from the whole event list - the follower just doesn't re-read the
+part it already has.
+
 The record home comes from `FABRICA_HOME` for these too, and per this
 module's layering rule they reach the record only through
-`src/index.ts`'s re-exports (`readTranscript`, `eventsByTask`,
-`stateOf`, and `foreman.events`), never `src/record` directly.
+`src/index.ts`'s re-exports (`readTranscript`, `followTask`,
+`eventsByTask`, `stateOf`, and `foreman.events`), never `src/record`
+directly.
 
 ## Why `bin.mjs` isn't a shebang'd `.ts` file
 

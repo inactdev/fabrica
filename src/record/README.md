@@ -70,6 +70,23 @@ CONTRACT rule 5 says old entries can never be changed or erased through Fabrica.
 
 If you got an event wrong, or a task's understanding of the world changed, don't rewrite the old line — **append a new event describing the correction.** The record is a history, not a snapshot; the correction is itself data worth keeping. (`request.md` follows the same principle for a different reason: it isn't corrected at all, because it's not Fabrica's record of what happened — it's the Client's own words, kept exactly as given.)
 
+## Reading a file that is still being appended to
+
+`readEvents` and `readTaskFile` read the whole file every call, which is
+the right answer for a reader that asks once (`fabrica log`, a query) and
+the wrong one for a reader that polls. `createLineTail(path)` (`tail.ts`)
+is the second shape: it keeps a byte offset and returns only the complete
+lines appended since the last call, so following a growing file costs the
+new bytes instead of the file. `fabrica watch` reads through it (via
+`src/foreman/follow.ts`) twice a second for as long as the Client watches,
+on an `events.jsonl` that holds every task this record home has ever seen
+and gains a heartbeat per running task every 15 seconds.
+
+The offset only ever advances past the last `\n` actually read, so a line
+caught mid-append is withheld rather than returned torn — the next call
+sees it whole. Reuse this for any other append-only file that gets
+followed rather than queried; don't hand-roll a second offset tracker.
+
 ## Task ids
 
 An id looks like `20260804-fix-login-bug-q7`: the registration date, a slug of the task text, and two random characters.

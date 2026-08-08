@@ -11,7 +11,7 @@
 // could reach the worker even if it wanted to. See watch-command.test.ts
 // and the PR's own end-to-end proof for that shown, not just asserted.
 
-import { createForeman, readTranscript, stateOf } from "../index.ts";
+import { followTask, stateOf } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { delay } from "./delay.ts";
 import { WATCH_USAGE, parseWatchArgs } from "./watch-args.ts";
@@ -27,7 +27,7 @@ import {
   lastActivityAt,
   summarizeHeartbeatRun,
 } from "./render.ts";
-import type { FabricaTask } from "../index.ts";
+import type { FabricaTask, TaskFollower } from "../index.ts";
 
 export const WATCH_HELP = `Usage: ${WATCH_USAGE}
 
@@ -75,10 +75,12 @@ export async function runWatchCommand(argv: string[], opts: RunWatchCommandOptio
   try {
     const { taskId } = parseWatchArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
-    const foreman = createForeman({ recordHome });
+    // One follower for the whole watch: every poll below reads through
+    // it, so each line of the record is read and parsed exactly once no
+    // matter how long the Client watches.
+    const follower = followTask(recordHome, taskId);
 
-    const initialEvents = await foreman.events(taskId);
-    if (initialEvents.length === 0) {
+    if (follower.read().events.length === 0) {
       throw new CliError(
         "unknown-task",
         `fabrica watch: no task "${taskId}" in this record. Check the id with \`fabrica status\`.`
@@ -106,9 +108,8 @@ export async function runWatchCommand(argv: string[], opts: RunWatchCommandOptio
 
     try {
       await streamTranscript({
-        recordHome,
         taskId,
-        foreman,
+        follower,
         stdout,
         signal: controller.signal,
         pollIntervalMs: opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
@@ -126,14 +127,13 @@ export async function runWatchCommand(argv: string[], opts: RunWatchCommandOptio
 }
 
 async function streamTranscript(ctx: {
-  recordHome: string;
   taskId: string;
-  foreman: ReturnType<typeof createForeman>;
+  follower: TaskFollower;
   stdout: (line: string) => void;
   signal: AbortSignal;
   pollIntervalMs: number;
 }): Promise<void> {
-  const { recordHome, taskId, foreman, stdout, signal, pollIntervalMs } = ctx;
+  const { taskId, follower, stdout, signal, pollIntervalMs } = ctx;
   let printedTranscript = 0;
   let printedHeartbeats = 0;
   let wasQuiet = false;
@@ -149,17 +149,19 @@ async function streamTranscript(ctx: {
 
   /** True once nothing further can ever land, so the caller stops polling. */
   const poll = async (): Promise<boolean> => {
-    const entries = readTranscript(recordHome, taskId);
+    // One read of the record per poll, not three, and only the bytes
+    // that landed since the last one (followTask, src/foreman/follow.ts):
+    // this task's own events answer both "what's new" and "where does it
+    // stand" (stateOf is the same derivation foreman.status() runs, given
+    // the same events), so asking foreman.status() as well would re-read
+    // and re-parse the whole log - twice a second, for as long as the
+    // Client watches, on a file every running task appends a heartbeat
+    // to every 15 seconds.
+    const { transcript: entries, events } = follower.read();
     for (; printedTranscript < entries.length; printedTranscript++) {
       stdout(formatTranscriptLine(entries[printedTranscript]));
     }
 
-    // One read of the record per poll, not three: this task's own events
-    // answer both "what's new" and "where does it stand" (stateOf is the
-    // same derivation foreman.status() runs, given the same events), so
-    // asking foreman.status() as well would re-read and re-parse the
-    // whole log - twice a second, for as long as the Client watches.
-    const events = await foreman.events(taskId);
     const heartbeats = events.filter((e) => e.name === "heartbeat");
     // A run of new heartbeats gets the same collapsing fabrica log applies
     // to its whole history (issue #12 review finding, Client ruling): the
