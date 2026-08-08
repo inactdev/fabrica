@@ -34,21 +34,38 @@ function isHarnessVerifier(module: unknown): module is HarnessVerifier {
   return typeof candidate?.attemptRealEdit === "function" && typeof candidate?.harnessAvailable === "function";
 }
 
+export interface HarnessVerifierLookup {
+  verifier: HarnessVerifier | null;
+  /** A verify.ts that is right there on disk but could not be loaded - it
+   * threw at module scope, or imports something that no longer resolves.
+   * Kept separate from "nothing found" so the caller can say which it was:
+   * telling the Client no verify script exists, when one does, sends him
+   * looking for a file he is already staring at. */
+  loadFailures: { path: string; error: string }[];
+}
+
 /** The first skill/<harness>/verify.ts that actually exports both halves -
  * today there is exactly one harness with a shipped config, so "first" and
  * "only" coincide; a second harness adding its own verify.ts would need this
  * to pick one deliberately instead of arbitrarily, not a problem yet. A
  * half-written verify.ts is skipped rather than returned, so the caller
  * reports it as "nothing to run" instead of dying on a TypeError. */
-async function loadHarnessVerifier(): Promise<HarnessVerifier | null> {
-  if (!existsSync(SKILL_DIR)) return null;
-  for (const name of readdirSync(SKILL_DIR)) {
-    const verifyPath = join(SKILL_DIR, name, "verify.ts");
+export async function loadHarnessVerifier(skillDir: string = SKILL_DIR): Promise<HarnessVerifierLookup> {
+  const loadFailures: { path: string; error: string }[] = [];
+  if (!existsSync(skillDir)) return { verifier: null, loadFailures };
+  for (const name of readdirSync(skillDir)) {
+    const verifyPath = join(skillDir, name, "verify.ts");
     if (!existsSync(verifyPath)) continue;
-    const module: unknown = await import(verifyPath).catch(() => null);
-    if (isHarnessVerifier(module)) return module;
+    let module: unknown = null;
+    try {
+      module = await import(verifyPath);
+    } catch (err) {
+      loadFailures.push({ path: verifyPath, error: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+    if (isHarnessVerifier(module)) return { verifier: module, loadFailures };
   }
-  return null;
+  return { verifier: null, loadFailures };
 }
 
 export const VERIFY_HOOK_HELP = `Usage: fabrica verify-hook
@@ -73,6 +90,9 @@ export interface RunVerifyHookOptions {
    * the real availability probe against the installed binary - can't be
    * supplied by accident. */
   harness?: HarnessVerifier;
+  /** Test seam: the directory scanned for `<harness>/verify.ts`, so the real
+   * discovery-and-import path itself is exercisable, not only bypassed. */
+  skillDir?: string;
 }
 
 /** Whether an `edit-attempt-blocked` event is *this* attempt's. The
@@ -93,9 +113,16 @@ export async function runVerifyHookCommand(opts: RunVerifyHookOptions = {}): Pro
   const stdout = opts.stdout ?? ((line: string) => console.log(line));
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
-  const verifier = opts.harness ?? (await loadHarnessVerifier());
+  let verifier = opts.harness ?? null;
   if (!verifier) {
-    stderr("No per-harness verify script found under skill/ - nothing to run.");
+    const found = await loadHarnessVerifier(opts.skillDir);
+    verifier = found.verifier;
+    for (const failure of found.loadFailures) {
+      stderr(`${failure.path} could not be loaded: ${failure.error}`);
+    }
+  }
+  if (!verifier) {
+    stderr("No usable per-harness verify script found under skill/ - nothing to run.");
     return 1;
   }
 

@@ -107,9 +107,12 @@ export async function runDenyAndLogEditCommand(opts: RunDenyAndLogEditOptions = 
 
   let payload: PreToolUsePayload = {};
   try {
-    payload = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") throw new Error("payload was not a JSON object");
+    payload = parsed as PreToolUsePayload;
   } catch {
     // Malformed input from the harness itself - still deny below.
+    if (raw !== "") stderr("deny-and-log-edit: stdin payload was not valid JSON - denying anyway, logged as unknown.");
   }
 
   try {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEvent } from "../record/index.ts";
@@ -19,6 +19,62 @@ function captureIo() {
   const err: string[] = [];
   return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
 }
+
+function skillDirWith(harnessName: string, verifySource: string): string {
+  const skillDir = mkdtempSync(join(tmpdir(), "fabrica-verify-hook-skill-"));
+  mkdirSync(join(skillDir, harnessName));
+  writeFileSync(join(skillDir, harnessName, "verify.ts"), verifySource);
+  return skillDir;
+}
+
+test("runVerifyHookCommand: an empty skill/ reports nothing to run", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir: mkdtempSync(join(tmpdir(), "fabrica-verify-hook-skill-")),
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /no usable per-harness verify script/i);
+});
+
+test("runVerifyHookCommand: a verify.ts that fails to load is reported by path and reason", async () => {
+  const io = captureIo();
+  const skillDir = skillDirWith("broken-harness", 'throw new Error("boom while loading");\n');
+
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  const err = io.err.join("\n");
+  assert.match(err, /broken-harness/);
+  assert.match(err, /could not be loaded: .*boom while loading/);
+});
+
+test("runVerifyHookCommand: a real verify.ts is discovered and used through the skill/ scan", async () => {
+  const io = captureIo();
+  const skillDir = skillDirWith(
+    "working-harness",
+    "export function harnessAvailable(): boolean { return false; }\n" +
+      "export function attemptRealEdit(): void { throw new Error('must not be called'); }\n"
+  );
+
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
+});
 
 test("runVerifyHookCommand: reports failure when the harness itself can't be reached", async () => {
   const io = captureIo();

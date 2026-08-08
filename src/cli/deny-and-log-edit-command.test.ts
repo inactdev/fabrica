@@ -47,18 +47,41 @@ test("runDenyAndLogEditCommand: records the attempt as edit-attempt-blocked", as
   assert.equal(details.target, "/x/new.txt");
 });
 
-test("runDenyAndLogEditCommand: a malformed stdin payload still denies, never throws", async () => {
+test("runDenyAndLogEditCommand: a malformed stdin payload still denies, never throws, and says so", async () => {
   const recordHome = tempRecordHome();
   const out: string[] = [];
+  const err: string[] = [];
   const code = await runDenyAndLogEditCommand({
     recordHome,
     stdin: Readable.from([Buffer.from("not json")]),
     stdout: (line) => out.push(line),
+    stderr: (line) => err.push(line),
   });
 
   assert.equal(code, 0);
   const decision = JSON.parse(out.join(""));
   assert.equal(decision.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(err.join("\n"), /not valid JSON/i);
+});
+
+test("runDenyAndLogEditCommand: valid JSON that isn't an object still denies and logs", async () => {
+  const recordHome = tempRecordHome();
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await runDenyAndLogEditCommand({
+    recordHome,
+    stdin: Readable.from([Buffer.from("null")]),
+    stdout: (line) => out.push(line),
+    stderr: (line) => err.push(line),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(out.join("")).hookSpecificOutput.permissionDecision, "deny");
+  assert.match(err.join("\n"), /not valid JSON/i);
+
+  const events = readEvents(recordHome);
+  assert.equal(events.length, 1);
+  assert.equal((events[0].details as { tool: string }).tool, "unknown");
 });
 
 test("runDenyAndLogEditCommand: stdin that never closes still denies and still logs", async () => {
