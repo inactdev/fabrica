@@ -84,7 +84,15 @@ test("runDenyAndLogEditCommand: stdin that never closes still denies and still l
   assert.equal((events[0].details as { tool: string }).tool, "unknown");
 });
 
-test("runDenyAndLogEditCommand: a payload that arrived before the deadline is kept, not discarded", async () => {
+test("runDenyAndLogEditCommand: a payload that arrived before the deadline is kept, not discarded", async (t) => {
+  // Deterministic on purpose: a real setTimeout raced against stream
+  // consumption would only pass when the event loop drains the pushed
+  // chunk inside the deadline, which is a clock race that flakes under
+  // load. Mocking only setTimeout (never setImmediate/microtasks) lets
+  // this wait for the chunk to actually be consumed, then fire the
+  // "deadline" itself on command - no wall-clock window to miss.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
   const recordHome = tempRecordHome();
   const out: string[] = [];
   const held = new Readable({ read() {} });
@@ -92,13 +100,21 @@ test("runDenyAndLogEditCommand: a payload that arrived before the deadline is ke
     Buffer.from(JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "/x/app.txt" }, cwd: "/x" }))
   );
 
-  const code = await runDenyAndLogEditCommand({
+  const resultPromise = runDenyAndLogEditCommand({
     recordHome,
     stdin: held,
     stdinTimeoutMs: 25,
     stdout: (line) => out.push(line),
     stderr: () => {},
   });
+
+  // Real setImmediate (unmocked): flushes the stream's own microtask/
+  // nextTick-driven read of the already-pushed chunk before the mocked
+  // deadline is allowed to fire.
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(25);
+
+  const code = await resultPromise;
 
   assert.equal(code, 0);
   assert.equal(JSON.parse(out.join("")).hookSpecificOutput.permissionDecision, "deny");
