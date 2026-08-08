@@ -156,9 +156,9 @@ async function runFixRound(
   // runProductionRound, so this round appends "work-started" below but
   // no "line-cut" - deliberately: the task already has one from its
   // original round, and nothing here reads it again. See
-  // src/foreman/README.md's "line-cut" section for why a general reader
-  // of "line-cut" as "this task has a live line" must treat the fix path
-  // as an exception.
+  // src/foreman/README.md's `verdict(taskId, ruling, note?)` section for
+  // why a general reader of "line-cut" as "this task has a live line"
+  // must treat the fix path as an exception.
   const line = reopenProductionLine({ project, taskId, recordHome });
 
   try {

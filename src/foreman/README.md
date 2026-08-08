@@ -70,12 +70,22 @@ return early" below.
    That call finds the same task's worktree path already occupied and
    refuses loudly with `LineError("workdir-exists")` naming the path —
    the same kind of refusal `createProductionLine` gives any other
-   taskId collision — rather than silently reusing or corrupting it, so
-   the task stops cleanly instead of drifting. The window stays open
-   because closing it would mean making a `git worktree add` and a
-   record append atomic, and nothing here offers that; a crash landing
-   in a few-line gap is rare enough, and its failure obvious enough,
-   that documenting it beats building machinery to prevent it.
+   taskId collision — rather than silently reusing or corrupting it.
+   That refusal is terminal, not a hiccup to retry through: the task is
+   stuck until a human clears the leftovers by hand, because every
+   later `fabrica answer <id>` reads `isRetry === false` again and hits
+   the same `workdir-exists`. Clearing the worktree alone isn't enough
+   either - `git worktree add -b fabrica/<taskId>` then fails on the
+   branch instead, since the branch survived the crash too. Recovery is
+   both halves, run in the Client's own checkout: `git worktree remove`
+   (or `git worktree prune`) for `recordHome/tasks/<taskId>/worktree`,
+   *and* `git branch -D fabrica/<taskId>`.
+
+   The window stays open because closing it would mean making a `git
+   worktree add` and a record append atomic, and nothing here offers
+   that; a crash landing in a few-line gap is rare enough, and its
+   failure obvious enough, that documenting it beats building machinery
+   to prevent it.
 3. **Resolves the check command** (`resolve-check.ts`) and refuses before
    any Worker runs if there isn't one (`check.ts`'s `requireCheckCommand`)
    — CONTRACT rule 2 allows no path around the gate, so a task with
