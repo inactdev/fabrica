@@ -113,7 +113,7 @@ test("runAttempts: onHeartbeat fires repeatedly while brain.work is in flight", 
   const beats: number[] = [];
 
   await runAttempts({
-    brain: slowBrain(55),
+    brain: slowBrain(300),
     brief: "do it",
     workdir: fastCheckWorkdir(),
     taskId: "t1",
