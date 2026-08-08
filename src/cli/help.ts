@@ -1,7 +1,7 @@
-// The top-level `fabrica --help` text and command registration. New
-// subcommands (status/log/watch #12) slot in as one more line in
-// COMMANDS and one more entry in this help text - nothing here needs
-// reshaping to add them.
+// The top-level `fabrica --help` text and command registration. A new
+// subcommand slots in as one more entry in COMMANDS and one more entry
+// in this help text - nothing here needs reshaping to add one, the way
+// status/log/watch (#12) each went in.
 
 export const COMMANDS = ["do", "verdict", "answer", "status", "log", "watch"] as const;
 

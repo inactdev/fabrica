@@ -124,8 +124,9 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
         delivery.md           # the delivery block, or failure report
         verdict               # accept|fix|wrong + note + occurredAt
         transcript.log        # the worker's structured transcript entries,
-                              # one JSON line each; `fabrica watch` renders
-                              # the live stream from them
+                              # one JSON line each, appended one batch per
+                              # attempt; `fabrica watch` prints them as they
+                              # land
         worktree/             # the ProductionLine while the task runs;
                               # removed when it is destroyed (the branch stays)
       projects.toml           # project registry + caps (below)

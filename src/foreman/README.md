@@ -374,8 +374,8 @@ today that means the Client, by hand.
 ## Why `do()` doesn't return early
 
 SPEC.md describes `fabrica do` as detached: it prints the task id and
-returns immediately while work continues in the background, streaming to
-the transcript. This module's `do()` does not do that — once it decides
+returns immediately while work continues in the background, writing to
+the transcript (one batch per attempt — see SPEC.md). This module's `do()` does not do that — once it decides
 to proceed, it runs the whole loop to completion before resolving. (The
 one early return is the ask-first seam below, and it isn't detachment:
 nothing is left running, because no ProductionLine was ever cut.)
@@ -427,7 +427,7 @@ recorded too - `"ask-failed"` (details: `{ error }`, the thrown error's
 own message) - before the error is rethrown unchanged, so every direct
 caller still sees the real exception and only the record gains a trace
 of it (Client ruling, issue #8 follow-up: "a failed task must never look
-like a started one" - `queries.ts`'s `deriveState` reports this state as
+like a started one" - `queries.ts`'s `stateOf` reports this state as
 `"failed"`, and `src/cli/wait-for-ask-outcome.ts` watches for it
 directly rather than only ever finding out via a timeout). An empty
 result falls through to `runProductionRound` (do.ts), the exact same
