@@ -184,9 +184,12 @@ them can reach a running worker.
   flagged "quiet" rather than left looking identical to progress; a
   `checking` task instead says so with its real elapsed time and is never
   flagged quiet (`isQuietTooLong` refuses that state outright), since
-  that silence has a known, honest explanation. It takes no arguments at
-  all, and refuses any it is given (`parseStatusArgs`) instead of
-  ignoring them.
+  that silence has a known, honest explanation. The pre-work `brain.ask()`
+  window is exempt for the same reason - `stateOf` already reads
+  "working" from `task-received` onward, so `isQuietTooLong` also waits
+  for a `"work-started"` event before it will raise the alarm. It takes
+  no arguments at all, and refuses any it is given (`parseStatusArgs`)
+  instead of ignoring them.
 - **`log <id>`** prints one task's event history in order, each event
   rendered as prose judged per event name rather than its stored
   `details` dumped raw, and a consecutive run of heartbeats collapsed
@@ -195,15 +198,31 @@ them can reach a running worker.
   transcript entries.
 - **`watch <id>`** polls the record and prints new transcript entries and
   heartbeats as they land, plus the same quiet and mid-check notices
-  `status` uses. **Stopping the watch never stops the work**:
-  this command only ever *reads* `events.jsonl` and `transcript.log`, so
-  Ctrl-C ends the polling loop and nothing else. Never add anything here
-  that reaches toward the detached process `fabrica do` spawned.
+  `status` uses. A backlog of heartbeats found on the first poll - normal
+  when attaching to a task that has been running a while - collapses into
+  the one "N heartbeats over 3m" line `log` uses, so catching up never
+  buries the transcript entries printed just above it. When the task
+  reaches a state nothing further is expected from, it prints a terminal
+  notice (`formatTerminalNotice`) instead of polling on in a silence
+  indistinguishable from a hang: `delivered`/`failed` say a `fix` verdict
+  can still wake the worker, `asking` points at `fabrica answer`, and a
+  `failed` task that never delivered says so plainly - `recordVerdict`
+  would refuse a ruling on it. Only `closed` ends the loop, since it is
+  the one state that provably cannot change again; the notice re-fires
+  whenever the state genuinely changes, so a second delivery after a
+  `fix` still announces itself. **Stopping the watch never stops the
+  work**: this command only ever *reads* `events.jsonl` and
+  `transcript.log`, so Ctrl-C ends the polling loop and nothing else.
+  Never add anything here that reaches toward the detached process
+  `fabrica do` spawned.
 
 `render.ts` is why all three agree on wording: age (`formatAge`), the
-quiet sentence (`formatQuietNotice`), the status line, the event line,
-and the transcript line each have exactly one definition, so an edit to
-any of them can't drift between commands.
+quiet sentence (`formatQuietNotice`), the terminal notice
+(`formatTerminalNotice`), the collapsed heartbeat run
+(`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s
+catch-up), the status line, the event line, and the transcript line each
+have exactly one definition, so an edit to any of them can't drift
+between commands.
 
 Both `status` and `watch` read the record once per render, then derive
 everything else from the events already in hand: `status` takes
@@ -331,8 +350,8 @@ calls `runTask`.
 | `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
-| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
-| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including `log`'s per-event-name prose and its heartbeat-run collapsing - plus `formatAge`, `isQuietTooLong`, `checkStartedAt`, and `QUIET_THRESHOLD_MS`. |
+| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its one exit-by-itself state (`closed`), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
+| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, and `QUIET_THRESHOLD_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
