@@ -292,6 +292,34 @@ test("formatEventLine: questions-asked reads as numbered questions, not escaped 
   assert.equal(line, "t0  questions-asked  1) Which endpoint?; 2) REST or GraphQL?");
 });
 
+test("formatEventLine: line-cut reads as prose, distinguishing a fresh cut from a reopen", () => {
+  const cut = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "line-cut",
+    details: { branch: "fabrica/x", reopened: false },
+  });
+  assert.equal(cut, "t0  line-cut  line cut: fabrica/x");
+
+  const reopened = formatEventLine({
+    occurredAt: "t1",
+    taskId: "x",
+    name: "line-cut",
+    details: { branch: "fabrica/x", reopened: true },
+  });
+  assert.equal(reopened, "t1  line-cut  line reopened: fabrica/x");
+});
+
+test("formatEventLine: ask-failed reads as prose, carrying the real error", () => {
+  const line = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "ask-failed",
+    details: { error: "the brain is unreachable" },
+  });
+  assert.equal(line, "t0  ask-failed  ask failed: the brain is unreachable");
+});
+
 test("formatEventLine: an unanticipated event name falls back to bounded, not unbounded, JSON", () => {
   const line = formatEventLine({
     occurredAt: "t0",

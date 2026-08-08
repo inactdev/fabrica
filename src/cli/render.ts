@@ -249,6 +249,26 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       return d.answer ? `answer: ${d.answer}` : fallbackDetail(details);
     }
 
+    case "line-cut": {
+      // `do.ts` emits this with `{ branch, reopened }` every time a
+      // ProductionLine is cut - once per ordinary task, and again on a
+      // `fabrica answer` resume, where `reopened` distinguishes checking
+      // out the same branch again from cutting a fresh one. It lands on
+      // every task's history, so a raw-JSON fallback here would be the
+      // single most common instance of the exact bug this rendering
+      // exists to fix.
+      const d = details as { branch?: string; reopened?: boolean };
+      const verb = d.reopened ? "line reopened" : "line cut";
+      return d.branch ? `${verb}: ${d.branch}` : verb;
+    }
+
+    case "ask-failed": {
+      // `ask.ts` emits this with `{ error }` (issue #8) when
+      // `brain.ask()` itself throws, before any Worker ever ran.
+      const d = details as { error?: string };
+      return d.error ? `ask failed: ${d.error}` : "ask failed";
+    }
+
     default:
       return fallbackDetail(details);
   }

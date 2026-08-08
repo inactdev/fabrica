@@ -105,6 +105,18 @@ batch per attempt, not word by word. Stopping the watch (Ctrl-C) never
 stops the work. Watching is a window onto the worker, not the
 room the worker lives in.
 
+The moment a task reaches a state nothing further is expected from, watch
+says so plainly instead of letting the stream simply stop, which would
+otherwise read as a hang: a delivered or failed task gets a note that a
+`fabrica verdict ... fix` can still wake the worker, a task closed by
+verdict gets a note that the ruling is final, and a task waiting on
+questions gets pointed at `fabrica answer`. If the answer to "what's
+next" itself changes - a `fix` verdict re-delivers, an answer resumes the
+work - the note fires again for the new state. Only "closed" ends the
+watch outright: it is the one state the record can never move on from
+again, so there is nothing left to poll for. Every other terminal state
+keeps watch running until you stop it yourself.
+
 ## The record
 
 Plain files, human-readable, at `~/.fabrica/` (path configurable):
