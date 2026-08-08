@@ -31,10 +31,32 @@ interface PreToolUsePayload {
   cwd?: string;
 }
 
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
+/** A harness writes the payload and closes stdin immediately, so this only
+ * ever expires when one doesn't - and waiting there until the harness's own
+ * hook timeout fires is a *non-blocking* error, i.e. the edit is allowed and
+ * never logged. Giving up early and denying anyway keeps this command's
+ * fail-closed promise. */
+const STDIN_READ_TIMEOUT_MS = 5_000;
+
+async function readStdin(stream: NodeJS.ReadableStream, timeoutMs: number): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8");
+  const read = (async () => {
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+  })().then(
+    () => "closed" as const,
+    () => "closed" as const
+  );
+
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<"timed-out">((resolve) => {
+    timer = setTimeout(() => resolve("timed-out"), timeoutMs);
+    timer.unref?.();
+  });
+
+  const outcome = await Promise.race([read, deadline]);
+  clearTimeout(timer);
+  if (outcome === "timed-out") (stream as Partial<NodeJS.ReadStream>).destroy?.();
+  return outcome === "timed-out" ? "" : Buffer.concat(chunks).toString("utf8");
 }
 
 function denyDecision(): string {
@@ -61,24 +83,28 @@ Environment:
 export interface RunDenyAndLogEditOptions {
   recordHome?: string;
   stdin?: NodeJS.ReadableStream;
+  stdinTimeoutMs?: number;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
 
 /** Always denies and always returns 0 - the deny decision on stdout is
- * what stops the edit, not the exit code. Fails closed: even a
- * malformed payload or a logging failure still emits the deny decision,
- * never silently allows the edit through. (This covers failures *inside*
- * this command; it cannot cover a harness that could not launch `fabrica`
- * at all - see the documented fail-open gap in that harness's own README
- * under skill/.) */
+ * what stops the edit, not the exit code. Fails closed: a malformed
+ * payload, a payload that never arrives, or a logging failure all still
+ * emit the deny decision, never silently allow the edit through. (This
+ * covers failures *inside* this command; it cannot cover a harness that
+ * could not launch `fabrica` at all - see the documented fail-open gap in
+ * that harness's own README under skill/.) */
 export async function runDenyAndLogEditCommand(opts: RunDenyAndLogEditOptions = {}): Promise<number> {
   const stdout = opts.stdout ?? ((line: string) => process.stdout.write(line));
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
+  const raw = await readStdin(opts.stdin ?? process.stdin, opts.stdinTimeoutMs ?? STDIN_READ_TIMEOUT_MS);
+  if (raw === "") stderr("deny-and-log-edit: no hook payload arrived on stdin - denying anyway.");
+
   let payload: PreToolUsePayload = {};
   try {
-    payload = JSON.parse(await readStdin(opts.stdin ?? process.stdin));
+    payload = JSON.parse(raw);
   } catch {
     // Malformed input from the harness itself - still deny below.
   }

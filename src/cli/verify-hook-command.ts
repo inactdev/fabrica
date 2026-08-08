@@ -29,17 +29,24 @@ export interface HarnessVerifier {
 
 const SKILL_DIR = fileURLToPath(new URL("../../skill", import.meta.url));
 
-/** The first skill/<harness>/verify.ts found - today there is exactly
- * one harness with a shipped config, so "first" and "only" coincide;
- * a second harness adding its own verify.ts would need this to pick
- * one deliberately instead of arbitrarily, not a problem yet. */
+function isHarnessVerifier(module: unknown): module is HarnessVerifier {
+  const candidate = module as Partial<HarnessVerifier> | null;
+  return typeof candidate?.attemptRealEdit === "function" && typeof candidate?.harnessAvailable === "function";
+}
+
+/** The first skill/<harness>/verify.ts that actually exports both halves -
+ * today there is exactly one harness with a shipped config, so "first" and
+ * "only" coincide; a second harness adding its own verify.ts would need this
+ * to pick one deliberately instead of arbitrarily, not a problem yet. A
+ * half-written verify.ts is skipped rather than returned, so the caller
+ * reports it as "nothing to run" instead of dying on a TypeError. */
 async function loadHarnessVerifier(): Promise<HarnessVerifier | null> {
   if (!existsSync(SKILL_DIR)) return null;
   for (const name of readdirSync(SKILL_DIR)) {
     const verifyPath = join(SKILL_DIR, name, "verify.ts");
-    if (existsSync(verifyPath)) {
-      return (await import(verifyPath)) as HarnessVerifier;
-    }
+    if (!existsSync(verifyPath)) continue;
+    const module: unknown = await import(verifyPath).catch(() => null);
+    if (isHarnessVerifier(module)) return module;
   }
   return null;
 }

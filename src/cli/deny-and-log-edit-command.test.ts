@@ -61,6 +61,29 @@ test("runDenyAndLogEditCommand: a malformed stdin payload still denies, never th
   assert.equal(decision.hookSpecificOutput.permissionDecision, "deny");
 });
 
+test("runDenyAndLogEditCommand: stdin that never closes still denies and still logs", async () => {
+  const recordHome = tempRecordHome();
+  const out: string[] = [];
+  const err: string[] = [];
+  const neverEnds = new Readable({ read() {} });
+
+  const code = await runDenyAndLogEditCommand({
+    recordHome,
+    stdin: neverEnds,
+    stdinTimeoutMs: 25,
+    stdout: (line) => out.push(line),
+    stderr: (line) => err.push(line),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(out.join("")).hookSpecificOutput.permissionDecision, "deny");
+  assert.match(err.join("\n"), /no hook payload arrived/i);
+
+  const events = readEvents(recordHome);
+  assert.equal(events.length, 1);
+  assert.equal((events[0].details as { tool: string }).tool, "unknown");
+});
+
 test("runDenyAndLogEditCommand: falls back to Bash's command field when no file path is given", async () => {
   const recordHome = tempRecordHome();
   await runDenyAndLogEditCommand({
