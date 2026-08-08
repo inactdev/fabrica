@@ -89,10 +89,6 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
 
     return 0;
   } catch (err) {
-    if (err instanceof CliError) {
-      stderr(err.message);
-      return 1;
-    }
     stderr(err instanceof Error ? err.message : String(err));
     return 1;
   }

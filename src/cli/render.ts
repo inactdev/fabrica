@@ -129,8 +129,8 @@ function fallbackDetail(details: unknown): string {
  * Client ruling): a Client re-reading this constantly needs "what
  * happened", not punctuation. The two events known to carry unbounded
  * text - "delivered" (a receipt's full check stdout+stderr can run to
- * 64MB) and, if it ever gets there, "questions-asked" turning a list of
- * questions into an escaped JSON string - are exactly the ones this
+ * 64MB) and "questions-asked" (a list of questions, which would
+ * otherwise show as an escaped JSON string) - are exactly the ones this
  * replaces with a judged summary; undefined means "the bare event name
  * already says it all" (e.g. "task-received" has no details). */
 function describeEventDetails(event: FabricaEvent): string | undefined {
@@ -186,9 +186,10 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     }
 
     case "questions-asked": {
-      // Not emitted by anything in this codebase yet (issue #8) - shaped
-      // defensively so whichever concrete form lands still reads as
-      // questions, not JSON, the day it exists.
+      // `src/foreman/ask.ts` emits this with `details.questions` as a
+      // string[] (issue #8) - the array branch below is the confirmed
+      // shape; the string branch stays for tolerance, so a question list
+      // always reads as questions, not JSON.
       const d = details as { questions?: string[] | string };
       if (Array.isArray(d.questions)) return d.questions.map((q, i) => `${i + 1}) ${q}`).join("; ");
       if (typeof d.questions === "string") return d.questions;
