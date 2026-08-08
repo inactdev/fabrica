@@ -122,11 +122,10 @@ test("runWatchCommand: streams a transcript entry that lands after watching star
   assert.ok(io.out.some((line) => line.includes("task delivered")));
 });
 
-test("runWatchCommand: heartbeat events show as liveness lines", async () => {
+test("runWatchCommand: a single heartbeat event shows as a liveness line", async () => {
   const recordHome = tempRecordHome();
   appendEvent(recordHome, { taskId: "t1", name: "task-received" });
   appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
-  appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 1 } });
   appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 1 } });
 
   const io = captureIo();
@@ -142,7 +141,65 @@ test("runWatchCommand: heartbeat events show as liveness lines", async () => {
   await watchPromise;
 
   const heartbeatLines = io.out.filter((line) => line.includes("[heartbeat]"));
-  assert.equal(heartbeatLines.length, 2);
+  assert.equal(heartbeatLines.length, 1);
+  assert.match(heartbeatLines[0], /still working\.\.\.$/);
+});
+
+// Client ruling on issue #12's review finding: watch's first poll must
+// not replay a whole heartbeat backlog as one line each - attaching to a
+// task that's been running an hour (15s interval) would otherwise dump
+// ~240 identical lines before anything useful shows, burying whatever
+// transcript printed just above. Same collapsing rule fabrica log already
+// applies to its full history, applied here to just the catch-up batch.
+test("runWatchCommand: a pre-existing heartbeat backlog collapses into one line on attach", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  for (let i = 0; i < 14; i++) appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 1 } });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  setTimeout(() => controller.abort(), 30);
+  await watchPromise;
+
+  const heartbeatLines = io.out.filter((line) => line.includes("[heartbeat]"));
+  assert.equal(heartbeatLines.length, 1, `expected the 14 pre-existing heartbeats collapsed to one line, got: ${JSON.stringify(io.out)}`);
+  assert.match(heartbeatLines[0], /^\S+  \[heartbeat\]  14 heartbeats over/);
+});
+
+test("runWatchCommand: a live heartbeat that lands after catch-up still prints as its own line", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  for (let i = 0; i < 5; i++) appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 1 } });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+
+  await waitFor(() => io.out.some((line) => line.includes("[heartbeat]")));
+  appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 1 } });
+  await waitFor(() => io.out.filter((line) => line.includes("[heartbeat]")).length >= 2);
+  controller.abort();
+  await watchPromise;
+
+  const heartbeatLines = io.out.filter((line) => line.includes("[heartbeat]"));
+  assert.equal(heartbeatLines.length, 2, `expected catch-up (1 collapsed) + 1 live line, got: ${JSON.stringify(io.out)}`);
+  assert.match(heartbeatLines[0], /5 heartbeats over/);
+  assert.match(heartbeatLines[1], /still working\.\.\.$/);
 });
 
 test("runWatchCommand: a task mid-check streams its real elapsed time live, never a quiet alarm", async () => {
@@ -169,6 +226,57 @@ test("runWatchCommand: a task mid-check streams its real elapsed time live, neve
 
   assert.ok(sawChecking, `expected a live "checking, Xs so far" line, got: ${JSON.stringify(io.out)}`);
   assert.ok(!io.out.some((line) => line.includes("quiet")), "a mid-check task is never flagged quiet");
+});
+
+// Client ruling on issue #12's review finding: without a terminal notice,
+// watching a task already ruled on, or one stopped for questions, looks
+// exactly like a hang - it just polls forever with nothing printed and no
+// way out but Ctrl-C.
+test("runWatchCommand: a closed task (verdict already recorded) gets a terminal notice, not silence", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { outcome: "done", delivery: { confidence: 100, summary: "done", branch: "fabrica/t1", files: [] } },
+  });
+  appendEvent(recordHome, { taskId: "t1", name: "verdict-recorded", details: { ruling: "accept", note: "good" } });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  setTimeout(() => controller.abort(), 30);
+  await watchPromise;
+
+  assert.ok(io.out.some((line) => line.includes("task closed")), `expected a closed notice, got: ${JSON.stringify(io.out)}`);
+});
+
+test("runWatchCommand: a task stopped for questions gets a terminal notice pointing at fabrica answer", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "questions-asked", details: { questions: ["Which endpoint?"] } });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  setTimeout(() => controller.abort(), 30);
+  await watchPromise;
+
+  assert.ok(io.out.some((line) => line.includes("task asking")), `expected an asking notice, got: ${JSON.stringify(io.out)}`);
+  assert.ok(io.out.some((line) => line.includes("fabrica answer t1")), "the notice should point at fabrica answer");
 });
 
 test("runWatchCommand: an unknown task id refuses plainly", async () => {

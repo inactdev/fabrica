@@ -132,7 +132,7 @@ test("answer() on an unknown task id refuses plainly", async () => {
 
 // Client ruling, issue #8 follow-up: a task whose brain.ask() itself
 // threw must show up as failed, not silently stuck at "working" forever
-// (deriveState's own fallback) or missing from status() entirely.
+// (stateOf's own fallback) or missing from status() entirely.
 test("status() lists a task whose ask() threw as failed", async () => {
   const recordHome = freshHome();
   const foreman = createForeman({ recordHome });

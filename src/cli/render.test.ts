@@ -67,6 +67,25 @@ test("isQuietTooLong: never true for a checking task, no matter how long - it ha
   assert.equal(isQuietTooLong("checking", events, start + QUIET_THRESHOLD_MS * 10), false);
 });
 
+test("isQuietTooLong: never true for the pre-work ask() window, no matter how long - it has a known explanation too", () => {
+  const start = 1_000_000;
+  // Only "task-received" so far: stateOf reports "working" (its default),
+  // but no "work-started" has landed - this is brain.ask()'s window, not
+  // a worker gone silent (issue #12 review finding, Client ruling: treat
+  // it exactly like "checking").
+  const events: FabricaEvent[] = [{ occurredAt: new Date(start).toISOString(), taskId: "x", name: "task-received" }];
+  assert.equal(isQuietTooLong("working", events, start + QUIET_THRESHOLD_MS * 10), false);
+});
+
+test("isQuietTooLong: true once a REAL working task (work-started landed) goes silent, even right after task-received", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "x", name: "task-received" },
+    { occurredAt: new Date(start + 1_000).toISOString(), taskId: "x", name: "work-started" },
+  ];
+  assert.equal(isQuietTooLong("working", events, start + 1_000 + QUIET_THRESHOLD_MS + 1), true);
+});
+
 test("checkStartedAt: the latest started check-run, when nothing has finished it yet", () => {
   const events: FabricaEvent[] = [
     { occurredAt: "2026-01-01T00:00:00.000Z", taskId: "x", name: "work-started" },

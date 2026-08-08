@@ -49,16 +49,24 @@ export function checkStartedAt(events: FabricaEvent[]): Date | null {
   return startedAt;
 }
 
-/** True only for a task still WORKING (a brain.work call in flight) whose
- * silence has run past QUIET_THRESHOLD_MS - a delivered, failed, or closed
- * task is quiet by definition and that's not the same fact. A task that is
- * "checking" is never quiet-too-long: Fabrica knows exactly what it's
- * doing and since when (checkStartedAt), so status/watch say that plainly
- * instead of raising an alarm about a silence that has a known, honest
- * explanation - the alarm stays fully meaningful for the case it actually
- * means something: a "working" task whose worker has truly gone silent. */
+/** True only for a task genuinely mid brain.work() whose silence has run
+ * past QUIET_THRESHOLD_MS - a delivered, failed, or closed task is quiet
+ * by definition and that's not the same fact. A task that is "checking"
+ * is never quiet-too-long: Fabrica knows exactly what it's doing and
+ * since when (checkStartedAt), so status/watch say that plainly instead
+ * of raising an alarm about a silence that has a known, honest
+ * explanation. The same reasoning covers the pre-work window: `stateOf`
+ * reports "working" from the moment `task-received` lands, including the
+ * whole stretch `brain.ask()` runs in before any ProductionLine exists -
+ * a real, often-slow brain call (`wait-for-ask-outcome.ts` budgets 60s
+ * for it) with nothing to append until it resolves. That gap is
+ * distinguished from a genuinely silent worker by whether a
+ * `"work-started"` event has landed yet - the alarm stays fully
+ * meaningful for the case it actually means something: a worker that
+ * started and then went quiet. */
 export function isQuietTooLong(state: FabricaTask["state"], events: FabricaEvent[], now: number = Date.now()): boolean {
   if (state !== "working") return false;
+  if (!events.some((e) => e.name === "work-started")) return false;
   const last = lastActivityAt(events);
   if (!last) return false;
   return now - last.getTime() > QUIET_THRESHOLD_MS;
@@ -246,6 +254,16 @@ export function formatEventLines(events: FabricaEvent[]): string[] {
 }
 
 function formatHeartbeatRun(run: FabricaEvent[]): string {
+  return `${run[0].occurredAt}  heartbeat  ${summarizeHeartbeatRun(run)}`;
+}
+
+/** "N heartbeats over <span>" - the count-and-real-elapsed-span math
+ * shared by `fabrica log`'s collapsed history line (`formatHeartbeatRun`,
+ * above) and `fabrica watch`'s collapsed catch-up line for a heartbeat
+ * backlog it attaches mid-stream (issue #12 review finding, Client
+ * ruling: same collapsing rule, applied to watch's initial batch too -
+ * only the line format around it differs per view. */
+export function summarizeHeartbeatRun(run: FabricaEvent[]): string {
   const spanMs = Date.parse(run[run.length - 1].occurredAt) - Date.parse(run[0].occurredAt);
-  return `${run[0].occurredAt}  heartbeat  ${run.length} heartbeats over ${formatAge(spanMs)}`;
+  return `${run.length} heartbeats over ${formatAge(spanMs)}`;
 }

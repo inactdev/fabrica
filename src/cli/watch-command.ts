@@ -24,6 +24,7 @@ import {
   formatTranscriptLine,
   isQuietTooLong,
   lastActivityAt,
+  summarizeHeartbeatRun,
 } from "./render.ts";
 
 export const WATCH_HELP = `Usage: ${WATCH_USAGE}
@@ -151,9 +152,20 @@ async function streamTranscript(ctx: {
     // whole log - twice a second, for as long as the Client watches.
     const events = await foreman.events(taskId);
     const heartbeats = events.filter((e) => e.name === "heartbeat");
-    for (; printedHeartbeats < heartbeats.length; printedHeartbeats++) {
-      stdout(`${heartbeats[printedHeartbeats].occurredAt}  [heartbeat]  still working...`);
+    // A run of new heartbeats gets the same collapsing fabrica log applies
+    // to its whole history (issue #12 review finding, Client ruling): the
+    // first poll after attaching to a task that's been running a while
+    // can find dozens already on the record, and printing each as its own
+    // line would bury the transcript entries printed just above. A single
+    // new heartbeat - the normal case, one per pollIntervalMs tick once
+    // caught up - still reads as a plain liveness line.
+    const newHeartbeats = heartbeats.slice(printedHeartbeats);
+    if (newHeartbeats.length === 1) {
+      stdout(`${newHeartbeats[0].occurredAt}  [heartbeat]  still working...`);
+    } else if (newHeartbeats.length > 1) {
+      stdout(`${newHeartbeats[0].occurredAt}  [heartbeat]  ${summarizeHeartbeatRun(newHeartbeats)}`);
     }
+    printedHeartbeats = heartbeats.length;
 
     const state = events.length > 0 ? stateOf(events) : "working";
 
@@ -190,6 +202,16 @@ async function streamTranscript(ctx: {
       stdout(
         `-- task ${state} - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`
       );
+    } else if (!noticedTerminal && state === "closed") {
+      // Rule 6: closed means the Client's verdict is recorded and final -
+      // unlike "delivered", there is no fix path left to reopen this one.
+      noticedTerminal = true;
+      stdout("-- task closed - your verdict is recorded; nothing more will ever land on this transcript --");
+    } else if (!noticedTerminal && state === "asking") {
+      // Stopped for clarifying questions before any Worker ran (issue #8)
+      // - polling forever here would look like a hang with no way out.
+      noticedTerminal = true;
+      stdout(`-- task asking - stopped for clarifying questions; answer with \`fabrica answer ${taskId} -m "<text>"\` to resume it --`);
     }
   };
 
