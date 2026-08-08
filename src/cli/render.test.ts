@@ -231,11 +231,33 @@ test("formatEventLine: delivered summarizes without carrying the check's raw out
 
   assert.equal(
     line,
-    "t0  delivered  delivered: done - Completed: add a demo line (confidence 100%, attempt 2/2, branch fabrica/x, 2 file(s))"
+    "t0  delivered  delivered: done - Completed: add a demo line (confidence 100%, attempt 2, branch fabrica/x, 2 file(s))"
   );
   assert.ok(line.length < 300, `expected a bounded line, got ${line.length} chars`);
   assert.doesNotMatch(line, /x{100}/);
   assert.doesNotMatch(line, /y{100}/);
+});
+
+// Client ruling, issue #12 review finding: never print a ratio that can
+// invert. A fix round draws no budget of its own (issue #65), so once one
+// has run, receipts.length can exceed the task's original totalAttempts -
+// "attempt 3/2" is exactly the unreadable output this rendering exists to
+// eliminate, so the count stands alone with no denominator at all.
+test("formatEventLine: delivered after a fix round shows the attempt count alone, never a ratio that can invert", () => {
+  const line = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "delivered",
+    details: {
+      outcome: "done",
+      delivery: { confidence: 100, summary: "fixed per note", branch: "fabrica/x", files: [], gateChanges: "" },
+      receipts: [{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }],
+      totalAttempts: 2,
+    },
+  });
+
+  assert.match(line, /attempt 3/);
+  assert.doesNotMatch(line, /attempt \d+\/\d+/, "no digit/digit ratio anywhere, even though the branch itself contains a slash");
 });
 
 test("formatEventLine: delivered flags a declared gate change", () => {

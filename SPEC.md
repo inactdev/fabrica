@@ -107,15 +107,20 @@ room the worker lives in.
 
 The moment a task reaches a state nothing further is expected from, watch
 says so plainly instead of letting the stream simply stop, which would
-otherwise read as a hang: a delivered or failed task gets a note that a
-`fabrica verdict ... fix` can still wake the worker, a task closed by
-verdict gets a note that the ruling is final, and a task waiting on
-questions gets pointed at `fabrica answer`. If the answer to "what's
-next" itself changes - a `fix` verdict re-delivers, an answer resumes the
-work - the note fires again for the new state. Only "closed" ends the
-watch outright: it is the one state the record can never move on from
-again, so there is nothing left to poll for. Every other terminal state
-keeps watch running until you stop it yourself.
+otherwise read as a hang: a delivered task, or a failed one that reached
+a real delivery, gets a note that a `fabrica verdict ... fix` can still
+wake the worker; a task closed by verdict gets a note that the ruling is
+final; a task waiting on questions gets pointed at `fabrica answer`. A
+task that failed before ever delivering - the brain's clarify step
+itself threw, so no Worker ever ran - gets its own note naming that,
+since neither `fix` nor `fabrica answer` can move it either. If the
+answer to "what's next" itself changes - a `fix` verdict re-delivers, an
+answer resumes the work - the note fires again for the new state.
+Watch ends outright, rather than continuing to poll, for the two states
+the record can never move on from again: "closed", and a "failed" task
+that never delivered. Every other terminal state - a real failed
+delivery, "delivered" itself, or "asking" - keeps watch running until
+you stop it yourself.
 
 ## The record
 

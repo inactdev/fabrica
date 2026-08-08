@@ -207,14 +207,18 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
         outcome?: string;
         delivery?: { confidence?: number; summary?: string; branch?: string; files?: string[]; gateChanges?: string };
         receipts?: unknown[];
-        totalAttempts?: number;
       };
       const delivery = d.delivery;
       if (!delivery) return d.outcome ? `delivered: ${d.outcome}` : undefined;
 
-      const attempts = d.receipts ? `${d.receipts.length}${d.totalAttempts ? `/${d.totalAttempts}` : ""}` : undefined;
+      // Just the count, never a "N/totalAttempts" ratio: a fix round
+      // draws no budget of its own (issue #65), so receipts.length can
+      // exceed the original totalAttempts once one has run - a ratio
+      // whose numerator outgrows its denominator is exactly the
+      // unreadable output this rendering exists to eliminate. Client
+      // ruling, issue #12 review finding.
       const bits: string[] = [`confidence ${delivery.confidence}%`];
-      if (attempts) bits.push(`attempt ${attempts}`);
+      if (d.receipts) bits.push(`attempt ${d.receipts.length}`);
       if (delivery.branch) bits.push(`branch ${delivery.branch}`);
       if (delivery.files) bits.push(`${delivery.files.length} file(s)`);
       if (delivery.gateChanges) bits.push("gate changes declared");

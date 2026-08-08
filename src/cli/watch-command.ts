@@ -208,10 +208,8 @@ async function streamTranscript(ctx: {
     }
     wasQuiet = quiet;
 
-    const notice = formatTerminalNotice(state, {
-      taskId,
-      hasDelivery: events.some((e) => e.name === "delivered"),
-    });
+    const hasDelivery = events.some((e) => e.name === "delivered");
+    const notice = formatTerminalNotice(state, { taskId, hasDelivery });
     if (!notice) {
       noticedState = null;
     } else if (state !== noticedState) {
@@ -219,14 +217,19 @@ async function streamTranscript(ctx: {
       stdout(notice);
     }
 
-    // "closed" is the one state that provably cannot change again:
-    // recordVerdict refuses any further ruling once the last verdict was
-    // accept or wrong (src/foreman/verdict.ts's "already-closed"), so the
-    // notice's "nothing more will ever land" is literally true and there
-    // is nothing left to poll for. delivered/failed/asking all still keep
-    // polling - a `fix` verdict or a `fabrica answer` genuinely wakes
-    // those back up, and this watch should show it when it happens.
-    return state === "closed";
+    // Two states provably cannot change again, and the watch ends for
+    // both: "closed" (recordVerdict refuses any further ruling once the
+    // last verdict was accept or wrong - src/foreman/verdict.ts's
+    // "already-closed"), and a "failed" task with no "delivered" event -
+    // brain.ask() itself threw before any Worker ran, so `fabrica
+    // verdict ... fix` refuses it with "not-delivered" and `fabrica
+    // answer` refuses it with "no-questions-pending" (issue #12 review
+    // finding, Client ruling: identical property to "closed", so it gets
+    // the same treatment). A genuine failed DELIVERY, "asking", and
+    // "delivered" all still keep polling - a `fix` verdict or a `fabrica
+    // answer` genuinely wakes those back up, and this watch should show
+    // it when it happens.
+    return state === "closed" || (state === "failed" && !hasDelivery);
   };
 
   if (await poll()) return;

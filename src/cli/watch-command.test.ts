@@ -258,6 +258,60 @@ test("runWatchCommand: a closed task (verdict already recorded) gets a terminal 
   assert.ok(io.out.some((line) => line.includes("task closed")), `expected a closed notice, got: ${JSON.stringify(io.out)}`);
 });
 
+// Client ruling, issue #12 review finding: identical property to "closed"
+// - brain.ask() itself threw before any Worker ran, so `fabrica verdict
+// ... fix` refuses it (not-delivered) and `fabrica answer` refuses it
+// (no-questions-pending) too. Nothing can ever move this task, so watch
+// ends on its own instead of polling forever - no Ctrl-C needed here.
+test("runWatchCommand: a task whose ask() threw (failed, never delivered) ends the watch on its own", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "ask-failed", details: { error: "the brain is unreachable" } });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const code = await runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.ok(
+    io.out.some((line) => line.includes("failed before any work started")),
+    `expected the no-fix-path notice, got: ${JSON.stringify(io.out)}`
+  );
+});
+
+test("runWatchCommand: a task with a real failed DELIVERY keeps polling, unlike an ask() failure", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { outcome: "failure-report", delivery: { confidence: 0, summary: "red", branch: "fabrica/t1", files: [] } },
+  });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  setTimeout(() => controller.abort(), 30);
+  const code = await watchPromise;
+
+  assert.equal(code, 0);
+  assert.ok(io.out.some((line) => line.includes("task failed")));
+  assert.ok(!io.out.some((line) => line.includes("failed before any work started")));
+});
+
 test("runWatchCommand: a task stopped for questions gets a terminal notice pointing at fabrica answer", async () => {
   const recordHome = tempRecordHome();
   appendEvent(recordHome, { taskId: "t1", name: "task-received" });
