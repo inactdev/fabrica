@@ -482,11 +482,12 @@ for the full reasoning). `doTask`'s first-ever call always passes
 `isRetry: false`.
 
 The record entry it keys on is `"line-cut"`, which `runProductionRound`
-appends the moment `createProductionLine`/`reopenProductionLine`
-returns - proof the line genuinely exists - and **not**
+appends as soon as `createProductionLine`/`reopenProductionLine` returns
+- proof the line genuinely exists, though not in the same instant it
+started existing (see the window in step 2 above) - and **not**
 `"answers-given"`, which `answerTask` writes *before* calling
 `runProductionRound` at all (Client ruling, PR #69 review). The two come
-apart in exactly one place, and it strands the task: a resume that dies
+apart in two places. The first strands the task: a resume that dies
 on the cut itself (the project moved or was renamed, a stale
 `.git/index.lock`, any other `git worktree add` failure) leaves
 `"answers-given"` on the record with no branch anywhere to match it.
@@ -498,6 +499,16 @@ the real cause - the same permanently-stuck-task shape the
 Moving the `"answers-given"` append after the cut instead was considered
 and rejected: a second answer would then append a duplicate round to
 `answers.md`.
+
+The second place they come apart is the crash window in step 2 - the
+line is cut, but the process dies before the append. That one cuts the
+other way: keyed on the answer, `isRetry` would be true and the resume
+would reopen the branch that really is there, where keying on
+`"line-cut"` leaves the task needing the manual cleanup step 2
+describes. It still loses the argument, because it is the rarer case and
+the one whose failure is loud, named, and fixable by hand in two
+commands - against a first case where keying on the answer would strand
+the task with no way out at all.
 
 What the guard guarantees is that the task stays resumable and keeps
 reporting its true error - not that retrying succeeds. Reopening does
