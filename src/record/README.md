@@ -23,7 +23,7 @@ A line of `events.jsonl` looks like this:
 | --- | --- | --- | --- |
 | `occurredAt` | An ISO 8601 timestamp | Placing the event in time — ordering, and `fabrica log`'s output. | Can't be omitted from the file: `appendEvent` stamps it itself at write time (see `NewFabricaEvent` below). |
 | `taskId` | The id of the task this event belongs to | Letting `readEventsForTask` pull one task's history out of the shared file. | Can't be omitted: every event belongs to exactly one task. |
-| `name` | One of a known, closed set of event names — `task-received`, `work-started`, `check-run`, `delivered`, and so on (the full set is `FabricaEventName` in `types.ts`) | Saying what happened. A closed union rather than a free-form string, so a typo in an event name is a build error, not a phantom event that silently never shows up in any query. | Can't be omitted: an event with no name says nothing happened. |
+| `name` | One of a known, closed set of event names — `task-received`, `work-started`, `check-run`, `delivered`, and so on (the full set is `FabricaEventName` in `contract/surface.ts`) | Saying what happened. A closed union rather than a free-form string, so a typo in an event name is a build error, not a phantom event that silently never shows up in any query. | Can't be omitted: an event with no name says nothing happened. |
 | `details` | Any JSON value | Whatever extra context that particular event needs — a check's exit code, an attempt number, a verdict's note. | Left off the line entirely, not written as `null` — a plain event stays a plain three-field line. |
 
 ### `FabricaEvent` and `NewFabricaEvent`

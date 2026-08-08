@@ -60,6 +60,22 @@ return early" below.
    that event, and nothing else, is what tells a later resume it must
    reopen this branch rather than cut a new one; see "The ask-first
    seam" below.
+
+   A window still separates the two: `createProductionLine`/
+   `reopenProductionLine` returning is not the same instant as the
+   `"line-cut"` append a few lines later. If the process dies in that
+   gap, the branch and worktree are genuinely on disk but the record
+   has nothing proving it, so the next round for this taskId still
+   reads `isRetry === false` and calls `createProductionLine` again.
+   That call finds the same task's worktree path already occupied and
+   refuses loudly with `LineError("workdir-exists")` naming the path —
+   the same kind of refusal `createProductionLine` gives any other
+   taskId collision — rather than silently reusing or corrupting it, so
+   the task stops cleanly instead of drifting. The window stays open
+   because closing it would mean making a `git worktree add` and a
+   record append atomic, and nothing here offers that; a crash landing
+   in a few-line gap is rare enough, and its failure obvious enough,
+   that documenting it beats building machinery to prevent it.
 3. **Resolves the check command** (`resolve-check.ts`) and refuses before
    any Worker runs if there isn't one (`check.ts`'s `requireCheckCommand`)
    — CONTRACT rule 2 allows no path around the gate, so a task with
@@ -577,6 +593,13 @@ whether a task is `"closed"`.
   own outcome and the **cumulative** receipts (prior + this round) —
   `queries.ts`'s `deliveryOf`/`receiptsOf`/`deriveState` all read the
   *last* `"delivered"` event for exactly this reason, not the first.
+
+  This calls `reopenProductionLine` directly rather than going through
+  `runProductionRound`, so a fix round appends `"work-started"` but no
+  `"line-cut"`. That's fine today - nothing reads `"line-cut"` on this
+  path, and the task already got one from its original round - but it
+  means `"line-cut"` is not a reliable "this task currently has a live
+  line" signal in general: the fix path is a standing exception to it.
 
   **What a fix costs, precisely**: nothing, on purpose (issue #65). Rule
   3's "three means three" bounds `do()`'s own retry loop — a *machine*
