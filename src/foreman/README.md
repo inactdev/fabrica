@@ -375,7 +375,8 @@ today that means the Client, by hand.
 
 SPEC.md describes `fabrica do` as detached: it prints the task id and
 returns immediately while work continues in the background, writing to
-the transcript (one batch per attempt — see SPEC.md). This module's `do()` does not do that — once it decides
+the transcript (one batch per attempt — see SPEC.md). This module's
+`do()` does not do that — once it decides
 to proceed, it runs the whole loop to completion before resolving. (The
 one early return is the ask-first seam below, and it isn't detachment:
 nothing is left running, because no ProductionLine was ever cut.)

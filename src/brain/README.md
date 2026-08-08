@@ -131,8 +131,9 @@ a person to read.
 Each entry holds three fields:
 
 - `occurredAt` - an ISO 8601 timestamp for when this piece of output
-  happened. Lets a live view place entries in time and stream them as
-  they arrive, rather than only after the whole call finishes.
+  happened. The entries reach the record in one batch per attempt, so
+  this is what lets a view place each one at the moment it actually
+  happened rather than at the moment the batch landed.
 - `kind` - what sort of chunk this is, such as `"stdout"`, `"tool-call"`,
   or `"reasoning"`. Deliberately a plain string, not a closed set, for
   the same reason `reasoningEffort` is: different tools categorize their
