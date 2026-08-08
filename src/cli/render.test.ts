@@ -8,6 +8,7 @@ import {
   formatEventLines,
   formatQuietNotice,
   formatStatusLine,
+  formatTerminalNotice,
   formatTranscriptLine,
   isQuietTooLong,
   lastActivityAt,
@@ -367,4 +368,31 @@ test("formatEventLines: two separate single-heartbeat gaps, split by a real even
 
 test("formatEventLines: no events, no lines", () => {
   assert.deepEqual(formatEventLines([]), []);
+});
+
+// A task whose brain.ask() threw records "ask-failed", which stateOf
+// reports as "failed" - but it never delivered anything, so recordVerdict
+// refuses `fabrica verdict <id> fix` with "not-delivered". The notice must
+// never point the Client at a command the tool will reject.
+test("formatTerminalNotice: a failure with no delivery offers no fix path", () => {
+  const notice = formatTerminalNotice("failed", { taskId: "t1", hasDelivery: false });
+  assert.ok(notice);
+  assert.match(notice, /no `fix` path/);
+  assert.match(notice, /fabrica log t1/);
+  assert.doesNotMatch(notice, /verdict wakes the worker/);
+});
+
+test("formatTerminalNotice: a failed delivery still names the fix path", () => {
+  const notice = formatTerminalNotice("failed", { taskId: "t1", hasDelivery: true });
+  assert.ok(notice);
+  assert.match(notice, /`fix` verdict wakes the worker again/);
+});
+
+test("formatTerminalNotice: only terminal-ish states get one", () => {
+  const ctx = { taskId: "t1", hasDelivery: true };
+  assert.match(formatTerminalNotice("delivered", ctx)!, /task delivered/);
+  assert.match(formatTerminalNotice("closed", ctx)!, /task closed/);
+  assert.match(formatTerminalNotice("asking", ctx)!, /fabrica answer t1/);
+  assert.equal(formatTerminalNotice("working", ctx), null);
+  assert.equal(formatTerminalNotice("checking", ctx), null);
 });

@@ -21,11 +21,13 @@ import {
   checkStartedAt,
   formatAge,
   formatQuietNotice,
+  formatTerminalNotice,
   formatTranscriptLine,
   isQuietTooLong,
   lastActivityAt,
   summarizeHeartbeatRun,
 } from "./render.ts";
+import type { FabricaTask } from "../index.ts";
 
 export const WATCH_HELP = `Usage: ${WATCH_USAGE}
 
@@ -137,9 +139,16 @@ async function streamTranscript(ctx: {
   let wasQuiet = false;
   let wasChecking = false;
   let lastCheckingPace = -1;
-  let noticedTerminal = false;
+  // Which state the last terminal notice was issued for, not merely
+  // "whether one was" - a `fix` verdict moves a delivered task back to
+  // "working" and then delivers it again, and that second delivery has to
+  // say so. A one-shot latch would leave the stream silently stopping
+  // instead, which is the exact looks-like-a-hang case the notice exists
+  // to prevent.
+  let noticedState: FabricaTask["state"] | null = null;
 
-  const poll = async () => {
+  /** True once nothing further can ever land, so the caller stops polling. */
+  const poll = async (): Promise<boolean> => {
     const entries = readTranscript(recordHome, taskId);
     for (; printedTranscript < entries.length; printedTranscript++) {
       stdout(formatTranscriptLine(entries[printedTranscript]));
@@ -197,28 +206,31 @@ async function streamTranscript(ctx: {
     }
     wasQuiet = quiet;
 
-    if (!noticedTerminal && (state === "delivered" || state === "failed")) {
-      noticedTerminal = true;
-      stdout(
-        `-- task ${state} - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`
-      );
-    } else if (!noticedTerminal && state === "closed") {
-      // Rule 6: closed means the Client's verdict is recorded and final -
-      // unlike "delivered", there is no fix path left to reopen this one.
-      noticedTerminal = true;
-      stdout("-- task closed - your verdict is recorded; nothing more will ever land on this transcript --");
-    } else if (!noticedTerminal && state === "asking") {
-      // Stopped for clarifying questions before any Worker ran (issue #8)
-      // - polling forever here would look like a hang with no way out.
-      noticedTerminal = true;
-      stdout(`-- task asking - stopped for clarifying questions; answer with \`fabrica answer ${taskId} -m "<text>"\` to resume it --`);
+    const notice = formatTerminalNotice(state, {
+      taskId,
+      hasDelivery: events.some((e) => e.name === "delivered"),
+    });
+    if (!notice) {
+      noticedState = null;
+    } else if (state !== noticedState) {
+      noticedState = state;
+      stdout(notice);
     }
+
+    // "closed" is the one state that provably cannot change again:
+    // recordVerdict refuses any further ruling once the last verdict was
+    // accept or wrong (src/foreman/verdict.ts's "already-closed"), so the
+    // notice's "nothing more will ever land" is literally true and there
+    // is nothing left to poll for. delivered/failed/asking all still keep
+    // polling - a `fix` verdict or a `fabrica answer` genuinely wakes
+    // those back up, and this watch should show it when it happens.
+    return state === "closed";
   };
 
-  await poll();
+  if (await poll()) return;
   while (!signal.aborted) {
     await delay(pollIntervalMs, signal);
     if (signal.aborted) break;
-    await poll();
+    if (await poll()) return;
   }
 }

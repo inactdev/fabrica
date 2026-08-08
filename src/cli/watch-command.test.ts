@@ -314,3 +314,100 @@ test("runWatchCommand: aborting an already-aborted signal returns immediately", 
   assert.equal(code, 0);
   assert.ok(io.out.some((line) => line.includes("small change")), "still prints what already happened, once");
 });
+
+// The notice tracks WHICH state it was issued for, not merely that one was
+// issued: a `fix` verdict wakes the same task back up, and its second
+// delivery has to say so too. A one-shot latch would leave the stream
+// silently stopping - the exact looks-like-a-hang case the notice exists
+// to prevent.
+test("runWatchCommand: a second delivery after a fix verdict gets its own notice", async () => {
+  const recordHome = tempRecordHome();
+  const delivered = { outcome: "done", delivery: { confidence: 100, summary: "done", branch: "fabrica/t1", files: [] } };
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, { taskId: "t1", name: "delivered", details: delivered });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+
+  const noticeCount = () => io.out.filter((line) => line.includes("task delivered")).length;
+  assert.ok(await waitFor(() => noticeCount() === 1), `expected the first delivered notice, got: ${JSON.stringify(io.out)}`);
+
+  appendEvent(recordHome, { taskId: "t1", name: "verdict-recorded", details: { ruling: "fix", note: "one more thing" } });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { verdict: "fix", project: "/some/project" } });
+  // A heartbeat landing proves a poll actually observed the fix round's
+  // "working" state, rather than the whole round slipping between polls.
+  appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 2 } });
+  assert.ok(await waitFor(() => io.out.some((line) => line.includes("[heartbeat]"))));
+
+  appendEvent(recordHome, { taskId: "t1", name: "delivered", details: delivered });
+  const sawSecond = await waitFor(() => noticeCount() === 2, 5_000);
+  controller.abort();
+  await watchPromise;
+
+  assert.ok(sawSecond, `expected a second delivered notice after the fix round, got: ${JSON.stringify(io.out)}`);
+});
+
+// "closed" is the one state that provably cannot change again
+// (recordVerdict refuses any further ruling once the last one was accept or
+// wrong), so the loop ends itself instead of polling until Ctrl-C.
+test("runWatchCommand: a closed task ends the watch itself, without waiting to be stopped", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { outcome: "done", delivery: { confidence: 100, summary: "done", branch: "fabrica/t1", files: [] } },
+  });
+  appendEvent(recordHome, { taskId: "t1", name: "verdict-recorded", details: { ruling: "accept", note: "good" } });
+
+  const io = captureIo();
+  const safetyStop = new AbortController();
+  const timer = setTimeout(() => safetyStop.abort(), 5_000);
+  const code = await runWatchCommand(["t1"], {
+    recordHome,
+    signal: safetyStop.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  clearTimeout(timer);
+
+  assert.equal(code, 0);
+  assert.equal(safetyStop.signal.aborted, false, "watch should have returned on its own, not been stopped");
+  assert.ok(io.out.some((line) => line.includes("task closed")));
+});
+
+// A task whose brain.ask() threw is "failed" with nothing ever delivered,
+// so `fabrica verdict <id> fix` would be refused with "not-delivered" -
+// the notice must not send the Client at it.
+test("runWatchCommand: an ask-failed task's notice offers no fix path", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "ask-failed", details: { error: "no credential" } });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  const sawNotice = await waitFor(() => io.out.some((line) => line.includes("task failed")));
+  controller.abort();
+  await watchPromise;
+
+  assert.ok(sawNotice, `expected a failed notice, got: ${JSON.stringify(io.out)}`);
+  const notice = io.out.find((line) => line.includes("task failed"))!;
+  assert.match(notice, /no `fix` path/);
+  assert.doesNotMatch(notice, /verdict wakes the worker/);
+});

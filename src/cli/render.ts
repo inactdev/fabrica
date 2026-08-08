@@ -121,6 +121,46 @@ export function formatQuietNotice(quietForMs: number): string {
   return `quiet ${formatAge(quietForMs)}, no signal since last heartbeat - not known to be stuck, not known to be fine`;
 }
 
+/** What `fabrica watch` prints when a task reaches a state nothing
+ * further is expected from, so a stream that simply stops is never
+ * mistaken for a hang - null for a state the worker is still moving
+ * through. Every branch names an action the tool will actually accept:
+ * a task that failed before it ever delivered has no `fix` path at all
+ * (`recordVerdict` refuses it with "not-delivered"), so it is worded
+ * apart from the delivered/failed-delivery case rather than pointing the
+ * Client at a command that would be rejected. */
+export function formatTerminalNotice(
+  state: FabricaTask["state"],
+  ctx: { taskId: string; hasDelivery: boolean }
+): string | null {
+  switch (state) {
+    case "delivered":
+      return `-- task delivered - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
+    case "failed":
+      if (!ctx.hasDelivery) {
+        // The only way to be "failed" with no "delivered" event on the
+        // record: brain.ask() itself threw, before any Worker ran (see
+        // stateOf's "ask-failed" branch). Nothing was ever delivered, so
+        // there is nothing to rule on.
+        return (
+          `-- task failed before any work started - the brain's clarify step threw, so nothing was ever ` +
+          `delivered and there is no \`fix\` path; \`fabrica log ${ctx.taskId}\` has the reason --`
+        );
+      }
+      return `-- task failed - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
+    case "closed":
+      // Rule 6: closed means the Client's verdict is recorded and final -
+      // unlike "delivered", there is no fix path left to reopen this one.
+      return "-- task closed - your verdict is recorded; nothing more will ever land on this transcript --";
+    case "asking":
+      // Stopped for clarifying questions before any Worker ran (issue #8)
+      // - polling forever here would look like a hang with no way out.
+      return `-- task asking - stopped for clarifying questions; answer with \`fabrica answer ${ctx.taskId} -m "<text>"\` to resume it --`;
+    default:
+      return null;
+  }
+}
+
 /** A generic fallback for an event name this file has no specific
  * rendering for (an unimplemented one like "cap-refused", or a future one
  * this file hasn't been taught yet) - compact JSON, but capped, so an
