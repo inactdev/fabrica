@@ -16,6 +16,33 @@ import { LineError } from "./errors.ts";
 import type { ProductionLine } from "../../contract/surface.ts";
 import { assertSafeId, describeGitError, requireRepoRoot } from "./safety.ts";
 
+/** True if a branch `fabrica/<taskId>` already exists in `project`. Never
+ * throws (matches safety.ts's isKnownWorktree's style). This is the
+ * `refs/heads/` check reopenProductionLine uses below to refuse
+ * `no-such-branch`, and nothing else - module-private on purpose, not
+ * exported from src/line's barrel.
+ *
+ * **Not** what decides createProductionLine vs. reopenProductionLine for
+ * a resumed task (Client ruling, issue #8): src/foreman/do.ts's
+ * runProductionRound takes an explicit `isRetry` its caller derives from
+ * the record, never from git state, because a taskId is only unique
+ * within one record home - a same-named branch from another record home
+ * or a hand-made one would otherwise be silently adopted on a task's
+ * actual first round. Keeping this unexported is part of that ruling:
+ * the rejected signal shouldn't be one import away. See
+ * src/line/README.md for the full reasoning. */
+function productionLineBranchExists(project: string, taskId: string): boolean {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/fabrica/${taskId}`], {
+      cwd: project,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function reopenProductionLine(opts: { project: string; taskId: string; recordHome: string }): ProductionLine {
   assertSafeId(opts.taskId);
   const project = requireRepoRoot(opts.project);
@@ -40,12 +67,8 @@ export function reopenProductionLine(opts: { project: string; taskId: string; re
   // a tag called `fabrica/<taskId>` would resolve, and `git worktree add`
   // would then check it out at a detached HEAD, so the fix round's
   // commits would land on nothing and be silently orphaned at teardown.
-  try {
-    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
-      cwd: project,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch {
+  // productionLineBranchExists checks exactly that ref form.
+  if (!productionLineBranchExists(project, opts.taskId)) {
     throw new LineError(
       "no-such-branch",
       `Cannot reopen a ProductionLine for ${branch}: no local branch of that name exists in ${project}. ` +

@@ -37,7 +37,7 @@ A line of `events.jsonl` looks like this:
 Three different documents live in a task's folder, and they used to be conflated into one (`task.md`, holding the original text with clarification rounds appended onto it — indistinguishable from each other once appended). They're kept apart because that distinction is itself worth keeping:
 
 - **`request.md`** — what the Client originally wrote. Verbatim, immutable: `registerTask` writes it once, at registration, and nothing in this module ever appends to it or overwrites it again.
-- **`answers.md`** — every clarification round so far, one section per round: the question that was asked, and the answer the Client gave. Appended to by whatever handles `fabrica answer`, one round at a time.
+- **`answers.md`** — every clarification round so far, one section per round: the question that was asked, and the answer the Client gave. Appended to by `src/foreman/`'s `answerTask` (issue #8), one round at a time.
 - **`brief.md`** — the request plus every answer, assembled into the single document a Worker actually receives. This is exactly what gets passed as the `brief` argument to `Brain.work` (see `src/brain/README.md`). Re-derived from `request.md` and `answers.md` every time `fabrica answer` runs, so it can never drift out of sync with what it's assembled from.
 
 Why keep them apart instead of one growing file? Because "this task needed three rounds of clarification" and "this task ran straight through" are different facts about a task — and, over time, about the Client's own task-writing — and merging request and answers into one blob destroys that signal. It feeds directly into:
@@ -55,14 +55,14 @@ Each task gets `tasks/<id>/`, holding:
 | File | Holds | Written by |
 | --- | --- | --- |
 | `request.md` | The Client's original task text, verbatim | `registerTask`, once, at registration; never appended to or overwritten again. |
-| `answers.md` | Every clarification round: question asked, answer given | Whatever handles `fabrica answer`, one round appended per call. |
-| `brief.md` | `request.md` plus every answer in `answers.md`, assembled — what a Worker actually receives | The Foreman, at registration, verbatim from the request (no answers exist yet); re-derived and rewritten by `fabrica answer` each time a round is added. |
+| `answers.md` | Every clarification round: question asked, answer given | The Foreman's `answerTask` (issue #8), one round appended per `fabrica answer`. |
+| `brief.md` | `request.md` plus every answer in `answers.md`, assembled — what a Worker actually receives | The Foreman, at registration, verbatim from the request (no answers exist yet); re-derived and rewritten by `answerTask` each time a round is added. |
 | `plan.md` | The agent's plan, on the runs where it proceeds straight to work instead of asking questions | The worker, once. |
 | `delivery.md` | The delivery block, or a failure report | The Foreman, after checks run - rewritten in place by a `fix` verdict's extra round, so it always shows the latest one. |
 | `verdict` | Every ruling (`accept` / `fix` / `wrong`) plus its note and a timestamp | The Foreman's `recordVerdict`, one line appended per ruling - a `fix` leaves the task open, so a task can collect several before its final one. |
 | `transcript.log` | The worker's transcript entries, one JSON line each (see `src/brain/README.md`'s `TranscriptEntry`) | The Foreman, one append per attempt as the loop runs. |
 
-`registerTask` writes `request.md` and appends the matching `task-received` event to `events.jsonl` in the same call, so the file and the record can't drift apart. `src/foreman/` (issue #7) now writes `brief.md`, `transcript.log`, and `delivery.md` the same way, and its `verdict.ts` (issue #10) writes `verdict`; `answers.md` and `plan.md` are the remaining files, and exist for the modules that write them later in the loop to reuse the pattern.
+`registerTask` writes `request.md` and appends the matching `task-received` event to `events.jsonl` in the same call, so the file and the record can't drift apart. `src/foreman/` (issue #7) now writes `brief.md`, `transcript.log`, and `delivery.md` the same way, and its `verdict.ts` (issue #10) writes `verdict` and its `answer.ts` (issue #8) writes `answers.md`; `plan.md` is the one remaining file, and exists for the module that writes it later in the loop to reuse the pattern.
 
 ## Why there is no edit and no delete
 

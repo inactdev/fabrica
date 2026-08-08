@@ -50,7 +50,7 @@ The whole tool in one command.
 2. **Clarify-or-proceed (ask-first dial, v1 position: ask).** The agent's
    first pass produces either QUESTIONS or a short PLAN:
    - If the task is materially ambiguous → print numbered questions and
-     stop. The Client answers with `fabrica answer <id> "<text>"`, which
+     stop. The Client answers with `fabrica answer <id> -m "<text>"`, which
      appends a round to `answers.md` and re-derives `brief.md`, then
      resumes at this step. The brief is the Client's original request
      plus every answer given so far, assembled into the one document a
@@ -77,7 +77,7 @@ The whole tool in one command.
 7. **Nags for a verdict** on later `fabrica` invocations until one is recorded
    (Contract 6).
 
-### `fabrica answer <id> "<text>"`
+### `fabrica answer <id> -m "<text>"`
 Appends a clarification round to `answers.md` and re-derives `brief.md`
 from `request.md` plus every answer so far, then resumes the task. Never
 writes into `request.md` — the Client's original words stay verbatim.

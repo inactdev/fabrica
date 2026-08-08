@@ -33,6 +33,21 @@ const resultLine = (overrides) => ({
   ...overrides,
 });
 
+// ask()'s prompt wraps the caller's marker task text inside a longer,
+// fixed template (buildAskPrompt in ../claude-code.ts) rather than
+// passing it as `brief` directly, so these scenarios match by substring
+// instead of the exact-equality switch below.
+if (brief?.includes("ASK_SCENARIO_QUESTIONS")) {
+  line(resultLine({ result: JSON.stringify({ questions: ["What database?", "Multi-tenant?"] }) }));
+} else if (brief?.includes("ASK_SCENARIO_NONE")) {
+  line(resultLine({ result: JSON.stringify({ questions: [] }) }));
+} else if (brief?.includes("ASK_SCENARIO_FENCED")) {
+  line(resultLine({ result: "```json\n" + JSON.stringify({ questions: ["Fenced question?"] }) + "\n```" }));
+} else if (brief?.includes("ASK_SCENARIO_MIXED")) {
+  line(resultLine({ result: JSON.stringify({ questions: ["Real question?", "  ", 7] }) }));
+} else if (brief?.includes("ASK_SCENARIO_GARBLED")) {
+  line(resultLine({ result: "sure, sounds good, proceeding now" }));
+} else {
 switch (brief) {
   case "ECHO_ARGS": {
     line({ type: "assistant", message: { content: [{ type: "text", text: JSON.stringify(args) }] } });
@@ -117,4 +132,5 @@ switch (brief) {
   default: {
     line(resultLine({}));
   }
+}
 }

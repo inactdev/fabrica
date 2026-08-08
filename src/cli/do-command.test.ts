@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { readEventsForTask } from "../record/index.ts";
 import { runDoCommand } from "./do-command.ts";
 
 const FAKE_ENTRY = fileURLToPath(new URL("./helpers/fake-run-task-entry.ts", import.meta.url));
@@ -26,6 +27,13 @@ function captureIo() {
   return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
 }
 
+// Every test below passes a short askTimeoutMs/askPollMs so a slow or
+// missing ask-outcome signal never makes this suite itself slow - the
+// fake brain's ask() resolves instantly, so a real signal always lands
+// well within these bounds; only the "no work" test below relies on the
+// timeout actually being hit.
+const FAST_ASK_WAIT = { askTimeoutMs: 5_000, askPollMs: 20 };
+
 test("runDoCommand: a literal project path registers a task and prints just its id", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
@@ -34,6 +42,7 @@ test("runDoCommand: a literal project path registers a task and prints just its 
   const code = await runDoCommand(["add a comment", "--project", project], {
     recordHome,
     entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
     ...io,
   });
 
@@ -41,6 +50,120 @@ test("runDoCommand: a literal project path registers a task and prints just its 
   assert.equal(io.out.length, 1);
   assert.match(io.out[0], /^\d{8}-/);
   assert.deepEqual(io.err, []);
+});
+
+// Issue #8's own definition of done, scenario 1, exercised end to end
+// through the real CLI: a materially ambiguous task prints numbered
+// questions and stops.
+//
+// Client ruling (issue #8 follow-up): stdout stays exactly the task id,
+// one line, nothing else, in every case - including the asking one -
+// so `id=$(fabrica do "..." --project foo) || exit 1` (src/cli/README.md)
+// keeps working verbatim. The explanation and questions are guidance for
+// the Client's own screen, so they go to stderr instead; no separate
+// exit code for this case, since restoring the documented stdout
+// contract already covers scripting.
+test("runDoCommand: a materially ambiguous task's stdout is exactly the task id, nothing else", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["ASK_ME_SOMETHING build an app", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 1, "stdout must be exactly one line, the id, same as any other outcome");
+  assert.match(io.out[0], /^\d{8}-/);
+  const taskId = io.out[0];
+
+  // No worker ran - nothing beyond registration and the ask itself is on
+  // the record yet.
+  const events = readEventsForTask(recordHome, taskId).map((e) => e.name);
+  assert.deepEqual(events, ["task-received", "questions-asked"]);
+});
+
+test("runDoCommand: a materially ambiguous task prints the numbered questions and how to answer them, to stderr", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["ASK_ME_SOMETHING build an app", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  const taskId = io.out[0];
+  assert.match(io.err.join("\n"), /materially ambiguous/);
+  assert.match(io.err.join("\n"), /1\. What database should this use\?/);
+  assert.match(io.err.join("\n"), /2\. Should it support multi-tenancy\?/);
+  assert.match(io.err.join("\n"), new RegExp(`fabrica answer ${taskId} -m "<text>"`));
+});
+
+// Client ruling, issue #8 follow-up: a task that fails before any work
+// starts (brain.ask() throwing - the reference adapter's documented
+// credential gap is today's live path) must exit non-zero with the real
+// reason, so `id=$(fabrica do "..." --project foo) || exit 1`
+// (src/cli/README.md) actually catches it, instead of reading a
+// success code off a task that never got past its own first step.
+test("runDoCommand: a task whose ask() fails prints the real reason and exits non-zero", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["ASK_FAILS_SOMETHING build an app", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.equal(io.out.length, 1, "stdout still carries only the task id - the task was genuinely registered");
+  assert.match(io.out[0], /^\d{8}-/);
+  const taskId = io.out[0];
+  assert.match(io.err.join("\n"), /the task failed before any work started/);
+  assert.match(io.err.join("\n"), /simulated: the brain is unreachable/);
+
+  const events = readEventsForTask(recordHome, taskId).map((e) => e.name);
+  assert.deepEqual(events, ["task-received", "ask-failed"]);
+});
+
+// Issue #8's own definition of done, scenario 3, exercised end to end:
+// an unambiguous task is unaffected and still delivers in the
+// background exactly as before.
+test("runDoCommand: an unambiguous task is unaffected - it still delivers in the background", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["add a comment", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 1, "still exactly one line: just the task id, no questions");
+  const taskId = io.out[0];
+
+  const deadline = Date.now() + 10_000;
+  let delivered = false;
+  while (Date.now() < deadline) {
+    if (readEventsForTask(recordHome, taskId).some((e) => e.name === "delivered")) {
+      delivered = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(delivered, "the unambiguous task never delivered in the background");
 });
 
 test("runDoCommand: a registered project name resolves through projects.toml", async () => {
@@ -55,6 +178,7 @@ test("runDoCommand: a registered project name resolves through projects.toml", a
   const code = await runDoCommand(["add a comment", "--project", "demo"], {
     recordHome,
     entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
     ...io,
   });
 
@@ -70,6 +194,7 @@ test("runDoCommand: no projects.toml at all still works against a literal path (
   const code = await runDoCommand(["add a comment", "--project", project], {
     recordHome,
     entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
     ...io,
   });
 

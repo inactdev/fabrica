@@ -7,9 +7,10 @@
 // real-binary test for the live proof and claude-code.md for what
 // each discovery means.
 
-import { mkdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
+import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
@@ -53,6 +54,13 @@ export interface ClaudeCodeAdapterOptions {
    * the container gets only what its own image defines - nothing from
    * this process's own environment (API keys, tokens) leaks in. */
   env?: Record<string, string>;
+  /** ask()'s scratch workdir override - same purpose as `binPath` above:
+   * lets a test seed a directory with the fake CLI script before calling
+   * ask(), since ask() otherwise mints and destroys its own fresh
+   * tmpdir per call (there being no real project to mount for a call
+   * that runs before any ProductionLine exists). Leave it out in real
+   * use. */
+  askScratchDir?: string;
 }
 
 // One line of `claude ... --output-format stream-json`. Only the shape
@@ -111,6 +119,68 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
   // enforce here.
   if (workOpts?.reasoningEffort) args.push("--effort", workOpts.reasoningEffort);
   return args;
+}
+
+// SPEC.md step 2, "Clarify-or-proceed" (issue #8): the prompt this
+// adapter's ask() sends. Instructs the model to draw the line this issue
+// itself draws - materially ambiguous means an ambiguity that would
+// change what gets built, not one a reasonable person would resolve the
+// same way every time - and to answer in a fixed, parseable shape rather
+// than free prose.
+function buildAskPrompt(brief: string): string {
+  return (
+    "You are deciding whether a task description is materially ambiguous " +
+    "before any work starts on it - ambiguous in a way that would change " +
+    "what actually gets built, not something a reasonable person would " +
+    "fill in the same way every time. If it is materially ambiguous, " +
+    "write the numbered questions whose answers would change what gets " +
+    "built. If it is already clear enough to proceed, ask nothing.\n\n" +
+    "Respond with ONLY a JSON object, no other text before or after it, " +
+    "in exactly this shape:\n" +
+    '{"questions": ["question one", "question two"]}\n' +
+    "or, if nothing needs asking:\n" +
+    '{"questions": []}\n\n' +
+    `Task:\n${brief}`
+  );
+}
+
+function buildAskArgs(prompt: string, opts: ClaudeCodeAdapterOptions): string[] {
+  // No --permission-mode bypassPermissions here: this call is asked to
+  // think and answer, never to edit anything, so it needs none of the
+  // tool access work() has to unlock. No --resume either - ask() always
+  // starts a fresh, throwaway session; nothing about it is meant to
+  // continue into work()'s own session (see this file's own doc for why
+  // that wouldn't even resolve - a session only resumes from the cwd it
+  // was born in, and ask() and work() never share one).
+  const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
+  if (opts.model) args.push("--model", opts.model);
+  return args;
+}
+
+/** The model is asked for bare JSON but may still wrap it in a fenced
+ * code block despite the instruction - stripped defensively before
+ * parsing. Anything that still isn't valid JSON, or isn't shaped like
+ * BrainAskResult, is treated as "nothing to ask" rather than failing the
+ * task over a formatting slip - the same defensive spirit as
+ * parseLines() below, and matching this issue's own stated bias toward
+ * not over-asking when uncertain. */
+function parseAskResult(text: string): BrainAskResult {
+  const fenced = text.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  const candidate = fenced ? fenced[1] : text.trim();
+  try {
+    const parsed: unknown = JSON.parse(candidate);
+    const questions = (parsed as { questions?: unknown } | null)?.questions;
+    if (Array.isArray(questions)) {
+      // Blank or non-string entries are dropped, not treated as grounds
+      // to throw the whole list away - one stray element must not lose a
+      // real question. registerAndAsk filters the same way.
+      const kept = questions.filter((q): q is string => typeof q === "string" && q.trim().length > 0);
+      return kept.length > 0 ? { questions: kept } : {};
+    }
+  } catch {
+    // Not parseable JSON - fall through to "nothing to ask".
+  }
+  return {};
 }
 
 function parseLines(stdout: string): ClaudeStreamLine[] {
@@ -197,6 +267,61 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
   return {
     name: "claude-code",
     model: opts.model ?? "default",
+
+    async ask(brief: string): Promise<BrainAskResult> {
+      // No ProductionLine exists yet at this point (SPEC.md step 2 runs
+      // before step 3's isolation) - a fresh, empty scratch dir stands in
+      // for workdir instead of any real project, and nothing else is
+      // mounted (no readOnlyMounts: there is no git repository to reach
+      // here at all). CONTRACT rule 1 holds by construction: this call
+      // has no path to anything of the Client's to touch.
+      const ownScratchDir = opts.askScratchDir === undefined;
+      const scratchDir = opts.askScratchDir ?? mkdtempSync(join(realpathSync(tmpdir()), "fabrica-ask-"));
+      // Without a mounted home, a `--user <uid>` container has no
+      // /etc/passwd entry for that uid and $HOME resolves to "/", which
+      // is read-only - the CLI writes its own startup config/state under
+      // $HOME and would die there (see src/containment/README.md's
+      // "$HOME" note). work() persists its home across calls so a
+      // --resume finds the last session; ask() never resumes, so this
+      // one is throwaway and goes away with the call.
+      const homeDir = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-ask-home-"));
+      const args = buildAskArgs(buildAskPrompt(brief), opts);
+
+      let stdout: string;
+      let stderr: string;
+      let exitCode: number | null;
+      try {
+        ({ stdout, stderr, exitCode } = await runContained(bin, args, {
+          workdir: scratchDir,
+          network: "allowed",
+          image,
+          env: opts.env,
+          homeDir,
+        }));
+      } catch (err) {
+        if (err instanceof ContainmentError) {
+          throw new ClaudeCodeError(
+            "spawn-failed",
+            `could not run "${bin}" contained (image ${image}) to assess ambiguity: ${err.message}`
+          );
+        }
+        throw err;
+      } finally {
+        if (ownScratchDir) rmSync(scratchDir, { recursive: true, force: true });
+        rmSync(homeDir, { recursive: true, force: true });
+      }
+
+      const lines = parseLines(stdout);
+      const result = [...lines].reverse().find((l) => l.type === "result");
+
+      if (exitCode !== 0 || result?.is_error) {
+        const detail = result?.result ?? (stderr.trim() || `exit code ${exitCode}`);
+        const status = result?.api_error_status ? ` (api_error_status ${result.api_error_status})` : "";
+        throw new ClaudeCodeError("cli-error", `${detail}${status}`);
+      }
+
+      return result?.result ? parseAskResult(result.result) : {};
+    },
 
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions): Promise<BrainWorkResult> {
       const args = buildArgs(brief, opts, workOpts);

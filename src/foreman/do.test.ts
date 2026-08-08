@@ -4,11 +4,12 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { doTask } from "./do.ts";
+import { doTask, runProductionRound } from "./do.ts";
 import { ForemanError } from "./errors.ts";
 import { deliveryOf, receiptsOf } from "./queries.ts";
-import { readTaskFile } from "../record/index.ts";
+import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
+import { LineError } from "../line/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 
 function freshHome(): string {
@@ -279,4 +280,114 @@ test("doTask records an honest failure-report, not silence, when the pre-teardow
 
   const receipts = receiptsOf(recordHome, task.id);
   assert.equal(receipts[receipts.length - 1].outcome, "failed");
+});
+
+// Issue #8's own definition of done, scenario 1: a materially ambiguous
+// task returns numbered questions and starts no worker.
+test("doTask stops and returns 'asking' when the brain finds the task materially ambiguous, without starting a worker", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const brain = fakeBrain({ askQuestions: ["What database should this use?", "Multi-tenant?"] });
+
+  const task = await doTask(recordHome, "build me an app", { project, brain });
+
+  assert.equal(task.state, "asking");
+  assert.equal(brain.calls, 0, "no worker should run before the Client answers");
+
+  const events = readEventsForTask(recordHome, task.id);
+  assert.deepEqual(
+    events.map((e) => e.name),
+    ["task-received", "questions-asked"]
+  );
+
+  // No ProductionLine was ever cut - rule 1 holds trivially since there
+  // was never anything to isolate in the first place.
+  const worktrees = execSync("git worktree list", { cwd: project, encoding: "utf8" });
+  assert.equal(worktrees.trim().split("\n").length, 1, "only the main worktree should exist");
+
+  // No delivery exists yet for an asking task.
+  assert.equal(deliveryOf(recordHome, task.id), null);
+});
+
+// Issue #8's own definition of done, scenario 3: an unambiguous task is
+// unaffected and runs exactly as it did before this issue - the brain is
+// still consulted (ask() is called once), but nothing about the outcome
+// changes.
+test("doTask on an unambiguous task is unaffected: ask() is consulted but the task runs exactly as before", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const brain = fakeBrain(); // no askQuestions configured - nothing to ask
+
+  const task = await doTask(recordHome, "small change", { project, brain });
+
+  assert.equal(task.state, "delivered");
+  assert.deepEqual(brain.askCalls, ["small change"], "the brain's first pass still runs");
+  assert.equal(brain.calls, 1, "exactly one work() call, same as before issue #8");
+
+  const events = readEventsForTask(recordHome, task.id);
+  assert.deepEqual(
+    events.map((e) => e.name),
+    ["task-received", "line-cut", "work-started", "check-run", "delivered"],
+    "no questions-asked/answers-given events for a task nothing needed to ask about"
+  );
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "done");
+});
+
+// Client ruling: runProductionRound's create-vs-reopen choice must come
+// from an explicit isRetry the caller derives from the record - not from
+// whether a same-named branch happens to exist in the project - because
+// a taskId is only unique within one record home, while branches live in
+// the project. A foreign or leftover fabrica/<taskId> branch (a
+// different record home's task, a hand-made branch, a record home
+// recreated while the project's own branches survived) must never be
+// silently adopted just because it shares a name.
+test("runProductionRound on a first-ever round (isRetry: false) refuses loudly even if a same-named branch already exists", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const taskId = "not-actually-a-retry";
+  // A branch that has nothing to do with this call - standing in for a
+  // foreign/leftover branch that merely happens to share this taskId.
+  execSync(`git branch fabrica/${taskId}`, { cwd: project, shell: "/bin/bash" });
+
+  await assert.rejects(
+    () =>
+      runProductionRound(recordHome, taskId, "some brief", {
+        project,
+        brain: fakeBrain(),
+        totalAttempts: 2,
+        explicitAttempts: false,
+        isRetry: false,
+      }),
+    (err: unknown) => err instanceof LineError && err.code === "cut-failed"
+  );
+});
+
+test("runProductionRound with isRetry: true reopens the task's own branch", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const taskId = "a-genuine-retry";
+
+  // First round: a real createProductionLine call, as doTask's own
+  // first-ever call would make - leaves the branch behind once torn down.
+  const first = await runProductionRound(recordHome, taskId, "some brief", {
+    project,
+    brain: fakeBrain(),
+    totalAttempts: 1,
+    explicitAttempts: true,
+    isRetry: false,
+  });
+  assert.equal(first.state, "delivered");
+
+  // Second round for the SAME taskId, declared a retry - must reopen the
+  // branch the first round already cut, not refuse on "already exists".
+  const second = await runProductionRound(recordHome, taskId, "some brief, retried", {
+    project,
+    brain: fakeBrain(),
+    totalAttempts: 1,
+    explicitAttempts: true,
+    isRetry: true,
+  });
+  assert.equal(second.state, "delivered");
 });

@@ -66,6 +66,34 @@ Every refusal `createProductionLine` can raise applies here too, plus
 refuses rather than reusing a leftover worktree, so a line has to be
 destroyed before it can be reopened.
 
+### `productionLineBranchExists(project, taskId)` (module-private)
+
+Plain boolean, never throws - true if `fabrica/<taskId>` already exists as
+a local branch, false otherwise (including when `project` or `taskId`
+themselves are bad, same as `safety.ts`'s `isKnownWorktree`). It is the
+`refs/heads/` check `reopenProductionLine` uses internally to refuse
+`no-such-branch`, and nothing else: not exported from `resume.ts`, not
+re-exported from this module's barrel, so the rejected "decide from git
+state" signal below isn't one import away.
+
+**Not** what decides `createProductionLine` vs. `reopenProductionLine`
+for a resumed task, on purpose (Client ruling, issue #8): an earlier
+version of `src/foreman/do.ts`'s `runProductionRound` called this
+directly to make that choice, on the theory that a first-ever round
+could never see a branch already there. That was the weaker evidence -
+a taskId is unique only within one record home (`registerTask` claims
+`tasks/<id>/`), while branches live in the *project*, so a same-named
+`fabrica/<taskId>` branch left by a different record home, a record home
+recreated while the project's own branches survived, or a hand-made
+branch, would all have been silently reopened and committed onto on what
+was actually a task's first round - exactly where
+`createProductionLine`'s own loud refusal is supposed to apply.
+`runProductionRound` now takes an explicit `isRetry` the caller derives
+from the *record* instead (`answer.ts`: this exact taskId, in this exact
+record home, already has a `"line-cut"` event - proof a line was
+genuinely cut for it once) - a claim only that task's own round can make
+true, unlike a branch's mere existence in the project.
+
 ## `destroyProductionLine(line)`
 
 Returns a `TeardownResult`: `{ status: "destroyed" }` when it actually

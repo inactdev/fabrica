@@ -72,3 +72,31 @@ test("main: top-level help mentions the verdict command", async () => {
   assert.equal(code, 0);
   assert.match(io.out[0], /verdict <taskId>/);
 });
+
+test("main: top-level help mentions the answer command", async () => {
+  const io = captureIo();
+  const code = await main(["--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /answer <taskId>/);
+});
+
+test("main: `answer --help` prints the answer command's own usage and exits 0, without running anything", async () => {
+  const io = captureIo();
+  const code = await main(["answer", "--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica answer <taskId>/);
+});
+
+test("main: `answer -h` also short-circuits to help", async () => {
+  const io = captureIo();
+  const code = await main(["answer", "some-task", "-h"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica answer <taskId>/);
+});
+
+test("main: `answer` with bad usage refuses without touching the record", async () => {
+  const io = captureIo();
+  const code = await main(["answer"], io);
+  assert.equal(code, 1);
+  assert.match(io.err[0], /<taskId>/);
+});

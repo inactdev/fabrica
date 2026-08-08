@@ -1,12 +1,13 @@
 // The loop: SPEC.md "fabrica do". Wires src/record, src/line, src/brain,
-// and src/config together — register the task, cut a ProductionLine, run
-// the worker for a counted number of attempts, verify with the project's
-// check, and deliver. See README.md for the design decisions this file
-// leans on (why check.sh, why attempts behaves the way it does, why the
-// promise doesn't resolve early).
+// and src/config together — register the task, ask-or-proceed (issue #8,
+// ask.ts), cut a ProductionLine, run the worker for a counted number of
+// attempts, verify with the project's check, and deliver. See README.md
+// for the design decisions this file leans on (why check.sh, why
+// attempts behaves the way it does, why the promise doesn't resolve
+// early).
 
-import { appendEvent, appendTaskFile, registerTask, writeTaskFile } from "../record/index.ts";
-import { createProductionLine, destroyProductionLine } from "../line/index.ts";
+import { appendEvent, appendTaskFile, readTaskFile, writeTaskFile } from "../record/index.ts";
+import { createProductionLine, destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
@@ -16,62 +17,120 @@ import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
+import { registerAndAsk } from "./ask.ts";
 import type { Delivery, FabricaTask } from "../../contract/surface.ts";
 
-/** SPEC.md step 5's default: one attempt, and on red one fix pass with the
- * failure output, then re-check — a ceiling of 2 worker runs. */
-export const DEFAULT_ATTEMPTS = 2;
+export { DEFAULT_ATTEMPTS } from "./ask.ts";
 
 export async function doTask(
   recordHome: string,
   taskText: string,
   opts: { project: string; attempts?: number; brain?: Brain }
 ): Promise<FabricaTask> {
-  const brain = opts.brain;
-  if (!brain) {
-    throw new ForemanError(
-      "no-brain",
-      "fabrica do: no brain was provided, and v1 has no default adapter wired in yet " +
-        "(issue #6 builds the first one). Pass one explicitly."
-    );
-  }
+  // SPEC.md steps 1-2: register the task, then give the brain one pass
+  // at the bare task text (issue #8) before any ProductionLine exists.
+  // registerAndAsk raises ForemanError("no-brain"/"invalid-attempts")
+  // up front, same as this function always has, before anything is
+  // registered.
+  const { taskId, brief, questions, project, totalAttempts, explicitAttempts } = await registerAndAsk(
+    recordHome,
+    taskText,
+    opts
+  );
 
-  const explicitAttempts = opts.attempts !== undefined;
-  if (explicitAttempts && (!Number.isInteger(opts.attempts) || opts.attempts! < 1)) {
-    throw new ForemanError(
-      "invalid-attempts",
-      `fabrica do: attempts must be a positive integer, got ${opts.attempts}.`
-    );
-  }
-  const totalAttempts = opts.attempts ?? DEFAULT_ATTEMPTS;
+  // A materially ambiguous task stops here - no ProductionLine is ever
+  // cut, no Worker ever runs. `fabrica answer <id> -m "<text>"`
+  // (src/foreman/answer.ts) resumes it, extending this same brief.
+  if (questions.length > 0) return { id: taskId, state: "asking" };
 
-  const { id: taskId } = registerTask(recordHome, taskText);
-  // Ownership split: registerTask (src/record) writes request.md as part
-  // of registration — the record owns what the Client said. The Foreman
-  // writes brief.md here, afterwards — the Foreman owns what a Worker is
-  // actually given.
+  // Always a first-ever round: registerAndAsk just claimed this taskId,
+  // so no ProductionLine for it can exist yet. Never derived from
+  // whether a branch happens to exist (see runProductionRound's own
+  // comment for why that was the weaker, unsafe signal).
+  return runProductionRound(recordHome, taskId, brief, {
+    project,
+    brain: opts.brain!,
+    totalAttempts,
+    explicitAttempts,
+    isRetry: false,
+  });
+}
+
+/**
+ * SPEC.md steps 3-6: isolate, work, verify, deliver. Shared by a task
+ * proceeding straight out of `doTask` and one resuming after `fabrica
+ * answer` (answer.ts) - `brief` is whatever the brain should actually
+ * receive: the bare task text in doTask's case, request.md plus every
+ * answer so far in answer.ts's.
+ */
+export async function runProductionRound(
+  recordHome: string,
+  taskId: string,
+  brief: string,
+  ctx: { project: string; brain: Brain; totalAttempts: number; explicitAttempts: boolean; isRetry: boolean }
+): Promise<FabricaTask> {
+  const { project, brain, totalAttempts, explicitAttempts, isRetry } = ctx;
+  // The delivery's summary/evidence want the Client's original one-line
+  // ask, not the full brief a resumed round's worker receives - `brief`
+  // for an answer.ts retry is request.md plus the whole "## Clarification"
+  // Q/A block, which would otherwise turn `delivery.summary` (`Completed:
+  // ${taskText}`) and delivery.md into a multi-paragraph blob instead of
+  // one line. verdict.ts's fix path already draws this exact distinction
+  // (`readTaskFile(..., "request.md")` for taskText, `brief.md` only for
+  // the worker's own brief) - mirrored here rather than reinvented.
+  const taskText = readTaskFile(recordHome, taskId, "request.md") ?? brief;
+  // `isRetry` is an explicit signal the caller derives from the RECORD -
+  // answer.ts sets it true only when this exact taskId, in this exact
+  // record home, already has a "line-cut" event: proof that
+  // createProductionLine genuinely returned for this task once, so the
+  // `fabrica/<taskId>` branch out there is this task's own.
+  // doTask's first-ever call always passes false.
   //
-  // Two complementary reasons to write it now, upfront, rather than
-  // deriving it on demand later:
-  //   - #8 is why it exists NOW: brief.md is written here so fabrica
-  //     answer only has to append a round to answers.md and re-derive
-  //     brief.md from what's already there, instead of having to create
-  //     the file itself and reshape this path.
-  //   - #19 is why it must be STORED rather than derived LATER: once
-  //     per-project lessons get primed into the brief, brief.md becomes
-  //     the record of what was actually handed to a Worker, not a cache
-  //     of request.md — a brief will contain material that cannot be
-  //     reconstructed later from request.md + answers.md alone, because
-  //     lessons change over time. Storing it is evidence, not a
-  //     convenience.
-  // Today brief.md is byte-identical to request.md — v1 neither asks a
-  // clarifying question (#8) nor primes lessons (#19) yet — and that
-  // sameness is expected to end the moment either one lands.
-  writeTaskFile(recordHome, taskId, "brief.md", taskText);
-
-  const line = createProductionLine({ project: opts.project, taskId, recordHome });
+  // Proof of the cut specifically, not proof the Client answered: a
+  // resume records "answers-given" before this function ever runs, so a
+  // round that died on the cut itself (a moved project path, a stale
+  // .git/index.lock) leaves that event behind with no branch to match
+  // it. Keyed on "answers-given", every later `fabrica answer` would
+  // then reopen a line that was never cut and die on `no-such-branch`
+  // forever, even after the Client fixed the real cause - the task
+  // permanently stuck, which is exactly what staying resumable is
+  // supposed to prevent.
+  //
+  // This used to be decided by asking git whether a `fabrica/<taskId>`
+  // branch already existed, on the theory that a first-ever round could
+  // never see one. That was the weaker evidence: a taskId is only unique
+  // within one record home (registerTask claims tasks/<id>/), while
+  // branches live in the project - a same-named branch left by a
+  // different record home, a record home recreated while the project's
+  // branches survived, or a hand-made branch, would all have been
+  // silently reopened and committed onto, on what was actually this
+  // task's first round, exactly where createProductionLine's own loud
+  // refusal used to apply. The record - whether this taskId's own
+  // history shows a prior incomplete resume - is a claim only this
+  // task's own retry can make true, so it can't be spoofed by an
+  // unrelated branch happening to share a name.
+  //
+  // Note what reopening does and doesn't fix. It makes a retry possible
+  // at all, and a failure unrelated to the branch's own content (an
+  // unreachable brain, a transient error) then succeeds once that
+  // condition clears. It does NOT re-cut from the project's current
+  // HEAD: the reopened branch is still forked from wherever it was
+  // first cut, so a failure baked into that history - no check.sh in
+  // that commit, a project path already wrong then - throws the same
+  // error on every retry.
+  const line = isRetry
+    ? reopenProductionLine({ project, taskId, recordHome })
+    : createProductionLine({ project, taskId, recordHome });
 
   try {
+    // The line demonstrably exists now - recorded here, inside the try,
+    // so teardown still runs if this append itself fails, and before
+    // anything that can throw between the cut and "work-started"
+    // (requireCheckCommand, requireGateBaseline). A later resume reads
+    // this event and nothing else to know it must reopen this branch
+    // rather than cut a new one.
+    appendEvent(recordHome, { taskId, name: "line-cut", details: { branch: line.branch, reopened: isRetry } });
+
     // Pin the diff's fork point to the exact commit the ProductionLine was
     // cut from, before any worker attempt runs — so the delivery's `files`
     // list can't drift if the Client's own checkout moves to a different
@@ -87,7 +146,7 @@ export async function doTask(
 
     const { receipts, lastGate, declaredGateChanges } = await runAttempts({
       brain,
-      brief: taskText,
+      brief,
       workdir: line.workdir,
       taskId,
       check,

@@ -4,4 +4,4 @@
 // dependency on contract/. This is the ONLY interface a Worker's model
 // plugs into; nothing past this file may know which brain is behind it.
 
-export type { Brain, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../../contract/surface.ts";
+export type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../../contract/surface.ts";

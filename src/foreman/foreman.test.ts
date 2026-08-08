@@ -66,7 +66,7 @@ test("events() returns this task's events only, in order", async () => {
   assert.ok(eventsA.every((e) => e.taskId === taskA.id));
   assert.deepEqual(
     eventsA.map((e) => e.name),
-    ["task-received", "work-started", "check-run", "delivered"]
+    ["task-received", "line-cut", "work-started", "check-run", "delivered"]
   );
 
   const eventsB = await foreman.events(taskB.id);
@@ -79,4 +79,67 @@ test("deliveryOf() and receiptsOf() return null/empty for an unknown task id", a
 
   assert.equal(await foreman.deliveryOf("no-such-task"), null);
   assert.deepEqual(await foreman.receiptsOf("no-such-task"), []);
+});
+
+test("status() lists an asking task as asking, and answer() moves it on", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome });
+  const project = makeFixtureRepo("exit 0");
+
+  const asked = await foreman.do("build me an app", {
+    project,
+    brain: fakeBrain({ askQuestions: ["Which database?"] }),
+  });
+  assert.equal(asked.state, "asking");
+
+  const beforeAnswer = (await foreman.status()).find((t) => t.id === asked.id);
+  assert.equal(beforeAnswer?.state, "asking");
+
+  const resumed = await foreman.answer(asked.id, "Postgres.");
+  assert.equal(resumed.state, "delivered");
+
+  const afterAnswer = (await foreman.status()).find((t) => t.id === asked.id);
+  assert.equal(afterAnswer?.state, "delivered");
+});
+
+// Mirrors verdict()'s own same-instance brain memory: a do() call that
+// ended up "asking" already recorded its brain by taskId, so answer()
+// on the SAME Foreman instance reuses it without a brain argument of
+// its own (contract/surface.ts's Foreman.answer takes none).
+test("answer() reuses the exact brain a same-instance do() call was given", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome });
+  const project = makeFixtureRepo("exit 0");
+  const brain = fakeBrain({ askQuestions: ["Which?"] });
+
+  const asked = await foreman.do("build me an app", { project, brain });
+  await foreman.answer(asked.id, "An answer.");
+
+  assert.equal(brain.calls, 1, "the same brain instance was reused for the resumed round");
+});
+
+test("answer() on an unknown task id refuses plainly", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome });
+
+  await assert.rejects(
+    () => foreman.answer("some-task-id", "an answer"),
+    (err: unknown) => err instanceof ForemanError && err.code === "unknown-task"
+  );
+});
+
+// Client ruling, issue #8 follow-up: a task whose brain.ask() itself
+// threw must show up as failed, not silently stuck at "working" forever
+// (deriveState's own fallback) or missing from status() entirely.
+test("status() lists a task whose ask() threw as failed", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome });
+  const project = makeFixtureRepo("exit 0");
+  const brain = fakeBrain({ askError: new Error("simulated: the brain is unreachable") });
+
+  await assert.rejects(() => foreman.do("build me an app", { project, brain }));
+
+  const tasks = await foreman.status();
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].state, "failed");
 });

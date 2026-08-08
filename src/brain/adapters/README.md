@@ -169,6 +169,13 @@ export function terminalToolAdapter(): Brain {
   return {
     name: "terminal-tool",
     model: "whatever model that tool reports itself as using",
+    async ask(brief) {
+      // SPEC.md step 2, before any ProductionLine exists - so no workdir
+      // and nothing on disk to run against; see ../README.md. A real one
+      // runs the tool in a throwaway scratch dir and parses its answer
+      // defensively (reference adapter: claude-code.md's "ask(brief)").
+      return { questions: [] };
+    },
     async work(brief, workdir, opts) {
       // Real flag names come from verifying the live binary (issue #6).
       const args = opts?.session

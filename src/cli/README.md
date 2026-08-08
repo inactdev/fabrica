@@ -47,17 +47,97 @@ The one command this issue builds. What it does, in order:
    directory, and must exist as a directory or this refuses too. This is
    the "-or-name" half `foreman/README.md` calls out as explicitly a
    CLI-layer concern - `doTask` itself only ever sees a resolved path.
-4. **Spawns the loop, detached** (`spawn-detached.ts`), and prints the
-   new task's id to stdout - one line, nothing else - the moment it's
-   registered. This process then exits; the task keeps running. See
-   "Why detached execution needs its own file" below for the mechanism.
+4. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
+   new task's id the moment it's registered (`watch-for-task-id.ts`).
+5. **Waits, bounded, to see whether the task asks, proceeds, or fails**
+   (`wait-for-ask-outcome.ts`, issue #8): the detached process is still
+   running `doTask` (`src/foreman/do.ts`), which now does register ->
+   ask -> maybe isolate/work in one call (SPEC.md step 2, "Clarify-or-
+   proceed" - see `src/foreman/README.md`'s "The ask-first seam"). This
+   polls that task's own record for whichever of `"questions-asked"`,
+   `"ask-failed"`, or `"work-started"` lands first:
+   - **Materially ambiguous** → stops, printing the numbered questions
+     and how to answer them (`fabrica answer <id> -m "<text>"`) to
+     **stderr**. No Worker ever ran; nothing keeps running in the
+     background for this task until answered.
+   - **`brain.ask()` itself threw** (the reference adapter's documented
+     credential gap is today's live path) → stops, printing the real
+     reason to **stderr** and exiting **non-zero** (Client ruling, issue
+     #8 follow-up: "a failed task must never look like a started one").
+     `ask.ts`'s `registerAndAsk` already wrote this to the record as
+     `"ask-failed"` before this process ever sees it.
+   - **Otherwise, or if the wait times out** → nothing further to print;
+     this process then exits, and the task keeps running in the
+     background. See "Why detached execution needs its own file" below
+     for the spawn mechanism.
+
+   The wait is bounded, not indefinite, on purpose - but the timeout is
+   for the genuinely-slow-brain case only, not a stand-in for "the task
+   failed": a brain that throws is detected directly, above, the moment
+   `"ask-failed"` lands, not left to exhaust the clock. Only a brain
+   that is simply slow, or a task that fails for an unrelated reason
+   before ever reaching `"work-started"` (e.g. a missing check command -
+   a known, separate gap this doesn't close), falls through to the
+   timeout, which still resolves as "proceeding" - the task itself is
+   never affected by what this observes; it keeps running (or, in that
+   separate gap's case, has already failed silently upstream of what
+   this can see).
+
+**stdout is always exactly the task id, one line, nothing else, in
+every outcome including the failed one** - Client ruling (issue #8
+follow-up): an earlier version also put the asking case's explanation
+and questions on stdout, which broke the documented contract below by
+putting prose ahead of `$id` in the output a script reads. Explanations,
+questions, and failure reasons are all for the Client's own screen, not
+data - they go to stderr. There is no separate exit code for the asking
+case (restoring the plain stdout contract already covers scripting -
+`fabrica answer` and the task's own `"questions-asked"` event carry the
+real content regardless of what the terminal still shows), but the
+failed case does exit non-zero - the one outcome this contract actually
+has to distinguish, since a script's `id=$(fabrica do "...") || exit 1`
+depends on that exit code alone to know whether `$id` is worth trusting.
 
 A refusal at steps 1-3 exits non-zero with the message on stderr - safe
 to use in a script (`id=$(fabrica do "..." --project foo) || exit 1`).
 Once step 4 starts, this process's own exit code no longer reflects the
-task's eventual outcome, which is the nature of detachment: by design,
-nothing is left waiting around to report it here (see `fabrica
-status`/`log`/`watch`, issue #12 - not built yet).
+task's eventual outcome for the "proceeds" case, which is the nature of
+detachment: by design, nothing is left waiting around to report delivery
+or failure here (see `fabrica status`/`log`/`watch`, issue #12 - not
+built yet). The "asks" and "`ask()` threw" cases are the exceptions:
+this process already knows and reports those outcomes directly (the
+failed one non-zero), since no work was ever started to detach from.
+
+## `fabrica answer <taskId> -m "<text>"`
+
+Answers the clarifying questions `fabrica do` printed and stopped on
+(issue #8), and resumes the task. Like `fabrica verdict`, this never
+detaches: resuming runs the task's isolate/work/verify/deliver pipeline
+synchronously (`src/foreman/answer.ts`'s `answerTask`, the same
+`runProductionRound` `do()` itself uses once it decides to proceed), so
+the command can report the outcome directly.
+
+`answer-args.ts` parses one positional (the taskId) plus a required
+`-m "<text>"`, mirroring `verdict-args.ts` - Client ruling: the two
+commands where the Client types free prose should behave identically,
+in `git commit -m`'s already-familiar shape, and a flag (unlike a bare
+positional) takes an answer that starts with a dash, e.g. `-1 means
+unlimited`, without mistaking it for a flag of its own.
+`answer-command.ts` resolves the record
+home the same way `do-command.ts`/`verdict-command.ts` do and calls
+`createForeman({ recordHome }).answer(taskId, text)` - no brain override
+in real use, so this always uses `defaultBrainAdapter()` unless the same
+process already ran the `do()` call that asked (there is no such case for
+the real CLI, where `fabrica do` and `fabrica answer` are always separate
+invocations - see `src/foreman/README.md`'s "The ask-first seam" for the
+per-instance brain memory this falls back from). SPEC.md's "one
+clarification round by default" is enforced by the Foreman, not this
+file: once a round has actually *delivered*, a second `fabrica answer`
+on the same task refuses with `ForemanError("already-answered")`. A
+round that threw before delivering does not spend the clarification
+round - the command can be run again, and reports whatever the retry
+does (see `src/foreman/README.md`'s "The ask-first seam" for why the
+guard keys on a delivered round rather than on the answer being
+recorded).
 
 ### `FABRICA_HOME`
 
@@ -191,17 +271,20 @@ calls `runTask`.
 | --- | --- |
 | `bin.mjs` | The installed executable. Two lines of real work - see above. |
 | `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh. |
-| `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. New subcommands (#8, #12) add one branch here. |
+| `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand (#12: status/log/watch) adds one more branch here, the way #8's `answer` did. |
 | `help.ts` | Top-level help text and the list of known commands. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
-| `do-command.ts` | Ties config, project resolution, and the detached spawn together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
+| `do-command.ts` | Ties config, project resolution, the detached spawn, and the ask-outcome wait together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
+| `answer-args.ts` | Parses `fabrica answer`'s arguments. |
+| `answer-command.ts` | Resolves the record home and calls `Foreman.answer` for `fabrica answer`; `ANSWER_HELP` is `answer --help`'s text. |
 | `verdict-args.ts` | Parses `fabrica verdict`'s arguments. |
 | `verdict-command.ts` | Resolves the record home and calls `Foreman.verdict` for `fabrica verdict`; `VERDICT_HELP` is `verdict --help`'s text. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
+| `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether the task asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
 | `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`. |
 | `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `project-not-found`, `spawn-failed`, `registration-timeout`. |
-| `helpers/fake-run-task-entry.ts` | Test-only stand-in for `run-task-entry.ts`, using `fakeBrain()` instead of the real adapter - lets `spawn-detached.test.ts` and `do-command.test.ts` exercise the real spawn-and-discover mechanism as a real separate process, without ever invoking a real coding agent. |
+| `helpers/fake-run-task-entry.ts` | Test-only stand-in for `run-task-entry.ts`, using `fakeBrain()` instead of the real adapter - lets `spawn-detached.test.ts` and `do-command.test.ts` exercise the real spawn-and-discover mechanism as a real separate process, without ever invoking a real coding agent. A taskText containing `ASK_ME_SOMETHING` makes its fake brain ask a clarifying question (issue #8) instead of proceeding, and one containing `ASK_FAILS_SOMETHING` makes its `ask()` throw, since there's no other channel to configure a fake running in a separate process. |

@@ -12,7 +12,10 @@ export type ForemanErrorCode =
   | "not-delivered"
   | "already-closed"
   | "invalid-verdict"
-  | "missing-note";
+  | "missing-note"
+  | "no-questions-pending"
+  | "already-answered"
+  | "missing-answer";
 
 export class ForemanError extends Error {
   readonly code: ForemanErrorCode;
