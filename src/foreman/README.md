@@ -60,6 +60,32 @@ return early" below.
    that event, and nothing else, is what tells a later resume it must
    reopen this branch rather than cut a new one; see "The ask-first
    seam" below.
+
+   A window still separates the two: `createProductionLine`/
+   `reopenProductionLine` returning is not the same instant as the
+   `"line-cut"` append a few lines later. If the process dies in that
+   gap, the branch and worktree are genuinely on disk but the record
+   has nothing proving it, so the next round for this taskId still
+   reads `isRetry === false` and calls `createProductionLine` again.
+   That call finds the same task's worktree path already occupied and
+   refuses loudly with `LineError("workdir-exists")` naming the path —
+   the same kind of refusal `createProductionLine` gives any other
+   taskId collision — rather than silently reusing or corrupting it.
+   That refusal is terminal, not a hiccup to retry through: the task is
+   stuck until a human clears the leftovers by hand, because every
+   later `fabrica answer <id>` reads `isRetry === false` again and hits
+   the same `workdir-exists`. Clearing the worktree alone isn't enough
+   either - `git worktree add -b fabrica/<taskId>` then fails on the
+   branch instead, since the branch survived the crash too. Recovery is
+   both halves, run in the Client's own checkout: `git worktree remove`
+   (or `git worktree prune`) for `recordHome/tasks/<taskId>/worktree`,
+   *and* `git branch -D fabrica/<taskId>`.
+
+   The window stays open because closing it would mean making a `git
+   worktree add` and a record append atomic, and nothing here offers
+   that; a crash landing in a few-line gap is rare enough, and its
+   failure obvious enough, that documenting it beats building machinery
+   to prevent it.
 3. **Resolves the check command** (`resolve-check.ts`) and refuses before
    any Worker runs if there isn't one (`check.ts`'s `requireCheckCommand`)
    — CONTRACT rule 2 allows no path around the gate, so a task with
@@ -456,11 +482,12 @@ for the full reasoning). `doTask`'s first-ever call always passes
 `isRetry: false`.
 
 The record entry it keys on is `"line-cut"`, which `runProductionRound`
-appends the moment `createProductionLine`/`reopenProductionLine`
-returns - proof the line genuinely exists - and **not**
+appends as soon as `createProductionLine`/`reopenProductionLine` returns
+- proof the line genuinely exists, though not in the same instant it
+started existing (see the window in step 2 above) - and **not**
 `"answers-given"`, which `answerTask` writes *before* calling
 `runProductionRound` at all (Client ruling, PR #69 review). The two come
-apart in exactly one place, and it strands the task: a resume that dies
+apart in two places. The first strands the task: a resume that dies
 on the cut itself (the project moved or was renamed, a stale
 `.git/index.lock`, any other `git worktree add` failure) leaves
 `"answers-given"` on the record with no branch anywhere to match it.
@@ -472,6 +499,16 @@ the real cause - the same permanently-stuck-task shape the
 Moving the `"answers-given"` append after the cut instead was considered
 and rejected: a second answer would then append a duplicate round to
 `answers.md`.
+
+The second place they come apart is the crash window in step 2 - the
+line is cut, but the process dies before the append. That one cuts the
+other way: keyed on the answer, `isRetry` would be true and the resume
+would reopen the branch that really is there, where keying on
+`"line-cut"` leaves the task needing the manual cleanup step 2
+describes. It still loses the argument, because it is the rarer case and
+the one whose failure is loud, named, and fixable by hand in two
+commands - against a first case where keying on the answer would strand
+the task with no way out at all.
 
 What the guard guarantees is that the task stays resumable and keeps
 reporting its true error - not that retrying succeeds. Reopening does
@@ -577,6 +614,13 @@ whether a task is `"closed"`.
   own outcome and the **cumulative** receipts (prior + this round) —
   `queries.ts`'s `deliveryOf`/`receiptsOf`/`deriveState` all read the
   *last* `"delivered"` event for exactly this reason, not the first.
+
+  This calls `reopenProductionLine` directly rather than going through
+  `runProductionRound`, so a fix round appends `"work-started"` but no
+  `"line-cut"`. That's fine today - nothing reads `"line-cut"` on this
+  path, and the task already got one from its original round - but it
+  means `"line-cut"` is not a reliable "this task currently has a live
+  line" signal in general: the fix path is a standing exception to it.
 
   **What a fix costs, precisely**: nothing, on purpose (issue #65). Rule
   3's "three means three" bounds `do()`'s own retry loop — a *machine*
