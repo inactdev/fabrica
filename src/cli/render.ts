@@ -204,12 +204,11 @@ export function formatStatusLine(
  * branch, `formatTerminalNotice`'s "failed before any work started"
  * branch, and `watch-command.ts`'s poll-loop exit condition, which all
  * mean exactly this). The one definition of that rule, taking a bare
- * state so every one of those callers - some of which only ever have the
- * state, not a full task - can call it directly: independent copies of
- * the same predicate is how they'd silently drift apart (issue #12
- * review finding). Takes the bare state rather than a task object so a
- * caller holding only `state` (not a `FabricaTask`) never has to wrap it
- * first. */
+ * state rather than a task object so every one of those callers - some
+ * of which only ever hold the state, not a full `FabricaTask` - can call
+ * it directly without wrapping it first: independent copies of the same
+ * predicate is how they'd silently drift apart (issue #12 review
+ * finding). */
 export function isDeadEnd(state: FabricaTask["state"], hasDelivery: boolean): boolean {
   return state === "failed" && !hasDelivery;
 }

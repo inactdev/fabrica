@@ -242,7 +242,13 @@ notice (`formatTerminalNotice`), the collapsed heartbeat run
 (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s
 catch-up), the status line, the event line, and the transcript line each
 have exactly one definition, so an edit to any of them can't drift
-between commands.
+between commands. The same holds for the one judgement all of this hangs
+on: `isDeadEnd(state, hasDelivery)` is the single definition of "failed
+with nothing ever delivered", called by `status`'s "FAILED,
+UNRESOLVABLE" marker and its sort, by `formatTerminalNotice`'s
+failed-before-any-work branch, and by `watch`'s poll-loop exit
+condition - it takes a bare state, not a task, so a caller holding only
+the state calls it directly instead of hand-writing the check again.
 
 Both `status` and `watch` read the record once per render, then derive
 everything else from the events already in hand: `status` takes
