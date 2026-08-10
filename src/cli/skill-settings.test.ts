@@ -38,9 +38,13 @@ const DECIDING_COMMANDS = ["verdict", "answer"];
 
 function commandsInMainDispatch(): string[] {
   const mainSource = readFileSync(join(repoRoot, "src", "cli", "main.ts"), "utf8");
-  return [...mainSource.matchAll(/if \(command === "([a-z-]+)"\)/g)]
-    .map((m) => m[1])
-    .filter((command) => !command.startsWith("-"));
+  // Deliberately includes "--help"/"-h" rather than filtering them out -
+  // they're real dispatch branches too, and a narrowing that silently
+  // drops free help output should fail this coverage assertion exactly
+  // the same way dropping a real subcommand would (Client ruling,
+  // issue #76 follow-up: this is precisely the gap a reviewer, not a
+  // test, caught the first time).
+  return [...mainSource.matchAll(/if \(command === "([a-z-]+)"\)/g)].map((m) => m[1]);
 }
 
 interface SettingsTemplate {
@@ -198,6 +202,28 @@ test("fabrica do/status/log/watch run unprompted, bare and with arguments", () =
         evaluate(settings, attempt),
         "allow",
         `${settings.harness}: "${attempt}" is not auto-approved - reading/starting commands should never prompt`
+      );
+    }
+  }
+});
+
+test("bare fabrica and its help forms run unprompted - pure output, nothing decided", () => {
+  const templates = harnessSettings();
+  assert.ok(templates.length > 0, "no harness ships a settings.json to check");
+
+  // Restored by Client ruling (issue #76 follow-up) after the explicit
+  // allow list's first version accidentally dropped them: help output
+  // decides nothing and changes nothing, so prompting for it is exactly
+  // the friction this whole PR exists to remove elsewhere. Exact-match
+  // entries only - no wildcard, so nothing broader reopens.
+  const attempts = ["fabrica", "fabrica --help", "fabrica -h"];
+
+  for (const settings of templates) {
+    for (const attempt of attempts) {
+      assert.equal(
+        evaluate(settings, attempt),
+        "allow",
+        `${settings.harness}: "${attempt}" is not auto-approved - pure help output should never prompt`
       );
     }
   }

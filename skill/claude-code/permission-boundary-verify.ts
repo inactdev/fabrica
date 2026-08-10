@@ -29,6 +29,20 @@
 // by a caller's mistake. No credential is ever read, copied, or
 // printed - authentication rides on whatever the calling machine's
 // `claude` is already logged in as.
+//
+// Known limit, stated plainly rather than silently accepted (Client
+// ruling, issue #76 follow-up): `markTrusted`/`restoreTrust` are each
+// an unsynchronized read-modify-write cycle against that same real
+// `~/.claude.json`, which any other live session on the machine -
+// including, realistically, the real session this file itself spawns
+// - can also be writing to at the same time (its own project/history
+// state). The atomic rename guarantees a reader never sees a torn or
+// half-written file, but it does not prevent a lost update: a write
+// landing between this function's own read and rename is silently
+// overwritten, and one landing during the up-to-180s session run can
+// revert the trust patch mid-check. Closing that properly needs a
+// real lock around the whole file, which is out of scope here - this
+// only closes the corruption risk, not the race.
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";

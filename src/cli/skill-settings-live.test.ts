@@ -92,14 +92,54 @@ async function loadChecker(harness: string): Promise<CheckPermissionBoundary> {
 /** An allow-emptied copy of the shipped template, written directly
  * inside the given scratch dir rather than wherever
  * checkPermissionBoundary installs the real template under test, so
- * the two can never collide - same deny/hooks, permissions.allow: []. */
+ * the two can never collide - same deny, permissions.allow: [], and
+ * hooks stripped entirely. Keeping the shipped hooks would leave the
+ * PreToolUse -> fabrica deny-and-log-edit wiring live; since the fake
+ * shim on PATH answers to that name too, any Edit/Write/NotebookEdit/
+ * MultiEdit attempt during the session would append to the same
+ * marker file this control reads, failing it for a reason that has
+ * nothing to do with the Bash allow list under test. */
 function emptyAllowVariant(harness: string, scratch: string): string {
   const shipped = JSON.parse(readFileSync(join(skillDir, harness, "settings.json"), "utf8"));
   shipped.permissions.allow = [];
+  delete shipped.hooks;
   const variantPath = join(scratch, "empty-allow-settings.json");
   writeFileSync(variantPath, JSON.stringify(shipped, null, 2));
   return variantPath;
 }
+
+/** Canonicalizes quote character and whitespace before comparing two
+ * command strings, so a session that writes `fabrica do 'a task'`
+ * instead of `fabrica do "a task"` - a real, correct denial or
+ * execution, just phrased differently - doesn't fail an assertion on
+ * model phrasing rather than on the permission boundary. Only folds
+ * together strings that already differ solely in quote character or
+ * whitespace run-length; it does not remove quotes, reorder tokens, or
+ * strip flags, so two commands with genuinely different content - the
+ * standalone verdict attempt and the chained one that contains it -
+ * still normalize to different strings (proven below in "normalizing
+ * command strings"). */
+function normalizeCommand(command: string): string {
+  return command.replace(/'/g, '"').replace(/\s+/g, " ").trim();
+}
+
+function includesCommand(commands: string[], target: string): boolean {
+  const normalizedTarget = normalizeCommand(target);
+  return commands.some((c) => normalizeCommand(c) === normalizedTarget);
+}
+
+test("normalizing command strings still distinguishes the standalone verdict attempt from the chained one", () => {
+  const standalone = "fabrica verdict task-1 accept -m note";
+  const chained = "fabrica status && fabrica verdict task-1 accept -m note";
+  assert.notEqual(
+    normalizeCommand(standalone),
+    normalizeCommand(chained),
+    "normalizing quote style and whitespace must not blur two genuinely different commands into the same string"
+  );
+  // The specific flakiness this exists to absorb: quote-character swaps.
+  assert.equal(normalizeCommand(`fabrica do 'a task'`), normalizeCommand(`fabrica do "a task"`));
+  assert.equal(normalizeCommand("fabrica  status"), normalizeCommand("fabrica status"));
+});
 
 /** A negative control's whole point is that its attempts were denied,
  * not that they were never tried - `executedArgs` empty is also what
@@ -117,7 +157,7 @@ function assertGenuinelyDenied(harness: string, result: CheckResult, attempts: s
   );
   for (const attempt of attempts) {
     assert.ok(
-      result.deniedCommands.includes(attempt),
+      includesCommand(result.deniedCommands, attempt),
       `${harness}: "${attempt}" was never genuinely attempted-and-denied - it's absent from both executedArgs ` +
         `and deniedCommands (${JSON.stringify(result.deniedCommands)}), so this run proves nothing about denial, ` +
         `only that nothing happened to run`
@@ -182,27 +222,29 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
     // with.
     for (const freeArgs of FREE_ARGS) {
       assert.ok(
-        result.executedArgs.includes(freeArgs),
+        includesCommand(result.executedArgs, freeArgs),
         `${harness}: "fabrica ${freeArgs}" never actually ran in a real session - executedArgs was ${JSON.stringify(result.executedArgs)}`
       );
     }
 
-    // Deciding commands, denial-genuineness checked first: exact
-    // matches against the specific attempt strings, not a substring
-    // check - "verdict" appears in both the standalone and the
-    // chained attempt, so a substring match could be satisfied by
-    // the chained denial alone and pass vacuously for the
-    // standalone case even if the model never attempted it.
+    // Deciding commands, denial-genuineness checked first: matched
+    // (after quote/whitespace normalization) against the specific
+    // attempt strings, not a substring check - "verdict" appears in
+    // both the standalone and the chained attempt, so a substring
+    // match could be satisfied by the chained denial alone and pass
+    // vacuously for the standalone case even if the model never
+    // attempted it. Normalizing does not blur that distinction - see
+    // "normalizing command strings still distinguishes..." above.
     assert.ok(
-      result.deniedCommands.includes("fabrica verdict task-1 accept -m note"),
-      `${harness}: no real permission_denials entry named the standalone verdict attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+      includesCommand(result.deniedCommands, "fabrica verdict task-1 accept -m note"),
+      `${harness}: no real permission_denials entry named the standalone verdict attempt - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
     );
     assert.ok(
-      result.deniedCommands.includes("fabrica answer task-1 -m answer-text"),
-      `${harness}: no real permission_denials entry named the standalone answer attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+      includesCommand(result.deniedCommands, "fabrica answer task-1 -m answer-text"),
+      `${harness}: no real permission_denials entry named the standalone answer attempt - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
     );
     assert.ok(
-      result.deniedCommands.includes("fabrica status && fabrica verdict task-1 accept -m note"),
+      includesCommand(result.deniedCommands, "fabrica status && fabrica verdict task-1 accept -m note"),
       `${harness}: the chained "fabrica status && fabrica verdict ..." attempt was not denied as a whole - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
     );
     // Only meaningful now that the three checks above already prove
@@ -215,7 +257,7 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
     // or did something slip through despite the reported denial.
     for (const deniedArgs of ["verdict task-1 accept -m note", "answer task-1 -m answer-text"]) {
       assert.equal(
-        result.executedArgs.includes(deniedArgs),
+        includesCommand(result.executedArgs, deniedArgs),
         false,
         `${harness}: "fabrica ${deniedArgs}" actually ran despite a real permission_denials entry for it - a bypass got through`
       );
