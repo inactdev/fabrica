@@ -66,11 +66,12 @@ the work. Everything a brain builds, edits, or runs happens inside it.
   and edits to its files never land in the original project. That is a
   guarantee about project state, not process containment on its own -
   real, OS-level process containment exists at `../containment/` (issue
-  #44, Docker-based): a call's reads and writes are confined to
-  `workdir` because it is the only thing bind-mounted into a fresh,
-  throwaway container, and network is denied unless deliberately
-  allowed (see that module's README for the exact rules and why). Each
-  adapter wires this in itself rather than getting it for free from the
+  #44, Docker-based): a call runs in a fresh, throwaway container whose
+  only writable mounts are `workdir` and, when the adapter persists a
+  warm session, its own throwaway home directory, with network denied
+  unless deliberately allowed (that module's README owns the exact
+  rules and why). Each adapter wires this in itself rather than getting
+  it for free from the
   `Brain` interface, because plugging it in means running the adapter's
   own tool *inside* a container image, which is adapter-specific
   plumbing (see the reference CLI adapter's own doc file under

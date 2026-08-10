@@ -149,8 +149,9 @@ doesn't yet.
 
 ### Process containment
 
-Every call runs inside a fresh, throwaway Docker container: reads and
-writes confined to `workdir` (the only thing bind-mounted in), network
+Every call runs inside a fresh, throwaway Docker container: the only
+writable mounts are `workdir` and this adapter's own per-task session
+home (below), the project's git history is mounted read-only, network
 deliberately allowed (this CLI needs it to reach its own API - see
 `../../containment/README.md` for why filesystem is what's actually
 enforced here, and why Docker's own bind-mount model makes that
