@@ -371,7 +371,7 @@ calls `runTask`.
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
 | `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its two exit-by-itself states (`closed`, and a `failed` task that never delivered), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
-| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, and `QUIET_THRESHOLD_MS`. |
+| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, `QUIET_THRESHOLD_MS`, and `CHECKING_QUIET_CEILING_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
