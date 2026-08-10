@@ -18,7 +18,7 @@ import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runDoCommand } from "./do-command.ts";
 import { runWatchCommand } from "./watch-command.ts";
-import { CHECKING_QUIET_CEILING_MS } from "./render.ts";
+import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS } from "./render.ts";
 import type { Brain } from "../index.ts";
 
 // See status-command.test.ts's matching test: runCheck is synchronous
@@ -260,8 +260,76 @@ test("runWatchCommand: a check stuck past its own long ceiling is flagged quiet 
   setTimeout(() => controller.abort(), 30);
   await watchPromise;
 
-  assert.ok(io.out.some((line) => line.includes("quiet")), `expected the quiet alarm, got: ${JSON.stringify(io.out)}`);
+  assert.ok(
+    io.out.some((line) => line.includes("and still not finished")),
+    `expected the checking alarm, got: ${JSON.stringify(io.out)}`
+  );
   assert.ok(!io.out.some((line) => /^checking, .* so far$/.test(line)), "the plain elapsed line steps aside for the alarm");
+});
+
+// Client ruling, issue #12 review finding (quiet-wording-names-
+// nonexistent-heartbeat): the checking alarm must name what actually
+// happened (a check that started N ago and has not finished), never the
+// "no signal since last heartbeat" wording - no heartbeat is ever
+// emitted during a check.
+test("runWatchCommand: the checking alarm names a stuck check live, not a nonexistent heartbeat", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  const start = Date.now() - CHECKING_QUIET_CEILING_MS - 1;
+  const startEvent = {
+    occurredAt: new Date(start).toISOString(),
+    taskId: "t1",
+    name: "check-run",
+    details: { attempt: 1, phase: "started" },
+  };
+  appendFileSync(recordPath(recordHome), `${JSON.stringify(startEvent)}\n`);
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  setTimeout(() => controller.abort(), 30);
+  await watchPromise;
+
+  assert.ok(!io.out.some((line) => line.includes("heartbeat")), `expected no mention of a heartbeat, got: ${JSON.stringify(io.out)}`);
+});
+
+// The pre-work window's own ceiling (PRE_WORK_QUIET_CEILING_MS): a task
+// stuck between task-received and work-started past its own long window
+// gets the quiet alarm too, with wording that doesn't claim a heartbeat
+// that attempts.ts never emits for this window.
+test("runWatchCommand: a task stuck before work-started past its own ceiling is flagged quiet live, naming no heartbeat", async () => {
+  const recordHome = tempRecordHome();
+  const start = Date.now() - PRE_WORK_QUIET_CEILING_MS - 1;
+  const receivedEvent = {
+    occurredAt: new Date(start).toISOString(),
+    taskId: "t1",
+    name: "task-received",
+    details: { brief: "small change" },
+  };
+  appendFileSync(recordPath(recordHome), `${JSON.stringify(receivedEvent)}\n`);
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  const sawQuiet = await waitFor(() => io.out.some((line) => line.includes("no signal recorded yet")));
+  controller.abort();
+  await watchPromise;
+
+  assert.ok(sawQuiet, `expected the pre-work quiet alarm, got: ${JSON.stringify(io.out)}`);
+  assert.ok(!io.out.some((line) => line.includes("heartbeat")), "attempts.ts's heartbeat interval never wraps brain.ask()");
 });
 
 // Client ruling on issue #12's review finding: without a terminal notice,
