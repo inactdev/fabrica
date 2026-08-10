@@ -298,8 +298,55 @@ computed at runtime therefore convert it first with `node:url`'s
   discovered - otherwise `fabrica verify-hook` reports no usable harness
   while one is sitting right there.
 
-Both are covered by tests that build a `#`-containing path and were proven
-to fail against the raw-path version.
+**This closes the bug for `#` completely, and for `?` only at the Node
+level.** `pathToFileURL` fixes Node's own `import()`-parses-a-path-as-a-URL
+truncation for both characters equally - proven end to end for `#`,
+including against a real `.ts` file using genuine TypeScript syntax (a
+type cast, matching `run-task-entry.ts`'s own shape). `?` looks fixed by
+the same measure, but isn't: tsx's own TypeScript transform has a second,
+separate bug that only survives for `#`. See the next section - it is why
+this checkout's path can never contain a literal `?`, no matter what
+`pathToFileURL` does.
+
+## Why a checkout path can never contain a literal `?`
+
+Not something this project can fix - a bug in tsx's own module resolution,
+kept here in enough detail to file upstream. `pathToFileURL` correctly
+percent-encodes a `?` before handing the URL to `import()`, so Node's own
+resolution is fine with it. But tsx registers its own resolve hook ahead
+of Node's default one (to transform `.ts` syntax on the fly), and that
+hook independently re-derives a path from the URL - and for a `?`
+specifically, it derives the wrong one. Observed directly against this
+project's pinned tsx (`node_modules/tsx`, esbuild-backed): given an entry
+whose real path is `.../worktree?7-dirty/inner/entry.ts`, tsx's transform
+target resolves to a synthetic `.../worktree.js` - the `#` case has no
+equivalent problem; the same shape of path with `#` instead of `?`
+transforms correctly, cache path and all.
+
+At that broken path, plain JavaScript loads by accident (nothing about it
+needs the transform, so the bug never bites), but real TypeScript syntax
+fails outright:
+
+```
+Error: Transform failed with 1 error:
+/…/worktree.js:5:32: ERROR: Expected ")" but found "as"
+    at failureErrorWithLog (…/node_modules/esbuild/lib/main.js:…)
+```
+
+(That specific line came from a fixture containing `(err as Error)` - any
+TypeScript-only syntax triggers it the same way.) Since `run-task-entry.ts`
+and `main.ts` are both real TypeScript, a checkout at a `?` path can't run
+`fabrica` at all once tsx tries to load either one - not a `fabrica`
+crash, a `tsx` one, and not something `pathToFileURL` or any other change
+in this codebase can close. `bin.mjs` and `tsx-bootstrap.mjs` therefore
+each check for a literal `?` in the relevant resolved path *before*
+importing anything real, and refuse with a plain explanation instead of
+letting tsx's own confusing transform error be the first thing anyone
+sees - the same principle `src/containment/`'s comma-in-a-path check
+applies to a path docker's `--mount` flag can't represent. Both refusals
+are covered by tests that run the real file as a separate process and
+assert on the refusal text, proven to fail against the pre-refusal
+version. `#` is unaffected and still works.
 
 ## Why detached execution needs its own file
 
@@ -378,8 +425,8 @@ calls `runTask`.
 
 | File | Holds |
 | --- | --- |
-| `bin.mjs` | The installed executable. Two lines of real work - see above. |
-| `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh, via `pathToFileURL` (see above). |
+| `bin.mjs` | The installed executable. Refuses a checkout path containing `?` before importing `main.ts` (see above), then two lines of real work. |
+| `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh, via `pathToFileURL` - except a `?` in the entry's path, refused outright rather than attempted (see above). |
 | `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand adds one more branch here, the way `answer` (#8) and `status`/`log`/`watch` (#12) each did. |
 | `help.ts` | Top-level help text and the list of known commands. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |

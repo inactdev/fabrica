@@ -40,8 +40,27 @@ test("tsx-bootstrap.mjs: loads an entry script whose path contains '#'", () => {
   assertBootstrapLoadsEntryAt("worktree#7-dirty");
 });
 
-test("tsx-bootstrap.mjs: loads an entry script whose path contains '?'", () => {
-  // Same underlying cause as '#' - import() parses a bare specifier as a
-  // URL, and '?' starts a query string there too.
-  assertBootstrapLoadsEntryAt("worktree?7-dirty");
+test("tsx-bootstrap.mjs: refuses an entry script whose path contains '?', with a clear message", () => {
+  // pathToFileURL fixes Node's own import()-as-URL truncation for '?'
+  // too, but tsx's own TypeScript transform has a separate, unfixable-
+  // from-here bug that only survives for '#' (README.md's "Why a
+  // checkout path can never contain a literal '?'") - so '?' is refused
+  // outright rather than attempted, regardless of what the entry script
+  // actually contains.
+  const base = mkdtempSync(join(tmpdir(), "fabrica-tsx-bootstrap-"));
+  const entryDir = join(base, "worktree?7-dirty");
+  mkdirSync(entryDir);
+  const entryPath = join(entryDir, "entry.ts");
+  writeFileSync(entryPath, `throw new Error("must not run");\n`);
+
+  assert.throws(
+    () => execFileSync(process.execPath, [BOOTSTRAP, entryPath], { stdio: "pipe" }),
+    (err: unknown) => {
+      const stderr = (err as { stderr: Buffer }).stderr.toString("utf8");
+      assert.match(stderr, /checkout's path contains a "\?"/);
+      assert.match(stderr, /tsx/);
+      assert.doesNotMatch(stderr, /Transform failed/);
+      return true;
+    }
+  );
 });

@@ -18,12 +18,30 @@
 
 import { pathToFileURL } from "node:url";
 
-await import("tsx/esm");
-
 const [, , entry, ...args] = process.argv;
-process.argv = [process.argv[0], entry, ...args];
+
 // entry is a raw filesystem path (spawn-detached.ts builds it with
 // fileURLToPath, decoding it) - import() parses a bare specifier as a
 // URL, so a checkout whose path contains a literal "#" or "?" would
-// truncate there and every `fabrica do` would fail to start.
+// truncate there and every `fabrica do` would fail to start. pathToFileURL
+// below fixes that for both characters - but tsx's own TypeScript
+// transform has a separate bug that only "#" survives (see README.md's
+// "Why a checkout path can never contain a literal '?'"), so a "?" is
+// refused here with a clear message instead of hitting tsx's confusing
+// one.
+if (entry !== undefined && entry.includes("?")) {
+  console.error(
+    `fabrica: this checkout's path contains a "?" (${entry}), which the ` +
+      `TypeScript loader fabrica runs on (tsx) cannot handle - it derives a ` +
+      `broken internal path from any "?" and refuses real TypeScript syntax ` +
+      `there. This is a bug in tsx, not fabrica (see README.md), and cannot ` +
+      `be worked around here. Move or rename this checkout so its path has ` +
+      `no "?" in it, then try again.`
+  );
+  process.exit(1);
+}
+
+await import("tsx/esm");
+
+process.argv = [process.argv[0], entry, ...args];
 await import(pathToFileURL(entry).href);
