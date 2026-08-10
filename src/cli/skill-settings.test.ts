@@ -14,13 +14,18 @@
 // This models the documented rules (word-boundary prefix matching;
 // shell operators - &&, ;, |, |&, &, and newline - splitting a
 // command into independently-checked subcommands) - it is not proof
-// the real
-// permission engine behaves that way. skill-settings-live.test.ts is
-// the empirical companion that drives a real session and reads its
+// the real permission engine behaves that way. skill-settings-live.test.ts
+// is the empirical companion that drives a real session and reads its
 // own permission_denials, including for a chained bypass attempt. Both
-// only cover operator-based chaining and word-boundary prefixes -
-// neither attempts a command-substitution-style bypass (e.g.
-// `cat $(fabrica verdict ...)`), which stays untested and open.
+// only cover operator-based chaining and word-boundary prefixes - a
+// command-substitution bypass (e.g. `cat $(fabrica verdict ...)`) is
+// invisible to this kind of matching. That specific form was checked
+// for real, though, and rejected by the harness's own guard before any
+// allow/deny matching ran - see AGENTS.md and the shipped harness's
+// own README under skill/ ("What's not verified") for the observation
+// and the one thing it does NOT prove: that guard belongs to the
+// harness, not to anything in this repo, and a harness change could
+// remove it with nothing here to notice.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
