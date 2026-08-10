@@ -38,13 +38,21 @@ const DECIDING_COMMANDS = ["verdict", "answer"];
 
 function commandsInMainDispatch(): string[] {
   const mainSource = readFileSync(join(repoRoot, "src", "cli", "main.ts"), "utf8");
-  // Deliberately includes "--help"/"-h" rather than filtering them out -
-  // they're real dispatch branches too, and a narrowing that silently
-  // drops free help output should fail this coverage assertion exactly
-  // the same way dropping a real subcommand would (Client ruling,
-  // issue #76 follow-up: this is precisely the gap a reviewer, not a
-  // test, caught the first time).
-  return [...mainSource.matchAll(/if \(command === "([a-z-]+)"\)/g)].map((m) => m[1]);
+  // Matches every `command === "X"` fragment, not just a line shaped
+  // exactly like `if (command === "X") {` - main.ts's help branch is
+  // a compound condition, `if (command === "--help" || command ===
+  // "-h") {`, and a regex anchored on `)` immediately closing the `if`
+  // never matches either quoted string inside it (verified against
+  // the real file: the anchored form captured only the 8 single-
+  // condition subcommands and silently missed both help flags, which
+  // is exactly the gap a reviewer caught when the coverage assertion
+  // this feeds was supposed to catch it mechanically - Client ruling,
+  // issue #76 follow-up). Deliberately includes "--help"/"-h" rather
+  // than filtering them out - they're real dispatch branches too, and
+  // a narrowing that silently drops free help output should fail this
+  // coverage assertion exactly the same way dropping a real
+  // subcommand would.
+  return [...mainSource.matchAll(/command === "([a-z-]+)"/g)].map((m) => m[1]);
 }
 
 interface SettingsTemplate {

@@ -43,6 +43,17 @@
 // revert the trust patch mid-check. Closing that properly needs a
 // real lock around the whole file, which is out of scope here - this
 // only closes the corruption risk, not the race.
+//
+// A second, separate limit worth naming rather than assuming away:
+// the restore lives only in a `finally`, which runs on a thrown error
+// or a normal return but not on the process being killed outright - a
+// Ctrl-C or a CI timeout kill during the real session's run leaves a
+// `projects[<scratch path>].hasTrustDialogAccepted` entry behind in
+// the real, machine-wide config, keyed to a temp directory the test
+// has already deleted. Low impact (an unreachable key pointing at a
+// nonexistent path, granting no real project any trust it shouldn't
+// have) but real: an interrupted run leaks one stale entry rather than
+// cleaning up after itself.
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
