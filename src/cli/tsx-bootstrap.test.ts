@@ -15,7 +15,11 @@ const BOOTSTRAP = fileURLToPath(new URL("./tsx-bootstrap.mjs", import.meta.url))
 
 /** Spawns the real bootstrap against an entry script living under a
  * directory whose name contains `marker` (e.g. a literal '#' or '?'),
- * and asserts the entry actually ran. */
+ * and asserts the entry actually ran. The fixture uses TypeScript-only
+ * syntax (an `as Error` cast, matching run-task-entry.ts's own shape) on
+ * purpose: plain JavaScript loads even at a transform target tsx derived
+ * wrongly, so a JavaScript fixture would pass while every real
+ * `fabrica do` from such a checkout died in tsx's transform. */
 function assertBootstrapLoadsEntryAt(dirNameContaining: string): void {
   const base = mkdtempSync(join(tmpdir(), "fabrica-tsx-bootstrap-"));
   const entryDir = join(base, dirNameContaining);
@@ -24,7 +28,13 @@ function assertBootstrapLoadsEntryAt(dirNameContaining: string): void {
   const entryPath = join(entryDir, "entry.ts");
   writeFileSync(
     entryPath,
-    `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(markerPath)}, "ran\\n");\n`
+    `import { writeFileSync } from "node:fs";\n` +
+      `const outcome: unknown = "ran\\n";\n` +
+      `try {\n` +
+      `  writeFileSync(${JSON.stringify(markerPath)}, outcome as string);\n` +
+      `} catch (err) {\n` +
+      `  throw new Error((err as Error).message);\n` +
+      `}\n`
   );
 
   execFileSync(process.execPath, [BOOTSTRAP, entryPath], { stdio: "pipe" });
