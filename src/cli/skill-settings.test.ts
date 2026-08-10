@@ -10,6 +10,16 @@
 // pattern would have guessed. Harnesses are discovered by reading
 // skill/ rather than named here, matching how the hook-settings tests
 // do it, since CONTRACT rule 8's scan reads every file under src/.
+//
+// This models the documented rules (word-boundary prefix matching;
+// shell operators - &&, ;, |, and friends - splitting a command into
+// independently-checked subcommands) - it is not proof the real
+// permission engine behaves that way. skill-settings-live.test.ts is
+// the empirical companion that drives a real session and reads its
+// own permission_denials, including for a chained bypass attempt. Both
+// only cover operator-based chaining and word-boundary prefixes -
+// neither attempts a command-substitution-style bypass (e.g.
+// `cat $(fabrica verdict ...)`), which stays untested and open.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -101,6 +111,14 @@ test("main.ts's real dispatch is fully covered: deciding commands are never allo
 
   const commands = commandsInMainDispatch();
   assert.ok(commands.length > 0, "found no commands in main.ts's dispatch - the scan itself is broken");
+  for (const deciding of DECIDING_COMMANDS) {
+    assert.ok(
+      commands.includes(deciding),
+      `commandsInMainDispatch() found no "${deciding}" branch - if main.ts's dispatch shape changed ` +
+        `(a switch, single quotes, a reformatted condition), this scan silently drops it and the ` +
+        `"never allowed" assertion below never runs for it`
+    );
+  }
 
   for (const settings of templates) {
     for (const command of commands) {
