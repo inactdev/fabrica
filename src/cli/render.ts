@@ -33,6 +33,27 @@ export const QUIET_THRESHOLD_MS = DEFAULT_HEARTBEAT_INTERVAL_MS * 3;
  * order of magnitude, for a different, much rarer failure. */
 export const CHECKING_QUIET_CEILING_MS = 4 * 60 * 60 * 1000; // 4 hours
 
+/** The pre-work window's own ceiling - the same ruling as
+ * CHECKING_QUIET_CEILING_MS ("no state may be exempt from the quiet alarm
+ * forever"), applied to its sibling gap: `stateOf` reports "working" from
+ * `task-received` onward, but nothing is appended between it and
+ * `"work-started"` except `"line-cut"`, so a machine reboot or OOM while
+ * `brain.ask()` is running (or during `createProductionLine`, right
+ * after `ask()` returns) would otherwise freeze the record there forever
+ * with the alarm never firing. Client ruling (issue #12 review finding):
+ * size THIS window to its own realistic duration, not to
+ * CHECKING_QUIET_CEILING_MS's - `wait-for-ask-outcome.ts` gives the CLI's
+ * own wait for an outcome 60s before it gives up (the detached process
+ * keeps going regardless, so a real `ask()` call can still legitimately
+ * run somewhat past that), which is nothing like a project's own test
+ * suite, which can legitimately run for hours. Do NOT harmonize this
+ * with CHECKING_QUIET_CEILING_MS - they guard different windows with
+ * genuinely different realistic durations: collapsing them to one value
+ * either makes this one too loose (missing a real reboot/OOM for
+ * minutes) or the checking one too tight (crying wolf on an honest slow
+ * test suite). */
+export const PRE_WORK_QUIET_CEILING_MS = 5 * 60 * 1000; // 5 minutes
+
 /** The project a task is running against, read from whichever event last
  * carried it (`work-started`/`delivered` details). The only implementation
  * of that lookup: it takes events the caller already holds, so `status`
@@ -71,32 +92,35 @@ export function checkStartedAt(events: FabricaEvent[]): Date | null {
 }
 
 /** True for a task genuinely mid brain.work() whose silence has run past
- * QUIET_THRESHOLD_MS, or a task "checking" whose check has run past
- * CHECKING_QUIET_CEILING_MS - a delivered, failed, or closed task is
- * quiet by definition and that's not the same fact. Below its own much
- * longer ceiling, "checking" stays exempt: Fabrica knows exactly what
- * it's doing and since when (checkStartedAt), so status/watch say that
+ * QUIET_THRESHOLD_MS, a task "checking" whose check has run past
+ * CHECKING_QUIET_CEILING_MS, or a pre-work task (see
+ * PRE_WORK_QUIET_CEILING_MS) whose silence since task-received has run
+ * past that window's own ceiling - a delivered, failed, or closed task
+ * is quiet by definition and that's not the same fact. Client ruling
+ * (issue #12 review finding): no state stays exempt forever - "checking"
+ * and the pre-work window both get their own long-but-finite ceilings
+ * instead of an unconditional pass, each sized to that window's own
+ * realistic duration (see each constant's own comment for why). Below
+ * its ceiling, "checking" stays exempt: Fabrica knows exactly what it's
+ * doing and since when (checkStartedAt), so status/watch say that
  * plainly instead of raising an alarm about a silence that has a known,
- * honest explanation - see CHECKING_QUIET_CEILING_MS's own comment for
- * why that ceiling exists and how it was chosen. The same working/quiet
- * reasoning covers the pre-work window: `stateOf` reports "working" from
- * the moment `task-received` lands, including the whole stretch
- * `brain.ask()` runs in before any ProductionLine exists - a real, often-
- * slow brain call (`wait-for-ask-outcome.ts` budgets 60s for it) with
- * nothing to append until it resolves. That gap is distinguished from a
- * genuinely silent worker by whether a `"work-started"` event has landed
- * yet - the alarm stays fully meaningful for the case it actually means
- * something: a worker that started and then went quiet. */
+ * honest explanation. The pre-work window is the same idea applied to the
+ * gap between `"task-received"` and `"work-started"` - nothing else is
+ * appended there except `"line-cut"`, and a `"work-started"` event
+ * marks the moment a genuinely silent worker becomes distinguishable
+ * from a `brain.ask()` call (or the `createProductionLine` step right
+ * after it) simply still being in flight. */
 export function isQuietTooLong(state: FabricaTask["state"], events: FabricaEvent[], now: number = Date.now()): boolean {
   if (state === "checking") {
     const startedAt = checkStartedAt(events);
     return startedAt !== null && now - startedAt.getTime() > CHECKING_QUIET_CEILING_MS;
   }
   if (state !== "working") return false;
-  if (!events.some((e) => e.name === "work-started")) return false;
   const last = lastActivityAt(events);
   if (!last) return false;
-  return now - last.getTime() > QUIET_THRESHOLD_MS;
+  const elapsed = now - last.getTime();
+  const hasWorkStarted = events.some((e) => e.name === "work-started");
+  return elapsed > (hasWorkStarted ? QUIET_THRESHOLD_MS : PRE_WORK_QUIET_CEILING_MS);
 }
 
 /** Compact, human age like "3s", "12m", "4h15m", "2d3h" - dense enough for
@@ -122,7 +146,7 @@ export function formatAge(ms: number): string {
  * actually observed. */
 export function formatStatusLine(
   task: FabricaTask,
-  opts: { project: string | null; ageMs: number; quietForMs: number | null; checkingForMs: number | null }
+  opts: { project: string | null; ageMs: number; liveness: string | null; hasDelivery: boolean }
 ): string {
   const project = opts.project ?? "unknown project";
   const age = formatAge(opts.ageMs);
@@ -131,26 +155,142 @@ export function formatStatusLine(
   if (task.state === "delivered") {
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
   }
-  // Once a check has run past CHECKING_QUIET_CEILING_MS, quietForMs takes
-  // over from the plain elapsed-time line - a check that has been
-  // "checking" for days is no longer honest work in progress, it's
-  // exactly the "not known to be stuck, not known to be fine" case the
-  // alarm exists for.
-  if (task.state === "checking" && opts.checkingForMs !== null && opts.quietForMs === null) {
-    return `${base}  <- checking, ${formatAge(opts.checkingForMs)} so far`;
+  // brain.ask() threw before any Worker ever ran - recordVerdict refuses
+  // a `fix` with "not-delivered", so this task cannot ever move again.
+  // The Client's ruling (issue #12 review finding) is neither to hide
+  // these nor let them read as ordinary open work: mark it plainly as the
+  // dead end it is, so it isn't mistaken for something still in progress.
+  if (isDeadEnd(task.state, opts.hasDelivery)) {
+    return `${base}  <- FAILED, UNRESOLVABLE: brain's clarify step threw before any work started - see \`fabrica log ${task.id}\``;
   }
-  if (opts.quietForMs !== null) {
-    return `${base}  <- ${formatQuietNotice(opts.quietForMs)}`;
-  }
-  return base;
+  // Whatever describeLiveness decided - "checking, 2m so far", a quiet
+  // alarm (whichever wording fits), or nothing - is exactly what shows
+  // up here. This function no longer decides that itself: it used to,
+  // and `watch-command.ts` independently re-derived the identical
+  // decision beside it, and the two had already drifted apart once
+  // (issue #12 review finding) before being caught.
+  return opts.liveness ? `${base}  <- ${opts.liveness}` : base;
 }
 
-/** The one wording for "this task has gone quiet", shared by `status` and
- * `watch` so the Client reads the same sentence in both - it says what is
- * known (nothing has been recorded for this long) and refuses to imply
- * either of the two things that aren't. */
-export function formatQuietNotice(quietForMs: number): string {
-  return `quiet ${formatAge(quietForMs)}, no signal since last heartbeat - not known to be stuck, not known to be fine`;
+/** A task whose `brain.ask()` itself threw before any Worker ever ran -
+ * `recordVerdict` refuses a `fix` on it with "not-delivered", so it can
+ * never move again (see `formatStatusLine`'s "FAILED, UNRESOLVABLE"
+ * branch, `formatTerminalNotice`'s "failed before any work started"
+ * branch, and `watch-command.ts`'s poll-loop exit condition, which all
+ * mean exactly this). The one definition of that rule, taking a bare
+ * state rather than a task object so every one of those callers - some
+ * of which only ever hold the state, not a full `FabricaTask` - can call
+ * it directly without wrapping it first: independent copies of the same
+ * predicate is how they'd silently drift apart (issue #12 review
+ * finding). */
+export function isDeadEnd(state: FabricaTask["state"], hasDelivery: boolean): boolean {
+  return state === "failed" && !hasDelivery;
+}
+
+/** The one wording for an ordinary "working" task gone quiet, shared by
+ * `status` and `watch` so the Client reads the same sentence in both - it
+ * says what is known (nothing has been recorded for this long, and what
+ * that last recording actually was) and refuses to imply anything past
+ * that. `lastSignal` names the one thing this is anchored to - always
+ * the record's literal last event, never a separate "did X ever happen"
+ * query (issue #12 review finding: the wording used to pair an elapsed
+ * time read from the last event with a fact - "did a heartbeat ever
+ * happen, anywhere in the history" - read from a different query over
+ * the whole history; those two could disagree, and this is the third
+ * finding of that exact shape on this branch. See `nameLastSignal` for
+ * where the label comes from). */
+export function formatQuietNotice(elapsedMs: number, lastSignal: string): string {
+  return `quiet ${formatAge(elapsedMs)}, no signal since ${lastSignal} - not known to be stuck, not known to be fine`;
+}
+
+/** A short label for what the record's last event actually was, for
+ * `formatQuietNotice` - "last heartbeat", "work started", "the check
+ * finished," and so on. This is deliberately the ONLY place that reads
+ * `event.name` to produce that label: `describeLiveness` passes it the
+ * literal last event, never asks a separate "has a heartbeat ever
+ * landed" (or any other "ever, anywhere") question. The set covered is
+ * exhaustive for a "working" task's last event (verified against
+ * `stateOf`'s switch in `src/foreman/queries.ts`): `task-received` and
+ * `line-cut` are the only things that can land before `work-started`
+ * (the pre-work window), `heartbeat` and a finished `check-run` are the
+ * only things that can land after it without changing the state away
+ * from "working" (a `check-run` with `phase: "started"` produces
+ * "checking" instead, handled by `describeLiveness`'s other branch, so
+ * it never reaches here), and `answers-given` covers the one-clarifying-
+ * round case (issue #8) where the Client's answer landed before the
+ * ProductionLine was even cut. The fallback is defensive only - every
+ * event that can reach here while "working" is named above. */
+function nameLastSignal(event: FabricaEvent): string {
+  switch (event.name) {
+    case "heartbeat":
+      return "last heartbeat";
+    case "work-started":
+      return "work started";
+    case "check-run":
+      return "the check finished";
+    case "answers-given":
+      return "the answer was recorded";
+    case "line-cut":
+      return "the line was cut";
+    case "task-received":
+      return "the task was received";
+    default:
+      return event.name;
+  }
+}
+
+/** The wording for a "checking" task whose check has run past
+ * CHECKING_QUIET_CEILING_MS - names what's actually known (a check that
+ * started this long ago and has not finished) instead of reusing
+ * `formatQuietNotice`'s "no signal since <the record's last event>":
+ * during a check that last event is the check's own `"started"` one -
+ * nothing else lands there, since `attempts.ts`'s heartbeat interval
+ * only wraps `brain.work`, never `runCheck` - and `nameLastSignal`
+ * would label it "the check finished", which is precisely what has not
+ * happened (issue #12 review finding, Client ruling). */
+export function formatCheckingQuietNotice(elapsedMs: number): string {
+  return `checking, ${formatAge(elapsedMs)} and still not finished - not known to be stuck, not known to be fine`;
+}
+
+/** What to say about a task's liveness right now - "checking, 2m so
+ * far" for a check genuinely still in progress, the quiet alarm past a
+ * ceiling (whichever wording fits: `formatCheckingQuietNotice` for
+ * "checking", `formatQuietNotice` otherwise), or null when neither
+ * applies. The one definition of that decision AND the elapsed-time
+ * arithmetic under it - `checkStartedAt` for "checking", the record's
+ * literal last event otherwise (read inline, see below), since those are
+ * different quantities that only coincide by accident (a heartbeat
+ * landing after a check starts doesn't change `stateOf`'s "checking"
+ * verdict). `status` and `watch` used to each derive this
+ * independently - once here, once hand-inlined in
+ * `watch-command.ts` - and the two had already drifted apart once
+ * (issue #12 review finding) before being caught; this is the fix for
+ * that whole class of bug, not just the one instance. Callers that need
+ * to tell "worth re-printing as time passes" (checking-in-progress)
+ * apart from "worth printing once per transition" (the quiet alarm)
+ * already have `state` and can call `isQuietTooLong` themselves for
+ * that - this function only ever answers "what does it look like,"
+ * never "when to show it again." */
+export function describeLiveness(state: FabricaTask["state"], events: FabricaEvent[], now: number): string | null {
+  if (state === "checking") {
+    const startedAt = checkStartedAt(events);
+    if (startedAt === null) return null; // defensive: shouldn't happen for a real task
+    const elapsed = now - startedAt.getTime();
+    return isQuietTooLong(state, events, now) ? formatCheckingQuietNotice(elapsed) : `checking, ${formatAge(elapsed)} so far`;
+  }
+  if (!isQuietTooLong(state, events, now)) return null;
+  // Read from the record's literal last event, once - its name and its
+  // own timestamp - never a separate query over the whole history. That
+  // was the actual bug in the last two rounds' fixes: "how long since
+  // anything happened" (lastActivityAt) and "what kind of thing last
+  // happened" (an "ever, anywhere" query like events.some(heartbeat))
+  // were two independently-derived facts that could disagree, so every
+  // round one pair got fixed and the next pair broke. There's nothing
+  // left to disagree with once both come from the same event object.
+  const last = events[events.length - 1];
+  if (!last) return null; // defensive: shouldn't happen for a real task
+  const elapsed = now - new Date(last.occurredAt).getTime();
+  return formatQuietNotice(elapsed, nameLastSignal(last));
 }
 
 /** What `fabrica watch` prints when a task reaches a state nothing
@@ -169,7 +309,7 @@ export function formatTerminalNotice(
     case "delivered":
       return `-- task delivered - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
     case "failed":
-      if (!ctx.hasDelivery) {
+      if (isDeadEnd(state, ctx.hasDelivery)) {
         // The only way to be "failed" with no "delivered" event on the
         // record: brain.ask() itself threw, before any Worker ran (see
         // stateOf's "ask-failed" branch). Nothing was ever delivered, so

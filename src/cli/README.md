@@ -182,18 +182,33 @@ them can reach a running worker.
   nothing else in the tool says a task is waiting on him. A `working`
   task with no recorded activity for longer than `QUIET_THRESHOLD_MS` is
   flagged "quiet" rather than left looking identical to progress; a
-  `checking` task instead says so with its real elapsed time and is
-  exempt from the quiet alarm below `CHECKING_QUIET_CEILING_MS` (4
-  hours), since that silence has a known, honest explanation; past that
-  ceiling `isQuietTooLong` returns true for it too and the alarm takes
-  over the line, because a check still running after that long is the one
-  case a live-elapsed reading can't explain (a killed worker, or a check
-  hung inside `runCheck`'s `execSync`). The pre-work `brain.ask()`
-  window is exempt for the same reason - `stateOf` already reads
-  "working" from `task-received` onward, so `isQuietTooLong` also waits
-  for a `"work-started"` event before it will raise the alarm. It takes
-  no arguments at all, and refuses any it is given (`parseStatusArgs`)
-  instead of ignoring them.
+  `checking` task instead says so with its real elapsed time below its
+  own long ceiling (`CHECKING_QUIET_CEILING_MS`, 4 hours), since that
+  silence has a known, honest explanation - past that ceiling
+  `isQuietTooLong` returns true for it too and its own wording takes over
+  the line ("checking, 4h and still not finished"), naming a stuck check
+  rather than reusing the ordinary quiet notice's "no signal since
+  &lt;whatever the record's last event was&gt;" (that last event is the
+  check's own `"started"` one, which has not finished and so has no
+  honest signal wording of its own). Both of those
+  readings - the one below the ceiling and the alarm past it - are
+  anchored to `checkStartedAt` (the `check-run` `"started"` event), never
+  to the record's last event, so anything appended mid-check can't shrink
+  the number the Client reads. The pre-work `brain.ask()` window
+  (`task-received` before `"work-started"` lands) gets the same
+  no-state-exempt-forever treatment on its own, much shorter ceiling
+  (`PRE_WORK_QUIET_CEILING_MS`, 5 minutes - sized to
+  `wait-for-ask-outcome.ts`'s 60s CLI wait, not copied from the checking
+  ceiling), and it likewise never claims a heartbeat that window never
+  has: the ordinary quiet notice names the record's literal last event,
+  so a window with no heartbeat in it says "work started" or "the task
+  was received" instead. A `failed` task whose `brain.ask()` itself
+  threw (nothing ever delivered, no `fix` path back - see `verdict.ts`'s
+  `"not-delivered"` refusal) stays listed rather than dropped, but marked
+  "FAILED, UNRESOLVABLE" and sorted after tasks still genuinely open, so
+  it neither vanishes nor is mistaken for work still in progress. It
+  takes no arguments at all, and refuses any it is given
+  (`parseStatusArgs`) instead of ignoring them.
 - **`log <id>`** prints one task's event history in order, each event
   rendered as prose judged per event name rather than its stored
   `details` dumped raw, and a consecutive run of heartbeats collapsed
@@ -225,12 +240,19 @@ them can reach a running worker.
   `fabrica do` spawned.
 
 `render.ts` is why all three agree on wording: age (`formatAge`), the
-quiet sentence (`formatQuietNotice`), the terminal notice
-(`formatTerminalNotice`), the collapsed heartbeat run
+quiet sentences (`formatQuietNotice` for an ordinary working task,
+`formatCheckingQuietNotice` for a check past its ceiling), the terminal
+notice (`formatTerminalNotice`), the collapsed heartbeat run
 (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s
 catch-up), the status line, the event line, and the transcript line each
 have exactly one definition, so an edit to any of them can't drift
-between commands.
+between commands. The same holds for the one judgement all of this hangs
+on: `isDeadEnd(state, hasDelivery)` is the single definition of "failed
+with nothing ever delivered", called by `status`'s "FAILED,
+UNRESOLVABLE" marker and its sort, by `formatTerminalNotice`'s
+failed-before-any-work branch, and by `watch`'s poll-loop exit
+condition - it takes a bare state, not a task, so a caller holding only
+the state calls it directly instead of hand-writing the check again.
 
 Both `status` and `watch` read the record once per render, then derive
 everything else from the events already in hand: `status` takes
@@ -442,7 +464,7 @@ calls `runTask`.
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
 | `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its two exit-by-itself states (`closed`, and a `failed` task that never delivered), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
-| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, `QUIET_THRESHOLD_MS`, and `CHECKING_QUIET_CEILING_MS`. |
+| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `describeLiveness`, `isQuietTooLong`, `isDeadEnd`, `checkStartedAt`, `formatCheckingQuietNotice`, `QUIET_THRESHOLD_MS`, `CHECKING_QUIET_CEILING_MS`, and `PRE_WORK_QUIET_CEILING_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `deny-and-log-edit-command.ts` | Reads a `PreToolUse` payload from stdin, denies it, and records `edit-attempt-blocked` - what a harness's session config runs, not something typed by hand (issue #13's prevention half; see that harness's own README under `skill/`). Deliberately the one command that does *not* refuse stray arguments: it promises to always deny and always exit 0 whatever it is handed, and a refusal would turn that fail-closed guarantee into a non-zero exit `PreToolUse` doesn't block on. |
 | `verify-hook-command.ts` | `fabrica verify-hook`: proves a session config actually denies-and-logs by running a real attempt, instead of assuming it. Takes no arguments and refuses any it is given (`parseVerifyHookArgs`, the same convention as `parseStatusArgs`) rather than ignoring them. Loads its harness-specific spawn by scanning `skill/` at runtime (never a hardcoded import - see `AGENTS.md`'s rule 8 note), reporting a `verify.ts` that throws or exports only half a verifier by name instead of skipping it silently. |

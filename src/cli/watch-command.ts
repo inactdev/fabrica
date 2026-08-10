@@ -19,12 +19,11 @@ import { resolveRecordHome } from "./record-home.ts";
 import {
   QUIET_THRESHOLD_MS,
   checkStartedAt,
-  formatAge,
-  formatQuietNotice,
+  describeLiveness,
   formatTerminalNotice,
   formatTranscriptLine,
+  isDeadEnd,
   isQuietTooLong,
-  lastActivityAt,
   summarizeHeartbeatRun,
 } from "./render.ts";
 import type { FabricaTask, TaskFollower } from "../index.ts";
@@ -39,8 +38,12 @@ heartbeats is flagged "quiet" instead of implying progress nobody has
 actually observed. A task running its check instead says so plainly -
 "checking, 2m so far" - since that has a real, known start time. That
 exemption holds up to a long ceiling (4 hours); a check still running
-past it is flagged "quiet" like any other state, since by then the
-silence no longer has an honest explanation.
+past it gets its own alarm ("checking, 4h and still not finished") since
+by then the silence no longer has an honest explanation - it never
+claims a heartbeat that a check never emits. The same idea covers the
+window before a task's worker has even started (\`fabrica do\` waiting on
+its brain to finish clarifying): that has its own, much shorter ceiling,
+since a real answer arrives in well under a minute.
 
 Stopping this (Ctrl-C) only stops watching. The task itself runs in a
 separate, already-detached process (\`fabrica do\` starts it that way) that
@@ -190,7 +193,12 @@ async function streamTranscript(ctx: {
     // ceiling it becomes eligible for the alarm too (issue #12 review
     // finding, Client ruling), and the alarm then takes over the display
     // the same way it does in `fabrica status` (render.ts's
-    // `formatStatusLine`).
+    // `formatStatusLine`). This is purely a WHEN-to-print decision -
+    // pace-limiting the checking line, edge-triggering the quiet one;
+    // WHAT to print for either always comes from `describeLiveness`, the
+    // one place that decision is made (issue #12 review finding: this
+    // command used to re-derive that wording itself, independently of
+    // render.ts, and the two had already drifted apart once).
     const quiet = isQuietTooLong(state, events, now);
 
     const checking = state === "checking" && !quiet;
@@ -199,7 +207,8 @@ async function streamTranscript(ctx: {
       const elapsedMs = startedAt ? now - startedAt.getTime() : 0;
       const pace = Math.floor(elapsedMs / QUIET_THRESHOLD_MS);
       if (!wasChecking || pace > lastCheckingPace) {
-        stdout(`checking, ${formatAge(elapsedMs)} so far`);
+        const notice = describeLiveness(state, events, now);
+        if (notice) stdout(notice);
         lastCheckingPace = pace;
       }
     } else {
@@ -208,8 +217,20 @@ async function streamTranscript(ctx: {
     wasChecking = checking;
 
     if (quiet !== wasQuiet) {
-      const last = lastActivityAt(events);
-      stdout(quiet && last ? formatQuietNotice(now - last.getTime()) : "signal resumed");
+      if (quiet) {
+        // The `??` arm is defensive only, not a second wording competing
+        // with render.ts's: every case describeLiveness returns null for
+        // is one isQuietTooLong already answered false, so `quiet` being
+        // true means it returned a sentence. It exists so a future
+        // divergence between the two prints something honest rather than
+        // swallowing the transition (it once printed "signal resumed").
+        stdout(
+          describeLiveness(state, events, now) ??
+            "quiet, nothing recorded for a while - not known to be stuck, not known to be fine",
+        );
+      } else {
+        stdout("signal resumed");
+      }
     }
     wasQuiet = quiet;
 
@@ -234,7 +255,7 @@ async function streamTranscript(ctx: {
     // "delivered" all still keep polling - a `fix` verdict or a `fabrica
     // answer` genuinely wakes those back up, and this watch should show
     // it when it happens.
-    return state === "closed" || (state === "failed" && !hasDelivery);
+    return state === "closed" || isDeadEnd(state, hasDelivery);
   };
 
   if (await poll()) return;
