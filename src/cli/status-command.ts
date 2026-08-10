@@ -99,8 +99,8 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     // rule, shared with render.ts's own marker, so this sort and that
     // label can never silently disagree on what counts as a dead end.
     const sorted = [...openTasks].sort((a, b) => {
-      const aDeadEnd = isDeadEnd(a.task, a.hasDelivery);
-      const bDeadEnd = isDeadEnd(b.task, b.hasDelivery);
+      const aDeadEnd = isDeadEnd(a.task.state, a.hasDelivery);
+      const bDeadEnd = isDeadEnd(b.task.state, b.hasDelivery);
       return aDeadEnd === bDeadEnd ? 0 : aDeadEnd ? 1 : -1;
     });
 
