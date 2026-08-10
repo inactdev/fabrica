@@ -33,6 +33,27 @@ export const QUIET_THRESHOLD_MS = DEFAULT_HEARTBEAT_INTERVAL_MS * 3;
  * order of magnitude, for a different, much rarer failure. */
 export const CHECKING_QUIET_CEILING_MS = 4 * 60 * 60 * 1000; // 4 hours
 
+/** The pre-work window's own ceiling - the same ruling as
+ * CHECKING_QUIET_CEILING_MS ("no state may be exempt from the quiet alarm
+ * forever"), applied to its sibling gap: `stateOf` reports "working" from
+ * `task-received` onward, but nothing is appended between it and
+ * `"work-started"` except `"line-cut"`, so a machine reboot or OOM while
+ * `brain.ask()` is running (or during `createProductionLine`, right
+ * after `ask()` returns) would otherwise freeze the record there forever
+ * with the alarm never firing. Client ruling (issue #12 review finding):
+ * size THIS window to its own realistic duration, not to
+ * CHECKING_QUIET_CEILING_MS's - `wait-for-ask-outcome.ts` gives the CLI's
+ * own wait for an outcome 60s before it gives up (the detached process
+ * keeps going regardless, so a real `ask()` call can still legitimately
+ * run somewhat past that), which is nothing like a project's own test
+ * suite, which can legitimately run for hours. Do NOT harmonize this
+ * with CHECKING_QUIET_CEILING_MS - they guard different windows with
+ * genuinely different realistic durations: collapsing them to one value
+ * either makes this one too loose (missing a real reboot/OOM for
+ * minutes) or the checking one too tight (crying wolf on an honest slow
+ * test suite). */
+export const PRE_WORK_QUIET_CEILING_MS = 5 * 60 * 1000; // 5 minutes
+
 /** The project a task is running against, read from whichever event last
  * carried it (`work-started`/`delivered` details). The only implementation
  * of that lookup: it takes events the caller already holds, so `status`
@@ -71,32 +92,35 @@ export function checkStartedAt(events: FabricaEvent[]): Date | null {
 }
 
 /** True for a task genuinely mid brain.work() whose silence has run past
- * QUIET_THRESHOLD_MS, or a task "checking" whose check has run past
- * CHECKING_QUIET_CEILING_MS - a delivered, failed, or closed task is
- * quiet by definition and that's not the same fact. Below its own much
- * longer ceiling, "checking" stays exempt: Fabrica knows exactly what
- * it's doing and since when (checkStartedAt), so status/watch say that
+ * QUIET_THRESHOLD_MS, a task "checking" whose check has run past
+ * CHECKING_QUIET_CEILING_MS, or a pre-work task (see
+ * PRE_WORK_QUIET_CEILING_MS) whose silence since task-received has run
+ * past that window's own ceiling - a delivered, failed, or closed task
+ * is quiet by definition and that's not the same fact. Client ruling
+ * (issue #12 review finding): no state stays exempt forever - "checking"
+ * and the pre-work window both get their own long-but-finite ceilings
+ * instead of an unconditional pass, each sized to that window's own
+ * realistic duration (see each constant's own comment for why). Below
+ * its ceiling, "checking" stays exempt: Fabrica knows exactly what it's
+ * doing and since when (checkStartedAt), so status/watch say that
  * plainly instead of raising an alarm about a silence that has a known,
- * honest explanation - see CHECKING_QUIET_CEILING_MS's own comment for
- * why that ceiling exists and how it was chosen. The same working/quiet
- * reasoning covers the pre-work window: `stateOf` reports "working" from
- * the moment `task-received` lands, including the whole stretch
- * `brain.ask()` runs in before any ProductionLine exists - a real, often-
- * slow brain call (`wait-for-ask-outcome.ts` budgets 60s for it) with
- * nothing to append until it resolves. That gap is distinguished from a
- * genuinely silent worker by whether a `"work-started"` event has landed
- * yet - the alarm stays fully meaningful for the case it actually means
- * something: a worker that started and then went quiet. */
+ * honest explanation. The pre-work window is the same idea applied to the
+ * gap between `"task-received"` and `"work-started"` - nothing else is
+ * appended there except `"line-cut"`, and a `"work-started"` event
+ * marks the moment a genuinely silent worker becomes distinguishable
+ * from a `brain.ask()` call (or the `createProductionLine` step right
+ * after it) simply still being in flight. */
 export function isQuietTooLong(state: FabricaTask["state"], events: FabricaEvent[], now: number = Date.now()): boolean {
   if (state === "checking") {
     const startedAt = checkStartedAt(events);
     return startedAt !== null && now - startedAt.getTime() > CHECKING_QUIET_CEILING_MS;
   }
   if (state !== "working") return false;
-  if (!events.some((e) => e.name === "work-started")) return false;
   const last = lastActivityAt(events);
   if (!last) return false;
-  return now - last.getTime() > QUIET_THRESHOLD_MS;
+  const elapsed = now - last.getTime();
+  const hasWorkStarted = events.some((e) => e.name === "work-started");
+  return elapsed > (hasWorkStarted ? QUIET_THRESHOLD_MS : PRE_WORK_QUIET_CEILING_MS);
 }
 
 /** Compact, human age like "3s", "12m", "4h15m", "2d3h" - dense enough for
@@ -122,7 +146,14 @@ export function formatAge(ms: number): string {
  * actually observed. */
 export function formatStatusLine(
   task: FabricaTask,
-  opts: { project: string | null; ageMs: number; quietForMs: number | null; checkingForMs: number | null }
+  opts: {
+    project: string | null;
+    ageMs: number;
+    quietForMs: number | null;
+    checkingForMs: number | null;
+    hadHeartbeat: boolean;
+    hasDelivery: boolean;
+  }
 ): string {
   const project = opts.project ?? "unknown project";
   const age = formatAge(opts.ageMs);
@@ -130,6 +161,14 @@ export function formatStatusLine(
 
   if (task.state === "delivered") {
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
+  }
+  // brain.ask() threw before any Worker ever ran - recordVerdict refuses
+  // a `fix` with "not-delivered", so this task cannot ever move again.
+  // The Client's ruling (issue #12 review finding) is neither to hide
+  // these nor let them read as ordinary open work: mark it plainly as the
+  // dead end it is, so it isn't mistaken for something still in progress.
+  if (task.state === "failed" && !opts.hasDelivery) {
+    return `${base}  <- FAILED, UNRESOLVABLE: brain's clarify step threw before any work started - see \`fabrica log ${task.id}\``;
   }
   // Once a check has run past CHECKING_QUIET_CEILING_MS, quietForMs takes
   // over from the plain elapsed-time line - a check that has been
@@ -140,17 +179,44 @@ export function formatStatusLine(
     return `${base}  <- checking, ${formatAge(opts.checkingForMs)} so far`;
   }
   if (opts.quietForMs !== null) {
-    return `${base}  <- ${formatQuietNotice(opts.quietForMs)}`;
+    const notice =
+      task.state === "checking"
+        ? formatCheckingQuietNotice(opts.quietForMs)
+        : formatQuietNotice(opts.quietForMs, opts.hadHeartbeat);
+    return `${base}  <- ${notice}`;
   }
   return base;
 }
 
-/** The one wording for "this task has gone quiet", shared by `status` and
- * `watch` so the Client reads the same sentence in both - it says what is
- * known (nothing has been recorded for this long) and refuses to imply
- * either of the two things that aren't. */
-export function formatQuietNotice(quietForMs: number): string {
-  return `quiet ${formatAge(quietForMs)}, no signal since last heartbeat - not known to be stuck, not known to be fine`;
+/** The one wording for an ordinary "working" task gone quiet, shared by
+ * `status` and `watch` so the Client reads the same sentence in both - it
+ * says what is known (nothing has been recorded for this long) and
+ * refuses to imply either of the two things that aren't. `hadHeartbeat`
+ * distinguishes the two ways "working" can go quiet: a task whose
+ * `brain.work()` call genuinely had heartbeats ticking and then stopped
+ * (the ordinary case this wording was written for), versus the pre-work
+ * window (PRE_WORK_QUIET_CEILING_MS) - `attempts.ts`'s heartbeat interval
+ * only wraps `brain.work`, never `brain.ask()`, so naming a heartbeat
+ * there would be naming a signal that was never there to lose (issue #12
+ * review finding, Client ruling: a misleading message needs a more
+ * specific fix, not a vaguer one - see `formatCheckingQuietNotice` for
+ * the same reasoning applied to "checking"). */
+export function formatQuietNotice(elapsedMs: number, hadHeartbeat: boolean): string {
+  const age = formatAge(elapsedMs);
+  return hadHeartbeat
+    ? `quiet ${age}, no signal since last heartbeat - not known to be stuck, not known to be fine`
+    : `quiet ${age}, no signal recorded yet - not known to be stuck, not known to be fine`;
+}
+
+/** The wording for a "checking" task whose check has run past
+ * CHECKING_QUIET_CEILING_MS - names what's actually known (a check that
+ * started this long ago and has not finished) instead of reusing
+ * `formatQuietNotice`'s heartbeat wording: no heartbeat is ever emitted
+ * during a check (`attempts.ts`'s heartbeat interval only wraps
+ * `brain.work`, never `runCheck`), so there was never one to lose here
+ * either (issue #12 review finding, Client ruling). */
+export function formatCheckingQuietNotice(elapsedMs: number): string {
+  return `checking, ${formatAge(elapsedMs)} and still not finished - not known to be stuck, not known to be fine`;
 }
 
 /** What `fabrica watch` prints when a task reaches a state nothing

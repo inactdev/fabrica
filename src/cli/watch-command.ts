@@ -20,6 +20,7 @@ import {
   QUIET_THRESHOLD_MS,
   checkStartedAt,
   formatAge,
+  formatCheckingQuietNotice,
   formatQuietNotice,
   formatTerminalNotice,
   formatTranscriptLine,
@@ -39,8 +40,12 @@ heartbeats is flagged "quiet" instead of implying progress nobody has
 actually observed. A task running its check instead says so plainly -
 "checking, 2m so far" - since that has a real, known start time. That
 exemption holds up to a long ceiling (4 hours); a check still running
-past it is flagged "quiet" like any other state, since by then the
-silence no longer has an honest explanation.
+past it gets its own alarm ("checking, 4h and still not finished") since
+by then the silence no longer has an honest explanation - it never
+claims a heartbeat that a check never emits. The same idea covers the
+window before a task's worker has even started (\`fabrica do\` waiting on
+its brain to finish clarifying): that has its own, much shorter ceiling,
+since a real answer arrives in well under a minute.
 
 Stopping this (Ctrl-C) only stops watching. The task itself runs in a
 separate, already-detached process (\`fabrica do\` starts it that way) that
@@ -209,7 +214,13 @@ async function streamTranscript(ctx: {
 
     if (quiet !== wasQuiet) {
       const last = lastActivityAt(events);
-      stdout(quiet && last ? formatQuietNotice(now - last.getTime()) : "signal resumed");
+      if (quiet && last) {
+        const elapsed = now - last.getTime();
+        const hadHeartbeat = events.some((e) => e.name === "heartbeat");
+        stdout(state === "checking" ? formatCheckingQuietNotice(elapsed) : formatQuietNotice(elapsed, hadHeartbeat));
+      } else {
+        stdout("signal resumed");
+      }
     }
     wasQuiet = quiet;
 

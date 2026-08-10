@@ -10,7 +10,7 @@ import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runDoCommand } from "./do-command.ts";
 import { runStatusCommand } from "./status-command.ts";
-import { CHECKING_QUIET_CEILING_MS } from "./render.ts";
+import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS } from "./render.ts";
 
 // A real, separate detached process (see do-command.test.ts): runCheck is
 // synchronous execSync, so a slow check blocks that process's own event
@@ -145,7 +145,8 @@ test("runStatusCommand: a check stuck past its own long ceiling is flagged quiet
 
   assert.equal(code, 0);
   assert.match(io.out[0], /checking/, "state itself is still checking");
-  assert.match(io.out[0], /quiet/, "but past the ceiling it reads as quiet");
+  assert.match(io.out[0], /and still not finished/, "but past the ceiling it names the stuck check, not honest progress");
+  assert.doesNotMatch(io.out[0], /heartbeat/, "no heartbeat is ever emitted during a check");
   assert.doesNotMatch(io.out[0], /checking, .* so far/, "the plain elapsed line steps aside for the alarm");
 });
 
@@ -161,4 +162,78 @@ test("runStatusCommand: a red delivery shows failed, not delivered, and carries 
   assert.match(io.out[0], new RegExp(`^${task.id}\\s`));
   assert.match(io.out[0], /failed/);
   assert.doesNotMatch(io.out[0], /AWAITING YOUR VERDICT/);
+});
+
+// Client ruling, issue #12 review finding (status-lists-ask-failed-tasks-
+// forever): a task whose brain.ask() itself threw has no fix path back
+// and never will again - it must stay in the listing (never hidden), but
+// marked as the dead end it is, not left looking like ordinary open work.
+test("runStatusCommand: an ask-failed task stays listed, marked unresolvable, not blended in with open work", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  await assert.rejects(
+    createForeman({ recordHome }).do("small change", {
+      project,
+      brain: fakeBrain({ askError: new Error("the brain is unreachable") }),
+    })
+  );
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 1);
+  assert.match(io.out[0], /failed/);
+  assert.match(io.out[0], /FAILED, UNRESOLVABLE/);
+});
+
+// Same ruling, its sibling: a live task still worth the Client's
+// attention must sort ahead of a dead-end one, so scanning top-down
+// finds the real open work first.
+test("runStatusCommand: an ask-failed task sorts after a task that's still genuinely open", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  await assert.rejects(
+    createForeman({ recordHome }).do("dead end", {
+      project,
+      brain: fakeBrain({ askError: new Error("the brain is unreachable") }),
+    })
+  );
+  const openTask = await createForeman({ recordHome }).do("still open", {
+    project,
+    brain: fakeBrain({ askQuestions: ["what should this do?"] }),
+  });
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 2);
+  assert.match(io.out[0], new RegExp(`^${openTask.id}\\s`));
+  assert.match(io.out[1], /FAILED, UNRESOLVABLE/);
+});
+
+// The pre-work window's own ceiling (PRE_WORK_QUIET_CEILING_MS): a task
+// stuck between task-received and work-started past its own long window
+// is flagged quiet too, catching a reboot or OOM during brain.ask() that
+// would otherwise freeze the record here with the alarm never firing.
+test("runStatusCommand: a task stuck before work-started past its own ceiling is flagged quiet, wording names no heartbeat", async () => {
+  const recordHome = tempRecordHome();
+  const start = Date.now() - PRE_WORK_QUIET_CEILING_MS - 1;
+  const receivedEvent = {
+    occurredAt: new Date(start).toISOString(),
+    taskId: "t1",
+    name: "task-received",
+    details: { brief: "small change" },
+  };
+  appendFileSync(recordPath(recordHome), `${JSON.stringify(receivedEvent)}\n`);
+
+  const io = captureIo();
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 1);
+  assert.match(io.out[0], /working/, "state itself is still working - only ask() is unaccounted for");
+  assert.match(io.out[0], /no signal recorded yet/, "no heartbeat was ever emitted for this window");
+  assert.doesNotMatch(io.out[0], /heartbeat/, "attempts.ts's heartbeat interval never wraps brain.ask()");
 });

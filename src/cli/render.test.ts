@@ -2,9 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   CHECKING_QUIET_CEILING_MS,
+  PRE_WORK_QUIET_CEILING_MS,
   QUIET_THRESHOLD_MS,
   checkStartedAt,
   formatAge,
+  formatCheckingQuietNotice,
   formatEventLine,
   formatEventLines,
   formatQuietNotice,
@@ -91,14 +93,26 @@ test("isQuietTooLong: a checking task with no recorded start at all is never fla
   assert.equal(isQuietTooLong("checking", events, Date.now() + CHECKING_QUIET_CEILING_MS * 10), false);
 });
 
-test("isQuietTooLong: never true for the pre-work ask() window, no matter how long - it has a known explanation too", () => {
+test("isQuietTooLong: false for the pre-work ask() window well within its own ceiling - it has a known explanation too", () => {
   const start = 1_000_000;
   // Only "task-received" so far: stateOf reports "working" (its default),
   // but no "work-started" has landed - this is brain.ask()'s window, not
-  // a worker gone silent (issue #12 review finding, Client ruling: treat
-  // it exactly like "checking").
+  // a worker gone silent.
   const events: FabricaEvent[] = [{ occurredAt: new Date(start).toISOString(), taskId: "x", name: "task-received" }];
-  assert.equal(isQuietTooLong("working", events, start + QUIET_THRESHOLD_MS * 10), false);
+  assert.equal(isQuietTooLong("working", events, start + QUIET_THRESHOLD_MS), false);
+});
+
+// Client ruling, issue #12 review finding (the pre-work window's own
+// twin of the checking ceiling): "no state may be exempt forever" - past
+// PRE_WORK_QUIET_CEILING_MS, a task stuck between task-received and
+// work-started becomes eligible for the alarm too, catching a reboot or
+// OOM during brain.ask() that would otherwise freeze the record here
+// with the alarm never firing.
+test("isQuietTooLong: false right up to PRE_WORK_QUIET_CEILING_MS, true just past it, for the pre-work window", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [{ occurredAt: new Date(start).toISOString(), taskId: "x", name: "task-received" }];
+  assert.equal(isQuietTooLong("working", events, start + PRE_WORK_QUIET_CEILING_MS - 1), false);
+  assert.equal(isQuietTooLong("working", events, start + PRE_WORK_QUIET_CEILING_MS + 1), true);
 });
 
 test("isQuietTooLong: true once a REAL working task (work-started landed) goes silent, even right after task-received", () => {
@@ -143,7 +157,7 @@ test("checkStartedAt: a second attempt's start, after the first attempt's check 
 test("formatStatusLine: flags a delivered task as awaiting verdict", () => {
   const line = formatStatusLine(
     { id: "t1", state: "delivered" },
-    { project: "/proj", ageMs: 60_000, quietForMs: null, checkingForMs: null }
+    { project: "/proj", ageMs: 60_000, quietForMs: null, checkingForMs: null, hadHeartbeat: true, hasDelivery: true }
   );
   assert.match(line, /AWAITING YOUR VERDICT/);
   assert.match(line, /fabrica verdict t1 accept\|fix\|wrong/);
@@ -152,7 +166,14 @@ test("formatStatusLine: flags a delivered task as awaiting verdict", () => {
 test("formatStatusLine: flags a quiet working task without implying it's stuck or fine", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    { project: "/proj", ageMs: 600_000, quietForMs: 90_000, checkingForMs: null }
+    {
+      project: "/proj",
+      ageMs: 600_000,
+      quietForMs: 90_000,
+      checkingForMs: null,
+      hadHeartbeat: true,
+      hasDelivery: false,
+    }
   );
   assert.match(line, /quiet/);
   assert.match(line, /not known to be stuck/);
@@ -161,7 +182,7 @@ test("formatStatusLine: flags a quiet working task without implying it's stuck o
 test("formatStatusLine: a plain working task with recent activity has no flag", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    { project: "/proj", ageMs: 5_000, quietForMs: null, checkingForMs: null }
+    { project: "/proj", ageMs: 5_000, quietForMs: null, checkingForMs: null, hadHeartbeat: false, hasDelivery: false }
   );
   assert.doesNotMatch(line, /<-/);
 });
@@ -169,7 +190,7 @@ test("formatStatusLine: a plain working task with recent activity has no flag", 
 test("formatStatusLine: unknown project is said plainly, not left blank", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    { project: null, ageMs: 1_000, quietForMs: null, checkingForMs: null }
+    { project: null, ageMs: 1_000, quietForMs: null, checkingForMs: null, hadHeartbeat: false, hasDelivery: false }
   );
   assert.match(line, /unknown project/);
 });
@@ -177,10 +198,33 @@ test("formatStatusLine: unknown project is said plainly, not left blank", () => 
 test("formatStatusLine: a checking task within its ceiling says so plainly with its real elapsed time, never quiet", () => {
   const line = formatStatusLine(
     { id: "t1", state: "checking" },
-    { project: "/proj", ageMs: 600_000, quietForMs: null, checkingForMs: 120_000 }
+    {
+      project: "/proj",
+      ageMs: 600_000,
+      quietForMs: null,
+      checkingForMs: 120_000,
+      hadHeartbeat: false,
+      hasDelivery: false,
+    }
   );
   assert.match(line, /checking, 2m so far/);
   assert.doesNotMatch(line, /quiet/);
+});
+
+test("formatStatusLine: a failed task with no delivery is marked FAILED, UNRESOLVABLE, not left looking like open work", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "failed" },
+    { project: "/proj", ageMs: 600_000, quietForMs: null, checkingForMs: null, hadHeartbeat: false, hasDelivery: false }
+  );
+  assert.match(line, /FAILED, UNRESOLVABLE/);
+});
+
+test("formatStatusLine: a failed task WITH a delivery is not marked unresolvable - a fix verdict can still wake it", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "failed" },
+    { project: "/proj", ageMs: 600_000, quietForMs: null, checkingForMs: null, hadHeartbeat: false, hasDelivery: true }
+  );
+  assert.doesNotMatch(line, /UNRESOLVABLE/);
 });
 
 // Client ruling, issue #12 review finding: once isQuietTooLong has ruled a
@@ -192,10 +236,38 @@ test("formatStatusLine: a checking task within its ceiling says so plainly with 
 test("formatStatusLine: a checking task past its ceiling shows the quiet alarm, not the plain elapsed line", () => {
   const line = formatStatusLine(
     { id: "t1", state: "checking" },
-    { project: "/proj", ageMs: 600_000, quietForMs: 5 * 60 * 60 * 1000, checkingForMs: 5 * 60 * 60 * 1000 }
+    {
+      project: "/proj",
+      ageMs: 600_000,
+      quietForMs: 5 * 60 * 60 * 1000,
+      checkingForMs: 5 * 60 * 60 * 1000,
+      hadHeartbeat: false,
+      hasDelivery: false,
+    }
   );
-  assert.match(line, /quiet/);
+  assert.match(line, /not known to be stuck/);
   assert.doesNotMatch(line, /checking, .* so far/);
+});
+
+// Client ruling, issue #12 review finding: a stuck check's quiet notice
+// must name what actually happened (a check that started N ago and has
+// not finished) rather than reusing the "no signal since last heartbeat"
+// wording - no heartbeat is ever emitted during a check, so that phrase
+// would point at a signal that never existed.
+test("formatStatusLine: a checking task past its ceiling names a check, not a nonexistent heartbeat", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "checking" },
+    {
+      project: "/proj",
+      ageMs: 600_000,
+      quietForMs: 5 * 60 * 60 * 1000,
+      checkingForMs: 5 * 60 * 60 * 1000,
+      hadHeartbeat: false,
+      hasDelivery: false,
+    }
+  );
+  assert.match(line, /checking, .* and still not finished/);
+  assert.doesNotMatch(line, /heartbeat/);
 });
 
 test("formatEventLine: work-started reads as prose, project included", () => {
@@ -391,14 +463,37 @@ test("formatEventLine: an unanticipated event name falls back to bounded, not un
   assert.match(line, /…$/);
 });
 
-test("formatQuietNotice: one wording, and it's the one formatStatusLine prints", () => {
-  const notice = formatQuietNotice(90_000);
+test("formatQuietNotice: names a lost heartbeat when there was one to lose, and it's the one formatStatusLine prints", () => {
+  const notice = formatQuietNotice(90_000, true);
   assert.equal(notice, "quiet 1m, no signal since last heartbeat - not known to be stuck, not known to be fine");
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    { project: "/p", ageMs: 600_000, quietForMs: 90_000, checkingForMs: null }
+    {
+      project: "/p",
+      ageMs: 600_000,
+      quietForMs: 90_000,
+      checkingForMs: null,
+      hadHeartbeat: true,
+      hasDelivery: false,
+    }
   );
   assert.ok(line.endsWith(notice), `status line should end with the shared notice, got: ${line}`);
+});
+
+// Client ruling, issue #12 review finding: the pre-work window
+// (PRE_WORK_QUIET_CEILING_MS) never has a heartbeat to lose either -
+// attempts.ts's heartbeat interval only wraps brain.work(), never
+// brain.ask() - so its quiet notice must not claim one existed.
+test("formatQuietNotice: never claims a heartbeat that was never emitted, for the pre-work window", () => {
+  const notice = formatQuietNotice(90_000, false);
+  assert.equal(notice, "quiet 1m, no signal recorded yet - not known to be stuck, not known to be fine");
+  assert.doesNotMatch(notice, /heartbeat/);
+});
+
+test("formatCheckingQuietNotice: names a check that started N ago and hasn't finished, not a heartbeat", () => {
+  const notice = formatCheckingQuietNotice(5 * 60 * 60 * 1000);
+  assert.equal(notice, "checking, 5h and still not finished - not known to be stuck, not known to be fine");
+  assert.doesNotMatch(notice, /heartbeat/);
 });
 
 test("formatTranscriptLine: timestamp, kind, text", () => {

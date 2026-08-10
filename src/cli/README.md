@@ -182,18 +182,25 @@ them can reach a running worker.
   nothing else in the tool says a task is waiting on him. A `working`
   task with no recorded activity for longer than `QUIET_THRESHOLD_MS` is
   flagged "quiet" rather than left looking identical to progress; a
-  `checking` task instead says so with its real elapsed time and is
-  exempt from the quiet alarm below `CHECKING_QUIET_CEILING_MS` (4
-  hours), since that silence has a known, honest explanation; past that
-  ceiling `isQuietTooLong` returns true for it too and the alarm takes
-  over the line, because a check still running after that long is the one
-  case a live-elapsed reading can't explain (a killed worker, or a check
-  hung inside `runCheck`'s `execSync`). The pre-work `brain.ask()`
-  window is exempt for the same reason - `stateOf` already reads
-  "working" from `task-received` onward, so `isQuietTooLong` also waits
-  for a `"work-started"` event before it will raise the alarm. It takes
-  no arguments at all, and refuses any it is given (`parseStatusArgs`)
-  instead of ignoring them.
+  `checking` task instead says so with its real elapsed time below its
+  own long ceiling (`CHECKING_QUIET_CEILING_MS`, 4 hours), since that
+  silence has a known, honest explanation - past that ceiling
+  `isQuietTooLong` returns true for it too and its own wording takes over
+  the line ("checking, 4h and still not finished"), naming a stuck check
+  rather than reusing the ordinary quiet notice's "no signal since last
+  heartbeat" (no heartbeat is ever emitted during a check). The pre-work
+  `brain.ask()` window (`task-received` before `"work-started"` lands)
+  gets the same no-state-exempt-forever treatment on its own, much
+  shorter ceiling (`PRE_WORK_QUIET_CEILING_MS`, 5 minutes - sized to
+  `wait-for-ask-outcome.ts`'s 60s CLI wait, not copied from the checking
+  ceiling), with wording that likewise never claims a heartbeat that
+  window never has either. A `failed` task whose `brain.ask()` itself
+  threw (nothing ever delivered, no `fix` path back - see `verdict.ts`'s
+  `"not-delivered"` refusal) stays listed rather than dropped, but marked
+  "FAILED, UNRESOLVABLE" and sorted after tasks still genuinely open, so
+  it neither vanishes nor is mistaken for work still in progress. It
+  takes no arguments at all, and refuses any it is given
+  (`parseStatusArgs`) instead of ignoring them.
 - **`log <id>`** prints one task's event history in order, each event
   rendered as prose judged per event name rather than its stored
   `details` dumped raw, and a consecutive run of heartbeats collapsed
