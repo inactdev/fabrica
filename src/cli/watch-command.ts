@@ -19,14 +19,11 @@ import { resolveRecordHome } from "./record-home.ts";
 import {
   QUIET_THRESHOLD_MS,
   checkStartedAt,
-  formatAge,
-  formatCheckingQuietNotice,
-  formatQuietNotice,
+  describeLiveness,
   formatTerminalNotice,
   formatTranscriptLine,
   isDeadEnd,
   isQuietTooLong,
-  lastActivityAt,
   summarizeHeartbeatRun,
 } from "./render.ts";
 import type { FabricaTask, TaskFollower } from "../index.ts";
@@ -196,7 +193,12 @@ async function streamTranscript(ctx: {
     // ceiling it becomes eligible for the alarm too (issue #12 review
     // finding, Client ruling), and the alarm then takes over the display
     // the same way it does in `fabrica status` (render.ts's
-    // `formatStatusLine`).
+    // `formatStatusLine`). This is purely a WHEN-to-print decision -
+    // pace-limiting the checking line, edge-triggering the quiet one;
+    // WHAT to print for either always comes from `describeLiveness`, the
+    // one place that decision is made (issue #12 review finding: this
+    // command used to re-derive that wording itself, independently of
+    // render.ts, and the two had already drifted apart once).
     const quiet = isQuietTooLong(state, events, now);
 
     const checking = state === "checking" && !quiet;
@@ -205,7 +207,8 @@ async function streamTranscript(ctx: {
       const elapsedMs = startedAt ? now - startedAt.getTime() : 0;
       const pace = Math.floor(elapsedMs / QUIET_THRESHOLD_MS);
       if (!wasChecking || pace > lastCheckingPace) {
-        stdout(`checking, ${formatAge(elapsedMs)} so far`);
+        const notice = describeLiveness(state, events, now);
+        if (notice) stdout(notice);
         lastCheckingPace = pace;
       }
     } else {
@@ -214,22 +217,8 @@ async function streamTranscript(ctx: {
     wasChecking = checking;
 
     if (quiet !== wasQuiet) {
-      const last = lastActivityAt(events);
-      if (quiet && last) {
-        // Same distinction render.ts's formatStatusLine makes: "how long
-        // this check has been running" (anchored to checkStartedAt) is a
-        // different quantity from "how long since the record's last
-        // event" (anchored to lastActivityAt) - they happen to coincide
-        // today since nothing else is appended mid-check, but the
-        // checking notice must use its own real elapsed time, not lean
-        // on that coincidence.
-        const checkStarted = state === "checking" ? checkStartedAt(events) : null;
-        const elapsed = checkStarted ? now - checkStarted.getTime() : now - last.getTime();
-        const hadHeartbeat = events.some((e) => e.name === "heartbeat");
-        stdout(state === "checking" ? formatCheckingQuietNotice(elapsed) : formatQuietNotice(elapsed, hadHeartbeat));
-      } else {
-        stdout("signal resumed");
-      }
+      const notice = quiet ? describeLiveness(state, events, now) : null;
+      stdout(notice ?? "signal resumed");
     }
     wasQuiet = quiet;
 

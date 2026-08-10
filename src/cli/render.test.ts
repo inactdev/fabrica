@@ -5,6 +5,7 @@ import {
   PRE_WORK_QUIET_CEILING_MS,
   QUIET_THRESHOLD_MS,
   checkStartedAt,
+  describeLiveness,
   formatAge,
   formatCheckingQuietNotice,
   formatEventLine,
@@ -155,35 +156,36 @@ test("checkStartedAt: a second attempt's start, after the first attempt's check 
   assert.equal(checkStartedAt(events)!.toISOString(), "2026-01-01T00:00:20.000Z");
 });
 
+// formatStatusLine itself only ever decides three things now: the
+// delivered flag, the dead-end flag, and whether to append whatever
+// `describeLiveness` decided - it no longer picks checking/quiet
+// wording itself (issue #12 review finding: that decision, and the
+// elapsed-time arithmetic under it, used to live here AND be
+// independently re-derived in watch-command.ts, and the two copies had
+// already drifted apart once). See the `describeLiveness` tests below
+// for the wording/quantity coverage that used to live on this function.
+
 test("formatStatusLine: flags a delivered task as awaiting verdict", () => {
   const line = formatStatusLine(
     { id: "t1", state: "delivered" },
-    { project: "/proj", ageMs: 60_000, quietForMs: null, checkingForMs: null, hadHeartbeat: true, hasDelivery: true }
+    { project: "/proj", ageMs: 60_000, liveness: null, hasDelivery: true }
   );
   assert.match(line, /AWAITING YOUR VERDICT/);
   assert.match(line, /fabrica verdict t1 accept\|fix\|wrong/);
 });
 
-test("formatStatusLine: flags a quiet working task without implying it's stuck or fine", () => {
+test("formatStatusLine: appends whatever describeLiveness decided, verbatim", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    {
-      project: "/proj",
-      ageMs: 600_000,
-      quietForMs: 90_000,
-      checkingForMs: null,
-      hadHeartbeat: true,
-      hasDelivery: false,
-    }
+    { project: "/proj", ageMs: 600_000, liveness: "quiet 1m, no signal since last heartbeat - test wording", hasDelivery: false }
   );
-  assert.match(line, /quiet/);
-  assert.match(line, /not known to be stuck/);
+  assert.match(line, /quiet 1m, no signal since last heartbeat - test wording/);
 });
 
-test("formatStatusLine: a plain working task with recent activity has no flag", () => {
+test("formatStatusLine: no liveness notice, no flag at all", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    { project: "/proj", ageMs: 5_000, quietForMs: null, checkingForMs: null, hadHeartbeat: false, hasDelivery: false }
+    { project: "/proj", ageMs: 5_000, liveness: null, hasDelivery: false }
   );
   assert.doesNotMatch(line, /<-/);
 });
@@ -191,31 +193,15 @@ test("formatStatusLine: a plain working task with recent activity has no flag", 
 test("formatStatusLine: unknown project is said plainly, not left blank", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },
-    { project: null, ageMs: 1_000, quietForMs: null, checkingForMs: null, hadHeartbeat: false, hasDelivery: false }
+    { project: null, ageMs: 1_000, liveness: null, hasDelivery: false }
   );
   assert.match(line, /unknown project/);
-});
-
-test("formatStatusLine: a checking task within its ceiling says so plainly with its real elapsed time, never quiet", () => {
-  const line = formatStatusLine(
-    { id: "t1", state: "checking" },
-    {
-      project: "/proj",
-      ageMs: 600_000,
-      quietForMs: null,
-      checkingForMs: 120_000,
-      hadHeartbeat: false,
-      hasDelivery: false,
-    }
-  );
-  assert.match(line, /checking, 2m so far/);
-  assert.doesNotMatch(line, /quiet/);
 });
 
 test("formatStatusLine: a failed task with no delivery is marked FAILED, UNRESOLVABLE, not left looking like open work", () => {
   const line = formatStatusLine(
     { id: "t1", state: "failed" },
-    { project: "/proj", ageMs: 600_000, quietForMs: null, checkingForMs: null, hadHeartbeat: false, hasDelivery: false }
+    { project: "/proj", ageMs: 600_000, liveness: null, hasDelivery: false }
   );
   assert.match(line, /FAILED, UNRESOLVABLE/);
 });
@@ -223,31 +209,37 @@ test("formatStatusLine: a failed task with no delivery is marked FAILED, UNRESOL
 test("formatStatusLine: a failed task WITH a delivery is not marked unresolvable - a fix verdict can still wake it", () => {
   const line = formatStatusLine(
     { id: "t1", state: "failed" },
-    { project: "/proj", ageMs: 600_000, quietForMs: null, checkingForMs: null, hadHeartbeat: false, hasDelivery: true }
+    { project: "/proj", ageMs: 600_000, liveness: null, hasDelivery: true }
   );
   assert.doesNotMatch(line, /UNRESOLVABLE/);
 });
 
-// Client ruling, issue #12 review finding: once isQuietTooLong has ruled a
-// checking task quiet (past CHECKING_QUIET_CEILING_MS), the quiet alarm
-// takes over the display the same way it would for any other state -
-// callers signal this by passing both a non-null checkingForMs (state is
-// still "checking") and a non-null quietForMs (the caller's own
-// isQuietTooLong call came back true).
-test("formatStatusLine: a checking task past its ceiling shows the quiet alarm, not the plain elapsed line", () => {
-  const line = formatStatusLine(
-    { id: "t1", state: "checking" },
-    {
-      project: "/proj",
-      ageMs: 600_000,
-      quietForMs: 5 * 60 * 60 * 1000,
-      checkingForMs: 5 * 60 * 60 * 1000,
-      hadHeartbeat: false,
-      hasDelivery: false,
-    }
-  );
-  assert.match(line, /not known to be stuck/);
-  assert.doesNotMatch(line, /checking, .* so far/);
+// describeLiveness is the one place `status` and `watch` decide what a
+// task's liveness looks like - these tests work from real event arrays
+// (not precomputed numbers) so a regression that makes the two commands
+// diverge again would have to fail here first, since both now call this
+// exact function rather than each deriving their own wording.
+
+test("describeLiveness: a checking task within its ceiling says so plainly with its real elapsed time, never quiet", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "check-run", details: { attempt: 1, phase: "started" } },
+  ];
+  const notice = describeLiveness("checking", events, start + 120_000);
+  assert.equal(notice, "checking, 2m so far");
+});
+
+// Client ruling, issue #12 review finding: once isQuietTooLong has ruled
+// a checking task quiet (past CHECKING_QUIET_CEILING_MS), the quiet
+// alarm takes over the display instead of the plain elapsed line.
+test("describeLiveness: a checking task past its ceiling shows the quiet alarm, not the plain elapsed line", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "check-run", details: { attempt: 1, phase: "started" } },
+  ];
+  const notice = describeLiveness("checking", events, start + CHECKING_QUIET_CEILING_MS + 1);
+  assert.match(notice ?? "", /not known to be stuck/);
+  assert.doesNotMatch(notice ?? "", /checking, .* so far/);
 });
 
 // Client ruling, issue #12 review finding: a stuck check's quiet notice
@@ -255,42 +247,66 @@ test("formatStatusLine: a checking task past its ceiling shows the quiet alarm, 
 // not finished) rather than reusing the "no signal since last heartbeat"
 // wording - no heartbeat is ever emitted during a check, so that phrase
 // would point at a signal that never existed.
-test("formatStatusLine: a checking task past its ceiling names a check, not a nonexistent heartbeat", () => {
-  const line = formatStatusLine(
-    { id: "t1", state: "checking" },
-    {
-      project: "/proj",
-      ageMs: 600_000,
-      quietForMs: 5 * 60 * 60 * 1000,
-      checkingForMs: 5 * 60 * 60 * 1000,
-      hadHeartbeat: false,
-      hasDelivery: false,
-    }
-  );
-  assert.match(line, /checking, .* and still not finished/);
-  assert.doesNotMatch(line, /heartbeat/);
+test("describeLiveness: a checking task past its ceiling names a check, not a nonexistent heartbeat", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "check-run", details: { attempt: 1, phase: "started" } },
+  ];
+  const notice = describeLiveness("checking", events, start + CHECKING_QUIET_CEILING_MS + 1);
+  assert.match(notice ?? "", /checking, .* and still not finished/);
+  assert.doesNotMatch(notice ?? "", /heartbeat/);
 });
 
-// Review finding: quietForMs is time since the record's LAST EVENT;
-// checkingForMs is time since the check itself started - different
-// quantities that happen to coincide in the common case, but the
-// checking notice must read the one it actually names. Deliberately
-// distinct values here so a regression back to reading quietForMs fails
-// loudly instead of passing by coincidence.
-test("formatStatusLine: a checking task past its ceiling reports how long the CHECK has run, not time since the last event", () => {
-  const line = formatStatusLine(
-    { id: "t1", state: "checking" },
-    {
-      project: "/proj",
-      ageMs: 600_000,
-      quietForMs: 10 * 60 * 60 * 1000, // time since last event: 10h
-      checkingForMs: 5 * 60 * 60 * 1000, // time the check has actually run: 5h
-      hadHeartbeat: false,
-      hasDelivery: false,
-    }
-  );
-  assert.match(line, /checking, 5h and still not finished/);
-  assert.doesNotMatch(line, /10h/);
+// Review finding (fixed once already, now proven against the real
+// function both commands share): a heartbeat landing after check-run
+// "started" doesn't change stateOf's "checking" verdict, so
+// lastActivityAt and checkStartedAt genuinely diverge here - the
+// checking notice must read the latter, not the former.
+test("describeLiveness: a checking task past its ceiling reports how long the CHECK has run, not time since a later heartbeat", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "check-run", details: { attempt: 1, phase: "started" } },
+    // A heartbeat 4h after the check started - much more recent than
+    // the check's own start, but stateOf still reports "checking".
+    { occurredAt: new Date(start + 4 * 60 * 60 * 1000).toISOString(), taskId: "t1", name: "heartbeat", details: { attempt: 1 } },
+  ];
+  const now = start + CHECKING_QUIET_CEILING_MS + 60 * 60 * 1000; // 5h after start
+  const notice = describeLiveness("checking", events, now);
+  assert.match(notice ?? "", /checking, 5h and still not finished/);
+});
+
+test("describeLiveness: an ordinary working task gone quiet, wording names the lost heartbeat", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" },
+    { occurredAt: new Date(start + 1_000).toISOString(), taskId: "t1", name: "heartbeat", details: { attempt: 1 } },
+  ];
+  const notice = describeLiveness("working", events, start + 1_000 + QUIET_THRESHOLD_MS + 1);
+  assert.match(notice ?? "", /no signal since last heartbeat/);
+});
+
+test("describeLiveness: the pre-work window gone quiet, wording never claims a heartbeat that never existed", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [{ occurredAt: new Date(start).toISOString(), taskId: "t1", name: "task-received" }];
+  const notice = describeLiveness("working", events, start + PRE_WORK_QUIET_CEILING_MS + 1);
+  assert.match(notice ?? "", /no signal recorded yet/);
+  assert.doesNotMatch(notice ?? "", /heartbeat/);
+});
+
+test("describeLiveness: null for a plain working task with recent activity - nothing to say", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [{ occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" }];
+  assert.equal(describeLiveness("working", events, start + 5_000), null);
+});
+
+test("describeLiveness: null for a delivered task, no matter how old", () => {
+  const events: FabricaEvent[] = [{ occurredAt: "2020-01-01T00:00:00.000Z", taskId: "t1", name: "delivered" }];
+  assert.equal(describeLiveness("delivered", events, Date.now()), null);
+});
+
+test("describeLiveness: null for a checking task with no recorded start at all (defensive, shouldn't happen for a real task)", () => {
+  const events: FabricaEvent[] = [{ occurredAt: "t0", taskId: "t1", name: "task-received" }];
+  assert.equal(describeLiveness("checking", events, Date.now() + CHECKING_QUIET_CEILING_MS * 10), null);
 });
 
 test("isDeadEnd: a failed task with no delivery is a dead end", () => {
@@ -505,17 +521,7 @@ test("formatEventLine: an unanticipated event name falls back to bounded, not un
 test("formatQuietNotice: names a lost heartbeat when there was one to lose, and it's the one formatStatusLine prints", () => {
   const notice = formatQuietNotice(90_000, true);
   assert.equal(notice, "quiet 1m, no signal since last heartbeat - not known to be stuck, not known to be fine");
-  const line = formatStatusLine(
-    { id: "t1", state: "working" },
-    {
-      project: "/p",
-      ageMs: 600_000,
-      quietForMs: 90_000,
-      checkingForMs: null,
-      hadHeartbeat: true,
-      hasDelivery: false,
-    }
-  );
+  const line = formatStatusLine({ id: "t1", state: "working" }, { project: "/p", ageMs: 600_000, liveness: notice, hasDelivery: false });
   assert.ok(line.endsWith(notice), `status line should end with the shared notice, got: ${line}`);
 });
 

@@ -146,14 +146,7 @@ export function formatAge(ms: number): string {
  * actually observed. */
 export function formatStatusLine(
   task: FabricaTask,
-  opts: {
-    project: string | null;
-    ageMs: number;
-    quietForMs: number | null;
-    checkingForMs: number | null;
-    hadHeartbeat: boolean;
-    hasDelivery: boolean;
-  }
+  opts: { project: string | null; ageMs: number; liveness: string | null; hasDelivery: boolean }
 ): string {
   const project = opts.project ?? "unknown project";
   const age = formatAge(opts.ageMs);
@@ -170,32 +163,13 @@ export function formatStatusLine(
   if (isDeadEnd(task.state, opts.hasDelivery)) {
     return `${base}  <- FAILED, UNRESOLVABLE: brain's clarify step threw before any work started - see \`fabrica log ${task.id}\``;
   }
-  // Once a check has run past CHECKING_QUIET_CEILING_MS, quietForMs takes
-  // over from the plain elapsed-time line - a check that has been
-  // "checking" for days is no longer honest work in progress, it's
-  // exactly the "not known to be stuck, not known to be fine" case the
-  // alarm exists for.
-  if (task.state === "checking" && opts.checkingForMs !== null && opts.quietForMs === null) {
-    return `${base}  <- checking, ${formatAge(opts.checkingForMs)} so far`;
-  }
-  if (opts.quietForMs !== null) {
-    // "How long has this check been running" (checkingForMs, anchored to
-    // the check-run "started" event) is a different quantity from "how
-    // long since the record's last event" (quietForMs) - they happen to
-    // coincide today because nothing else gets appended while a check is
-    // in flight, but that's incidental, not guaranteed, and passing the
-    // wrong one in would silently start printing a stale number the
-    // moment that stops being true. The checking branch always uses its
-    // own real elapsed time; it falls back to the generic wording only in
-    // the defensive case a "checking" task somehow has no recorded start
-    // at all (shouldn't happen for a real task - see checkStartedAt).
-    const notice =
-      task.state === "checking" && opts.checkingForMs !== null
-        ? formatCheckingQuietNotice(opts.checkingForMs)
-        : formatQuietNotice(opts.quietForMs, opts.hadHeartbeat);
-    return `${base}  <- ${notice}`;
-  }
-  return base;
+  // Whatever describeLiveness decided - "checking, 2m so far", a quiet
+  // alarm (whichever wording fits), or nothing - is exactly what shows
+  // up here. This function no longer decides that itself: it used to,
+  // and `watch-command.ts` independently re-derived the identical
+  // decision beside it, and the two had already drifted apart once
+  // (issue #12 review finding) before being caught.
+  return opts.liveness ? `${base}  <- ${opts.liveness}` : base;
 }
 
 /** A task whose `brain.ask()` itself threw before any Worker ever ran -
@@ -242,6 +216,38 @@ export function formatQuietNotice(elapsedMs: number, hadHeartbeat: boolean): str
  * either (issue #12 review finding, Client ruling). */
 export function formatCheckingQuietNotice(elapsedMs: number): string {
   return `checking, ${formatAge(elapsedMs)} and still not finished - not known to be stuck, not known to be fine`;
+}
+
+/** What to say about a task's liveness right now - "checking, 2m so
+ * far" for a check genuinely still in progress, the quiet alarm past a
+ * ceiling (whichever wording fits: `formatCheckingQuietNotice` for
+ * "checking", `formatQuietNotice` otherwise), or null when neither
+ * applies. The one definition of that decision AND the elapsed-time
+ * arithmetic under it - `checkStartedAt` for "checking", `lastActivityAt`
+ * otherwise, since those are different quantities that only coincide by
+ * accident (a heartbeat landing after a check starts doesn't change
+ * `stateOf`'s "checking" verdict). `status` and `watch` used to each
+ * derive this independently - once here, once hand-inlined in
+ * `watch-command.ts` - and the two had already drifted apart once
+ * (issue #12 review finding) before being caught; this is the fix for
+ * that whole class of bug, not just the one instance. Callers that need
+ * to tell "worth re-printing as time passes" (checking-in-progress)
+ * apart from "worth printing once per transition" (the quiet alarm)
+ * already have `state` and can call `isQuietTooLong` themselves for
+ * that - this function only ever answers "what does it look like,"
+ * never "when to show it again." */
+export function describeLiveness(state: FabricaTask["state"], events: FabricaEvent[], now: number): string | null {
+  if (state === "checking") {
+    const startedAt = checkStartedAt(events);
+    if (startedAt === null) return null; // defensive: shouldn't happen for a real task
+    const elapsed = now - startedAt.getTime();
+    return isQuietTooLong(state, events, now) ? formatCheckingQuietNotice(elapsed) : `checking, ${formatAge(elapsed)} so far`;
+  }
+  if (!isQuietTooLong(state, events, now)) return null;
+  const last = lastActivityAt(events);
+  if (!last) return null; // defensive: shouldn't happen for a real task
+  const hadHeartbeat = events.some((e) => e.name === "heartbeat");
+  return formatQuietNotice(now - last.getTime(), hadHeartbeat);
 }
 
 /** What `fabrica watch` prints when a task reaches a state nothing
