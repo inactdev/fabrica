@@ -117,7 +117,18 @@ function restoreTrust(targetPath: string, prior: unknown): void {
  * - a caller outside this harness's own directory has no business
  * knowing that convention - then instructing the session to attempt
  * each of `attempts` - full `fabrica ...` command strings - in turn
- * via its Bash tool, then reports which ones actually ran.
+ * via its Bash tool, then reports which ones actually ran. Pass `null`
+ * for `settingsJsonPath` to run with no project-level settings.json
+ * installed at all - the negative control that proves a passing check
+ * is actually about the installed template, not some ambient
+ * permissiveness (see skill-settings-live.test.ts).
+ *
+ * The session runs with `--setting-sources project`, deliberately
+ * excluding the tester's own user-level and local settings layers -
+ * without this, a personal broad allow rule on the machine running the
+ * check could make the free-command assertions pass for a reason that
+ * has nothing to do with the shipped template, manufacturing false
+ * confidence in exactly the boundary this exists to prove.
  *
  * Refuses (throws) unless `rawCwd` resolves under the system temp
  * directory: this function patches machine-wide Claude Code trust
@@ -127,7 +138,7 @@ function restoreTrust(targetPath: string, prior: unknown): void {
  */
 export async function checkPermissionBoundary(
   rawCwd: string,
-  settingsJsonPath: string,
+  settingsJsonPath: string | null,
   attempts: string[]
 ): Promise<PermissionBoundaryResult> {
   // macOS resolves a temp dir through a /var -> /private/var symlink
@@ -152,9 +163,11 @@ export async function checkPermissionBoundary(
     return { available: false, unavailableReason: "claude is not installed or not runnable on PATH", executedArgs: [], deniedCommands: [] };
   }
 
-  const settingsDir = join(cwd, ".claude");
-  mkdirSync(settingsDir, { recursive: true });
-  writeFileSync(join(settingsDir, "settings.json"), readFileSync(settingsJsonPath));
+  if (settingsJsonPath !== null) {
+    const settingsDir = join(cwd, ".claude");
+    mkdirSync(settingsDir, { recursive: true });
+    writeFileSync(join(settingsDir, "settings.json"), readFileSync(settingsJsonPath));
+  }
 
   const binDir = join(cwd, ".permission-boundary-bin");
   mkdirSync(binDir, { recursive: true });
@@ -181,7 +194,7 @@ export async function checkPermissionBoundary(
 
     let raw: string;
     try {
-      raw = execFileSync("claude", ["-p", prompt, "--output-format", "json"], {
+      raw = execFileSync("claude", ["-p", prompt, "--output-format", "json", "--setting-sources", "project"], {
         cwd,
         env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
         encoding: "utf8",
