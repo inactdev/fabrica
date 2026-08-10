@@ -217,8 +217,14 @@ async function streamTranscript(ctx: {
     wasChecking = checking;
 
     if (quiet !== wasQuiet) {
-      const notice = quiet ? describeLiveness(state, events, now) : null;
-      stdout(notice ?? "signal resumed");
+      if (quiet) {
+        stdout(
+          describeLiveness(state, events, now) ??
+            "quiet, nothing recorded for a while - not known to be stuck, not known to be fine",
+        );
+      } else {
+        stdout("signal resumed");
+      }
     }
     wasQuiet = quiet;
 
