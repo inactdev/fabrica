@@ -16,8 +16,14 @@
 // [node, entryScript, ...args] - the same shape it would see running
 // directly, so it never has to know a bootstrap sat in front of it.
 
+import { pathToFileURL } from "node:url";
+
 await import("tsx/esm");
 
 const [, , entry, ...args] = process.argv;
 process.argv = [process.argv[0], entry, ...args];
-await import(entry);
+// entry is a raw filesystem path (spawn-detached.ts builds it with
+// fileURLToPath, decoding it) - import() parses a bare specifier as a
+// URL, so a checkout whose path contains a literal "#" or "?" would
+// truncate there and every `fabrica do` would fail to start.
+await import(pathToFileURL(entry).href);
