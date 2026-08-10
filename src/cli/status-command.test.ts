@@ -248,7 +248,7 @@ test("runStatusCommand: an ask-failed task sorts after a task that's still genui
 // stuck between task-received and work-started past its own long window
 // is flagged quiet too, catching a reboot or OOM during brain.ask() that
 // would otherwise freeze the record here with the alarm never firing.
-test("runStatusCommand: a task stuck before work-started past its own ceiling is flagged quiet, wording names no heartbeat", async () => {
+test("runStatusCommand: a task stuck before work-started past its own ceiling is flagged quiet, wording names the actual last event", async () => {
   const recordHome = tempRecordHome();
   const start = Date.now() - PRE_WORK_QUIET_CEILING_MS - 1;
   const receivedEvent = {
@@ -265,6 +265,6 @@ test("runStatusCommand: a task stuck before work-started past its own ceiling is
   assert.equal(code, 0);
   assert.equal(io.out.length, 1);
   assert.match(io.out[0], /working/, "state itself is still working - only ask() is unaccounted for");
-  assert.match(io.out[0], /no signal recorded yet/, "no heartbeat was ever emitted for this window");
+  assert.match(io.out[0], /no signal since the task was received/, "task-received is the record's actual last event here");
   assert.doesNotMatch(io.out[0], /heartbeat/, "attempts.ts's heartbeat interval never wraps brain.ask()");
 });
