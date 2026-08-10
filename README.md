@@ -80,9 +80,12 @@ yourself:
 `status` flags a delivered task as waiting on your verdict, shows a task
 that is running its check with how long it has been at it, and calls a
 working task that has recorded nothing for a while quiet - silence never
-gets to look like progress. An Inspector refusal is shown separately
-and points to `fabrica log <id>` for the reason. `watch` follows one task
-the same way:
+<<<<<<< HEAD
+gets to look like progress. A task that failed before any work started
+stays on the list, marked "FAILED, UNRESOLVABLE" and sorted below the
+tasks still moving, so it neither disappears nor looks live. An Inspector
+refusal is shown separately as no verdict reached and points to
+`fabrica log <id>` for the reason. `watch` follows one task the same way:
 heartbeats appear live, and the worker's own transcript arrives in a
 batch at the end of each attempt. Stopping `watch` (Ctrl-C) stops only
 the watching; the work runs on in its own process.
