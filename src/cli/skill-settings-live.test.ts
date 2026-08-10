@@ -104,17 +104,21 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
           `${harness}: "fabrica ${deniedArgs}" actually ran in a real session - it must be denied, not merely undocumented as allowed`
         );
       }
+      // Exact matches against the specific attempt strings, not a
+      // substring check - "verdict" appears in both the standalone
+      // and the chained attempt, so a substring match could be
+      // satisfied by the chained denial alone and pass vacuously for
+      // the standalone case even if the model never attempted it.
       assert.ok(
-        result.deniedCommands.some((c) => c.includes("verdict")),
-        `${harness}: no real permission_denials entry named the verdict attempt - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+        result.deniedCommands.includes("fabrica verdict task-1 accept -m note"),
+        `${harness}: no real permission_denials entry named the standalone verdict attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
       );
       assert.ok(
-        result.deniedCommands.some((c) => c.includes("answer")),
-        `${harness}: no real permission_denials entry named the answer attempt - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+        result.deniedCommands.includes("fabrica answer task-1 -m answer-text"),
+        `${harness}: no real permission_denials entry named the standalone answer attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
       );
-
       assert.ok(
-        result.deniedCommands.some((c) => c.includes("&&") && c.includes("verdict")),
+        result.deniedCommands.includes("fabrica status && fabrica verdict task-1 accept -m note"),
         `${harness}: the chained "fabrica status && fabrica verdict ..." attempt was not denied as a whole - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
       );
       assert.equal(

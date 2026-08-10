@@ -31,7 +31,7 @@
 // `claude` is already logged in as.
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, renameSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
 
@@ -61,11 +61,17 @@ function readConfig(): ClaudeConfig {
 /** Temp-file-then-rename, never a truncating in-place write - a crash
  * between those two steps for a plain writeFileSync would leave the
  * machine-wide config empty; rename is atomic, so readers only ever
- * see the old file or the new one, never a half-written one. */
+ * see the old file or the new one, never a half-written one. The temp
+ * file is explicitly chmod'd to the target's own current mode before
+ * the rename - a plain writeFileSync would otherwise create it under
+ * the process umask (commonly 0644), silently widening a config that
+ * may be 0600 to world-readable the moment this runs once. */
 function writeConfigAtomic(config: ClaudeConfig): void {
   const target = configPath();
+  const mode = statSync(target).mode;
   const tmpPath = `${target}.tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmpPath, JSON.stringify(config, null, 2));
+  chmodSync(tmpPath, mode);
   renameSync(tmpPath, target);
 }
 
