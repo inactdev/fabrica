@@ -231,6 +231,23 @@ export async function checkPermissionBoundary(
 
     return { available: true, executedArgs, deniedCommands };
   } finally {
-    restoreTrust(cwd, priorTrust);
+    // A throw here would propagate out of the finally block and
+    // replace whatever the try block just computed - including a
+    // genuinely successful result - with this error instead, silently
+    // discarding real proof. The session that just ran also writes to
+    // ~/.claude.json itself (its own project/history state), so a
+    // restore racing that write - a torn read, a transient EACCES -
+    // is a real possibility, not a hypothetical. Caught and reported
+    // loudly rather than thrown, so the caller still gets its real
+    // result and a human still finds out the machine-wide trust entry
+    // for `cwd` may need manual cleanup.
+    try {
+      restoreTrust(cwd, priorTrust);
+    } catch (err) {
+      console.error(
+        `permission-boundary-verify: failed to restore Claude Code trust state for ${cwd} after the check - ` +
+          `${String(err)} - the entry may need manual removal from ~/.claude.json's "projects" map`
+      );
+    }
   }
 }

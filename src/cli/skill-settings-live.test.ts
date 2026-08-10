@@ -44,7 +44,7 @@
 // below prints a banner naming why, so a run that never actually
 // proved the boundary can't be mistaken for one that did.
 
-import { test, after } from "node:test";
+import { test, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -89,13 +89,14 @@ async function loadChecker(harness: string): Promise<CheckPermissionBoundary> {
   return module.checkPermissionBoundary;
 }
 
-/** An allow-emptied copy of the shipped template, written to a fresh
- * scratch file - same deny/hooks, permissions.allow: []. */
-function emptyAllowVariant(harness: string, scratchParent: string): string {
+/** An allow-emptied copy of the shipped template, written directly
+ * inside the given scratch dir rather than wherever
+ * checkPermissionBoundary installs the real template under test, so
+ * the two can never collide - same deny/hooks, permissions.allow: []. */
+function emptyAllowVariant(harness: string, scratch: string): string {
   const shipped = JSON.parse(readFileSync(join(skillDir, harness, "settings.json"), "utf8"));
   shipped.permissions.allow = [];
-  const dir = mkdtempSync(join(scratchParent, "empty-allow-"));
-  const variantPath = join(dir, "settings.json");
+  const variantPath = join(scratch, "empty-allow-settings.json");
   writeFileSync(variantPath, JSON.stringify(shipped, null, 2));
   return variantPath;
 }
@@ -124,7 +125,19 @@ function assertGenuinelyDenied(harness: string, result: CheckResult, attempts: s
   }
 }
 
-test("real session: the shipped settings.json actually runs do/status/log/watch and actually denies verdict/answer, including a chained bypass attempt", async (t) => {
+/** Shared shape every test below follows: skip loudly (env var unset,
+ * no harness ships the live verifier, or the harness itself reports
+ * unavailable) rather than silently passing on an inconclusive run;
+ * otherwise hand each harness a fresh scratch dir and run `attempt`
+ * against it, cleaning up unconditionally afterward. `attempt` does
+ * the real check and its own assertions - what varies between tests
+ * is which settings.json (if any) gets installed and what a pass is
+ * supposed to mean, not this scaffolding. */
+async function forEachLiveHarness(
+  t: TestContext,
+  scratchPrefix: string,
+  attempt: (checkPermissionBoundary: CheckPermissionBoundary, harness: string, scratch: string) => Promise<CheckResult>
+): Promise<void> {
   if (process.env.FABRICA_TEST_REAL_PERMISSIONS !== "1") {
     skipReason = "FABRICA_TEST_REAL_PERMISSIONS=1 not set";
     return t.skip(skipReason);
@@ -138,128 +151,95 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
 
   for (const harness of harnesses) {
     const checkPermissionBoundary = await loadChecker(harness);
-    const scratch = mkdtempSync(join(tmpdir(), "fabrica-live-permissions-"));
+    const scratch = mkdtempSync(join(tmpdir(), scratchPrefix));
     try {
-      const attempts = [
-        ...FREE_ATTEMPTS,
-        "fabrica verdict task-1 accept -m note",
-        "fabrica answer task-1 -m answer-text",
-        "fabrica status && fabrica verdict task-1 accept -m note",
-      ];
-
-      const result = await checkPermissionBoundary(scratch, join(skillDir, harness, "settings.json"), attempts);
+      const result = await attempt(checkPermissionBoundary, harness, scratch);
       if (!result.available) {
         skipReason = `${harness}: ${result.unavailableReason}`;
         return t.skip(skipReason);
-      }
-
-      // Free commands: executedArgs containing an entry can only be
-      // true if the shim genuinely ran, so this observable alone
-      // proves the boundary let it through - nothing else to pair it
-      // with.
-      for (const freeArgs of FREE_ARGS) {
-        assert.ok(
-          result.executedArgs.includes(freeArgs),
-          `${harness}: "fabrica ${freeArgs}" never actually ran in a real session - executedArgs was ${JSON.stringify(result.executedArgs)}`
-        );
-      }
-
-      // Deciding commands, denial-genuineness checked first: exact
-      // matches against the specific attempt strings, not a substring
-      // check - "verdict" appears in both the standalone and the
-      // chained attempt, so a substring match could be satisfied by
-      // the chained denial alone and pass vacuously for the
-      // standalone case even if the model never attempted it.
-      assert.ok(
-        result.deniedCommands.includes("fabrica verdict task-1 accept -m note"),
-        `${harness}: no real permission_denials entry named the standalone verdict attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
-      );
-      assert.ok(
-        result.deniedCommands.includes("fabrica answer task-1 -m answer-text"),
-        `${harness}: no real permission_denials entry named the standalone answer attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
-      );
-      assert.ok(
-        result.deniedCommands.includes("fabrica status && fabrica verdict task-1 accept -m note"),
-        `${harness}: the chained "fabrica status && fabrica verdict ..." attempt was not denied as a whole - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
-      );
-      // Only meaningful now that the three checks above already prove
-      // each attempt was genuinely made and denied by the engine - an
-      // executedArgs check run on its own would also pass if the
-      // model had simply never tried these, which is exactly the
-      // vacuous-pass shape the Client's ruling on the negative
-      // controls called out. Here it adds real information: does the
-      // side effect (nothing ran) agree with the engine's own report,
-      // or did something slip through despite the reported denial.
-      for (const deniedArgs of ["verdict task-1 accept -m note", "answer task-1 -m answer-text"]) {
-        assert.equal(
-          result.executedArgs.includes(deniedArgs),
-          false,
-          `${harness}: "fabrica ${deniedArgs}" actually ran despite a real permission_denials entry for it - a bypass got through`
-        );
       }
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
   }
+}
+
+test("real session: the shipped settings.json actually runs do/status/log/watch and actually denies verdict/answer, including a chained bypass attempt", async (t) => {
+  await forEachLiveHarness(t, "fabrica-live-permissions-", async (checkPermissionBoundary, harness, scratch) => {
+    const attempts = [
+      ...FREE_ATTEMPTS,
+      "fabrica verdict task-1 accept -m note",
+      "fabrica answer task-1 -m answer-text",
+      "fabrica status && fabrica verdict task-1 accept -m note",
+    ];
+
+    const result = await checkPermissionBoundary(scratch, join(skillDir, harness, "settings.json"), attempts);
+    if (!result.available) return result;
+
+    // Free commands: executedArgs containing an entry can only be
+    // true if the shim genuinely ran, so this observable alone
+    // proves the boundary let it through - nothing else to pair it
+    // with.
+    for (const freeArgs of FREE_ARGS) {
+      assert.ok(
+        result.executedArgs.includes(freeArgs),
+        `${harness}: "fabrica ${freeArgs}" never actually ran in a real session - executedArgs was ${JSON.stringify(result.executedArgs)}`
+      );
+    }
+
+    // Deciding commands, denial-genuineness checked first: exact
+    // matches against the specific attempt strings, not a substring
+    // check - "verdict" appears in both the standalone and the
+    // chained attempt, so a substring match could be satisfied by
+    // the chained denial alone and pass vacuously for the
+    // standalone case even if the model never attempted it.
+    assert.ok(
+      result.deniedCommands.includes("fabrica verdict task-1 accept -m note"),
+      `${harness}: no real permission_denials entry named the standalone verdict attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+    );
+    assert.ok(
+      result.deniedCommands.includes("fabrica answer task-1 -m answer-text"),
+      `${harness}: no real permission_denials entry named the standalone answer attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+    );
+    assert.ok(
+      result.deniedCommands.includes("fabrica status && fabrica verdict task-1 accept -m note"),
+      `${harness}: the chained "fabrica status && fabrica verdict ..." attempt was not denied as a whole - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+    );
+    // Only meaningful now that the three checks above already prove
+    // each attempt was genuinely made and denied by the engine - an
+    // executedArgs check run on its own would also pass if the
+    // model had simply never tried these, which is exactly the
+    // vacuous-pass shape the Client's ruling on the negative
+    // controls called out. Here it adds real information: does the
+    // side effect (nothing ran) agree with the engine's own report,
+    // or did something slip through despite the reported denial.
+    for (const deniedArgs of ["verdict task-1 accept -m note", "answer task-1 -m answer-text"]) {
+      assert.equal(
+        result.executedArgs.includes(deniedArgs),
+        false,
+        `${harness}: "fabrica ${deniedArgs}" actually ran despite a real permission_denials entry for it - a bypass got through`
+      );
+    }
+
+    return result;
+  });
 });
 
 test("negative control: with no settings.json installed, none of the free commands run", async (t) => {
-  if (process.env.FABRICA_TEST_REAL_PERMISSIONS !== "1") {
-    skipReason = "FABRICA_TEST_REAL_PERMISSIONS=1 not set";
-    return t.skip(skipReason);
-  }
-
-  const harnesses = harnessesWithLiveVerifier();
-  if (harnesses.length === 0) {
-    skipReason = "no harness ships both settings.json and permission-boundary-verify.ts";
-    return t.skip(skipReason);
-  }
-
-  for (const harness of harnesses) {
-    const checkPermissionBoundary = await loadChecker(harness);
-    const scratch = mkdtempSync(join(tmpdir(), "fabrica-live-permissions-noconfig-"));
-    try {
-      const result = await checkPermissionBoundary(scratch, null, FREE_ATTEMPTS);
-      if (!result.available) {
-        skipReason = `${harness}: ${result.unavailableReason}`;
-        return t.skip(skipReason);
-      }
-
-      assertGenuinelyDenied(harness, result, FREE_ATTEMPTS);
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
-    }
-  }
+  await forEachLiveHarness(t, "fabrica-live-permissions-noconfig-", async (checkPermissionBoundary, harness, scratch) => {
+    const result = await checkPermissionBoundary(scratch, null, FREE_ATTEMPTS);
+    if (!result.available) return result;
+    assertGenuinelyDenied(harness, result, FREE_ATTEMPTS);
+    return result;
+  });
 });
 
 test("negative control: with the shipped template's own allow list emptied, none of the free commands run", async (t) => {
-  if (process.env.FABRICA_TEST_REAL_PERMISSIONS !== "1") {
-    skipReason = "FABRICA_TEST_REAL_PERMISSIONS=1 not set";
-    return t.skip(skipReason);
-  }
-
-  const harnesses = harnessesWithLiveVerifier();
-  if (harnesses.length === 0) {
-    skipReason = "no harness ships both settings.json and permission-boundary-verify.ts";
-    return t.skip(skipReason);
-  }
-
-  for (const harness of harnesses) {
-    const checkPermissionBoundary = await loadChecker(harness);
-    const scratch = mkdtempSync(join(tmpdir(), "fabrica-live-permissions-emptyallow-"));
-    const variantParent = mkdtempSync(join(tmpdir(), "fabrica-live-permissions-variant-"));
-    try {
-      const variantPath = emptyAllowVariant(harness, variantParent);
-      const result = await checkPermissionBoundary(scratch, variantPath, FREE_ATTEMPTS);
-      if (!result.available) {
-        skipReason = `${harness}: ${result.unavailableReason}`;
-        return t.skip(skipReason);
-      }
-
-      assertGenuinelyDenied(harness, result, FREE_ATTEMPTS);
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
-      rmSync(variantParent, { recursive: true, force: true });
-    }
-  }
+  await forEachLiveHarness(t, "fabrica-live-permissions-emptyallow-", async (checkPermissionBoundary, harness, scratch) => {
+    const variantPath = emptyAllowVariant(harness, scratch);
+    const result = await checkPermissionBoundary(scratch, variantPath, FREE_ATTEMPTS);
+    if (!result.available) return result;
+    assertGenuinelyDenied(harness, result, FREE_ATTEMPTS);
+    return result;
+  });
 });
