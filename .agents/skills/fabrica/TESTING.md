@@ -1,7 +1,12 @@
 # How this handbook was tested (fabrica#14)
 
 The issue's bar for "done": a fresh chat session, given only `SKILL.md`,
-drives a full task correctly. This is the transcript of that test.
+drives a full task correctly. This file is that transcript, re-run after
+`fabrica status`/`log`/`watch` (issue #12) landed and the handbook was
+rewritten against the real, current command surface - the original
+two-command version was tested once already; this replaces that run
+rather than sitting alongside it, since the six-command handbook needed
+its own proof.
 
 ## Setup
 
@@ -11,74 +16,78 @@ drives a full task correctly. This is the transcript of that test.
 - `fabrica` installed for real via `npm link` and run as the actual
   installed binary - not a test harness, not a fake brain.
 - A brand-new agent (Claude Code's `general-purpose` subagent), told to
-  read only `SKILL.md` - explicitly instructed *not* to read
-  `SPEC.md`, `CONTRACT.md`, any `README.md`, or Fabrica's source - and
-  given a Client request in plain language: *"Add a subtract(a, b)
-  function to math.js that returns a minus b, and export it alongside
-  add. Use fabrica for this - don't edit the file yourself."*
+  read only `SKILL.md` - explicitly instructed *not* to read `SPEC.md`,
+  `CONTRACT.md`, any `README.md`, or Fabrica's source - and given a
+  Client request in plain language: *"Add a subtract(a, b) function to
+  math.js that returns a minus b, and export it alongside add. Use
+  fabrica for this - don't edit the file yourself."* It was also told to
+  exercise `status`, `log`, and `watch` at least once each against the
+  real task, and not to use any background wait/poll tool - since the
+  underlying credential gap (below) now makes every task fail within a
+  couple of seconds, nothing in this run needed a long wait.
 
 ## What the fresh agent actually did, in order
 
 1. Read `SKILL.md`.
-2. Ran `fabrica --help`, `fabrica do --help`, `fabrica verdict --help`
-   to confirm the handbook's command shapes against the real CLI before
-   trusting them.
-3. Ran `fabrica do "Add a subtract(a, b) function to math.js that
-   returns a minus b, and export it alongside add." --project <fixture
-   path>` - the Client's own words, not a paraphrase, and did not touch
-   `math.js` itself.
-4. Correctly reported the task as *registered and running, not done* -
-   did not treat the command returning as the task finishing.
-5. Checked the record (`ls tasks/<id>/`) immediately after - no
-   `delivery.md` yet - and, rather than guessing, set up a wait/poll
-   strategy for a real answer instead of assuming a quick failure meant
-   the task was stuck, or that a quiet directory meant success.
-6. When re-prompted to stop waiting and check the record directly
-   (a scripted nudge to force the "query now, not from memory" path -
-   see caveat below), it re-ran three fresh commands and reported
-   exactly what they showed:
-   - `ls tasks/<id>/`: only `brief.md`, `request.md`,
-     `worktree.fabrica-session` - **no `delivery.md`**.
-   - `events.jsonl`: `task-received`, `work-started`, and nothing
-     after.
-   - `cli.log`: `fabrica do: task on "..." failed: Not logged in ·
-     Please run /login`.
-7. Reported, in plain language, that the task never delivered, that
-   this was an authentication problem with the worker adapter and not a
-   problem with the `subtract` request itself, that it would not fix
-   this itself (the handbook's first taboo), and that no verdict applies
-   because nothing delivered (the handbook's record-reading guidance).
-   It did not fabricate a delivery, did not guess the task had "probably
-   worked by now," and named the exact task id for follow-up.
+2. Ran `fabrica --help` and `fabrica do --help` to confirm the handbook's
+   command list and shapes against the real CLI before trusting them -
+   both matched exactly.
+3. Ran `fabrica do "Add a subtract(a, b) function to math.js that returns
+   a minus b, and export it alongside add." --project <fixture path>` -
+   the Client's own words, not a paraphrase - and did not touch `math.js`
+   itself.
+4. The command printed the task id to stdout, then reported on stderr
+   that the task failed before any work started (`Not logged in · Please
+   run /login`), exit code 1 - the handbook's documented third outcome of
+   `do`, not the "asking" or "started" ones. The agent correctly did not
+   read exit-1-with-a-task-id as "the request was bad" - it reported the
+   real reason instead.
+5. Ran `fabrica status`: one line, `<taskId>  unknown project  failed
+   5s old`. Correctly noted the id and state rather than assuming
+   anything from the command's earlier exit code.
+6. Ran `fabrica log <taskId>`: two events, `task-received` then
+   `ask-failed` with the real error text - matched what `do` had already
+   reported.
+7. Ran `fabrica watch <taskId>`: printed the handbook-documented terminal
+   notice for a task that failed before any delivery ("no `fix` path;
+   `fabrica log` has the reason") and returned on its own immediately -
+   no timeout or interrupt needed, since a `failed`-with-no-delivery task
+   is one of `watch`'s two terminal states.
+8. Re-ran `fabrica status` once more before reporting, confirming the
+   state hadn't changed since the last check (taboo 2), then gave the
+   Client a plain-language report: the request was handed to Fabrica, it
+   failed before any work started for a credentials reason unrelated to
+   the request itself, nothing touched the project, there's no `fix` path
+   since nothing delivered, and it named the exact task id for follow-up.
+   It did not fabricate a delivery and did not fix `math.js` itself.
 
 ## What this does and doesn't prove
 
-**Proves cleanly:** taboo 1 (never touched the fixture file itself, ran
-`fabrica do` instead), taboo 2 (repeatedly re-queried the real record
-instead of assuming; the final report cites the literal command output,
-not a remembered state), and correct use of both documented commands'
-argument shapes, verified against the real CLI.
+**Proves cleanly:** taboo 1 (never touched the fixture file), taboo 2
+(every status claim backed by a command run that same turn, including the
+final re-check before reporting), and correct real-CLI use of `do`,
+`status`, `log`, and `watch`, including `do`'s "failed before any work
+started" outcome and `watch`'s auto-stop-on-terminal-state behavior -
+none of this existed at the time of the first test run.
 
-**Doesn't cover:** a clean `accept`/`fix`/`wrong` verdict round (taboo
-3's exact-numbers-through), because the task never reached a delivered
-state to rule on.
+**Doesn't cover:** `fabrica answer` (no task ever reached the "asking"
+state to answer) and a clean `accept`/`fix`/`wrong` verdict round, because
+no task reached a delivered state to act on either way. Verified instead
+by direct source reading (`answer-args.ts`, `answer-command.ts`,
+`verdict-args.ts`, `verdict-command.ts`) and, for `verdict`/`answer`'s
+refusal paths on an undelivered/unasked task, by running both commands by
+hand against the same failed task and confirming their exact refusal text
+(`"has not been delivered yet"`, `"never asked a clarifying question"`).
 
-**Why:** a pre-existing, already-documented gap, unrelated to this
-issue - `src/brain/adapters/claude-code.md`'s "Process containment"
-section: the reference brain adapter always runs the coding agent inside
-a throwaway Docker container, and that container has no credential
-configured yet (verified live here too: `claude auth status` inside it
-reports "Not logged in"). Every real task run through `fabrica do` fails
-at this same step today, regardless of what the task asks for. Closing
-that gap is a live-credential decision for whoever configures Fabrica,
-not a documentation fix - see that file for the full reasoning. It is
-called out again in the CONTRACT/AGENTS-facing summary of this work
-rather than worked around here.
-
-One honest caveat about the test itself: step 6 above was a scripted
-nudge from the person running this test ("stop waiting, check the record
-now") rather than the fresh agent independently deciding to stop
-waiting on its own after its background monitor idled out without
-resolving. What it did *after* that nudge - which three commands it
-ran, and reporting only what they actually showed - was the agent's own
-judgment, using the handbook's record-reading guidance, not scripted.
+**Why the same gap as before:** `src/brain/adapters/claude-code.md`'s
+"Process containment" section - the reference brain adapter always runs
+inside a throwaway Docker container with no credential configured, so
+`claude auth status` inside it reports "Not logged in." What changed since
+the last test: every task's first pass now calls `brain.ask()` before any
+work begins (issue #8, already on `master` when this handbook was first
+written but exercised for the first time by this run), so a task hits this
+gap even faster than before - at the clarifying step, before a
+ProductionLine is ever cut, rather than partway into a worker run. Every
+real task run through `fabrica do` fails at this same step today,
+regardless of what it asks for. Closing that gap is a live-credential
+decision for whoever configures Fabrica, not a documentation fix.
