@@ -30,29 +30,34 @@ export interface HarnessVerifier {
 
 const SKILL_DIR = fileURLToPath(new URL("../../skill", import.meta.url));
 
-function isHarnessVerifier(module: unknown): module is HarnessVerifier {
+function missingVerifierExports(module: unknown): string[] {
   const candidate = module as Partial<HarnessVerifier> | null;
-  return typeof candidate?.attemptRealEdit === "function" && typeof candidate?.harnessAvailable === "function";
+  const missing: string[] = [];
+  if (typeof candidate?.attemptRealEdit !== "function") missing.push("attemptRealEdit");
+  if (typeof candidate?.harnessAvailable !== "function") missing.push("harnessAvailable");
+  return missing;
 }
 
 export interface HarnessVerifierLookup {
   verifier: HarnessVerifier | null;
-  /** A verify.ts that is right there on disk but could not be loaded - it
-   * threw at module scope, or imports something that no longer resolves.
-   * Kept separate from "nothing found" so the caller can say which it was:
-   * telling the Client no verify script exists, when one does, sends him
-   * looking for a file he is already staring at. */
-  loadFailures: { path: string; error: string }[];
+  /** A verify.ts that is right there on disk but unusable - it threw at
+   * module scope, imports something that no longer resolves, or evaluated
+   * fine while exporting only half of what a verifier needs. Kept separate
+   * from "nothing found" so the caller can say which it was: telling the
+   * Client no verify script exists, when one does, sends him looking for a
+   * file he is already staring at. */
+  loadFailures: { path: string; problem: string }[];
 }
 
 /** The first skill/<harness>/verify.ts that actually exports both halves -
  * today there is exactly one harness with a shipped config, so "first" and
  * "only" coincide; a second harness adding its own verify.ts would need this
  * to pick one deliberately instead of arbitrarily, not a problem yet. A
- * half-written verify.ts is skipped rather than returned, so the caller
- * reports it as "nothing to run" instead of dying on a TypeError. */
+ * half-written verify.ts is skipped rather than returned, so the caller never
+ * dies on a TypeError - but it is skipped by name, as a load failure saying
+ * which export is missing, not silently. */
 export async function loadHarnessVerifier(skillDir: string = SKILL_DIR): Promise<HarnessVerifierLookup> {
-  const loadFailures: { path: string; error: string }[] = [];
+  const loadFailures: { path: string; problem: string }[] = [];
   if (!existsSync(skillDir)) return { verifier: null, loadFailures };
   for (const name of readdirSync(skillDir)) {
     const verifyPath = join(skillDir, name, "verify.ts");
@@ -65,10 +70,18 @@ export async function loadHarnessVerifier(skillDir: string = SKILL_DIR): Promise
       // not hypothetical) - pathToFileURL percent-encodes those first.
       module = await import(pathToFileURL(verifyPath).href);
     } catch (err) {
-      loadFailures.push({ path: verifyPath, error: err instanceof Error ? err.message : String(err) });
+      loadFailures.push({
+        path: verifyPath,
+        problem: `could not be loaded: ${err instanceof Error ? err.message : String(err)}`,
+      });
       continue;
     }
-    if (isHarnessVerifier(module)) return { verifier: module, loadFailures };
+    const missing = missingVerifierExports(module);
+    if (missing.length === 0) return { verifier: module as HarnessVerifier, loadFailures };
+    loadFailures.push({
+      path: verifyPath,
+      problem: `loaded, but exports no ${missing.join(" and no ")} - a verify script needs both attemptRealEdit and harnessAvailable`,
+    });
   }
   return { verifier: null, loadFailures };
 }
@@ -152,7 +165,7 @@ export async function runVerifyHookCommand(opts: RunVerifyHookOptions = {}): Pro
     const found = await loadHarnessVerifier(opts.skillDir);
     verifier = found.verifier;
     for (const failure of found.loadFailures) {
-      stderr(`${failure.path} could not be loaded: ${failure.error}`);
+      stderr(`${failure.path} ${failure.problem}`);
     }
   }
   if (!verifier) {
@@ -173,7 +186,17 @@ export async function runVerifyHookCommand(opts: RunVerifyHookOptions = {}): Pro
   const eventsBefore = readEvents(recordHome).length;
 
   stdout("Attempting a real edit in this directory, through your installed session config...");
-  verifier.attemptRealEdit(cwd, targetFileName);
+  // A harness's verify.ts is free to let its own spawn throw (binary gone
+  // mid-run, timeout, killed) - and a session that exits non-zero *because*
+  // the hook denied the edit looks exactly like that from here. So the throw
+  // is reported and the verdict still comes from disk and the record below,
+  // rather than aborting the command on a stack trace and skipping the
+  // throwaway file's cleanup.
+  try {
+    verifier.attemptRealEdit(cwd, targetFileName);
+  } catch (err) {
+    stderr(`The attempt itself failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   const created = existsSync(targetPath);
   if (created) rmSync(targetPath, { force: true }); // never leave the throwaway file behind, pass or fail

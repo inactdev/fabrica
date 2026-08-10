@@ -77,6 +77,26 @@ test("runVerifyHookCommand: a verify.ts that fails to load is reported by path a
   assert.match(err, /could not be loaded: .*boom while loading/);
 });
 
+test("runVerifyHookCommand: a verify.ts missing half its exports is named, not skipped anonymously", async () => {
+  const io = captureIo();
+  const skillDir = skillDirWith(
+    "half-written-harness",
+    "export function harnessAvailable(): boolean { return true; }\n"
+  );
+
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  const err = io.err.join("\n");
+  assert.match(err, /half-written-harness/);
+  assert.match(err, /exports no attemptRealEdit/);
+});
+
 test("runVerifyHookCommand: a real verify.ts is discovered and used through the skill/ scan", async () => {
   const io = captureIo();
   const skillDir = skillDirWith(
@@ -221,6 +241,62 @@ test("runVerifyHookCommand: a skill/ path containing '#' still resolves its veri
   // halves - a truncated import would instead fail to resolve.
   assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
   assert.doesNotMatch(io.err.join("\n"), /could not be loaded/i);
+});
+
+test("runVerifyHookCommand: a verifier that throws still reports a verdict and cleans up", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+  let seenFileName = "";
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // A harness verify.ts that lets its own spawn failure escape - here the
+      // session wrote the file and *then* exited non-zero, so the verdict
+      // (allowed, not denied) has to come from disk regardless of the throw.
+      attemptRealEdit: (attemptCwd, targetFileName) => {
+        seenFileName = targetFileName;
+        writeFileSync(join(attemptCwd, targetFileName), "verify\n");
+        throw new Error("spawnSync claude ENOENT");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /spawnSync claude ENOENT/);
+  assert.match(io.out.join("\n"), /edit denied:\s+no/);
+  assert.match(io.out.join("\n"), /not fully working/i);
+  assert.equal(existsSync(join(cwd, seenFileName)), false, "the throwaway file must be cleaned up even when the attempt throws");
+});
+
+test("runVerifyHookCommand: a session that exits non-zero because the edit was blocked still passes", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      attemptRealEdit: (attemptCwd, targetFileName) => {
+        appendEvent(recordHome, {
+          taskId: "project:unregistered",
+          name: "edit-attempt-blocked",
+          details: { target: join(attemptCwd, targetFileName) },
+        });
+        throw new Error("command failed with exit code 1");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.match(io.out.join("\n"), /working correctly/i);
 });
 
 test("runVerifyHookCommand: another session's blocked edit doesn't count as this attempt's", async () => {
