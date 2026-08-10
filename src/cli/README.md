@@ -279,6 +279,28 @@ the file's real path even when reached through the `npm link` symlink),
 regardless of where the caller's shell happened to be sitting. Once that
 import registers tsx's loader hooks, `main.ts` loads normally.
 
+## Why nothing here ever `import()`s a raw filesystem path
+
+The sibling sharp edge to the one above, and it has already bitten twice.
+`import()` parses its argument as a **URL**, not as a path - so a path
+containing a literal `#` or `?` is truncated at that character before
+resolution, and the import fails on a file name that doesn't exist. It is
+not hypothetical here: workers run out of generated worktree paths, which
+can contain either character. Both places that load a module by a path
+computed at runtime therefore convert it first with `node:url`'s
+`pathToFileURL(p).href`, which percent-encodes those characters:
+
+- `tsx-bootstrap.mjs`, importing the entry script it was handed
+  (`spawn-detached.ts` builds that path with `fileURLToPath`, i.e. already
+  decoded) - otherwise every `fabrica do` from such a checkout dies with
+  `ERR_MODULE_NOT_FOUND` on the truncated path before the task ever starts.
+- `verify-hook-command.ts`, importing the `skill/<harness>/verify.ts` it
+  discovered - otherwise `fabrica verify-hook` reports no usable harness
+  while one is sitting right there.
+
+Both are covered by tests that build a `#`-containing path and were proven
+to fail against the raw-path version.
+
 ## Why detached execution needs its own file
 
 SPEC.md requires `fabrica do` to print the task id and return
@@ -357,7 +379,7 @@ calls `runTask`.
 | File | Holds |
 | --- | --- |
 | `bin.mjs` | The installed executable. Two lines of real work - see above. |
-| `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh. |
+| `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh, via `pathToFileURL` (see above). |
 | `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand adds one more branch here, the way `answer` (#8) and `status`/`log`/`watch` (#12) each did. |
 | `help.ts` | Top-level help text and the list of known commands. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
@@ -373,8 +395,8 @@ calls `runTask`.
 | `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its two exit-by-itself states (`closed`, and a `failed` task that never delivered), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
 | `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, `QUIET_THRESHOLD_MS`, and `CHECKING_QUIET_CEILING_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
-| `deny-and-log-edit-command.ts` | Reads a `PreToolUse` payload from stdin, denies it, and records `edit-attempt-blocked` - what a harness's session config runs, not something typed by hand (issue #13's prevention half; see that harness's own README under `skill/`). |
-| `verify-hook-command.ts` | `fabrica verify-hook`: proves a session config actually denies-and-logs by running a real attempt, instead of assuming it. Loads its harness-specific spawn by scanning `skill/` at runtime (never a hardcoded import - see `AGENTS.md`'s rule 8 note). |
+| `deny-and-log-edit-command.ts` | Reads a `PreToolUse` payload from stdin, denies it, and records `edit-attempt-blocked` - what a harness's session config runs, not something typed by hand (issue #13's prevention half; see that harness's own README under `skill/`). Deliberately the one command that does *not* refuse stray arguments: it promises to always deny and always exit 0 whatever it is handed, and a refusal would turn that fail-closed guarantee into a non-zero exit `PreToolUse` doesn't block on. |
+| `verify-hook-command.ts` | `fabrica verify-hook`: proves a session config actually denies-and-logs by running a real attempt, instead of assuming it. Takes no arguments and refuses any it is given (`parseVerifyHookArgs`, the same convention as `parseStatusArgs`) rather than ignoring them. Loads its harness-specific spawn by scanning `skill/` at runtime (never a hardcoded import - see `AGENTS.md`'s rule 8 note), reporting a `verify.ts` that throws or exports only half a verifier by name instead of skipping it silently. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |
