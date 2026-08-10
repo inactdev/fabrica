@@ -7,7 +7,14 @@
 import { eventsByTask, stateOf } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { checkStartedAt, formatStatusLine, isQuietTooLong, lastActivityAt, projectFromEvents } from "./render.ts";
+import {
+  checkStartedAt,
+  formatStatusLine,
+  isDeadEnd,
+  isQuietTooLong,
+  lastActivityAt,
+  projectFromEvents,
+} from "./render.ts";
 
 export const STATUS_USAGE = "fabrica status";
 
@@ -88,10 +95,12 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     // moving, so a reader scanning top-down sees real open work first -
     // see formatStatusLine's "FAILED, UNRESOLVABLE" branch for why they
     // stay listed at all rather than being dropped (issue #12 review
-    // finding, Client ruling).
+    // finding, Client ruling). isDeadEnd is the one definition of that
+    // rule, shared with render.ts's own marker, so this sort and that
+    // label can never silently disagree on what counts as a dead end.
     const sorted = [...openTasks].sort((a, b) => {
-      const aDeadEnd = a.task.state === "failed" && !a.hasDelivery;
-      const bDeadEnd = b.task.state === "failed" && !b.hasDelivery;
+      const aDeadEnd = isDeadEnd(a.task, a.hasDelivery);
+      const bDeadEnd = isDeadEnd(b.task, b.hasDelivery);
       return aDeadEnd === bDeadEnd ? 0 : aDeadEnd ? 1 : -1;
     });
 

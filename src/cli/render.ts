@@ -167,7 +167,7 @@ export function formatStatusLine(
   // The Client's ruling (issue #12 review finding) is neither to hide
   // these nor let them read as ordinary open work: mark it plainly as the
   // dead end it is, so it isn't mistaken for something still in progress.
-  if (task.state === "failed" && !opts.hasDelivery) {
+  if (isDeadEnd(task, opts.hasDelivery)) {
     return `${base}  <- FAILED, UNRESOLVABLE: brain's clarify step threw before any work started - see \`fabrica log ${task.id}\``;
   }
   // Once a check has run past CHECKING_QUIET_CEILING_MS, quietForMs takes
@@ -179,13 +179,34 @@ export function formatStatusLine(
     return `${base}  <- checking, ${formatAge(opts.checkingForMs)} so far`;
   }
   if (opts.quietForMs !== null) {
+    // "How long has this check been running" (checkingForMs, anchored to
+    // the check-run "started" event) is a different quantity from "how
+    // long since the record's last event" (quietForMs) - they happen to
+    // coincide today because nothing else gets appended while a check is
+    // in flight, but that's incidental, not guaranteed, and passing the
+    // wrong one in would silently start printing a stale number the
+    // moment that stops being true. The checking branch always uses its
+    // own real elapsed time; it falls back to the generic wording only in
+    // the defensive case a "checking" task somehow has no recorded start
+    // at all (shouldn't happen for a real task - see checkStartedAt).
     const notice =
-      task.state === "checking"
-        ? formatCheckingQuietNotice(opts.quietForMs)
+      task.state === "checking" && opts.checkingForMs !== null
+        ? formatCheckingQuietNotice(opts.checkingForMs)
         : formatQuietNotice(opts.quietForMs, opts.hadHeartbeat);
     return `${base}  <- ${notice}`;
   }
   return base;
+}
+
+/** A task whose `brain.ask()` itself threw before any Worker ever ran -
+ * `recordVerdict` refuses a `fix` on it with "not-delivered", so it can
+ * never move again (see `formatStatusLine`'s "FAILED, UNRESOLVABLE"
+ * branch). The one definition of that rule: `status-command.ts`'s sort
+ * order and this module's own marker must never drift apart on what
+ * counts as a dead end - three independent copies of the same predicate
+ * is how that drift happens silently (issue #12 review finding). */
+export function isDeadEnd(task: { state: FabricaTask["state"] }, hasDelivery: boolean): boolean {
+  return task.state === "failed" && !hasDelivery;
 }
 
 /** The one wording for an ordinary "working" task gone quiet, shared by
