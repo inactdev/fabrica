@@ -90,12 +90,14 @@ has the exact rules).
 Set `FABRICA_HOME` to use a record home other than `~/.fabrica`. Run
 `fabrica --help` or `fabrica <command> --help` for the rest.
 
-## Stopping the AI you talk to from editing files
+## Stopping the AI you talk to from editing files or ruling for you
 
-To stop the AI you talk to from editing files at all, install the
-session config for your harness by hand -
-`skill/claude-code/README.md` has the steps and what is verified. Then,
-from the directory you installed it into:
+Install the session config for your harness by hand to stop the AI you
+talk to from editing files at all, and from running `fabrica verdict` or
+`fabrica answer` - the two commands that record your own judgment.
+`skill/claude-code/README.md` has the steps, what is verified, and the
+limits of the verdict/answer half. Then, from the directory you installed
+it into:
 
     fabrica verify-hook
 

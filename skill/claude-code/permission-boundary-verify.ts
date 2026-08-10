@@ -1,0 +1,285 @@
+// Empirically proves what a shipped settings.json's permissions.allow/
+// deny actually do against a real, non-interactive session of this
+// harness - not just what the documented pattern-matching rules say
+// should happen. A real headless session has no TTY to answer an
+// approval prompt, so anything not covered by an allow rule is denied
+// outright; the session's own terminal JSON result names exactly
+// which Bash calls were denied in a `permission_denials` array, which
+// is what this reads rather than inferring approval from the model's
+// prose.
+//
+// A real session also needs its working directory marked as a
+// trusted workspace, or non-interactive mode ignores permissions.allow
+// entirely and denies everything, allowed or not - discovered
+// empirically while building this, not documented anywhere in this
+// project before now (see AGENTS.md, and this harness's own README).
+// There is no non-interactive flag to grant trust without also
+// bypassing permission checks entirely, so this patches the one field
+// the CLI's own warning names (`projects[path].hasTrustDialogAccepted`
+// in the real, machine-wide `~/.claude.json`) for the duration of the
+// check, and restores exactly what was there before in a `finally`
+// block - not a blind delete, since a real caller's prior trust,
+// history, or other per-project state must come back exactly as it
+// was, not be wiped. Every write to that file goes through a
+// temp-file-then-rename so a crash mid-write can never leave it
+// truncated, and `checkPermissionBoundary` refuses outright to run
+// against anything that isn't demonstrably a throwaway path under the
+// system temp directory - this function's whole job is patching
+// machine-wide state, so it must never be pointed at a real project
+// by a caller's mistake. No credential is ever read, copied, or
+// printed - authentication rides on whatever the calling machine's
+// `claude` is already logged in as.
+//
+// Known limit, stated plainly rather than silently accepted (Client
+// ruling, issue #76 follow-up): `markTrusted`/`restoreTrust` are each
+// an unsynchronized read-modify-write cycle against that same real
+// `~/.claude.json`, which any other live session on the machine -
+// including, realistically, the real session this file itself spawns
+// - can also be writing to at the same time (its own project/history
+// state). The atomic rename guarantees a reader never sees a torn or
+// half-written file, but it does not prevent a lost update: a write
+// landing between this function's own read and rename is silently
+// overwritten, and one landing during the up-to-180s session run can
+// revert the trust patch mid-check. Closing that properly needs a
+// real lock around the whole file, which is out of scope here - this
+// only closes the corruption risk, not the race.
+//
+// A second, separate limit worth naming rather than assuming away:
+// the restore lives only in a `finally`, which runs on a thrown error
+// or a normal return but not on the process being killed outright - a
+// Ctrl-C or a CI timeout kill during the real session's run leaves a
+// `projects[<scratch path>].hasTrustDialogAccepted` entry behind in
+// the real, machine-wide config, keyed to a temp directory the test
+// has already deleted. Low impact (an unreachable key pointing at a
+// nonexistent path, granting no real project any trust it shouldn't
+// have) but real: an interrupted run leaks one stale entry rather than
+// cleaning up after itself.
+
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, sep } from "node:path";
+
+export interface PermissionBoundaryResult {
+  available: boolean;
+  unavailableReason?: string;
+  /** The argument strings each attempted `fabrica <args>` invocation
+   * actually received, in the order a fake `fabrica` shim on PATH
+   * recorded them running - empty for an attempt that was denied. */
+  executedArgs: string[];
+  /** The full command strings a real permission_denials entry named. */
+  deniedCommands: string[];
+}
+
+interface ClaudeConfig {
+  projects?: Record<string, unknown>;
+}
+
+function configPath(): string {
+  return join(homedir(), ".claude.json");
+}
+
+function readConfig(): ClaudeConfig {
+  return JSON.parse(readFileSync(configPath(), "utf8")) as ClaudeConfig;
+}
+
+/** Temp-file-then-rename, never a truncating in-place write - a crash
+ * between those two steps for a plain writeFileSync would leave the
+ * machine-wide config empty; rename is atomic, so readers only ever
+ * see the old file or the new one, never a half-written one. Resolves
+ * `~/.claude.json` to its real path first: this machine's own dotfiles
+ * symlink other Claude Code config (see AGENTS.md's sharp-edge notes),
+ * so if the config itself is ever a symlink, `renameSync` must replace
+ * what it points at, not the symlink - replacing the symlink itself
+ * would silently detach it from whatever manages it (a Nix
+ * home-manager profile, in this environment) the first time this ever
+ * runs. The temp file is created with the resolved target's own
+ * current mode passed directly to writeFileSync - not written first
+ * under the process umask and chmod'd after, which leaves a real
+ * window where a copy of the Client's config sits world-readable - and
+ * both the write and the rename are covered by the same cleanup: any
+ * failure after the temp file exists unlinks it rather than leaving a
+ * partial copy of the Client's config behind. */
+function writeConfigAtomic(config: ClaudeConfig): void {
+  const configuredPath = configPath();
+  const targetExists = existsSync(configuredPath);
+  const target = targetExists ? realpathSync(configuredPath) : configuredPath;
+  // Not reachable today (both callers read the config first, which
+  // throws ENOENT and is caught into a loud skip before this runs),
+  // but the branch above exists to handle a missing file, so this
+  // must too rather than silently assuming statSync(target) succeeds
+  // - a new, owner-only config on a machine that somehow reaches this
+  // path with none yet is the safe default, not a would-be crash.
+  const mode = targetExists ? statSync(target).mode : 0o600;
+  const tmpPath = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(tmpPath, JSON.stringify(config, null, 2), { mode });
+    renameSync(tmpPath, target);
+  } catch (err) {
+    rmSync(tmpPath, { force: true });
+    throw err;
+  }
+}
+
+/** Marks `targetPath` trusted, returning whatever was there before
+ * (possibly undefined) so the caller can put it back exactly. */
+function markTrusted(targetPath: string): unknown {
+  const config = readConfig();
+  config.projects ??= {};
+  const prior = config.projects[targetPath];
+  const entry = typeof prior === "object" && prior !== null ? { ...(prior as Record<string, unknown>) } : {};
+  entry.hasTrustDialogAccepted = true;
+  config.projects[targetPath] = entry;
+  writeConfigAtomic(config);
+  return prior;
+}
+
+/** Restores `targetPath`'s entry to `prior` - the project's own real
+ * state (trust, history, whatever else lives there) if it had one,
+ * or removed entirely if it didn't, never left on whatever this
+ * check set it to. */
+function restoreTrust(targetPath: string, prior: unknown): void {
+  const config = readConfig();
+  config.projects ??= {};
+  if (prior === undefined) {
+    delete config.projects[targetPath];
+  } else {
+    config.projects[targetPath] = prior;
+  }
+  writeConfigAtomic(config);
+}
+
+/**
+ * Runs one real, non-interactive session of this harness inside `cwd`,
+ * first installing `settingsJsonPath` (the shipped template under
+ * test) at wherever this harness actually reads project settings from
+ * - a caller outside this harness's own directory has no business
+ * knowing that convention - then instructing the session to attempt
+ * each of `attempts` - full `fabrica ...` command strings - in turn
+ * via its Bash tool, then reports which ones actually ran. Pass `null`
+ * for `settingsJsonPath` to run with no project-level settings.json
+ * installed at all - the negative control that proves a passing check
+ * is actually about the installed template, not some ambient
+ * permissiveness (see skill-settings-live.test.ts).
+ *
+ * The session runs with `--setting-sources project`, deliberately
+ * excluding the tester's own user-level and local settings layers -
+ * without this, a personal broad allow rule on the machine running the
+ * check could make the free-command assertions pass for a reason that
+ * has nothing to do with the shipped template, manufacturing false
+ * confidence in exactly the boundary this exists to prove.
+ *
+ * Refuses (throws) unless `rawCwd` resolves under the system temp
+ * directory: this function patches machine-wide Claude Code trust
+ * state, and doing that against a real project directory - even
+ * transiently, even restored afterward - is a mistake this function
+ * itself must catch, not something callers can be trusted to avoid.
+ */
+export async function checkPermissionBoundary(
+  rawCwd: string,
+  settingsJsonPath: string | null,
+  attempts: string[]
+): Promise<PermissionBoundaryResult> {
+  // macOS resolves a temp dir through a /var -> /private/var symlink
+  // (AGENTS.md's own documented sharp edge); the trust key must match
+  // whatever cwd the CLI itself resolves to internally, or the patch
+  // below silently lands on a path never actually checked - and the
+  // scratch-directory guard below must check the same realpath'd
+  // form, or a /var-prefixed path could slip past it too.
+  const cwd = realpathSync(rawCwd);
+  const scratchRoot = realpathSync(tmpdir());
+  if (cwd !== scratchRoot && !cwd.startsWith(scratchRoot + sep)) {
+    throw new Error(
+      `checkPermissionBoundary refuses to run against ${cwd} - it is not under the system temp directory ` +
+        `(${scratchRoot}), and this function patches machine-wide Claude Code trust state that must never ` +
+        `be pointed at a real project directory`
+    );
+  }
+
+  try {
+    execFileSync("claude", ["--version"], { stdio: "pipe" });
+  } catch {
+    return { available: false, unavailableReason: "claude is not installed or not runnable on PATH", executedArgs: [], deniedCommands: [] };
+  }
+
+  if (settingsJsonPath !== null) {
+    const settingsDir = join(cwd, ".claude");
+    mkdirSync(settingsDir, { recursive: true });
+    writeFileSync(join(settingsDir, "settings.json"), readFileSync(settingsJsonPath));
+  }
+
+  const binDir = join(cwd, ".permission-boundary-bin");
+  mkdirSync(binDir, { recursive: true });
+  const markerPath = join(cwd, ".permission-boundary-marker.log");
+  writeFileSync(markerPath, "");
+  const shimPath = join(binDir, "fabrica");
+  writeFileSync(shimPath, `#!/bin/sh\necho "$*" >> "${markerPath}"\necho ok\n`);
+  chmodSync(shimPath, 0o755);
+
+  let priorTrust: unknown;
+  try {
+    priorTrust = markTrusted(cwd);
+  } catch (err) {
+    return { available: false, unavailableReason: `could not read or patch the real Claude Code config: ${String(err)}`, executedArgs: [], deniedCommands: [] };
+  }
+
+  try {
+    const prompt =
+      "Use your Bash tool to attempt EACH of the following commands, one at a time, exactly as written, " +
+      "in order. Attempt every single one regardless of whether an earlier one succeeded or was denied - " +
+      "do not stop early, do not retry a denied command, and do not substitute another way to run it. " +
+      "After attempting all of them, stop.\n" +
+      attempts.map((a, i) => `${i + 1}. ${a}`).join("\n");
+
+    let raw: string;
+    try {
+      raw = execFileSync("claude", ["-p", prompt, "--output-format", "json", "--setting-sources", "project"], {
+        cwd,
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+        encoding: "utf8",
+        timeout: 180_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+    } catch (err) {
+      return { available: false, unavailableReason: `real session failed to run: ${String(err)}`, executedArgs: [], deniedCommands: [] };
+    }
+
+    const parsed = JSON.parse(raw) as {
+      result?: string;
+      permission_denials?: { tool_name?: string; tool_input?: { command?: string } }[];
+    };
+    if (typeof parsed.result === "string" && parsed.result.includes("Not logged in")) {
+      return { available: false, unavailableReason: "claude is installed but not authenticated", executedArgs: [], deniedCommands: [] };
+    }
+
+    const executedArgs = readFileSync(markerPath, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const deniedCommands = (parsed.permission_denials ?? [])
+      .filter((d) => d.tool_name === "Bash")
+      .map((d) => d.tool_input?.command ?? "")
+      .filter(Boolean);
+
+    return { available: true, executedArgs, deniedCommands };
+  } finally {
+    // A throw here would propagate out of the finally block and
+    // replace whatever the try block just computed - including a
+    // genuinely successful result - with this error instead, silently
+    // discarding real proof. The session that just ran also writes to
+    // ~/.claude.json itself (its own project/history state), so a
+    // restore racing that write - a torn read, a transient EACCES -
+    // is a real possibility, not a hypothetical. Caught and reported
+    // loudly rather than thrown, so the caller still gets its real
+    // result and a human still finds out the machine-wide trust entry
+    // for `cwd` may need manual cleanup.
+    try {
+      restoreTrust(cwd, priorTrust);
+    } catch (err) {
+      console.error(
+        `permission-boundary-verify: failed to restore Claude Code trust state for ${cwd} after the check - ` +
+          `${String(err)} - the entry may need manual removal from ~/.claude.json's "projects" map`
+      );
+    }
+  }
+}
