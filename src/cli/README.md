@@ -272,8 +272,10 @@ with `ERR_MODULE_NOT_FOUND`.
 
 `bin.mjs` sidesteps this by never asking `--import` to resolve anything.
 It's plain JavaScript (nothing has taught Node to load `.ts` yet at this
-point, so it can't be `.ts` itself), and its first line is a real
-`import "tsx/esm"` - resolved by normal ES module resolution against
+point, so it can't be `.ts` itself), and its first real work - after the
+`?` refusal described below, which has to run first for that same
+nothing-loads-TypeScript-yet reason - is a real `import "tsx/esm"`,
+resolved by normal ES module resolution against
 *this file's own location* (`import.meta.url`, which Node resolves to
 the file's real path even when reached through the `npm link` symlink),
 regardless of where the caller's shell happened to be sitting. Once that
