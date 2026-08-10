@@ -171,6 +171,38 @@ test("runVerifyHookCommand: denied but never logged (the fail-open case) still f
   assert.match(io.out.join("\n"), /not fully working/i);
 });
 
+test("runVerifyHookCommand: a skill/ path containing '#' still resolves its verify.ts", async () => {
+  // import() parses a bare path string as a URL, where '#' starts a
+  // fragment - a raw path would silently truncate at it. Worker worktree
+  // paths are generated, so a checkout living at such a path is a real
+  // fleet condition, not an edge case. This proves the fix (pathToFileURL)
+  // rather than the bug.
+  const base = mkdtempSync(join(tmpdir(), "fabrica-verify-hook-skill-"));
+  const skillDir = join(base, "worktree#7-dirty");
+  mkdirSync(skillDir);
+  mkdirSync(join(skillDir, "working-harness"));
+  writeFileSync(
+    join(skillDir, "working-harness", "verify.ts"),
+    "export function harnessAvailable(): boolean { return false; }\n" +
+      "export function attemptRealEdit(): void { throw new Error('must not be called'); }\n"
+  );
+
+  const io = captureIo();
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  // Reaching the harness-unavailable message (not a load failure) proves
+  // the module past the '#' segment actually loaded and exported both
+  // halves - a truncated import would instead fail to resolve.
+  assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
+  assert.doesNotMatch(io.err.join("\n"), /could not be loaded/i);
+});
+
 test("runVerifyHookCommand: another session's blocked edit doesn't count as this attempt's", async () => {
   const recordHome = tempRecordHome();
   const cwd = tempCwd();

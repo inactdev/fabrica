@@ -16,7 +16,7 @@
 
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { readEvents } from "../index.ts";
 import type { FabricaEvent } from "../index.ts";
@@ -58,7 +58,11 @@ export async function loadHarnessVerifier(skillDir: string = SKILL_DIR): Promise
     if (!existsSync(verifyPath)) continue;
     let module: unknown = null;
     try {
-      module = await import(verifyPath);
+      // A plain path string is parsed as a URL by import(), which would
+      // truncate at a literal "#" or "?" in the checkout's path (this
+      // fleet runs workers out of generated worktree paths, so that is
+      // not hypothetical) - pathToFileURL percent-encodes those first.
+      module = await import(pathToFileURL(verifyPath).href);
     } catch (err) {
       loadFailures.push({ path: verifyPath, error: err instanceof Error ? err.message : String(err) });
       continue;
