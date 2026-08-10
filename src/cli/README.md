@@ -429,7 +429,7 @@ calls `runTask`.
 | --- | --- |
 | `bin.mjs` | The installed executable. Refuses a checkout path containing `?` before importing `main.ts` (see above), then two lines of real work. |
 | `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh, via `pathToFileURL` - except a `?` in the entry's path, refused outright rather than attempted (see above). |
-| `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand adds one more branch here, the way `answer` (#8) and `status`/`log`/`watch` (#12) each did. |
+| `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand adds one more branch here, the way `answer` (#8) and `status`/`log`/`watch` (#12) each did - and one more decision: `skill-settings.test.ts` reads this dispatch and fails until every command in it is either auto-approved by each shipped harness's `settings.json` or listed as deciding/hook-only there (issue #76). |
 | `help.ts` | Top-level help text and the list of known commands. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
 | `do-command.ts` | Ties config, project resolution, the detached spawn, and the ask-outcome wait together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
