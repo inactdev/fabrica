@@ -188,10 +188,14 @@ them can reach a running worker.
   `isQuietTooLong` returns true for it too and its own wording takes over
   the line ("checking, 4h and still not finished"), naming a stuck check
   rather than reusing the ordinary quiet notice's "no signal since last
-  heartbeat" (no heartbeat is ever emitted during a check). The pre-work
-  `brain.ask()` window (`task-received` before `"work-started"` lands)
-  gets the same no-state-exempt-forever treatment on its own, much
-  shorter ceiling (`PRE_WORK_QUIET_CEILING_MS`, 5 minutes - sized to
+  heartbeat" (no heartbeat is ever emitted during a check). Both of those
+  readings - the one below the ceiling and the alarm past it - are
+  anchored to `checkStartedAt` (the `check-run` `"started"` event), never
+  to the record's last event, so anything appended mid-check can't shrink
+  the number the Client reads. The pre-work `brain.ask()` window
+  (`task-received` before `"work-started"` lands) gets the same
+  no-state-exempt-forever treatment on its own, much shorter ceiling
+  (`PRE_WORK_QUIET_CEILING_MS`, 5 minutes - sized to
   `wait-for-ask-outcome.ts`'s 60s CLI wait, not copied from the checking
   ceiling), with wording that likewise never claims a heartbeat that
   window never has either. A `failed` task whose `brain.ask()` itself
