@@ -12,8 +12,9 @@
 // do it, since CONTRACT rule 8's scan reads every file under src/.
 //
 // This models the documented rules (word-boundary prefix matching;
-// shell operators - &&, ;, |, and friends - splitting a command into
-// independently-checked subcommands) - it is not proof the real
+// shell operators - &&, ;, |, |&, &, and newline - splitting a
+// command into independently-checked subcommands) - it is not proof
+// the real
 // permission engine behaves that way. skill-settings-live.test.ts is
 // the empirical companion that drives a real session and reads its
 // own permission_denials, including for a chained bypass attempt. Both
@@ -126,10 +127,16 @@ const SEPARATOR_TOKENS = ["&&", "||", "|&", ";", "|", "&"];
 
 /** Shell separators split a command into subcommands checked
  * independently - a rule covering one side of `&&`/`;`/`|` does not
- * extend permission to the other side. */
+ * extend permission to the other side. Newline is a separator too
+ * (documented alongside the others, not an afterthought): without it,
+ * `evaluate()` prefix-matches a whole multi-line string as one
+ * subcommand, so `"fabrica status --json\nfabrica verdict task-1
+ * accept"` would read as an allowed `fabrica status` call and never
+ * check the embedded verdict line at all - caught by a review finding
+ * that named the exact failure mode, not found independently. */
 function subcommandsOf(command: string): string[] {
   return command
-    .split(/(&&|\|\||\|&|;|\||&)/)
+    .split(/(&&|\|\||\|&|;|\||&|\n)/)
     .map((part) => part.trim())
     .filter((part) => part !== "" && !SEPARATOR_TOKENS.includes(part));
 }
@@ -220,6 +227,7 @@ test("fabrica verdict and fabrica answer are never auto-approved, including thro
     "fabrica status; fabrica verdict task-1 accept",
     "fabrica do 'x' | fabrica verdict task-1 accept",
     "fabrica log task-1 && fabrica answer task-1 -m 'x'",
+    "fabrica status --json\nfabrica verdict task-1 accept",
   ];
 
   for (const settings of templates) {
