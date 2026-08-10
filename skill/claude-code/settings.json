@@ -1,6 +1,8 @@
 {
   "permissions": {
     "deny": [
+      "Bash(fabrica verdict *)",
+      "Bash(fabrica answer *)",
       "Bash(rm *)",
       "Bash(mv *)",
       "Bash(cp *)",
@@ -19,7 +21,12 @@
       "Bash(wget *)"
     ],
     "allow": [
-      "Bash(fabrica *)",
+      "Bash(fabrica do *)",
+      "Bash(fabrica status *)",
+      "Bash(fabrica log *)",
+      "Bash(fabrica watch *)",
+      "Bash(fabrica deny-and-log-edit *)",
+      "Bash(fabrica verify-hook *)",
       "Bash(git status)",
       "Bash(git status *)",
       "Bash(git diff *)",
