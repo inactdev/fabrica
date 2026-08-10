@@ -344,7 +344,7 @@ test("runWatchCommand: the checking alarm's live elapsed time tracks the check's
 // stuck between task-received and work-started past its own long window
 // gets the quiet alarm too, with wording that doesn't claim a heartbeat
 // that attempts.ts never emits for this window.
-test("runWatchCommand: a task stuck before work-started past its own ceiling is flagged quiet live, naming no heartbeat", async () => {
+test("runWatchCommand: a task stuck before work-started past its own ceiling is flagged quiet live, naming the actual last event", async () => {
   const recordHome = tempRecordHome();
   const start = Date.now() - PRE_WORK_QUIET_CEILING_MS - 1;
   const receivedEvent = {
@@ -364,7 +364,7 @@ test("runWatchCommand: a task stuck before work-started past its own ceiling is 
     pollIntervalMs: 10,
     ...io,
   });
-  const sawQuiet = await waitFor(() => io.out.some((line) => line.includes("no signal recorded yet")));
+  const sawQuiet = await waitFor(() => io.out.some((line) => line.includes("no signal since the task was received")));
   controller.abort();
   await watchPromise;
 

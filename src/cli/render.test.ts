@@ -285,11 +285,53 @@ test("describeLiveness: an ordinary working task gone quiet, wording names the l
   assert.match(notice ?? "", /no signal since last heartbeat/);
 });
 
-test("describeLiveness: the pre-work window gone quiet, wording never claims a heartbeat that never existed", () => {
+test("describeLiveness: the pre-work window gone quiet, wording names the actual last event, not a heartbeat", () => {
   const start = 1_000_000;
   const events: FabricaEvent[] = [{ occurredAt: new Date(start).toISOString(), taskId: "t1", name: "task-received" }];
   const notice = describeLiveness("working", events, start + PRE_WORK_QUIET_CEILING_MS + 1);
-  assert.match(notice ?? "", /no signal recorded yet/);
+  assert.match(notice ?? "", /no signal since the task was received/);
+  assert.doesNotMatch(notice ?? "", /heartbeat/);
+});
+
+// Review finding (issue #12, third instance of this exact bug shape):
+// the quiet notice used to pair "how long since anything happened"
+// (lastActivityAt) with "did a heartbeat ever occur, anywhere in the
+// history" (a separate whole-history query) - two independently derived
+// facts that could disagree. Both mirror cases from that finding, now
+// proven against the real function: a worker killed right after a red
+// check-run must say the CHECK finished, not fall back to a stale
+// "heartbeat" claim just because one happened earlier in the task's
+// life.
+test("describeLiveness: mirror case 1 - killed right after a red check-run, names the check finishing, not a stale earlier heartbeat", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" },
+    // An earlier heartbeat exists in the history - the old hadHeartbeat
+    // query would find it and claim it's the last signal, even though
+    // it isn't.
+    { occurredAt: new Date(start + 1_000).toISOString(), taskId: "t1", name: "heartbeat", details: { attempt: 1 } },
+    { occurredAt: new Date(start + 2_000).toISOString(), taskId: "t1", name: "check-run", details: { attempt: 1, phase: "started" } },
+    // The check finished red - stateOf falls back to "working" - and
+    // then the worker was killed with nothing else ever appended.
+    { occurredAt: new Date(start + 5_000).toISOString(), taskId: "t1", name: "check-run", details: { attempt: 1, green: false } },
+  ];
+  const notice = describeLiveness("working", events, start + 5_000 + QUIET_THRESHOLD_MS + 1);
+  assert.match(notice ?? "", /no signal since the check finished/);
+  assert.doesNotMatch(notice ?? "", /heartbeat/);
+});
+
+// Mirror case 2: a worker killed inside the first heartbeat interval -
+// before any heartbeat has ever fired - must say work STARTED, the real
+// signal that did land, rather than a vague "nothing recorded" that
+// undersells what's actually known.
+test("describeLiveness: mirror case 2 - killed before the first heartbeat, names work starting, not a vague 'nothing recorded'", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "task-received" },
+    { occurredAt: new Date(start + 1_000).toISOString(), taskId: "t1", name: "work-started" },
+  ];
+  const notice = describeLiveness("working", events, start + 1_000 + QUIET_THRESHOLD_MS + 1);
+  assert.match(notice ?? "", /no signal since work started/);
   assert.doesNotMatch(notice ?? "", /heartbeat/);
 });
 
@@ -518,20 +560,16 @@ test("formatEventLine: an unanticipated event name falls back to bounded, not un
   assert.match(line, /…$/);
 });
 
-test("formatQuietNotice: names a lost heartbeat when there was one to lose, and it's the one formatStatusLine prints", () => {
-  const notice = formatQuietNotice(90_000, true);
+test("formatQuietNotice: names whatever signal it's given, verbatim - it's the one formatStatusLine prints", () => {
+  const notice = formatQuietNotice(90_000, "last heartbeat");
   assert.equal(notice, "quiet 1m, no signal since last heartbeat - not known to be stuck, not known to be fine");
   const line = formatStatusLine({ id: "t1", state: "working" }, { project: "/p", ageMs: 600_000, liveness: notice, hasDelivery: false });
   assert.ok(line.endsWith(notice), `status line should end with the shared notice, got: ${line}`);
 });
 
-// Client ruling, issue #12 review finding: the pre-work window
-// (PRE_WORK_QUIET_CEILING_MS) never has a heartbeat to lose either -
-// attempts.ts's heartbeat interval only wraps brain.work(), never
-// brain.ask() - so its quiet notice must not claim one existed.
-test("formatQuietNotice: never claims a heartbeat that was never emitted, for the pre-work window", () => {
-  const notice = formatQuietNotice(90_000, false);
-  assert.equal(notice, "quiet 1m, no signal recorded yet - not known to be stuck, not known to be fine");
+test("formatQuietNotice: assumes nothing about what the signal was - it just prints the label it's given", () => {
+  const notice = formatQuietNotice(90_000, "work started");
+  assert.equal(notice, "quiet 1m, no signal since work started - not known to be stuck, not known to be fine");
   assert.doesNotMatch(notice, /heartbeat/);
 });
 

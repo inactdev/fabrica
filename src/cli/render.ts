@@ -189,22 +189,54 @@ export function isDeadEnd(state: FabricaTask["state"], hasDelivery: boolean): bo
 
 /** The one wording for an ordinary "working" task gone quiet, shared by
  * `status` and `watch` so the Client reads the same sentence in both - it
- * says what is known (nothing has been recorded for this long) and
- * refuses to imply either of the two things that aren't. `hadHeartbeat`
- * distinguishes the two ways "working" can go quiet: a task whose
- * `brain.work()` call genuinely had heartbeats ticking and then stopped
- * (the ordinary case this wording was written for), versus the pre-work
- * window (PRE_WORK_QUIET_CEILING_MS) - `attempts.ts`'s heartbeat interval
- * only wraps `brain.work`, never `brain.ask()`, so naming a heartbeat
- * there would be naming a signal that was never there to lose (issue #12
- * review finding, Client ruling: a misleading message needs a more
- * specific fix, not a vaguer one - see `formatCheckingQuietNotice` for
- * the same reasoning applied to "checking"). */
-export function formatQuietNotice(elapsedMs: number, hadHeartbeat: boolean): string {
-  const age = formatAge(elapsedMs);
-  return hadHeartbeat
-    ? `quiet ${age}, no signal since last heartbeat - not known to be stuck, not known to be fine`
-    : `quiet ${age}, no signal recorded yet - not known to be stuck, not known to be fine`;
+ * says what is known (nothing has been recorded for this long, and what
+ * that last recording actually was) and refuses to imply anything past
+ * that. `lastSignal` names the one thing this is anchored to - always
+ * the record's literal last event, never a separate "did X ever happen"
+ * query (issue #12 review finding: the wording used to pair an elapsed
+ * time read from the last event with a fact - "did a heartbeat ever
+ * happen, anywhere in the history" - read from a different query over
+ * the whole history; those two could disagree, and this is the third
+ * finding of that exact shape on this branch. See `nameLastSignal` for
+ * where the label comes from). */
+export function formatQuietNotice(elapsedMs: number, lastSignal: string): string {
+  return `quiet ${formatAge(elapsedMs)}, no signal since ${lastSignal} - not known to be stuck, not known to be fine`;
+}
+
+/** A short label for what the record's last event actually was, for
+ * `formatQuietNotice` - "last heartbeat", "work started", "the check
+ * finished," and so on. This is deliberately the ONLY place that reads
+ * `event.name` to produce that label: `describeLiveness` passes it the
+ * literal last event, never asks a separate "has a heartbeat ever
+ * landed" (or any other "ever, anywhere") question. The set covered is
+ * exhaustive for a "working" task's last event (verified against
+ * `stateOf`'s switch in `src/foreman/queries.ts`): `task-received` and
+ * `line-cut` are the only things that can land before `work-started`
+ * (the pre-work window), `heartbeat` and a finished `check-run` are the
+ * only things that can land after it without changing the state away
+ * from "working" (a `check-run` with `phase: "started"` produces
+ * "checking" instead, handled by `describeLiveness`'s other branch, so
+ * it never reaches here), and `answers-given` covers the one-clarifying-
+ * round case (issue #8) where the Client's answer landed before the
+ * ProductionLine was even cut. The fallback is defensive only - every
+ * event that can reach here while "working" is named above. */
+function nameLastSignal(event: FabricaEvent): string {
+  switch (event.name) {
+    case "heartbeat":
+      return "last heartbeat";
+    case "work-started":
+      return "work started";
+    case "check-run":
+      return "the check finished";
+    case "answers-given":
+      return "the answer was recorded";
+    case "line-cut":
+      return "the line was cut";
+    case "task-received":
+      return "the task was received";
+    default:
+      return event.name;
+  }
 }
 
 /** The wording for a "checking" task whose check has run past
@@ -244,10 +276,18 @@ export function describeLiveness(state: FabricaTask["state"], events: FabricaEve
     return isQuietTooLong(state, events, now) ? formatCheckingQuietNotice(elapsed) : `checking, ${formatAge(elapsed)} so far`;
   }
   if (!isQuietTooLong(state, events, now)) return null;
-  const last = lastActivityAt(events);
+  // Read from the record's literal last event, once - its name and its
+  // own timestamp - never a separate query over the whole history. That
+  // was the actual bug in the last two rounds' fixes: "how long since
+  // anything happened" (lastActivityAt) and "what kind of thing last
+  // happened" (an "ever, anywhere" query like events.some(heartbeat))
+  // were two independently-derived facts that could disagree, so every
+  // round one pair got fixed and the next pair broke. There's nothing
+  // left to disagree with once both come from the same event object.
+  const last = events[events.length - 1];
   if (!last) return null; // defensive: shouldn't happen for a real task
-  const hadHeartbeat = events.some((e) => e.name === "heartbeat");
-  return formatQuietNotice(now - last.getTime(), hadHeartbeat);
+  const elapsed = now - new Date(last.occurredAt).getTime();
+  return formatQuietNotice(elapsed, nameLastSignal(last));
 }
 
 /** What `fabrica watch` prints when a task reaches a state nothing
