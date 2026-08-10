@@ -7,14 +7,7 @@
 import { eventsByTask, stateOf } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import {
-  checkStartedAt,
-  formatStatusLine,
-  isDeadEnd,
-  isQuietTooLong,
-  lastActivityAt,
-  projectFromEvents,
-} from "./render.ts";
+import { describeLiveness, formatStatusLine, isDeadEnd, projectFromEvents } from "./render.ts";
 
 export const STATUS_USAGE = "fabrica status";
 
@@ -108,14 +101,9 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
       const project = projectFromEvents(events);
       const firstEvent = events[0];
       const ageMs = firstEvent ? now - new Date(firstEvent.occurredAt).getTime() : 0;
-      const quiet = isQuietTooLong(task.state, events, now);
-      const last = lastActivityAt(events);
-      const quietForMs = quiet && last ? now - last.getTime() : null;
-      const checkStarted = task.state === "checking" ? checkStartedAt(events) : null;
-      const checkingForMs = checkStarted ? now - checkStarted.getTime() : null;
-      const hadHeartbeat = events.some((e) => e.name === "heartbeat");
+      const liveness = describeLiveness(task.state, events, now);
 
-      stdout(formatStatusLine(task, { project, ageMs, quietForMs, checkingForMs, hadHeartbeat, hasDelivery }));
+      stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery }));
     }
 
     return 0;
