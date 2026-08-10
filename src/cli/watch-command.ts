@@ -218,6 +218,12 @@ async function streamTranscript(ctx: {
 
     if (quiet !== wasQuiet) {
       if (quiet) {
+        // The `??` arm is defensive only, not a second wording competing
+        // with render.ts's: every case describeLiveness returns null for
+        // is one isQuietTooLong already answered false, so `quiet` being
+        // true means it returned a sentence. It exists so a future
+        // divergence between the two prints something honest rather than
+        // swallowing the transition (it once printed "signal resumed").
         stdout(
           describeLiveness(state, events, now) ??
             "quiet, nothing recorded for a while - not known to be stuck, not known to be fine",
