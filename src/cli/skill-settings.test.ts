@@ -83,11 +83,12 @@ function commandsInMainDispatch(): string[] {
   // in main.ts today, but nothing stops one arriving) would otherwise
   // match nowhere at all, silently dropping it from `commands` and
   // defeating the "fails loudly" guarantee this file exists to
-  // provide. Deliberately not `[^"]+` (anything but a quote) - this
-  // file's own top comment illustrates the dispatch shape with a
-  // literal `if (command === "...")`, which an unrestricted charset
-  // matches as a phantom command named "..." (verified: it did, and
-  // broke this test on a comment rather than real code).
+  // provide. Deliberately not `[^"]+` (anything but a quote) - the
+  // scanned file, main.ts, has its own top comment illustrating the
+  // dispatch shape with a literal `if (command === "...")`, which an
+  // unrestricted charset matches as a phantom command named "..."
+  // (verified: it did, and broke this test on a comment rather than
+  // real code - not this file's own header, main.ts's).
   return [...mainSource.matchAll(/command === "([a-zA-Z0-9_-]+)"/g)].map((m) => m[1]);
 }
 
