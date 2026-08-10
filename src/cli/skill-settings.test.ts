@@ -129,6 +129,16 @@ test("main.ts's real dispatch is fully covered: deciding commands are never allo
           "allow",
           `${settings.harness}: "fabrica ${command}" records the Client's own judgment but is auto-approved`
         );
+        // notEqual(verdict, "allow") alone is also satisfied by "ask",
+        // which a later edit that simply removes the deny entries
+        // (relying only on omission from allow) would still pass -
+        // exactly the defense-in-depth layer this pins directly, not
+        // just its observable effect today.
+        assert.ok(
+          settings.deny.some((p) => bashPatternMatches(p, `fabrica ${command}`)),
+          `${settings.harness}: no permissions.deny pattern actually matches "fabrica ${command}" - it may only be ` +
+            `absent from allow, which stops protecting it the moment a broader allow entry is reintroduced`
+        );
       } else {
         assert.equal(
           verdict,
