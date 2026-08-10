@@ -300,6 +300,46 @@ test("runWatchCommand: the checking alarm names a stuck check live, not a nonexi
   assert.ok(!io.out.some((line) => line.includes("heartbeat")), `expected no mention of a heartbeat, got: ${JSON.stringify(io.out)}`);
 });
 
+// Review finding: the checking alarm's live elapsed time must be
+// anchored to when the CHECK started, not to the record's last event - a
+// heartbeat landing after check-run "started" doesn't change stateOf's
+// "checking" verdict (heartbeat is a no-op in that switch), so this is a
+// real way for the two quantities to diverge. Before the fix this would
+// have shown a near-zero elapsed time instead of the check's real,
+// hours-long duration.
+test("runWatchCommand: the checking alarm's live elapsed time tracks the check's own start, not a later heartbeat", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  const start = Date.now() - CHECKING_QUIET_CEILING_MS - 1;
+  const startEvent = {
+    occurredAt: new Date(start).toISOString(),
+    taskId: "t1",
+    name: "check-run",
+    details: { attempt: 1, phase: "started" },
+  };
+  appendFileSync(recordPath(recordHome), `${JSON.stringify(startEvent)}\n`);
+  // A real, current-time event landing after the check started -
+  // stateOf stays "checking" (heartbeat doesn't change it), but
+  // lastActivityAt now points at this instead of the check's own start.
+  appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 1 } });
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  const sawAlarm = await waitFor(() => io.out.some((line) => line.includes("checking, 4h and still not finished")));
+  controller.abort();
+  await watchPromise;
+
+  assert.ok(sawAlarm, `expected the check's real ~4h duration, got: ${JSON.stringify(io.out)}`);
+});
+
 // The pre-work window's own ceiling (PRE_WORK_QUIET_CEILING_MS): a task
 // stuck between task-received and work-started past its own long window
 // gets the quiet alarm too, with wording that doesn't claim a heartbeat

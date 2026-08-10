@@ -215,7 +215,15 @@ async function streamTranscript(ctx: {
     if (quiet !== wasQuiet) {
       const last = lastActivityAt(events);
       if (quiet && last) {
-        const elapsed = now - last.getTime();
+        // Same distinction render.ts's formatStatusLine makes: "how long
+        // this check has been running" (anchored to checkStartedAt) is a
+        // different quantity from "how long since the record's last
+        // event" (anchored to lastActivityAt) - they happen to coincide
+        // today since nothing else is appended mid-check, but the
+        // checking notice must use its own real elapsed time, not lean
+        // on that coincidence.
+        const checkStarted = state === "checking" ? checkStartedAt(events) : null;
+        const elapsed = checkStarted ? now - checkStarted.getTime() : now - last.getTime();
         const hadHeartbeat = events.some((e) => e.name === "heartbeat");
         stdout(state === "checking" ? formatCheckingQuietNotice(elapsed) : formatQuietNotice(elapsed, hadHeartbeat));
       } else {

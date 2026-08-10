@@ -13,6 +13,7 @@ import {
   formatStatusLine,
   formatTerminalNotice,
   formatTranscriptLine,
+  isDeadEnd,
   isQuietTooLong,
   lastActivityAt,
   projectFromEvents,
@@ -268,6 +269,44 @@ test("formatStatusLine: a checking task past its ceiling names a check, not a no
   );
   assert.match(line, /checking, .* and still not finished/);
   assert.doesNotMatch(line, /heartbeat/);
+});
+
+// Review finding: quietForMs is time since the record's LAST EVENT;
+// checkingForMs is time since the check itself started - different
+// quantities that happen to coincide in the common case, but the
+// checking notice must read the one it actually names. Deliberately
+// distinct values here so a regression back to reading quietForMs fails
+// loudly instead of passing by coincidence.
+test("formatStatusLine: a checking task past its ceiling reports how long the CHECK has run, not time since the last event", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "checking" },
+    {
+      project: "/proj",
+      ageMs: 600_000,
+      quietForMs: 10 * 60 * 60 * 1000, // time since last event: 10h
+      checkingForMs: 5 * 60 * 60 * 1000, // time the check has actually run: 5h
+      hadHeartbeat: false,
+      hasDelivery: false,
+    }
+  );
+  assert.match(line, /checking, 5h and still not finished/);
+  assert.doesNotMatch(line, /10h/);
+});
+
+test("isDeadEnd: a failed task with no delivery is a dead end", () => {
+  assert.equal(isDeadEnd({ state: "failed" }, false), true);
+});
+
+test("isDeadEnd: a failed task WITH a delivery is not a dead end - a fix verdict can still wake it", () => {
+  assert.equal(isDeadEnd({ state: "failed" }, true), false);
+});
+
+test("isDeadEnd: any non-failed state is never a dead end, regardless of delivery", () => {
+  assert.equal(isDeadEnd({ state: "working" }, false), false);
+  assert.equal(isDeadEnd({ state: "checking" }, false), false);
+  assert.equal(isDeadEnd({ state: "delivered" }, false), false);
+  assert.equal(isDeadEnd({ state: "closed" }, false), false);
+  assert.equal(isDeadEnd({ state: "asking" }, false), false);
 });
 
 test("formatEventLine: work-started reads as prose, project included", () => {

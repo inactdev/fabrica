@@ -150,6 +150,37 @@ test("runStatusCommand: a check stuck past its own long ceiling is flagged quiet
   assert.doesNotMatch(io.out[0], /checking, .* so far/, "the plain elapsed line steps aside for the alarm");
 });
 
+// Review finding: the checking alarm's elapsed time must be anchored to
+// when the CHECK started, not to the record's last event - a heartbeat
+// landing after check-run "started" doesn't change stateOf's "checking"
+// verdict (heartbeat is a no-op in that switch), so it's a real way for
+// the two quantities to diverge, not just a hypothetical one. Before the
+// fix this would have shown a near-zero elapsed time instead of the
+// check's real, hours-long duration.
+test("runStatusCommand: the checking alarm's elapsed time tracks the check's own start, not a later heartbeat", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  const start = Date.now() - CHECKING_QUIET_CEILING_MS - 1;
+  const startEvent = {
+    occurredAt: new Date(start).toISOString(),
+    taskId: "t1",
+    name: "check-run",
+    details: { attempt: 1, phase: "started" },
+  };
+  appendFileSync(recordPath(recordHome), `${JSON.stringify(startEvent)}\n`);
+  // A real, current-time event landing after the check started - stateOf
+  // stays "checking" (heartbeat doesn't change it), but lastActivityAt
+  // now points at this instead of the check's own start.
+  appendEvent(recordHome, { taskId: "t1", name: "heartbeat", details: { attempt: 1 } });
+
+  const io = captureIo();
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.match(io.out[0], /checking, 4h and still not finished/, `expected the check's real ~4h duration, got: ${io.out[0]}`);
+});
+
 test("runStatusCommand: a red delivery shows failed, not delivered, and carries no verdict flag", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 1");
