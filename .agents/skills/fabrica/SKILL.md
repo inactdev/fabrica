@@ -47,10 +47,13 @@ you but isn't what the command takes.
 
 ## The commands
 
-Fabrica ships six commands today: `do`, `answer`, `verdict`, `status`,
-`log`, `watch`. Run `fabrica --help` or `fabrica <command> --help` to check
-this hasn't changed before relying on anything below - a handbook can go
-stale, a `--help` flag can't.
+Six commands drive a task, and they are the only ones you ever run: `do`,
+`answer`, `verdict`, `status`, `log`, `watch`. Run `fabrica --help` or
+`fabrica <command> --help` to check this hasn't changed before relying on
+anything below - a handbook can go stale, a `--help` flag can't. `--help`
+also lists `verify-hook` and `deny-and-log-edit`; those set up and police
+the Client's own session config and have nothing to do with running a task,
+so they are not yours to run.
 
 ### `fabrica do "<task text>" --project <path-or-name>`
 
