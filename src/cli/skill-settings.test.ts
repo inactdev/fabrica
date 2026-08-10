@@ -51,8 +51,20 @@ function commandsInMainDispatch(): string[] {
   // than filtering them out - they're real dispatch branches too, and
   // a narrowing that silently drops free help output should fail this
   // coverage assertion exactly the same way dropping a real
-  // subcommand would.
-  return [...mainSource.matchAll(/command === "([a-z-]+)"/g)].map((m) => m[1]);
+  // subcommand would. The capture group is a broader identifier
+  // charset than `[a-z-]+` - letters (either case), digits, and
+  // underscore alongside hyphen - since a charset requires the closing
+  // quote to land immediately after the group: a future command name
+  // with a digit, underscore, or uppercase letter (no such name exists
+  // in main.ts today, but nothing stops one arriving) would otherwise
+  // match nowhere at all, silently dropping it from `commands` and
+  // defeating the "fails loudly" guarantee this file exists to
+  // provide. Deliberately not `[^"]+` (anything but a quote) - this
+  // file's own top comment illustrates the dispatch shape with a
+  // literal `if (command === "...")`, which an unrestricted charset
+  // matches as a phantom command named "..." (verified: it did, and
+  // broke this test on a comment rather than real code).
+  return [...mainSource.matchAll(/command === "([a-zA-Z0-9_-]+)"/g)].map((m) => m[1]);
 }
 
 interface SettingsTemplate {
