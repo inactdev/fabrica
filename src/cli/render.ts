@@ -242,10 +242,12 @@ function nameLastSignal(event: FabricaEvent): string {
 /** The wording for a "checking" task whose check has run past
  * CHECKING_QUIET_CEILING_MS - names what's actually known (a check that
  * started this long ago and has not finished) instead of reusing
- * `formatQuietNotice`'s heartbeat wording: no heartbeat is ever emitted
- * during a check (`attempts.ts`'s heartbeat interval only wraps
- * `brain.work`, never `runCheck`), so there was never one to lose here
- * either (issue #12 review finding, Client ruling). */
+ * `formatQuietNotice`'s "no signal since <the record's last event>":
+ * during a check that last event is the check's own `"started"` one -
+ * nothing else lands there, since `attempts.ts`'s heartbeat interval
+ * only wraps `brain.work`, never `runCheck` - and `nameLastSignal`
+ * would label it "the check finished", which is precisely what has not
+ * happened (issue #12 review finding, Client ruling). */
 export function formatCheckingQuietNotice(elapsedMs: number): string {
   return `checking, ${formatAge(elapsedMs)} and still not finished - not known to be stuck, not known to be fine`;
 }
@@ -255,11 +257,12 @@ export function formatCheckingQuietNotice(elapsedMs: number): string {
  * ceiling (whichever wording fits: `formatCheckingQuietNotice` for
  * "checking", `formatQuietNotice` otherwise), or null when neither
  * applies. The one definition of that decision AND the elapsed-time
- * arithmetic under it - `checkStartedAt` for "checking", `lastActivityAt`
- * otherwise, since those are different quantities that only coincide by
- * accident (a heartbeat landing after a check starts doesn't change
- * `stateOf`'s "checking" verdict). `status` and `watch` used to each
- * derive this independently - once here, once hand-inlined in
+ * arithmetic under it - `checkStartedAt` for "checking", the record's
+ * literal last event otherwise (read inline, see below), since those are
+ * different quantities that only coincide by accident (a heartbeat
+ * landing after a check starts doesn't change `stateOf`'s "checking"
+ * verdict). `status` and `watch` used to each derive this
+ * independently - once here, once hand-inlined in
  * `watch-command.ts` - and the two had already drifted apart once
  * (issue #12 review finding) before being caught; this is the fix for
  * that whole class of bug, not just the one instance. Callers that need
