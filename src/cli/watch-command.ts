@@ -24,6 +24,7 @@ import {
   formatQuietNotice,
   formatTerminalNotice,
   formatTranscriptLine,
+  isDeadEnd,
   isQuietTooLong,
   lastActivityAt,
   summarizeHeartbeatRun,
@@ -253,7 +254,7 @@ async function streamTranscript(ctx: {
     // "delivered" all still keep polling - a `fix` verdict or a `fabrica
     // answer` genuinely wakes those back up, and this watch should show
     // it when it happens.
-    return state === "closed" || (state === "failed" && !hasDelivery);
+    return state === "closed" || isDeadEnd(state, hasDelivery);
   };
 
   if (await poll()) return;

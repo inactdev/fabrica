@@ -167,7 +167,7 @@ export function formatStatusLine(
   // The Client's ruling (issue #12 review finding) is neither to hide
   // these nor let them read as ordinary open work: mark it plainly as the
   // dead end it is, so it isn't mistaken for something still in progress.
-  if (isDeadEnd(task, opts.hasDelivery)) {
+  if (isDeadEnd(task.state, opts.hasDelivery)) {
     return `${base}  <- FAILED, UNRESOLVABLE: brain's clarify step threw before any work started - see \`fabrica log ${task.id}\``;
   }
   // Once a check has run past CHECKING_QUIET_CEILING_MS, quietForMs takes
@@ -201,12 +201,17 @@ export function formatStatusLine(
 /** A task whose `brain.ask()` itself threw before any Worker ever ran -
  * `recordVerdict` refuses a `fix` on it with "not-delivered", so it can
  * never move again (see `formatStatusLine`'s "FAILED, UNRESOLVABLE"
- * branch). The one definition of that rule: `status-command.ts`'s sort
- * order and this module's own marker must never drift apart on what
- * counts as a dead end - three independent copies of the same predicate
- * is how that drift happens silently (issue #12 review finding). */
-export function isDeadEnd(task: { state: FabricaTask["state"] }, hasDelivery: boolean): boolean {
-  return task.state === "failed" && !hasDelivery;
+ * branch, `formatTerminalNotice`'s "failed before any work started"
+ * branch, and `watch-command.ts`'s poll-loop exit condition, which all
+ * mean exactly this). The one definition of that rule, taking a bare
+ * state so every one of those callers - some of which only ever have the
+ * state, not a full task - can call it directly: independent copies of
+ * the same predicate is how they'd silently drift apart (issue #12
+ * review finding). Takes the bare state rather than a task object so a
+ * caller holding only `state` (not a `FabricaTask`) never has to wrap it
+ * first. */
+export function isDeadEnd(state: FabricaTask["state"], hasDelivery: boolean): boolean {
+  return state === "failed" && !hasDelivery;
 }
 
 /** The one wording for an ordinary "working" task gone quiet, shared by
@@ -256,7 +261,7 @@ export function formatTerminalNotice(
     case "delivered":
       return `-- task delivered - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
     case "failed":
-      if (!ctx.hasDelivery) {
+      if (isDeadEnd(state, ctx.hasDelivery)) {
         // The only way to be "failed" with no "delivered" event on the
         // record: brain.ask() itself threw, before any Worker ran (see
         // stateOf's "ask-failed" branch). Nothing was ever delivered, so

@@ -294,19 +294,19 @@ test("formatStatusLine: a checking task past its ceiling reports how long the CH
 });
 
 test("isDeadEnd: a failed task with no delivery is a dead end", () => {
-  assert.equal(isDeadEnd({ state: "failed" }, false), true);
+  assert.equal(isDeadEnd("failed", false), true);
 });
 
 test("isDeadEnd: a failed task WITH a delivery is not a dead end - a fix verdict can still wake it", () => {
-  assert.equal(isDeadEnd({ state: "failed" }, true), false);
+  assert.equal(isDeadEnd("failed", true), false);
 });
 
 test("isDeadEnd: any non-failed state is never a dead end, regardless of delivery", () => {
-  assert.equal(isDeadEnd({ state: "working" }, false), false);
-  assert.equal(isDeadEnd({ state: "checking" }, false), false);
-  assert.equal(isDeadEnd({ state: "delivered" }, false), false);
-  assert.equal(isDeadEnd({ state: "closed" }, false), false);
-  assert.equal(isDeadEnd({ state: "asking" }, false), false);
+  assert.equal(isDeadEnd("working", false), false);
+  assert.equal(isDeadEnd("checking", false), false);
+  assert.equal(isDeadEnd("delivered", false), false);
+  assert.equal(isDeadEnd("closed", false), false);
+  assert.equal(isDeadEnd("asking", false), false);
 });
 
 test("formatEventLine: work-started reads as prose, project included", () => {
