@@ -260,14 +260,14 @@ test("runVerifyHookCommand: a verifier that throws still reports a verdict and c
       attemptRealEdit: (attemptCwd, targetFileName) => {
         seenFileName = targetFileName;
         writeFileSync(join(attemptCwd, targetFileName), "verify\n");
-        throw new Error("spawnSync claude ENOENT");
+        throw new Error("spawnSync agent-cli ENOENT");
       },
     },
     ...io,
   });
 
   assert.equal(code, 1);
-  assert.match(io.err.join("\n"), /spawnSync claude ENOENT/);
+  assert.match(io.err.join("\n"), /spawnSync agent-cli ENOENT/);
   assert.match(io.out.join("\n"), /edit denied:\s+no/);
   assert.match(io.out.join("\n"), /not fully working/i);
   assert.equal(existsSync(join(cwd, seenFileName)), false, "the throwaway file must be cleaned up even when the attempt throws");
