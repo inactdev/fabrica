@@ -187,8 +187,10 @@ them can reach a running worker.
   silence has a known, honest explanation - past that ceiling
   `isQuietTooLong` returns true for it too and its own wording takes over
   the line ("checking, 4h and still not finished"), naming a stuck check
-  rather than reusing the ordinary quiet notice's "no signal since last
-  heartbeat" (no heartbeat is ever emitted during a check). Both of those
+  rather than reusing the ordinary quiet notice's "no signal since
+  &lt;whatever the record's last event was&gt;" (that last event is the
+  check's own `"started"` one, which has not finished and so has no
+  honest signal wording of its own). Both of those
   readings - the one below the ceiling and the alarm past it - are
   anchored to `checkStartedAt` (the `check-run` `"started"` event), never
   to the record's last event, so anything appended mid-check can't shrink
@@ -197,8 +199,10 @@ them can reach a running worker.
   no-state-exempt-forever treatment on its own, much shorter ceiling
   (`PRE_WORK_QUIET_CEILING_MS`, 5 minutes - sized to
   `wait-for-ask-outcome.ts`'s 60s CLI wait, not copied from the checking
-  ceiling), with wording that likewise never claims a heartbeat that
-  window never has either. A `failed` task whose `brain.ask()` itself
+  ceiling), and it likewise never claims a heartbeat that window never
+  has: the ordinary quiet notice names the record's literal last event,
+  so a window with no heartbeat in it says "work started" or "the task
+  was received" instead. A `failed` task whose `brain.ask()` itself
   threw (nothing ever delivered, no `fix` path back - see `verdict.ts`'s
   `"not-delivered"` refusal) stays listed rather than dropped, but marked
   "FAILED, UNRESOLVABLE" and sorted after tasks still genuinely open, so
@@ -460,7 +464,7 @@ calls `runTask`.
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
 | `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its two exit-by-itself states (`closed`, and a `failed` task that never delivered), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
-| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `isDeadEnd`, `checkStartedAt`, `formatCheckingQuietNotice`, `QUIET_THRESHOLD_MS`, `CHECKING_QUIET_CEILING_MS`, and `PRE_WORK_QUIET_CEILING_MS`. |
+| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `describeLiveness`, `isQuietTooLong`, `isDeadEnd`, `checkStartedAt`, `formatCheckingQuietNotice`, `QUIET_THRESHOLD_MS`, `CHECKING_QUIET_CEILING_MS`, and `PRE_WORK_QUIET_CEILING_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `deny-and-log-edit-command.ts` | Reads a `PreToolUse` payload from stdin, denies it, and records `edit-attempt-blocked` - what a harness's session config runs, not something typed by hand (issue #13's prevention half; see that harness's own README under `skill/`). Deliberately the one command that does *not* refuse stray arguments: it promises to always deny and always exit 0 whatever it is handed, and a refusal would turn that fail-closed guarantee into a non-zero exit `PreToolUse` doesn't block on. |
 | `verify-hook-command.ts` | `fabrica verify-hook`: proves a session config actually denies-and-logs by running a real attempt, instead of assuming it. Takes no arguments and refuses any it is given (`parseVerifyHookArgs`, the same convention as `parseStatusArgs`) rather than ignoring them. Loads its harness-specific spawn by scanning `skill/` at runtime (never a hardcoded import - see `AGENTS.md`'s rule 8 note), reporting a `verify.ts` that throws or exports only half a verifier by name instead of skipping it silently. |
