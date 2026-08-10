@@ -272,12 +272,83 @@ with `ERR_MODULE_NOT_FOUND`.
 
 `bin.mjs` sidesteps this by never asking `--import` to resolve anything.
 It's plain JavaScript (nothing has taught Node to load `.ts` yet at this
-point, so it can't be `.ts` itself), and its first line is a real
-`import "tsx/esm"` - resolved by normal ES module resolution against
+point, so it can't be `.ts` itself), and its first real work - after the
+`?` refusal described below, which has to run first for that same
+nothing-loads-TypeScript-yet reason - is a real `import "tsx/esm"`,
+resolved by normal ES module resolution against
 *this file's own location* (`import.meta.url`, which Node resolves to
 the file's real path even when reached through the `npm link` symlink),
 regardless of where the caller's shell happened to be sitting. Once that
 import registers tsx's loader hooks, `main.ts` loads normally.
+
+## Why nothing here ever `import()`s a raw filesystem path
+
+The sibling sharp edge to the one above, and it has already bitten twice.
+`import()` parses its argument as a **URL**, not as a path - so a path
+containing a literal `#` or `?` is truncated at that character before
+resolution, and the import fails on a file name that doesn't exist. It is
+not hypothetical here: workers run out of generated worktree paths, which
+can contain either character. Both places that load a module by a path
+computed at runtime therefore convert it first with `node:url`'s
+`pathToFileURL(p).href`, which percent-encodes those characters:
+
+- `tsx-bootstrap.mjs`, importing the entry script it was handed
+  (`spawn-detached.ts` builds that path with `fileURLToPath`, i.e. already
+  decoded) - otherwise every `fabrica do` from such a checkout dies with
+  `ERR_MODULE_NOT_FOUND` on the truncated path before the task ever starts.
+- `verify-hook-command.ts`, importing the `skill/<harness>/verify.ts` it
+  discovered - otherwise `fabrica verify-hook` reports no usable harness
+  while one is sitting right there.
+
+**This closes the bug for `#` completely, and for `?` only at the Node
+level.** `pathToFileURL` fixes Node's own `import()`-parses-a-path-as-a-URL
+truncation for both characters equally - proven end to end for `#`,
+including against a real `.ts` file using genuine TypeScript syntax (a
+type cast, matching `run-task-entry.ts`'s own shape). `?` looks fixed by
+the same measure, but isn't: tsx's own TypeScript transform has a second,
+separate bug that only survives for `#`. See the next section - it is why
+this checkout's path can never contain a literal `?`, no matter what
+`pathToFileURL` does.
+
+## Why a checkout path can never contain a literal `?`
+
+Not something this project can fix - a bug in tsx's own module resolution,
+kept here in enough detail to file upstream. `pathToFileURL` correctly
+percent-encodes a `?` before handing the URL to `import()`, so Node's own
+resolution is fine with it. But tsx registers its own resolve hook ahead
+of Node's default one (to transform `.ts` syntax on the fly), and that
+hook independently re-derives a path from the URL - and for a `?`
+specifically, it derives the wrong one. Observed directly against this
+project's pinned tsx (`node_modules/tsx`, esbuild-backed): given an entry
+whose real path is `.../worktree?7-dirty/inner/entry.ts`, tsx's transform
+target resolves to a synthetic `.../worktree.js` - the `#` case has no
+equivalent problem; the same shape of path with `#` instead of `?`
+transforms correctly, cache path and all.
+
+At that broken path, plain JavaScript loads by accident (nothing about it
+needs the transform, so the bug never bites), but real TypeScript syntax
+fails outright:
+
+```
+Error: Transform failed with 1 error:
+/…/worktree.js:5:32: ERROR: Expected ")" but found "as"
+    at failureErrorWithLog (…/node_modules/esbuild/lib/main.js:…)
+```
+
+(That specific line came from a fixture containing `(err as Error)` - any
+TypeScript-only syntax triggers it the same way.) Since `run-task-entry.ts`
+and `main.ts` are both real TypeScript, a checkout at a `?` path can't run
+`fabrica` at all once tsx tries to load either one - not a `fabrica`
+crash, a `tsx` one, and not something `pathToFileURL` or any other change
+in this codebase can close. `bin.mjs` and `tsx-bootstrap.mjs` therefore
+each check for a literal `?` in the relevant resolved path *before*
+importing anything real, and refuse with a plain explanation instead of
+letting tsx's own confusing transform error be the first thing anyone
+sees - the same principle `src/containment/`'s comma-in-a-path check
+applies to a path docker's `--mount` flag can't represent. Both refusals
+are covered by tests that run the real file as a separate process and
+assert on the refusal text, proven to fail against the pre-refusal
+version. `#` is unaffected and still works.
 
 ## Why detached execution needs its own file
 
@@ -356,8 +427,8 @@ calls `runTask`.
 
 | File | Holds |
 | --- | --- |
-| `bin.mjs` | The installed executable. Two lines of real work - see above. |
-| `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh. |
+| `bin.mjs` | The installed executable. Refuses a checkout path containing `?` before importing `main.ts` (see above), then two lines of real work. |
+| `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh, via `pathToFileURL` - except a `?` in the entry's path, refused outright rather than attempted (see above). |
 | `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand adds one more branch here, the way `answer` (#8) and `status`/`log`/`watch` (#12) each did. |
 | `help.ts` | Top-level help text and the list of known commands. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
@@ -373,6 +444,8 @@ calls `runTask`.
 | `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its two exit-by-itself states (`closed`, and a `failed` task that never delivered), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
 | `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, `QUIET_THRESHOLD_MS`, and `CHECKING_QUIET_CEILING_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
+| `deny-and-log-edit-command.ts` | Reads a `PreToolUse` payload from stdin, denies it, and records `edit-attempt-blocked` - what a harness's session config runs, not something typed by hand (issue #13's prevention half; see that harness's own README under `skill/`). Deliberately the one command that does *not* refuse stray arguments: it promises to always deny and always exit 0 whatever it is handed, and a refusal would turn that fail-closed guarantee into a non-zero exit `PreToolUse` doesn't block on. |
+| `verify-hook-command.ts` | `fabrica verify-hook`: proves a session config actually denies-and-logs by running a real attempt, instead of assuming it. Takes no arguments and refuses any it is given (`parseVerifyHookArgs`, the same convention as `parseStatusArgs`) rather than ignoring them. Loads its harness-specific spawn by scanning `skill/` at runtime (never a hardcoded import - see `AGENTS.md`'s rule 8 note), reporting a `verify.ts` that throws or exports only half a verifier by name instead of skipping it silently. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |

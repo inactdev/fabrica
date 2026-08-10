@@ -1,0 +1,412 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { appendEvent } from "../record/index.ts";
+import { runVerifyHookCommand } from "./verify-hook-command.ts";
+
+function tempRecordHome(): string {
+  return mkdtempSync(join(tmpdir(), "fabrica-verify-hook-cmd-home-"));
+}
+
+function tempCwd(): string {
+  return mkdtempSync(join(tmpdir(), "fabrica-verify-hook-cmd-cwd-"));
+}
+
+function captureIo() {
+  const out: string[] = [];
+  const err: string[] = [];
+  return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
+}
+
+function skillDirWith(harnessName: string, verifySource: string): string {
+  const skillDir = mkdtempSync(join(tmpdir(), "fabrica-verify-hook-skill-"));
+  mkdirSync(join(skillDir, harnessName));
+  writeFileSync(join(skillDir, harnessName, "verify.ts"), verifySource);
+  return skillDir;
+}
+
+test("runVerifyHookCommand: an unknown flag is refused with exact instructions, not ignored", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({ recordHome: tempRecordHome(), argv: ["--json"], ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.match(io.err[0], /unknown flag "--json"/);
+  assert.match(io.err[0], /Usage: fabrica verify-hook/);
+});
+
+test("runVerifyHookCommand: a stray positional is refused, not silently ignored", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({ recordHome: tempRecordHome(), argv: ["oops"], ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.match(io.err[0], /unexpected argument "oops"/);
+  assert.match(io.err[0], /verify-hook takes none/);
+});
+
+test("runVerifyHookCommand: an empty skill/ reports nothing to run", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir: mkdtempSync(join(tmpdir(), "fabrica-verify-hook-skill-")),
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /no usable per-harness verify script/i);
+});
+
+test("runVerifyHookCommand: a verify.ts that fails to load is reported by path and reason", async () => {
+  const io = captureIo();
+  const skillDir = skillDirWith("broken-harness", 'throw new Error("boom while loading");\n');
+
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  const err = io.err.join("\n");
+  assert.match(err, /broken-harness/);
+  assert.match(err, /could not be loaded: .*boom while loading/);
+});
+
+test("runVerifyHookCommand: a verify.ts missing half its exports is named, not skipped anonymously", async () => {
+  const io = captureIo();
+  const skillDir = skillDirWith(
+    "half-written-harness",
+    "export function harnessAvailable(): boolean { return true; }\n"
+  );
+
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  const err = io.err.join("\n");
+  assert.match(err, /half-written-harness/);
+  assert.match(err, /exports no attemptRealEdit/);
+});
+
+test("runVerifyHookCommand: a real verify.ts is discovered and used through the skill/ scan", async () => {
+  const io = captureIo();
+  const skillDir = skillDirWith(
+    "working-harness",
+    "export function harnessAvailable(): boolean { return false; }\n" +
+      "export function attemptRealEdit(): void { throw new Error('must not be called'); }\n"
+  );
+
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
+});
+
+test("runVerifyHookCommand: reports failure when the harness itself can't be reached", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    harness: {
+      harnessAvailable: () => false,
+      attemptRealEdit: () => {
+        throw new Error("must not be called when the harness is unavailable");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
+});
+
+test("runVerifyHookCommand: an availability probe that throws counts as unavailable", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    harness: {
+      // Nothing requires a verify.ts to swallow its own probe failure; a
+      // throw here must read as "could not be reached", not as a crash.
+      harnessAvailable: () => {
+        throw new Error("spawnSync agent-cli EACCES");
+      },
+      attemptRealEdit: () => {
+        throw new Error("must not be called when the harness is unavailable");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /spawnSync agent-cli EACCES/);
+  assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
+});
+
+test("runVerifyHookCommand: an async attempt is awaited before the verdict is read", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // A harness whose spawn is async: the event only lands after a turn of
+      // the event loop, so an unawaited call would read the record too early
+      // and report a working config as "denied, not logged".
+      attemptRealEdit: async (attemptCwd, targetFileName) => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        appendEvent(recordHome, {
+          taskId: "project:unregistered",
+          name: "edit-attempt-blocked",
+          details: { target: join(attemptCwd, targetFileName) },
+        });
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.match(io.out.join("\n"), /attempt logged:\s+yes/);
+});
+
+test("runVerifyHookCommand: an async attempt that rejects still reports a verdict and cleans up", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+  let seenFileName = "";
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      attemptRealEdit: async (attemptCwd, targetFileName) => {
+        seenFileName = targetFileName;
+        writeFileSync(join(attemptCwd, targetFileName), "verify\n");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        throw new Error("spawnSync agent-cli ENOENT");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /spawnSync agent-cli ENOENT/);
+  assert.match(io.out.join("\n"), /edit denied:\s+no/);
+  assert.equal(
+    existsSync(join(cwd, seenFileName)),
+    false,
+    "the throwaway file must be cleaned up even when an async attempt rejects"
+  );
+});
+
+test("runVerifyHookCommand: a properly denied and logged attempt passes", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // Simulates a working hook: nothing written to disk, but it logs the
+      // attempt, exactly like the real hook does in the same invocation.
+      attemptRealEdit: (attemptCwd, targetFileName) => {
+        appendEvent(recordHome, {
+          taskId: "project:unregistered",
+          name: "edit-attempt-blocked",
+          details: { target: join(attemptCwd, targetFileName) },
+        });
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.match(io.out.join("\n"), /edit denied:\s+yes/);
+  assert.match(io.out.join("\n"), /attempt logged:\s+yes/);
+  assert.match(io.out.join("\n"), /working correctly/i);
+});
+
+test("runVerifyHookCommand: a silently allowed edit fails, and the throwaway file is cleaned up", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+  let seenFileName = "";
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // Simulates a broken/misconfigured hook: the edit actually happens.
+      attemptRealEdit: (attemptCwd, targetFileName) => {
+        seenFileName = targetFileName;
+        writeFileSync(join(attemptCwd, targetFileName), "verify\n");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.out.join("\n"), /edit denied:\s+no/);
+  assert.equal(existsSync(join(cwd, seenFileName)), false, "the throwaway file must be cleaned up either way");
+});
+
+test("runVerifyHookCommand: denied but never logged (the fail-open case) still fails", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // Simulates the hook command failing to launch at all: nothing
+      // written, but nothing logged either.
+      attemptRealEdit: () => {},
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.out.join("\n"), /edit denied:\s+yes/);
+  assert.match(io.out.join("\n"), /attempt logged:\s+no/);
+  assert.match(io.out.join("\n"), /not fully working/i);
+});
+
+test("runVerifyHookCommand: a skill/ path containing '#' still resolves its verify.ts", async () => {
+  // import() parses a bare path string as a URL, where '#' starts a
+  // fragment - a raw path would silently truncate at it. Worker worktree
+  // paths are generated, so a checkout living at such a path is a real
+  // fleet condition, not an edge case. This proves the fix (pathToFileURL)
+  // rather than the bug.
+  const base = mkdtempSync(join(tmpdir(), "fabrica-verify-hook-skill-"));
+  const skillDir = join(base, "worktree#7-dirty");
+  mkdirSync(skillDir);
+  mkdirSync(join(skillDir, "working-harness"));
+  writeFileSync(
+    join(skillDir, "working-harness", "verify.ts"),
+    "export function harnessAvailable(): boolean { return false; }\n" +
+      "export function attemptRealEdit(): void { throw new Error('must not be called'); }\n"
+  );
+
+  const io = captureIo();
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    skillDir,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  // Reaching the harness-unavailable message (not a load failure) proves
+  // the module past the '#' segment actually loaded and exported both
+  // halves - a truncated import would instead fail to resolve.
+  assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
+  assert.doesNotMatch(io.err.join("\n"), /could not be loaded/i);
+});
+
+test("runVerifyHookCommand: a verifier that throws still reports a verdict and cleans up", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+  let seenFileName = "";
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // A harness verify.ts that lets its own spawn failure escape - here the
+      // session wrote the file and *then* exited non-zero, so the verdict
+      // (allowed, not denied) has to come from disk regardless of the throw.
+      attemptRealEdit: (attemptCwd, targetFileName) => {
+        seenFileName = targetFileName;
+        writeFileSync(join(attemptCwd, targetFileName), "verify\n");
+        throw new Error("spawnSync agent-cli ENOENT");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /spawnSync agent-cli ENOENT/);
+  assert.match(io.out.join("\n"), /edit denied:\s+no/);
+  assert.match(io.out.join("\n"), /not fully working/i);
+  assert.equal(existsSync(join(cwd, seenFileName)), false, "the throwaway file must be cleaned up even when the attempt throws");
+});
+
+test("runVerifyHookCommand: a session that exits non-zero because the edit was blocked still passes", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      attemptRealEdit: (attemptCwd, targetFileName) => {
+        appendEvent(recordHome, {
+          taskId: "project:unregistered",
+          name: "edit-attempt-blocked",
+          details: { target: join(attemptCwd, targetFileName) },
+        });
+        throw new Error("command failed with exit code 1");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.match(io.out.join("\n"), /working correctly/i);
+});
+
+test("runVerifyHookCommand: another session's blocked edit doesn't count as this attempt's", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // The session under test never gets as far as attempting the edit
+      // (unauthenticated, rate-limited, timed out); meanwhile an unrelated
+      // session elsewhere blocks an edit of its own and appends it to the
+      // same shared record. That must not read as a pass here.
+      attemptRealEdit: () => {
+        appendEvent(recordHome, {
+          taskId: "project:somewhere-else",
+          name: "edit-attempt-blocked",
+          details: { target: "/some/other/project/src/unrelated.ts" },
+        });
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.out.join("\n"), /attempt logged:\s+no/);
+});

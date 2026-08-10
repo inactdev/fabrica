@@ -3,7 +3,16 @@
 // in this help text - nothing here needs reshaping to add one, the way
 // status/log/watch (#12) each went in.
 
-export const COMMANDS = ["do", "verdict", "answer", "status", "log", "watch"] as const;
+export const COMMANDS = [
+  "do",
+  "verdict",
+  "answer",
+  "status",
+  "log",
+  "watch",
+  "deny-and-log-edit",
+  "verify-hook",
+] as const;
 
 export const TOP_LEVEL_HELP = `fabrica - hand in a task; get it done in isolation, verified, honestly.
 
@@ -28,6 +37,12 @@ Commands:
   watch <taskId>
       Follow a task while it runs: heartbeats live, transcript in
       batches. Stopping this (Ctrl-C) never stops the work.
+  verify-hook
+      Prove whether this directory's session config actually blocks and
+      logs an edit, instead of assuming it does.
+  deny-and-log-edit
+      Not for typing by hand - what a harness's session config runs
+      automatically to deny and log a blocked edit.
 
 Run "fabrica <command> --help" for a command's own usage.
 `;

@@ -14,6 +14,27 @@
 // directory it's meant to run from once installed). See the module
 // README's "Why bin.mjs isn't a shebang'd .ts file" for the failure
 // this sidesteps.
+//
+// The "?" check below has to come before that import, for the same
+// reason this whole file is plain JavaScript: main.ts (real TypeScript
+// syntax) cannot even be loaded once this checkout's path contains a
+// literal "?" - see README.md's "Why a checkout path can never contain
+// a literal '?'" for the tsx bug this refuses instead of hitting.
+
+import { fileURLToPath } from "node:url";
+
+const selfPath = fileURLToPath(import.meta.url);
+if (selfPath.includes("?")) {
+  console.error(
+    `fabrica: this checkout's path contains a "?" (${selfPath}), which the ` +
+      `TypeScript loader fabrica runs on (tsx) cannot handle - it derives a ` +
+      `broken internal path from any "?" and refuses real TypeScript syntax ` +
+      `there. This is a bug in tsx, not fabrica (see README.md), and cannot ` +
+      `be worked around here. Move or rename this checkout so its path has ` +
+      `no "?" in it, then try again.`
+  );
+  process.exit(1);
+}
 
 await import("tsx/esm");
 const { main } = await import(new URL("./main.ts", import.meta.url).href);

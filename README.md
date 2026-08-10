@@ -11,6 +11,8 @@ The answer key was committed first. The tool is now being built against it.
 - `SPEC.md` - the blueprint for version one.
 - `ROADMAP.md` - the path from here to Amy.
 - `src/` - the tool itself, as far as it has been built.
+- `skill/` - session setup for the AI you talk to, per harness. Templates
+  you review and install by hand; nothing here installs itself.
 
 To see the current state:
 
@@ -87,3 +89,17 @@ has the exact rules).
 
 Set `FABRICA_HOME` to use a record home other than `~/.fabrica`. Run
 `fabrica --help` or `fabrica <command> --help` for the rest.
+
+## Stopping the AI you talk to from editing files
+
+To stop the AI you talk to from editing files at all, install the
+session config for your harness by hand -
+`skill/claude-code/README.md` has the steps and what is verified. Then,
+from the directory you installed it into:
+
+    fabrica verify-hook
+
+It asks your chat agent, right now and with no permission bypass, to
+create a throwaway file there, and reports whether the edit was denied
+and whether the attempt was recorded - so "is this working" is something
+you prove rather than assume.

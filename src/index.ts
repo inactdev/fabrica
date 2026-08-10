@@ -32,3 +32,20 @@ export type { Brain } from "../contract/surface.ts";
 export { loadConfig, projectsTomlPath, requireProject } from "./config/index.ts";
 export { ConfigError } from "./config/index.ts";
 export type { ConfigErrorCode, Caps, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
+
+// Off-the-books nets (issue #13), prevention half: recordBlockedEditAttempt
+// is what `fabrica deny-and-log-edit` (src/cli/deny-and-log-edit-command.ts,
+// the command a harness's session config wires its file-editing hook to)
+// imports from here, the same way the CLI imports everything else it
+// needs — never straight from src/offbooks/. (Issue #13 also specified a
+// detection half; it was built, tested, then cut by Client ruling — see
+// AGENTS.md.)
+export { recordBlockedEditAttempt } from "./offbooks/index.ts";
+export type { BlockedEditAttempt } from "./offbooks/index.ts";
+
+// The record's read side: `fabrica verify-hook` (src/cli/) reads back the
+// events an attempt should have produced, to prove it rather than assume it.
+// (`eventsByTask` above is grouped by task; this is the flat, whole-record
+// list `readEvents(...).length`/`.slice(...)` needs - a different shape,
+// not a duplicate. `FabricaEvent` itself is already exported above.)
+export { readEvents } from "./record/index.ts";

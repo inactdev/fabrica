@@ -1,8 +1,10 @@
 # containment
 
 `runContained` runs one command as a real OS-level sandboxed process: its
-reads and writes are confined to a single directory, and it cannot reach
-the network unless told to. It exists to close a specific gap (issue
+writes are confined to `workdir` (plus `homeDir`, when a caller asks for
+one), its reads to those plus whatever `readOnlyMounts` names, and it
+cannot reach the network unless told to. It exists to close a specific
+gap (issue
 #44): CONTRACT rule 1 proves the Client's own checkout is never touched,
 but that says nothing about the Worker's *process* - before this module,
 a Worker (via `src/brain/adapters/`'s reference CLI adapter) ran with the
@@ -55,21 +57,26 @@ gap shows up under Docker, and why it's a smaller, more ordinary one.
 
 Every call runs a fresh, throwaway container (`docker run --rm`):
 
-- **Writes** are confined to `workdir` because it is the *only* writable
-  thing bind-mounted into the container
+- **Writes** are confined to `workdir`, the one writable thing bind-mounted
+  into every container
   (`--mount type=bind,source=<workdir>,target=/workdir -w /workdir` -
   the long form on purpose: unlike `-v`, its key=value fields don't
   split on a `:` appearing in the workdir path, and `recordHome` is
-  caller-configurable). There is no allow/deny rule to get right here,
-  unlike a host-process sandbox - the container's filesystem view simply
-  doesn't contain anything else writable from the host at all.
+  caller-configurable) - plus `homeDir` when a caller passes one, which
+  is mounted read-write on purpose so a warm session can persist (see
+  "Session persistence" below). Both are throwaway locations the call
+  itself named; nothing else on the host is writable, and
+  `readOnlyMounts` entries are reachable but not writable. There is no
+  allow/deny rule to get right here, unlike a host-process sandbox - the
+  container's filesystem view simply doesn't contain anything else from
+  the host at all.
 - **Reads** are confined the same way (plus `readOnlyMounts`, below),
   and this is a strictly stronger guarantee than the `sandbox-exec`
   version's was: that version had to carve out one exclusion (the home
   directory) from an otherwise-broad read allowance, because a
   host-process sandbox still has to let the OS's own files through. A
-  container has no such tension - nothing outside `workdir` (and
-  whatever's explicitly listed in `readOnlyMounts`) is visible, full
+  container has no such tension - nothing outside `workdir`, `homeDir`,
+  and whatever's explicitly listed in `readOnlyMounts` is visible, full
   stop.
 - **Network** is denied by passing `--network none` (verified: DNS
   resolution itself fails under it, and so does a plain TCP connect to
@@ -123,15 +130,16 @@ cannot collide with each other through this mechanism.
 
 ```ts
 const result = await runContained("echo", ["hi"], {
-  workdir: line.workdir,  // bind-mounted at /workdir - the only writable host path
+  workdir: line.workdir,  // bind-mounted at /workdir - writable, as is `homeDir` when given
   network: "denied",      // or "allowed" - no default; state it
   image: "alpine",        // required - which image the command runs inside
 });
 // result: { stdout: "hi\n", stderr: "", exitCode: 0 }
 ```
 
-- **`workdir`** - the only writable host path bind-mounted into the
-  container, at `/workdir` (also the container's working directory).
+- **`workdir`** - the writable host path bind-mounted into every
+  container, at `/workdir` (also the container's working directory);
+  the only other writable one is `homeDir`, and only when given.
   Resolved with `realpathSync` internally, so a path through a symlink
   (macOS's `/tmp` -> `/private/tmp`, same sharp edge `src/line/README.md`
   documents) still matches what actually gets mounted.
