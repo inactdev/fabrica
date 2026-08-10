@@ -134,6 +134,89 @@ test("runVerifyHookCommand: reports failure when the harness itself can't be rea
   assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
 });
 
+test("runVerifyHookCommand: an availability probe that throws counts as unavailable", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({
+    cwd: tempCwd(),
+    recordHome: tempRecordHome(),
+    harness: {
+      // Nothing requires a verify.ts to swallow its own probe failure; a
+      // throw here must read as "could not be reached", not as a crash.
+      harnessAvailable: () => {
+        throw new Error("spawnSync agent-cli EACCES");
+      },
+      attemptRealEdit: () => {
+        throw new Error("must not be called when the harness is unavailable");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /spawnSync agent-cli EACCES/);
+  assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
+});
+
+test("runVerifyHookCommand: an async attempt is awaited before the verdict is read", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      // A harness whose spawn is async: the event only lands after a turn of
+      // the event loop, so an unawaited call would read the record too early
+      // and report a working config as "denied, not logged".
+      attemptRealEdit: async (attemptCwd, targetFileName) => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        appendEvent(recordHome, {
+          taskId: "project:unregistered",
+          name: "edit-attempt-blocked",
+          details: { target: join(attemptCwd, targetFileName) },
+        });
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.match(io.out.join("\n"), /attempt logged:\s+yes/);
+});
+
+test("runVerifyHookCommand: an async attempt that rejects still reports a verdict and cleans up", async () => {
+  const recordHome = tempRecordHome();
+  const cwd = tempCwd();
+  const io = captureIo();
+  let seenFileName = "";
+
+  const code = await runVerifyHookCommand({
+    cwd,
+    recordHome,
+    harness: {
+      harnessAvailable: () => true,
+      attemptRealEdit: async (attemptCwd, targetFileName) => {
+        seenFileName = targetFileName;
+        writeFileSync(join(attemptCwd, targetFileName), "verify\n");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        throw new Error("spawnSync agent-cli ENOENT");
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /spawnSync agent-cli ENOENT/);
+  assert.match(io.out.join("\n"), /edit denied:\s+no/);
+  assert.equal(
+    existsSync(join(cwd, seenFileName)),
+    false,
+    "the throwaway file must be cleaned up even when an async attempt rejects"
+  );
+});
+
 test("runVerifyHookCommand: a properly denied and logged attempt passes", async () => {
   const recordHome = tempRecordHome();
   const cwd = tempCwd();

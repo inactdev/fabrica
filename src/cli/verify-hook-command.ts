@@ -24,7 +24,10 @@ import { resolveRecordHome } from "./record-home.ts";
 import { CliError } from "./errors.ts";
 
 export interface HarnessVerifier {
-  attemptRealEdit(cwd: string, targetFileName: string): void;
+  /** May be async: an awaited result is what makes the verdict below -
+   * the file on disk, the event on the record - measure a finished
+   * session rather than one still starting. */
+  attemptRealEdit(cwd: string, targetFileName: string): void | Promise<void>;
   harnessAvailable(): boolean;
 }
 
@@ -173,7 +176,19 @@ export async function runVerifyHookCommand(opts: RunVerifyHookOptions = {}): Pro
     return 1;
   }
 
-  if (!verifier.harnessAvailable()) {
+  // Nothing in HarnessVerifier obliges an implementation to swallow its own
+  // probe failures (a spawn that raises EACCES, a resolved binary path that
+  // is gone), and a throw here means exactly what `false` means: the harness
+  // could not be reached. Reported as that, not as a stack trace out of
+  // bin.mjs.
+  let available: boolean;
+  try {
+    available = verifier.harnessAvailable();
+  } catch (err) {
+    stderr(`Checking for your chat agent failed: ${err instanceof Error ? err.message : String(err)}`);
+    available = false;
+  }
+  if (!available) {
     stderr("Could not find or run your chat agent - is it installed and on your PATH?");
     return 1;
   }
@@ -191,9 +206,11 @@ export async function runVerifyHookCommand(opts: RunVerifyHookOptions = {}): Pro
   // the hook denied the edit looks exactly like that from here. So the throw
   // is reported and the verdict still comes from disk and the record below,
   // rather than aborting the command on a stack trace and skipping the
-  // throwaway file's cleanup.
+  // throwaway file's cleanup. Awaited, so an async spawn is finished before
+  // the file and the record are read - otherwise a working config reads as
+  // "denied, not logged" purely because nothing had happened yet.
   try {
-    verifier.attemptRealEdit(cwd, targetFileName);
+    await verifier.attemptRealEdit(cwd, targetFileName);
   } catch (err) {
     stderr(`The attempt itself failed: ${err instanceof Error ? err.message : String(err)}`);
   }
