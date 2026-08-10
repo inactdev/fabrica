@@ -13,6 +13,9 @@ The answer key was committed first. The tool is now being built against it.
 - `src/` - the tool itself, as far as it has been built.
 - `skill/` - session setup for the AI you talk to, per harness. Templates
   you review and install by hand; nothing here installs itself.
+- `.agents/skills/fabrica/` - the operator's skill: the manual a chat
+  agent reads before running `fabrica` on your behalf, so you can just
+  talk instead of typing the commands yourself.
 
 To see the current state:
 

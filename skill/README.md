@@ -1,6 +1,6 @@
 # skill/
 
-SPEC.md's "operator's skill": the manual and session setup for whatever AI the Client talks to. This folder currently holds only the prevention piece issue #13 ("off-the-books nets") asks for — the per-harness session config that disables file editing for the chat agent, and its blocked-edit-attempt logging hook. (Issue #13 also specified a detection half; it was built, tested, then cut by Client ruling — see AGENTS.md. Nothing here or in `src/` claims it exists.) The full agent-facing manual (commands, examples, taboos — SPEC.md's "The operator's skill" section) is a separate, not-yet-built piece; don't assume it's here.
+SPEC.md's "operator's skill": the manual and session setup for whatever AI the Client talks to. This folder currently holds only the prevention piece issue #13 ("off-the-books nets") asks for — the per-harness session config that disables file editing for the chat agent, and its blocked-edit-attempt logging hook. (Issue #13 also specified a detection half; it was built, tested, then cut by Client ruling — see AGENTS.md. Nothing here or in `src/` claims it exists.) The full agent-facing manual (commands, examples, taboos — SPEC.md's "The operator's skill" section) is a separate piece and lives in `.agents/skills/fabrica/`, not here.
 
 ## Layout
 
