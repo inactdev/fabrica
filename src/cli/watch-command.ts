@@ -37,8 +37,10 @@ end of each attempt, not word by word - the same entries \`fabrica log
 --transcript\` prints after the fact. A silent stretch longer than a few
 heartbeats is flagged "quiet" instead of implying progress nobody has
 actually observed. A task running its check instead says so plainly -
-"checking, 2m so far" - since that has a real, known start time; it is
-never flagged "quiet".
+"checking, 2m so far" - since that has a real, known start time. That
+exemption holds up to a long ceiling (4 hours); a check still running
+past it is flagged "quiet" like any other state, since by then the
+silence no longer has an honest explanation.
 
 Stopping this (Ctrl-C) only stops watching. The task itself runs in a
 separate, already-detached process (\`fabrica do\` starts it that way) that

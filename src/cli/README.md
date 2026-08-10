@@ -182,9 +182,13 @@ them can reach a running worker.
   nothing else in the tool says a task is waiting on him. A `working`
   task with no recorded activity for longer than `QUIET_THRESHOLD_MS` is
   flagged "quiet" rather than left looking identical to progress; a
-  `checking` task instead says so with its real elapsed time and is never
-  flagged quiet (`isQuietTooLong` refuses that state outright), since
-  that silence has a known, honest explanation. The pre-work `brain.ask()`
+  `checking` task instead says so with its real elapsed time and is
+  exempt from the quiet alarm below `CHECKING_QUIET_CEILING_MS` (4
+  hours), since that silence has a known, honest explanation; past that
+  ceiling `isQuietTooLong` returns true for it too and the alarm takes
+  over the line, because a check still running after that long is the one
+  case a live-elapsed reading can't explain (a killed worker, or a check
+  hung inside `runCheck`'s `execSync`). The pre-work `brain.ask()`
   window is exempt for the same reason - `stateOf` already reads
   "working" from `task-received` onward, so `isQuietTooLong` also waits
   for a `"work-started"` event before it will raise the alarm. It takes

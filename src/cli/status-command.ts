@@ -17,11 +17,12 @@ Lists every open task - one line each: id, project, state, age. A
 "delivered" task is flagged as awaiting your verdict (\`fabrica verdict\`)
 since nothing else tells you it's waiting. A "checking" task shows its
 real elapsed time ("checking, 2m so far") instead of a quiet alarm - the
-check itself has a known start time, so there's no need to guess. A
-"working" task with no recorded activity in a while is flagged "quiet"
-rather than implying progress nobody has actually observed. A closed task
-(verdict recorded) drops off this list - see \`fabrica log <id>\` for its
-history.
+check itself has a known start time, so there's no need to guess - up to
+a long ceiling (4 hours), past which it gets the quiet alarm like any
+other state. A "working" task with no recorded activity in a while is
+flagged "quiet" rather than implying progress nobody has actually
+observed. A closed task (verdict recorded) drops off this list - see
+\`fabrica log <id>\` for its history.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
