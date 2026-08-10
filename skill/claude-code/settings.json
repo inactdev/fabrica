@@ -25,7 +25,6 @@
       "Bash(fabrica status *)",
       "Bash(fabrica log *)",
       "Bash(fabrica watch *)",
-      "Bash(fabrica deny-and-log-edit *)",
       "Bash(fabrica verify-hook *)",
       "Bash(fabrica)",
       "Bash(fabrica --help)",

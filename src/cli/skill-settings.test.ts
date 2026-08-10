@@ -36,6 +36,24 @@ const skillDir = join(repoRoot, "skill");
 // instead of silently falling through either way.
 const DECIDING_COMMANDS = ["verdict", "answer"];
 
+// Commands whose only legitimate caller is a harness's own hook
+// runner, never the chat agent's Bash tool - deliberately absent from
+// the allow list, though not a deciding command either.
+// `deny-and-log-edit` is wired as a hook command (settings.json's
+// hooks.PreToolUse: "command": "fabrica deny-and-log-edit") and does
+// not need a permissions.allow entry to keep working, because a
+// PreToolUse hook's own command is not gated by permissions.allow at
+// all - verified empirically, not assumed: a real, non-interactive,
+// non-bypassed session with that allow entry removed entirely still
+// had its Write attempt denied and a genuine edit-attempt-blocked
+// event recorded, with the exact deny reason string (see AGENTS.md).
+// The entry used to exist anyway; its only real effect was letting a
+// chat agent invoke the command directly via Bash, fabricating an
+// edit-attempt-blocked event with tool "unknown" - the phantom-task
+// path issue #81 tracks. Client ruling, issue #76 follow-up: drop the
+// entry, do not re-add it as a "missing" one.
+const HOOK_ONLY_COMMANDS = ["deny-and-log-edit"];
+
 function commandsInMainDispatch(): string[] {
   const mainSource = readFileSync(join(repoRoot, "src", "cli", "main.ts"), "utf8");
   // Matches every `command === "X"` fragment, not just a line shaped
@@ -129,7 +147,7 @@ function evaluate(settings: SettingsTemplate, command: string): "allow" | "deny"
   return "allow";
 }
 
-test("main.ts's real dispatch is fully covered: deciding commands are never allowed, everything else is", () => {
+test("main.ts's real dispatch is fully covered: deciding and hook-only commands are never allowed, everything else is", () => {
   const templates = harnessSettings();
   assert.ok(templates.length > 0, "no harness ships a settings.json to check");
 
@@ -141,6 +159,12 @@ test("main.ts's real dispatch is fully covered: deciding commands are never allo
       `commandsInMainDispatch() found no "${deciding}" branch - if main.ts's dispatch shape changed ` +
         `(a switch, single quotes, a reformatted condition), this scan silently drops it and the ` +
         `"never allowed" assertion below never runs for it`
+    );
+  }
+  for (const hookOnly of HOOK_ONLY_COMMANDS) {
+    assert.ok(
+      commands.includes(hookOnly),
+      `commandsInMainDispatch() found no "${hookOnly}" branch - the same silent-drop risk as DECIDING_COMMANDS above`
     );
   }
 
@@ -163,12 +187,19 @@ test("main.ts's real dispatch is fully covered: deciding commands are never allo
           `${settings.harness}: no permissions.deny pattern actually matches "fabrica ${command}" - it may only be ` +
             `absent from allow, which stops protecting it the moment a broader allow entry is reintroduced`
         );
+      } else if (HOOK_ONLY_COMMANDS.includes(command)) {
+        assert.notEqual(
+          verdict,
+          "allow",
+          `${settings.harness}: "fabrica ${command}" is hook-only and must not be auto-approved for direct Bash ` +
+            `invocation by the chat agent - see HOOK_ONLY_COMMANDS`
+        );
       } else {
         assert.equal(
           verdict,
           "allow",
-          `${settings.harness}: "fabrica ${command}" is neither in DECIDING_COMMANDS nor auto-approved - ` +
-            `a command added to main.ts must be explicitly decided one way or the other, not left to fall through`
+          `${settings.harness}: "fabrica ${command}" is in neither DECIDING_COMMANDS nor HOOK_ONLY_COMMANDS and ` +
+            `is not auto-approved - a command added to main.ts must be explicitly decided one way or the other, not left to fall through`
         );
       }
     }
