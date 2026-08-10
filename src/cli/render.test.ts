@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CHECKING_QUIET_CEILING_MS,
   QUIET_THRESHOLD_MS,
   checkStartedAt,
   formatAge,
@@ -60,12 +61,34 @@ test("isQuietTooLong: true only once a working task's silence exceeds the thresh
   assert.equal(isQuietTooLong("working", events, start + QUIET_THRESHOLD_MS + 1), true);
 });
 
-test("isQuietTooLong: never true for a checking task, no matter how long - it has a known explanation", () => {
+test("isQuietTooLong: false for a checking task well within its own long ceiling - it has a known explanation", () => {
   const start = 1_000_000;
   const events: FabricaEvent[] = [
     { occurredAt: new Date(start).toISOString(), taskId: "x", name: "check-run", details: { phase: "started" } },
   ];
+  // Ten times the ordinary QUIET_THRESHOLD_MS (45s) is still nowhere near
+  // CHECKING_QUIET_CEILING_MS (4h) - a real, slow test suite easily runs
+  // this long, and the exemption exists precisely so that isn't flagged.
   assert.equal(isQuietTooLong("checking", events, start + QUIET_THRESHOLD_MS * 10), false);
+});
+
+// Client ruling, issue #12 review finding: below CHECKING_QUIET_CEILING_MS
+// the exemption holds no matter what, but past it "checking" becomes
+// eligible for the alarm too - the only way to catch a worker killed
+// mid-check (reboot, OOM) or a check that hung, where the record's last
+// event stays a "check-run started" forever with no finish ever coming.
+test("isQuietTooLong: false right up to CHECKING_QUIET_CEILING_MS, true just past it", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "x", name: "check-run", details: { phase: "started" } },
+  ];
+  assert.equal(isQuietTooLong("checking", events, start + CHECKING_QUIET_CEILING_MS - 1), false);
+  assert.equal(isQuietTooLong("checking", events, start + CHECKING_QUIET_CEILING_MS + 1), true);
+});
+
+test("isQuietTooLong: a checking task with no recorded start at all is never flagged (defensive, shouldn't happen for a real task)", () => {
+  const events: FabricaEvent[] = [{ occurredAt: "t0", taskId: "x", name: "task-received" }];
+  assert.equal(isQuietTooLong("checking", events, Date.now() + CHECKING_QUIET_CEILING_MS * 10), false);
 });
 
 test("isQuietTooLong: never true for the pre-work ask() window, no matter how long - it has a known explanation too", () => {
@@ -151,13 +174,28 @@ test("formatStatusLine: unknown project is said plainly, not left blank", () => 
   assert.match(line, /unknown project/);
 });
 
-test("formatStatusLine: a checking task says so plainly with its real elapsed time, never quiet", () => {
+test("formatStatusLine: a checking task within its ceiling says so plainly with its real elapsed time, never quiet", () => {
   const line = formatStatusLine(
     { id: "t1", state: "checking" },
     { project: "/proj", ageMs: 600_000, quietForMs: null, checkingForMs: 120_000 }
   );
   assert.match(line, /checking, 2m so far/);
   assert.doesNotMatch(line, /quiet/);
+});
+
+// Client ruling, issue #12 review finding: once isQuietTooLong has ruled a
+// checking task quiet (past CHECKING_QUIET_CEILING_MS), the quiet alarm
+// takes over the display the same way it would for any other state -
+// callers signal this by passing both a non-null checkingForMs (state is
+// still "checking") and a non-null quietForMs (the caller's own
+// isQuietTooLong call came back true).
+test("formatStatusLine: a checking task past its ceiling shows the quiet alarm, not the plain elapsed line", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "checking" },
+    { project: "/proj", ageMs: 600_000, quietForMs: 5 * 60 * 60 * 1000, checkingForMs: 5 * 60 * 60 * 1000 }
+  );
+  assert.match(line, /quiet/);
+  assert.doesNotMatch(line, /checking, .* so far/);
 });
 
 test("formatEventLine: work-started reads as prose, project included", () => {

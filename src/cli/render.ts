@@ -12,6 +12,27 @@ import type { FabricaEvent, FabricaTask, TranscriptEntry } from "../index.ts";
  * slow tick without crying wolf. */
 export const QUIET_THRESHOLD_MS = DEFAULT_HEARTBEAT_INTERVAL_MS * 3;
 
+/** "Checking" is exempt from the ordinary quiet alarm - Fabrica knows
+ * exactly what it's doing (see `isQuietTooLong` below) - but not forever.
+ * Past this, checking becomes eligible for the alarm too. This is NOT a
+ * guess at how long a check "should" take - there is no such number; a
+ * real project's own test suite can legitimately run for a long time,
+ * and this constant must stay well clear of that or it starts crying
+ * wolf on honest work, exactly the failure mode the exemption itself
+ * exists to prevent. Its only job is catching the case a live-elapsed
+ * reading genuinely can't explain: the detached worker was killed
+ * (machine reboot, OOM) or the check itself hung while blocked inside
+ * `runCheck`'s `execSync`, so the record's last event stays a
+ * `"check-run"` with `phase: "started"` forever, with no matching
+ * finish ever coming. Client ruling (issue #12 review finding) is
+ * explicit that this is a time ceiling, not process-liveness detection
+ * (checking whether the detached worker's PID is still alive would be
+ * the better root-cause fix, but that is a separate issue, not this
+ * one). Do NOT "tidy" this number down to match `QUIET_THRESHOLD_MS` or
+ * anything else already in this file - it is deliberately a different
+ * order of magnitude, for a different, much rarer failure. */
+export const CHECKING_QUIET_CEILING_MS = 4 * 60 * 60 * 1000; // 4 hours
+
 /** The project a task is running against, read from whichever event last
  * carried it (`work-started`/`delivered` details). The only implementation
  * of that lookup: it takes events the caller already holds, so `status`
@@ -49,22 +70,28 @@ export function checkStartedAt(events: FabricaEvent[]): Date | null {
   return startedAt;
 }
 
-/** True only for a task genuinely mid brain.work() whose silence has run
- * past QUIET_THRESHOLD_MS - a delivered, failed, or closed task is quiet
- * by definition and that's not the same fact. A task that is "checking"
- * is never quiet-too-long: Fabrica knows exactly what it's doing and
- * since when (checkStartedAt), so status/watch say that plainly instead
- * of raising an alarm about a silence that has a known, honest
- * explanation. The same reasoning covers the pre-work window: `stateOf`
- * reports "working" from the moment `task-received` lands, including the
- * whole stretch `brain.ask()` runs in before any ProductionLine exists -
- * a real, often-slow brain call (`wait-for-ask-outcome.ts` budgets 60s
- * for it) with nothing to append until it resolves. That gap is
- * distinguished from a genuinely silent worker by whether a
- * `"work-started"` event has landed yet - the alarm stays fully
- * meaningful for the case it actually means something: a worker that
- * started and then went quiet. */
+/** True for a task genuinely mid brain.work() whose silence has run past
+ * QUIET_THRESHOLD_MS, or a task "checking" whose check has run past
+ * CHECKING_QUIET_CEILING_MS - a delivered, failed, or closed task is
+ * quiet by definition and that's not the same fact. Below its own much
+ * longer ceiling, "checking" stays exempt: Fabrica knows exactly what
+ * it's doing and since when (checkStartedAt), so status/watch say that
+ * plainly instead of raising an alarm about a silence that has a known,
+ * honest explanation - see CHECKING_QUIET_CEILING_MS's own comment for
+ * why that ceiling exists and how it was chosen. The same working/quiet
+ * reasoning covers the pre-work window: `stateOf` reports "working" from
+ * the moment `task-received` lands, including the whole stretch
+ * `brain.ask()` runs in before any ProductionLine exists - a real, often-
+ * slow brain call (`wait-for-ask-outcome.ts` budgets 60s for it) with
+ * nothing to append until it resolves. That gap is distinguished from a
+ * genuinely silent worker by whether a `"work-started"` event has landed
+ * yet - the alarm stays fully meaningful for the case it actually means
+ * something: a worker that started and then went quiet. */
 export function isQuietTooLong(state: FabricaTask["state"], events: FabricaEvent[], now: number = Date.now()): boolean {
+  if (state === "checking") {
+    const startedAt = checkStartedAt(events);
+    return startedAt !== null && now - startedAt.getTime() > CHECKING_QUIET_CEILING_MS;
+  }
   if (state !== "working") return false;
   if (!events.some((e) => e.name === "work-started")) return false;
   const last = lastActivityAt(events);
@@ -104,7 +131,12 @@ export function formatStatusLine(
   if (task.state === "delivered") {
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
   }
-  if (task.state === "checking" && opts.checkingForMs !== null) {
+  // Once a check has run past CHECKING_QUIET_CEILING_MS, quietForMs takes
+  // over from the plain elapsed-time line - a check that has been
+  // "checking" for days is no longer honest work in progress, it's
+  // exactly the "not known to be stuck, not known to be fine" case the
+  // alarm exists for.
+  if (task.state === "checking" && opts.checkingForMs !== null && opts.quietForMs === null) {
     return `${base}  <- checking, ${formatAge(opts.checkingForMs)} so far`;
   }
   if (opts.quietForMs !== null) {

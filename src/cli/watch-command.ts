@@ -182,12 +182,16 @@ async function streamTranscript(ctx: {
 
     const now = Date.now();
 
-    // Say what it's doing (issue #12, the Client's own ruling): a check
-    // has a real, recorded start time, so a task mid-check says so
-    // plainly - on the same cadence QUIET_THRESHOLD_MS already sets - and
-    // isQuietTooLong (below) never raises an alarm for it, since there is
-    // nothing unexplained about this silence.
-    const checking = state === "checking";
+    // isQuietTooLong is computed first: below CHECKING_QUIET_CEILING_MS,
+    // a check has a real, recorded start time, so a task mid-check says
+    // so plainly instead of getting the quiet alarm - but past that
+    // ceiling it becomes eligible for the alarm too (issue #12 review
+    // finding, Client ruling), and the alarm then takes over the display
+    // the same way it does in `fabrica status` (render.ts's
+    // `formatStatusLine`).
+    const quiet = isQuietTooLong(state, events, now);
+
+    const checking = state === "checking" && !quiet;
     if (checking) {
       const startedAt = checkStartedAt(events);
       const elapsedMs = startedAt ? now - startedAt.getTime() : 0;
@@ -201,7 +205,6 @@ async function streamTranscript(ctx: {
     }
     wasChecking = checking;
 
-    const quiet = isQuietTooLong(state, events, now);
     if (quiet !== wasQuiet) {
       const last = lastActivityAt(events);
       stdout(quiet && last ? formatQuietNotice(now - last.getTime()) : "signal resumed");

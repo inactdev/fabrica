@@ -8,16 +8,17 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../index.ts";
-import { appendEvent } from "../record/index.ts";
+import { appendEvent, recordPath } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runDoCommand } from "./do-command.ts";
 import { runWatchCommand } from "./watch-command.ts";
+import { CHECKING_QUIET_CEILING_MS } from "./render.ts";
 import type { Brain } from "../index.ts";
 
 // See status-command.test.ts's matching test: runCheck is synchronous
@@ -226,6 +227,41 @@ test("runWatchCommand: a task mid-check streams its real elapsed time live, neve
 
   assert.ok(sawChecking, `expected a live "checking, Xs so far" line, got: ${JSON.stringify(io.out)}`);
   assert.ok(!io.out.some((line) => line.includes("quiet")), "a mid-check task is never flagged quiet");
+});
+
+// Client ruling, issue #12 review finding: past CHECKING_QUIET_CEILING_MS
+// (4h), a check no longer gets the benefit of the doubt - the only way to
+// catch a worker killed mid-check (reboot, OOM) or a check that hung.
+test("runWatchCommand: a check stuck past its own long ceiling is flagged quiet live, not shown as honest progress", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  // appendEvent always stamps the real current time, so a genuinely old
+  // "check-run started" event - the only way to exercise a ceiling this
+  // long without an actual multi-hour wait - has to be written directly.
+  const start = Date.now() - CHECKING_QUIET_CEILING_MS - 1;
+  const startEvent = {
+    occurredAt: new Date(start).toISOString(),
+    taskId: "t1",
+    name: "check-run",
+    details: { attempt: 1, phase: "started" },
+  };
+  appendFileSync(recordPath(recordHome), `${JSON.stringify(startEvent)}\n`);
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand(["t1"], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+  setTimeout(() => controller.abort(), 30);
+  await watchPromise;
+
+  assert.ok(io.out.some((line) => line.includes("quiet")), `expected the quiet alarm, got: ${JSON.stringify(io.out)}`);
+  assert.ok(!io.out.some((line) => /^checking, .* so far$/.test(line)), "the plain elapsed line steps aside for the alarm");
 });
 
 // Client ruling on issue #12's review finding: without a terminal notice,

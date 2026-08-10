@@ -1,14 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { appendFileSync, mkdtempSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../index.ts";
+import { appendEvent, recordPath } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runDoCommand } from "./do-command.ts";
 import { runStatusCommand } from "./status-command.ts";
+import { CHECKING_QUIET_CEILING_MS } from "./render.ts";
 
 // A real, separate detached process (see do-command.test.ts): runCheck is
 // synchronous execSync, so a slow check blocks that process's own event
@@ -114,6 +116,37 @@ test("runStatusCommand: a task mid-check says so plainly, with real elapsed time
   assert.match(out[0], new RegExp(`^${taskId}\\s`));
   assert.match(out[0], /checking, \d+s so far/);
   assert.doesNotMatch(out[0], /quiet/);
+});
+
+// Client ruling, issue #12 review finding: past CHECKING_QUIET_CEILING_MS
+// (4h), a check no longer gets the benefit of the doubt - the only way to
+// catch a worker killed mid-check (reboot, OOM) or a check that hung,
+// where the record's last event stays a "check-run started" forever.
+test("runStatusCommand: a check stuck past its own long ceiling is flagged quiet, not shown as honest progress", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  // appendEvent always stamps the real current time (rule 5: a caller can
+  // never smuggle its own occurredAt), so a genuinely old "check-run
+  // started" event - the only way to exercise a ceiling this long without
+  // an actual multi-hour wait - has to be written to the record file
+  // directly, bypassing that stamping.
+  const start = Date.now() - CHECKING_QUIET_CEILING_MS - 1;
+  const startEvent = {
+    occurredAt: new Date(start).toISOString(),
+    taskId: "t1",
+    name: "check-run",
+    details: { attempt: 1, phase: "started" },
+  };
+  appendFileSync(recordPath(recordHome), `${JSON.stringify(startEvent)}\n`);
+
+  const io = captureIo();
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.match(io.out[0], /checking/, "state itself is still checking");
+  assert.match(io.out[0], /quiet/, "but past the ceiling it reads as quiet");
+  assert.doesNotMatch(io.out[0], /checking, .* so far/, "the plain elapsed line steps aside for the alarm");
 });
 
 test("runStatusCommand: a red delivery shows failed, not delivered, and carries no verdict flag", async () => {
