@@ -155,8 +155,14 @@ Follows one task live: heartbeats as they happen, the worker's transcript
 in batches (one per finished attempt, not word by word), the same "quiet"
 and "checking, Xm so far" notices `status` uses. When the task reaches a
 state nothing further will happen from without the Client acting - delivered,
-failed, closed, or asking - it prints a plain notice saying so and, for
-`watch`, stops polling on its own. Stopping this yourself (Ctrl-C) only
+failed, closed, or asking - it prints a plain notice saying so. It then stops
+on its own only for the two states nothing can ever reopen: a closed task, and
+one that failed before it ever delivered. For `delivered`, `asking`, and a task
+that failed after delivering, the notice prints and the follow keeps running,
+deliberately - a `fix` verdict or a `fabrica answer` wakes those back up and
+this shows it when it happens - so you have to stop it yourself (Ctrl-C)
+rather than waiting for it to end. Never leave one of those blocking in the
+foreground while the Client is waiting on you. Stopping this yourself only
 ever stops watching; it can never touch the worker, which runs in an
 already-detached process this command only ever reads from, never signals.
 
@@ -191,8 +197,10 @@ $FABRICA_HOME/
                                answer given
     brief.md                  request + every answer, assembled - the
                                exact input the worker received
-    plan.md                   the worker's own plan, on a round that went
-                               straight to work instead of asking
+    plan.md                   reserved for the worker's own plan, on a round
+                               that went straight to work instead of asking -
+                               nothing writes it yet, so its absence is normal
+                               and not a sign the record is broken
     delivery.md               the delivery block, or a failure report -
                                only exists once the task has actually
                                delivered

@@ -78,6 +78,11 @@ by direct source reading (`answer-args.ts`, `answer-command.ts`,
 refusal paths on an undelivered/unasked task, by running both commands by
 hand against the same failed task and confirming their exact refusal text
 (`"has not been delivered yet"`, `"never asked a clarifying question"`).
+Also doesn't cover auto-discovery: this run handed the fresh agent
+`SKILL.md`'s path directly. The `.claude/skills/fabrica` symlink that lets
+Claude Code find it on its own was verified only by resolving it (it reads
+back `SKILL.md`/`TESTING.md`), not by a session that loaded the skill
+unprompted.
 
 **Why the same gap as before:** `src/brain/adapters/claude-code.md`'s
 "Process containment" section - the reference brain adapter always runs
