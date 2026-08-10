@@ -93,7 +93,7 @@ export async function main(
       io.stdout(VERIFY_HOOK_HELP);
       return 0;
     }
-    return runVerifyHookCommand(io);
+    return runVerifyHookCommand({ ...io, argv: rest });
   }
 
   io.stderr(`fabrica: unknown command "${command}".\n\n${TOP_LEVEL_HELP}`);

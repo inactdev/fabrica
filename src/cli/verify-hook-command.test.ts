@@ -27,6 +27,26 @@ function skillDirWith(harnessName: string, verifySource: string): string {
   return skillDir;
 }
 
+test("runVerifyHookCommand: an unknown flag is refused with exact instructions, not ignored", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({ recordHome: tempRecordHome(), argv: ["--json"], ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.match(io.err[0], /unknown flag "--json"/);
+  assert.match(io.err[0], /Usage: fabrica verify-hook/);
+});
+
+test("runVerifyHookCommand: a stray positional is refused, not silently ignored", async () => {
+  const io = captureIo();
+  const code = await runVerifyHookCommand({ recordHome: tempRecordHome(), argv: ["oops"], ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.match(io.err[0], /unexpected argument "oops"/);
+  assert.match(io.err[0], /verify-hook takes none/);
+});
+
 test("runVerifyHookCommand: an empty skill/ reports nothing to run", async () => {
   const io = captureIo();
   const code = await runVerifyHookCommand({

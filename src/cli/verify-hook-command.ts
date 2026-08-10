@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import { readEvents } from "../index.ts";
 import type { FabricaEvent } from "../index.ts";
 import { resolveRecordHome } from "./record-home.ts";
+import { CliError } from "./errors.ts";
 
 export interface HarnessVerifier {
   attemptRealEdit(cwd: string, targetFileName: string): void;
@@ -72,6 +73,25 @@ export async function loadHarnessVerifier(skillDir: string = SKILL_DIR): Promise
   return { verifier: null, loadFailures };
 }
 
+export const VERIFY_HOOK_USAGE = "fabrica verify-hook";
+
+/** `fabrica verify-hook` takes nothing: no flags, no positionals. Anything
+ * given is refused with the exact usage line rather than ignored, the
+ * same way status/log/watch refuse (status-command.ts's parseStatusArgs)
+ * - a silently swallowed `--json` reads as a supported flag that did
+ * nothing. */
+export function parseVerifyHookArgs(argv: string[]): void {
+  const [first] = argv;
+  if (first === undefined) return;
+  if (first.startsWith("-")) {
+    throw new CliError("bad-usage", `fabrica verify-hook: unknown flag "${first}". Usage: ${VERIFY_HOOK_USAGE}`);
+  }
+  throw new CliError(
+    "bad-usage",
+    `fabrica verify-hook: unexpected argument "${first}" - verify-hook takes none. Usage: ${VERIFY_HOOK_USAGE}`
+  );
+}
+
 export const VERIFY_HOOK_HELP = `Usage: fabrica verify-hook
 
 Proves whether the session config installed in this directory is
@@ -89,6 +109,9 @@ export interface RunVerifyHookOptions {
   recordHome?: string;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+  /** The command's own args, past `verify-hook` itself (main.ts already
+   * handles --help/-h before calling in). Defaults to none. */
+  argv?: string[];
   /** Test seam: bypasses the real harness discovery/spawn entirely. One
    * object, not two callbacks, so half a seam - a fake edit paired with
    * the real availability probe against the installed binary - can't be
@@ -116,6 +139,13 @@ function isAttemptOn(event: FabricaEvent, targetFileName: string): boolean {
 export async function runVerifyHookCommand(opts: RunVerifyHookOptions = {}): Promise<number> {
   const stdout = opts.stdout ?? ((line: string) => console.log(line));
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
+
+  try {
+    parseVerifyHookArgs(opts.argv ?? []);
+  } catch (err) {
+    stderr(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
 
   let verifier = opts.harness ?? null;
   if (!verifier) {
