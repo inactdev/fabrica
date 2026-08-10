@@ -23,6 +23,16 @@
 // template and would also pass without it is not testing the
 // template.
 //
+// The same discipline applies one level down: "nothing ran" is not
+// proof of denial by itself - it's also what a run looks like if the
+// model never attempted the commands at all (stopped early, refused,
+// errored). Every assertion in this file that claims something was
+// denied is paired with a check that it was genuinely attempted (a
+// real `permission_denials` entry naming it), not just absent from
+// what executed - see `assertGenuinelyDenied` below and the ordering
+// in the positive test. An assertion that would also pass if nothing
+// happened proves nothing about the boundary it claims to check.
+//
 // This costs a real API call per test and briefly patches a real,
 // machine-wide trust setting for a scratch directory (see
 // skill/<harness>/permission-boundary-verify.ts for why and how it's
@@ -90,6 +100,30 @@ function emptyAllowVariant(harness: string, scratchParent: string): string {
   return variantPath;
 }
 
+/** A negative control's whole point is that its attempts were denied,
+ * not that they were never tried - `executedArgs` empty is also what
+ * a run that skipped every attempt looks like, which would prove
+ * nothing. Requires both: nothing executed, AND every attempt shows
+ * up as a real `permission_denials` entry, so a run that produces
+ * neither (the model refused, stopped early, or errored before
+ * attempting anything) fails loudly instead of passing on an
+ * inconclusive result. */
+function assertGenuinelyDenied(harness: string, result: CheckResult, attempts: string[]): void {
+  assert.deepEqual(
+    result.executedArgs,
+    [],
+    `${harness}: a command actually ran - executedArgs was ${JSON.stringify(result.executedArgs)}`
+  );
+  for (const attempt of attempts) {
+    assert.ok(
+      result.deniedCommands.includes(attempt),
+      `${harness}: "${attempt}" was never genuinely attempted-and-denied - it's absent from both executedArgs ` +
+        `and deniedCommands (${JSON.stringify(result.deniedCommands)}), so this run proves nothing about denial, ` +
+        `only that nothing happened to run`
+    );
+  }
+}
+
 test("real session: the shipped settings.json actually runs do/status/log/watch and actually denies verdict/answer, including a chained bypass attempt", async (t) => {
   if (process.env.FABRICA_TEST_REAL_PERMISSIONS !== "1") {
     skipReason = "FABRICA_TEST_REAL_PERMISSIONS=1 not set";
@@ -119,6 +153,10 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
         return t.skip(skipReason);
       }
 
+      // Free commands: executedArgs containing an entry can only be
+      // true if the shim genuinely ran, so this observable alone
+      // proves the boundary let it through - nothing else to pair it
+      // with.
       for (const freeArgs of FREE_ARGS) {
         assert.ok(
           result.executedArgs.includes(freeArgs),
@@ -126,18 +164,12 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
         );
       }
 
-      for (const deniedArgs of ["verdict task-1 accept -m note", "answer task-1 -m answer-text"]) {
-        assert.equal(
-          result.executedArgs.includes(deniedArgs),
-          false,
-          `${harness}: "fabrica ${deniedArgs}" actually ran in a real session - it must be denied, not merely undocumented as allowed`
-        );
-      }
-      // Exact matches against the specific attempt strings, not a
-      // substring check - "verdict" appears in both the standalone
-      // and the chained attempt, so a substring match could be
-      // satisfied by the chained denial alone and pass vacuously for
-      // the standalone case even if the model never attempted it.
+      // Deciding commands, denial-genuineness checked first: exact
+      // matches against the specific attempt strings, not a substring
+      // check - "verdict" appears in both the standalone and the
+      // chained attempt, so a substring match could be satisfied by
+      // the chained denial alone and pass vacuously for the
+      // standalone case even if the model never attempted it.
       assert.ok(
         result.deniedCommands.includes("fabrica verdict task-1 accept -m note"),
         `${harness}: no real permission_denials entry named the standalone verdict attempt exactly - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
@@ -150,11 +182,21 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
         result.deniedCommands.includes("fabrica status && fabrica verdict task-1 accept -m note"),
         `${harness}: the chained "fabrica status && fabrica verdict ..." attempt was not denied as a whole - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
       );
-      assert.equal(
-        result.executedArgs.includes("verdict task-1 accept -m note"),
-        false,
-        `${harness}: the verdict half of the chained attempt actually ran - a chained bypass got through`
-      );
+      // Only meaningful now that the three checks above already prove
+      // each attempt was genuinely made and denied by the engine - an
+      // executedArgs check run on its own would also pass if the
+      // model had simply never tried these, which is exactly the
+      // vacuous-pass shape the Client's ruling on the negative
+      // controls called out. Here it adds real information: does the
+      // side effect (nothing ran) agree with the engine's own report,
+      // or did something slip through despite the reported denial.
+      for (const deniedArgs of ["verdict task-1 accept -m note", "answer task-1 -m answer-text"]) {
+        assert.equal(
+          result.executedArgs.includes(deniedArgs),
+          false,
+          `${harness}: "fabrica ${deniedArgs}" actually ran despite a real permission_denials entry for it - a bypass got through`
+        );
+      }
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -183,13 +225,7 @@ test("negative control: with no settings.json installed, none of the free comman
         return t.skip(skipReason);
       }
 
-      assert.deepEqual(
-        result.executedArgs,
-        [],
-        `${harness}: a free command ran with NO settings.json installed at all (executedArgs was ` +
-          `${JSON.stringify(result.executedArgs)}) - the positive test's passing result would not actually be ` +
-          `caused by the shipped template if this can happen`
-      );
+      assertGenuinelyDenied(harness, result, FREE_ATTEMPTS);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -220,13 +256,7 @@ test("negative control: with the shipped template's own allow list emptied, none
         return t.skip(skipReason);
       }
 
-      assert.deepEqual(
-        result.executedArgs,
-        [],
-        `${harness}: a free command ran with the shipped template's permissions.allow emptied (executedArgs was ` +
-          `${JSON.stringify(result.executedArgs)}) - the positive test's passing result would not actually be ` +
-          `caused by the template's own allow entries if this can happen`
-      );
+      assertGenuinelyDenied(harness, result, FREE_ATTEMPTS);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
       rmSync(variantParent, { recursive: true, force: true });

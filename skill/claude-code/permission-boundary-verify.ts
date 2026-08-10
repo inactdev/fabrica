@@ -31,7 +31,7 @@
 // `claude` is already logged in as.
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, renameSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
 
@@ -61,20 +61,27 @@ function readConfig(): ClaudeConfig {
 /** Temp-file-then-rename, never a truncating in-place write - a crash
  * between those two steps for a plain writeFileSync would leave the
  * machine-wide config empty; rename is atomic, so readers only ever
- * see the old file or the new one, never a half-written one. The temp
- * file is created with the target's own current mode passed directly
- * to writeFileSync - not written first under the process umask and
- * chmod'd after, which leaves a real window where a copy of the
- * Client's config sits world-readable, and leaves a stray world-
- * readable temp file behind forever if the process dies in that
- * window. Any failure between creating the temp file and the rename
- * unlinks it rather than leaving it behind. */
+ * see the old file or the new one, never a half-written one. Resolves
+ * `~/.claude.json` to its real path first: this machine's own dotfiles
+ * symlink other Claude Code config (see AGENTS.md's sharp-edge notes),
+ * so if the config itself is ever a symlink, `renameSync` must replace
+ * what it points at, not the symlink - replacing the symlink itself
+ * would silently detach it from whatever manages it (a Nix
+ * home-manager profile, in this environment) the first time this ever
+ * runs. The temp file is created with the resolved target's own
+ * current mode passed directly to writeFileSync - not written first
+ * under the process umask and chmod'd after, which leaves a real
+ * window where a copy of the Client's config sits world-readable - and
+ * both the write and the rename are covered by the same cleanup: any
+ * failure after the temp file exists unlinks it rather than leaving a
+ * partial copy of the Client's config behind. */
 function writeConfigAtomic(config: ClaudeConfig): void {
-  const target = configPath();
+  const configuredPath = configPath();
+  const target = existsSync(configuredPath) ? realpathSync(configuredPath) : configuredPath;
   const mode = statSync(target).mode;
   const tmpPath = `${target}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmpPath, JSON.stringify(config, null, 2), { mode });
   try {
+    writeFileSync(tmpPath, JSON.stringify(config, null, 2), { mode });
     renameSync(tmpPath, target);
   } catch (err) {
     rmSync(tmpPath, { force: true });
