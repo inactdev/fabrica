@@ -102,8 +102,15 @@ function readConfig(): ClaudeConfig {
  * partial copy of the Client's config behind. */
 function writeConfigAtomic(config: ClaudeConfig): void {
   const configuredPath = configPath();
-  const target = existsSync(configuredPath) ? realpathSync(configuredPath) : configuredPath;
-  const mode = statSync(target).mode;
+  const targetExists = existsSync(configuredPath);
+  const target = targetExists ? realpathSync(configuredPath) : configuredPath;
+  // Not reachable today (both callers read the config first, which
+  // throws ENOENT and is caught into a loud skip before this runs),
+  // but the branch above exists to handle a missing file, so this
+  // must too rather than silently assuming statSync(target) succeeds
+  // - a new, owner-only config on a machine that somehow reaches this
+  // path with none yet is the safe default, not a would-be crash.
+  const mode = targetExists ? statSync(target).mode : 0o600;
   const tmpPath = `${target}.tmp-${process.pid}-${Date.now()}`;
   try {
     writeFileSync(tmpPath, JSON.stringify(config, null, 2), { mode });
