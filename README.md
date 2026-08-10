@@ -61,6 +61,21 @@ round to answer them.
 That folds your answer into the brief and runs the task, this time in
 the foreground.
 
+While it runs, you can see where it stands without opening a record file
+yourself:
+
+    fabrica status         # every open task: id, project, state, age
+    fabrica log <id>       # one task's event history (--transcript for the raw output)
+    fabrica watch <id>     # follow that task while it runs
+
+`status` flags a delivered task as waiting on your verdict, shows a task
+that is running its check with how long it has been at it, and calls a
+working task that has recorded nothing for a while quiet - silence never
+gets to look like progress. `watch` follows one task the same way:
+heartbeats appear live, and the worker's own transcript arrives in a
+batch at the end of each attempt. Stopping `watch` (Ctrl-C) stops only
+the watching; the work runs on in its own process.
+
 When the work comes back, you get the last word:
 
     fabrica verdict <id> <accept|fix|wrong> [-m "<note>"]

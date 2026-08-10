@@ -3,8 +3,8 @@
 // at all). doTask's very first act, before any Worker runs, is
 // registerTask: it claims `<recordHome>/tasks/<id>/` and writes
 // request.md verbatim (src/record/tasks.ts). This watches that
-// directory from outside - the same append-only record any future
-// `fabrica status`/`log`/`watch` will read - rather than asking do()
+// directory from outside - the same append-only record
+// `fabrica status`/`log`/`watch` read - rather than asking do()
 // to report anything about itself.
 //
 // Matching by request.md's content, not by "whichever directory is

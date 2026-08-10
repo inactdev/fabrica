@@ -374,8 +374,9 @@ today that means the Client, by hand.
 ## Why `do()` doesn't return early
 
 SPEC.md describes `fabrica do` as detached: it prints the task id and
-returns immediately while work continues in the background, streaming to
-the transcript. This module's `do()` does not do that — once it decides
+returns immediately while work continues in the background, writing to
+the transcript (one batch per attempt — see SPEC.md). This module's
+`do()` does not do that — once it decides
 to proceed, it runs the whole loop to completion before resolving. (The
 one early return is the ask-first seam below, and it isn't detachment:
 nothing is left running, because no ProductionLine was ever cut.)
@@ -427,7 +428,7 @@ recorded too - `"ask-failed"` (details: `{ error }`, the thrown error's
 own message) - before the error is rethrown unchanged, so every direct
 caller still sees the real exception and only the record gains a trace
 of it (Client ruling, issue #8 follow-up: "a failed task must never look
-like a started one" - `queries.ts`'s `deriveState` reports this state as
+like a started one" - `queries.ts`'s `stateOf` reports this state as
 `"failed"`, and `src/cli/wait-for-ask-outcome.ts` watches for it
 directly rather than only ever finding out via a timeout). An empty
 result falls through to `runProductionRound` (do.ts), the exact same
@@ -573,8 +574,9 @@ Worker needs to fix the failure, and it is never written to the record.
 The cap is a bound on the re-serialization, not a fix for it: the record's
 shape and the receipt duplication itself are deliberately left alone, filed
 as issue #68 (which also carries the cleaner design - a delivery pointing at
-its receipt instead of copying it), deferred until issue #12's
-`status`/`log`/`watch` lane lands so the two don't collide.
+its receipt instead of copying it). It was deferred so it wouldn't collide
+with issue #12's `status`/`log`/`watch` lane; that lane has since landed,
+so #68 is now only waiting on being picked up.
 
 One consequence: the last attempt's `Receipt.outcome` can't be decided
 until *after* the attempt loop and the rule-9 gate check both finish (an
@@ -591,7 +593,7 @@ already correct. A `fix` verdict's round does the same, appending its own
 A delivered task stays open (`status()` still lists it, as `"delivered"`
 or `"failed"`) until this is called. Every ruling appends a
 `"verdict-recorded"` event, unconditionally — that event, not any
-side-channel state, is what `queries.ts`'s `deriveState` reads to decide
+side-channel state, is what `queries.ts`'s `stateOf` reads to decide
 whether a task is `"closed"`.
 
 - **`accept`** — the work is right. Closes the task.
@@ -612,7 +614,7 @@ whether a task is `"closed"`.
   running attempt count across the whole task, not a count that resets
   per fix. A second `"delivered"` event is appended with the fix round's
   own outcome and the **cumulative** receipts (prior + this round) —
-  `queries.ts`'s `deliveryOf`/`receiptsOf`/`deriveState` all read the
+  `queries.ts`'s `deliveryOf`/`receiptsOf`/`stateOf` all read the
   *last* `"delivered"` event for exactly this reason, not the first.
 
   This calls `reopenProductionLine` directly rather than going through
@@ -664,14 +666,16 @@ whether a task is `"closed"`.
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
-| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. |
+| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. Also ticks `onHeartbeat` every `DEFAULT_HEARTBEAT_INTERVAL_MS` while a `brain.work` call is in flight, so a long opaque await still shows up on the record (issue #12) - `do.ts` and `verdict.ts` both wire it to a `"heartbeat"` event - and fires `onCheckStarted` right before the check runs, so `"check-run"` lands twice per attempt (`details.phase: "started"`, then the result-carrying one) and a task genuinely mid-check is distinguishable from one that already finished a check (`queries.ts`'s `stateOf`). |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. |
 | `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
 | `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/deliver — shared with `answer.ts`'s resume path). |
 | `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong, re-enters the same line and worker on fix. |
-| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. `fixRoundOf` instead counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. |
+| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. `fixRoundOf` instead counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. |
+| `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
+| `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path and `answer()` both use. |
 
 `GateResult`, `Receipt`, `Delivery`, `FabricaTask`, `BrainAskResult`, and

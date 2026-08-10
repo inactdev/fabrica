@@ -102,10 +102,11 @@ to use in a script (`id=$(fabrica do "..." --project foo) || exit 1`).
 Once step 4 starts, this process's own exit code no longer reflects the
 task's eventual outcome for the "proceeds" case, which is the nature of
 detachment: by design, nothing is left waiting around to report delivery
-or failure here (see `fabrica status`/`log`/`watch`, issue #12 - not
-built yet). The "asks" and "`ask()` threw" cases are the exceptions:
-this process already knows and reports those outcomes directly (the
-failed one non-zero), since no work was ever started to detach from.
+or failure here - `fabrica status`/`log`/`watch` (below) are how you
+find out what happened. The "asks" and "`ask()` threw" cases are the
+exceptions: this process already knows and reports those outcomes
+directly (the failed one non-zero), since no work was ever started to
+detach from.
 
 ## `fabrica answer <taskId> -m "<text>"`
 
@@ -170,6 +171,92 @@ same-process `do()` call for this command to remember a brain from,
 unlike the contract tests - see `src/foreman/README.md`'s "What a fix
 costs" section).
 
+## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
+
+Issue #12 - the Client's eyes on a detached task, without reading record
+files himself. All three are strictly read-only over the record; none of
+them can reach a running worker.
+
+- **`status`** lists every open task, one line each: id, project, state,
+  age. A `delivered` task is flagged as awaiting the Client's verdict -
+  nothing else in the tool says a task is waiting on him. A `working`
+  task with no recorded activity for longer than `QUIET_THRESHOLD_MS` is
+  flagged "quiet" rather than left looking identical to progress; a
+  `checking` task instead says so with its real elapsed time and is
+  exempt from the quiet alarm below `CHECKING_QUIET_CEILING_MS` (4
+  hours), since that silence has a known, honest explanation; past that
+  ceiling `isQuietTooLong` returns true for it too and the alarm takes
+  over the line, because a check still running after that long is the one
+  case a live-elapsed reading can't explain (a killed worker, or a check
+  hung inside `runCheck`'s `execSync`). The pre-work `brain.ask()`
+  window is exempt for the same reason - `stateOf` already reads
+  "working" from `task-received` onward, so `isQuietTooLong` also waits
+  for a `"work-started"` event before it will raise the alarm. It takes
+  no arguments at all, and refuses any it is given (`parseStatusArgs`)
+  instead of ignoring them.
+- **`log <id>`** prints one task's event history in order, each event
+  rendered as prose judged per event name rather than its stored
+  `details` dumped raw, and a consecutive run of heartbeats collapsed
+  into one "14 heartbeats over 3m" line (a lone heartbeat still
+  reads as an ordinary one). `--transcript` adds the worker's raw
+  transcript entries.
+- **`watch <id>`** polls the record and prints new transcript entries and
+  heartbeats as they land, plus the same quiet and mid-check notices
+  `status` uses. A backlog of heartbeats found on the first poll - normal
+  when attaching to a task that has been running a while - collapses into
+  the one "N heartbeats over 3m" line `log` uses, so catching up never
+  buries the transcript entries printed just above it. When the task
+  reaches a state nothing further is expected from, it prints a terminal
+  notice (`formatTerminalNotice`) instead of polling on in a silence
+  indistinguishable from a hang: `delivered`, and a `failed` task that
+  reached a real delivery, say a `fix` verdict can still wake the worker;
+  `asking` points at `fabrica answer`; and a `failed` task that never
+  delivered says so plainly - `recordVerdict` would refuse a ruling on
+  it. The loop ends by itself for the two states that provably cannot
+  change again: `closed`, and that same never-delivered `failed` task
+  (`fabrica verdict ... fix` refuses it with `not-delivered`, `fabrica
+  answer` with `no-questions-pending`, so nothing can move it). Every
+  other terminal state keeps polling, and the notice re-fires whenever
+  the state genuinely changes, so a second delivery after a `fix` still
+  announces itself. **Stopping the watch never stops the
+  work**: this command only ever *reads* `events.jsonl` and
+  `transcript.log`, so Ctrl-C ends the polling loop and nothing else.
+  Never add anything here that reaches toward the detached process
+  `fabrica do` spawned.
+
+`render.ts` is why all three agree on wording: age (`formatAge`), the
+quiet sentence (`formatQuietNotice`), the terminal notice
+(`formatTerminalNotice`), the collapsed heartbeat run
+(`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s
+catch-up), the status line, the event line, and the transcript line each
+have exactly one definition, so an edit to any of them can't drift
+between commands.
+
+Both `status` and `watch` read the record once per render, then derive
+everything else from the events already in hand: `status` takes
+`eventsByTask(recordHome)` (one pass over the whole log, grouped by task
+id) instead of re-reading it per task, and both call `stateOf(events)`
+(the same derivation `foreman.status()` runs) rather than asking the
+record again - heartbeats make `events.jsonl` grow steadily while a task
+runs, so a per-task or per-poll re-read gets expensive fast.
+
+`watch` goes one step further, because once per render is still twice a
+second for as long as the Client watches: it holds one `followTask`
+follower (`src/foreman/follow.ts`, over `src/record/tail.ts`'s byte-offset
+line reader) for the whole run, so each line of `transcript.log` and
+`events.jsonl` is read and parsed exactly once no matter how long the
+watch lasts, and a poll costs the bytes that landed since the last one
+rather than the whole file. It still gets the task's *full* history back
+every poll - `stateOf`, `isQuietTooLong` and the terminal notice are all
+derived from the whole event list - the follower just doesn't re-read the
+part it already has.
+
+The record home comes from `FABRICA_HOME` for these too, and per this
+module's layering rule they reach the record only through
+`src/index.ts`'s re-exports (`readTranscript`, `followTask`,
+`eventsByTask`, `stateOf`, and `foreman.events`), never `src/record`
+directly.
+
 ## Why `bin.mjs` isn't a shebang'd `.ts` file
 
 The obvious shebang, `#!/usr/bin/env -S node --import tsx/esm`, works
@@ -220,8 +307,8 @@ any Worker runs, is `registerTask`: it claims
 `<recordHome>/tasks/<id>/` and writes `request.md` verbatim
 (`src/record/tasks.ts`) - synchronous, milliseconds, long before any
 real work starts. `watch-for-task-id.ts` watches that directory from
-outside (the same append-only record any future `fabrica status`/`log`/
-`watch` will read) for a new folder whose `request.md` matches the task
+outside (the same append-only record `fabrica status`/`log`/`watch`
+read) for a new folder whose `request.md` matches the task
 text just submitted, and resolves with its name. This is deliberately
 an outside observer, not a change to `doTask` - it costs nothing at the
 library layer and means detachment can be built, and later removed or
@@ -271,7 +358,7 @@ calls `runTask`.
 | --- | --- |
 | `bin.mjs` | The installed executable. Two lines of real work - see above. |
 | `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh. |
-| `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand (#12: status/log/watch) adds one more branch here, the way #8's `answer` did. |
+| `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand adds one more branch here, the way `answer` (#8) and `status`/`log`/`watch` (#12) each did. |
 | `help.ts` | Top-level help text and the list of known commands. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
 | `do-command.ts` | Ties config, project resolution, the detached spawn, and the ask-outcome wait together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
@@ -279,6 +366,13 @@ calls `runTask`.
 | `answer-command.ts` | Resolves the record home and calls `Foreman.answer` for `fabrica answer`; `ANSWER_HELP` is `answer --help`'s text. |
 | `verdict-args.ts` | Parses `fabrica verdict`'s arguments. |
 | `verdict-command.ts` | Resolves the record home and calls `Foreman.verdict` for `fabrica verdict`; `VERDICT_HELP` is `verdict --help`'s text. |
+| `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. |
+| `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
+| `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
+| `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
+| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its two exit-by-itself states (`closed`, and a `failed` task that never delivered), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
+| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, `QUIET_THRESHOLD_MS`, and `CHECKING_QUIET_CEILING_MS`. |
+| `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |
@@ -286,5 +380,5 @@ calls `runTask`.
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether the task asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
 | `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`. |
-| `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `project-not-found`, `spawn-failed`, `registration-timeout`. |
+| `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `unknown-task`, `project-not-found`, `spawn-failed`, `registration-timeout`. |
 | `helpers/fake-run-task-entry.ts` | Test-only stand-in for `run-task-entry.ts`, using `fakeBrain()` instead of the real adapter - lets `spawn-detached.test.ts` and `do-command.test.ts` exercise the real spawn-and-discover mechanism as a real separate process, without ever invoking a real coding agent. A taskText containing `ASK_ME_SOMETHING` makes its fake brain ask a clarifying question (issue #8) instead of proceeding, and one containing `ASK_FAILS_SOMETHING` makes its `ask()` throw, since there's no other channel to configure a fake running in a separate process. |

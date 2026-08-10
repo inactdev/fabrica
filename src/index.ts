@@ -12,6 +12,12 @@ export type { ForemanErrorCode } from "./foreman/index.ts";
 export { DEFAULT_ATTEMPTS } from "./foreman/index.ts";
 export { DEFAULT_CHECK_COMMAND } from "./foreman/index.ts";
 export { fixRoundOf } from "./foreman/index.ts";
+export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
+export { readTranscript, eventsByTask, stateOf } from "./foreman/index.ts";
+export { followTask } from "./foreman/index.ts";
+export type { TaskFollower, TaskProgress } from "./foreman/index.ts";
+export type { TranscriptEntry } from "../contract/surface.ts";
+export type { FabricaTask, FabricaEvent, FabricaEventName } from "../contract/surface.ts";
 export { validateDelivery, diffFiles, DeliveryError } from "./delivery/index.ts";
 export type { DeliveryErrorCode } from "./delivery/index.ts";
 

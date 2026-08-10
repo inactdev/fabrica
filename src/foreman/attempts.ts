@@ -10,6 +10,14 @@ import type { Brain, TranscriptEntry } from "../brain/index.ts";
 import { runCheck } from "./check.ts";
 import type { GateResult, Receipt } from "../../contract/surface.ts";
 
+/** How often a "heartbeat" event lands while a Worker's single `brain.work`
+ * call is in flight (issue #12) - that call is one long, opaque await with
+ * no incremental progress of its own to report, so this is the only signal
+ * that separates "still going" from "silently stuck" until it resolves.
+ * `fabrica status`/`watch` treat a gap much longer than this as "quiet too
+ * long" rather than assuming progress. */
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+
 export interface AttemptLoopResult {
   /** One per attempt actually run, in order. Each entry's `outcome`
    * reflects its own check result; the caller overwrites the last entry
@@ -37,8 +45,20 @@ export async function runAttempts(opts: {
    * from where the task's prior rounds left off, instead of restarting
    * at 1, so the record shows one running count across the whole task. */
   startAttempt?: number;
+  /** Fires the instant a check starts running, before its (synchronous,
+   * blocking) result is known - issue #12's "say what it's doing": with
+   * this, status/watch can report "checking, Xm so far" using a real
+   * recorded start time instead of guessing, and correctly stay silent
+   * about "quiet too long" for a check that is simply still running. */
+  onCheckStarted?: (attempt: number) => void;
   onCheckRun?: (attempt: number, gate: GateResult) => void;
   onTranscript?: (transcript: TranscriptEntry[]) => void;
+  /** Fires roughly every `heartbeatIntervalMs` while a `brain.work` call
+   * for `attempt` is still in flight. Omitted, no heartbeat runs. */
+  onHeartbeat?: (attempt: number) => void;
+  /** Test-only override of DEFAULT_HEARTBEAT_INTERVAL_MS - a short value
+   * lets a test observe a heartbeat without waiting 15 real seconds. */
+  heartbeatIntervalMs?: number;
 }): Promise<AttemptLoopResult> {
   const {
     brain,
@@ -50,8 +70,11 @@ export async function runAttempts(opts: {
     stopEarlyOnGreen,
     initialSession,
     startAttempt,
+    onCheckStarted,
     onCheckRun,
     onTranscript,
+    onHeartbeat,
+    heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
   } = opts;
 
   const receipts: Receipt[] = [];
@@ -65,12 +88,15 @@ export async function runAttempts(opts: {
     const t0 = Date.now();
 
     const thisBrief = lastGate && !lastGate.green ? correctionBrief(brief, lastGate) : brief;
-    const workResult = await brain.work(thisBrief, workdir, session ? { session } : undefined);
+    const workResult = await withHeartbeat(onHeartbeat && (() => onHeartbeat(attempt)), heartbeatIntervalMs, () =>
+      brain.work(thisBrief, workdir, session ? { session } : undefined)
+    );
     session = workResult.session ?? session;
     if (workResult.transcript.length > 0) onTranscript?.(workResult.transcript);
     if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
 
     const durationMs = Date.now() - t0;
+    onCheckStarted?.(attempt);
     const gate = runCheck(workdir, check);
     onCheckRun?.(attempt, gate);
     lastGate = gate;
@@ -125,6 +151,38 @@ export function gateForRecord(gate: GateResult): GateResult {
     green: gate.green,
     output: `[truncated, showing last ${kept} of ${total} bytes]\n${tail}`,
   };
+}
+
+/** Runs `fn`, calling `tick` on an interval for as long as it's pending.
+ * The interval is cleared the instant `fn` settles, success or failure -
+ * a heartbeat only ever means "still waiting," never "just finished."
+ *
+ * A throwing `tick` is swallowed on purpose. Every tick runs from a timer
+ * callback, not from the awaited path, so a throw there is an uncaught
+ * exception that kills the whole (detached) worker process mid-task -
+ * skipping the caller's teardown, and leaving the record with no
+ * "delivered"/"failed" event and the ProductionLine's worktree orphaned.
+ * The real trigger is unexceptional: `appendEvent` throws on a short
+ * write, ENOSPC, or EACCES. A missed heartbeat costs nothing more than a
+ * `fabrica status` reading "quiet"; a lost task costs the work. */
+async function withHeartbeat<T>(
+  tick: (() => void) | undefined,
+  intervalMs: number,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (!tick) return fn();
+  const timer = setInterval(() => {
+    try {
+      tick();
+    } catch {
+      // deliberately ignored - see above
+    }
+  }, intervalMs);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 /** Told exactly what failed (SPEC.md step 5), never a bare "try again." */

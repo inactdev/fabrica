@@ -1,5 +1,7 @@
 export { recordPath, appendEvent } from "./append.ts";
 export { readEvents, readEventsForTask } from "./read.ts";
+export { createLineTail } from "./tail.ts";
+export type { LineTail } from "./tail.ts";
 export {
   registerTask,
   taskDir,

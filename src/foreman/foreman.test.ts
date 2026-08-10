@@ -66,7 +66,9 @@ test("events() returns this task's events only, in order", async () => {
   assert.ok(eventsA.every((e) => e.taskId === taskA.id));
   assert.deepEqual(
     eventsA.map((e) => e.name),
-    ["task-received", "line-cut", "work-started", "check-run", "delivered"]
+    // "check-run" lands twice per attempt: once when the check starts
+    // (details.phase === "started", issue #12) and once with its result.
+    ["task-received", "line-cut", "work-started", "check-run", "check-run", "delivered"]
   );
 
   const eventsB = await foreman.events(taskB.id);
@@ -130,7 +132,7 @@ test("answer() on an unknown task id refuses plainly", async () => {
 
 // Client ruling, issue #8 follow-up: a task whose brain.ask() itself
 // threw must show up as failed, not silently stuck at "working" forever
-// (deriveState's own fallback) or missing from status() entirely.
+// (stateOf's own fallback) or missing from status() entirely.
 test("status() lists a task whose ask() threw as failed", async () => {
   const recordHome = freshHome();
   const foreman = createForeman({ recordHome });

@@ -9,6 +9,7 @@
 export type CliErrorCode =
   | "bad-usage"
   | "unknown-command"
+  | "unknown-task"
   | "project-not-found"
   | "spawn-failed"
   | "registration-timeout";

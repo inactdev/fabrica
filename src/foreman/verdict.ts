@@ -167,7 +167,7 @@ async function runFixRound(
     const protectedPathApplies = check === DEFAULT_CHECK_COMMAND;
     if (protectedPathApplies) requireGateBaseline(line.workdir, baseCommit);
 
-    appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix" } });
+    appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
     const { receipts: newReceipts, lastGate, declaredGateChanges: roundGateChanges } = await runAttempts({
       brain,
@@ -179,8 +179,14 @@ async function runFixRound(
       stopEarlyOnGreen: true,
       initialSession: lastSession,
       startAttempt: priorReceipts.length + 1,
+      onCheckStarted: (attempt) => {
+        appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, phase: "started" } });
+      },
       onCheckRun: (attempt, gate) => {
         appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, green: gate.green } });
+      },
+      onHeartbeat: (attempt) => {
+        appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
       },
       onTranscript: (transcript) => {
         appendTaskFile(
