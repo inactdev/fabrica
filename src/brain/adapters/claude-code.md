@@ -237,6 +237,36 @@ runs with - equivalent while the credential arrives via the
 environment, but the guard needs realigning if the gap is ever closed by
 baking a credential into the image instead.
 
+### The worker image, and rebuilding it after a toolchain change
+
+`docker/Dockerfile` in this directory builds `DEFAULT_IMAGE`
+(`fabrica-claude-code:latest`). It is not built automatically by
+anything - `runContained` expects to find it already there - so build it
+once before any contained call, and rebuild it whenever that file
+changes, from the repository root:
+
+    docker build -t fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .
+
+Everything in it is digest- or version-pinned, so a rebuild that changed
+nothing installs exactly what the last one did.
+
+Besides the CLI itself the image carries the toolchains a Worker needs
+to run a project's own check command inside its container (issue #86) -
+a Worker that cannot run the checks writes blind and burns fix rounds.
+Today that is git (for the read-only `.git` mount) and Go, copied from
+the official Go image rather than `apk add go`, which on this base is
+1.25.10 and older than a real project pins. Verified on the real machine
+after a rebuild:
+
+    docker run --rm fabrica-claude-code:latest go version
+    go version go1.26.8 linux/arm64
+
+and, under the shape `work()` actually runs with - an unprivileged
+`--user`, a bind-mounted `$HOME`, and a mounted `workdir` - `go test
+./...` passes in a small module there, so the toolchain is usable and
+not merely present. One image carrying every toolchain is the short-term
+answer; per-project worker images are a separate, later issue.
+
 ### Why `--output-format stream-json --verbose`, not `json`
 
 `--output-format json` prints one object after the whole call finishes:
