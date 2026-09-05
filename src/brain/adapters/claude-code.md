@@ -205,37 +205,44 @@ that same containment, both closed:
   (nothing yet deletes that directory when the task's line is torn
   down).
 
-One real thing still doesn't work end to end: authentication. The
-host's installed `claude` binary is a native macOS executable and can
-never run inside a Linux container - verified via `file` on it. What
-does work, also verified: installing that same tool's own Linux build
-via its public npm package inside a container (`docker/Dockerfile` in
-this directory, built once as `DEFAULT_IMAGE`) - it starts, parses
-arguments, and reports a version. What it can't do yet is log in: a
-fresh container has no credential configured at all, verified live
-(`claude auth status` inside the built image reports "Not logged in").
-That's an ordinary bootstrap requirement for any brand-new install of
-an authenticated CLI, not a special containment-caused breakage the way
-`sandbox-exec`'s Keychain failure was.
+Authentication now works end to end, and it took one deliberate
+decision to get there. The host's installed `claude` binary is a native
+macOS executable and can never run inside a Linux container - verified
+via `file` on it. What does work, also verified: installing that same
+tool's own Linux build via its public npm package inside a container
+(`docker/Dockerfile` in this directory, built once as `DEFAULT_IMAGE`).
+A fresh container has no credential of its own, which is the ordinary
+bootstrap requirement for any brand-new install of an authenticated CLI,
+not a containment-caused breakage the way `sandbox-exec`'s Keychain
+failure was.
 
-Closing it means giving this adapter's container a non-Keychain
-credential - `claude setup-token` generates a long-lived token meant for
-exactly this kind of headless use - which is a live-credential decision
-for whoever configures Fabrica, not something this file decides on its
-own. Until that's done, real tasks routed through this adapter fail at
-the authentication step; `claude-code.test.ts`'s capability-spike test
-checks the built image's own auth status before attempting real work,
-and skips (does not fail) rather than lie about proving this when it
-isn't true. That skip is deliberately loud rather than silent - the same
-file's `after()` hook prints a banner naming the reason whenever the
-spike didn't run - and a fixture-parity test covers the fake in the
-meantime; see `README.md`'s "Guarding a fake against drift from the real
-thing" for both and why they exist. One caveat on that guard, noted in
-the test itself: it probes auth as the image's own default user and
-`$HOME`, not the `--user`/mounted-home combination `work()` actually
-runs with - equivalent while the credential arrives via the
-environment, but the guard needs realigning if the gap is ever closed by
-baking a credential into the image instead.
+The gap is closed (issue #85) by forwarding a credential from the host's
+environment, never by baking one into the image. `claude setup-token`
+mints a long-lived token meant for exactly this kind of headless use;
+whoever configures Fabrica stores it somewhere their shell exports from
+(`~/.fabrica/brain.env`, mode 600, sourced from their shell profile, is
+the shape this was set up with) and `index.ts`'s `defaultBrainAdapter()`
+forwards exactly one variable, `CLAUDE_CODE_OAUTH_TOKEN`, into
+`ClaudeCodeAdapterOptions.env` when it is set in this process's
+environment. Nothing else from the host environment crosses the
+container wall - that option is an explicit allowlist, not a
+pass-through, and `index.test.ts` asserts both halves: forwarded when
+set, and an empty options object (not a filtered one) when it is unset,
+even with other credentials sitting in the same environment. With the
+variable unset, behavior is exactly what it was before: the adapter runs
+with no credential and real tasks fail at the authentication step.
+
+Because the token arrives by environment rather than being baked in, the
+caveat on `claude-code.test.ts`'s capability-spike guard still holds as
+written: it probes auth as the image's own default user and `$HOME`,
+which is equivalent to the `--user`/mounted-home combination `work()`
+really uses only while the credential travels this way. That guard runs
+`docker run` without forwarding the variable, so it still skips unless
+the image itself is authenticated; the skip is deliberately loud (the
+same file's `after()` hook prints a banner naming the reason) and a
+fixture-parity test covers the fake in the meantime - see `README.md`'s
+"Guarding a fake against drift from the real thing" for both and why
+they exist.
 
 ### Why `--output-format stream-json --verbose`, not `json`
 
