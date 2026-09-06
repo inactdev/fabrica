@@ -36,7 +36,13 @@ FROM golang@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1
 FROM node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
 # git so the Worker can actually use the read-only .git mount
 # worktree-git.ts provides (status/log/diff against the real history).
-RUN apk add --no-cache git
+# bash because the CLI's own Bash tool requires a real one (issue #89):
+# this base is Alpine, whose /bin/sh is busybox, and against busybox alone
+# every command the Worker runs fails with "No suitable shell found" -
+# verified live, and verified that setting SHELL does not substitute for
+# the binary. Without it the Worker cannot run the project's check at all,
+# which is the whole point of the toolchains above.
+RUN apk add --no-cache git bash
 RUN npm install -g @anthropic-ai/claude-code@2.1.222
 COPY --from=go /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:$PATH"
