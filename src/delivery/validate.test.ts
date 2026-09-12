@@ -27,6 +27,17 @@ test("an empty files array is not treated as missing", () => {
   assert.doesNotThrow(() => validateDelivery({ ...complete, files: [] }));
 });
 
+test("an Inspector report is accepted when it has a known verdict and text", () => {
+  assert.doesNotThrow(() =>
+    validateDelivery({ ...complete, outcome: "inspection-red", inspection: { verdict: "red", report: "lint failed" } })
+  );
+});
+
+test("a malformed Inspector report is rejected", () => {
+  assert.throws(() => validateDelivery({ ...complete, inspection: { verdict: "maybe", report: "text" } }), /inspection\.verdict/);
+  assert.throws(() => validateDelivery({ ...complete, inspection: { verdict: "red", report: 42 } }), /inspection\.report/);
+});
+
 for (const field of [
   "outcome",
   "confidence",

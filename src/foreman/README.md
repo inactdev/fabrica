@@ -5,8 +5,9 @@
 public entry point here from `contract/`). It is the delegator LANGUAGE.md
 calls the Foreman: it registers a task, cuts a ProductionLine, runs a
 Worker for a counted number of attempts, verifies the result with the
-project's own check, and writes a delivery — wiring `src/record`,
-`src/line`, `src/brain`, and `src/config` into the one loop SPEC.md calls
+project's own check, hands a configured green branch to Inspector, and
+writes a delivery. It wires `src/record`, `src/line`, `src/brain`,
+`src/config`, and `src/inspector` into the one loop SPEC.md calls
 "fabrica do". It is pure code: it delegates and counts, it never decides
 anything a model should decide instead.
 
@@ -29,6 +30,9 @@ const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
   See "`verdict(taskId, ruling, note?)`" below for why `verdict()` itself
   has no brain parameter of its own, and "The ask-first seam" for
   `answer()`'s identical reasoning.
+- **`inspector`** — an optional test seam for Inspector's handoff. Omit
+  it in production to use the installed command; pass a fake to test the
+  three Inspector verdicts without a real command or GitHub.
 
 The return value satisfies `Foreman` (`contract/surface.ts`): `do`,
 `answer`, `deliveryOf`, `receiptsOf`, `verdict`, `status`, `events`,
@@ -99,8 +103,8 @@ return early" below.
    outcome is forced to `discarded-protected-path` regardless of whether
    the check went green - recorded honestly, not thrown away (see "Rule
    9: blocked by CI, not by Fabrica's own mark" below).
-6. **Commits, builds, and validates the delivery**: any changes still
-   sitting uncommitted in the worktree are committed onto the
+6. **Commits, hands off, builds, and validates the delivery**: any changes
+   still sitting uncommitted in the worktree are committed onto the
    ProductionLine's branch (`commit.ts`) before that worktree is
    destroyed - see `src/delivery/README.md`'s "files-list-vs-teardown
    decision" for why. This runs for every outcome uniformly, including
@@ -111,6 +115,21 @@ return early" below.
    branch, rename it, or otherwise flag it for CI - see "Rule 9: blocked
    by CI, not by Fabrica's own mark" below for why that mark was tried
    and then deliberately removed.
+   When the final Fabrica check is green and this revision has
+   `.inspector.json`, the Foreman records `inspector-called` and invokes
+   Inspector on this checked-out branch before a delivery exists.
+   Inspector's green report proceeds to the normal delivery; a red report
+   becomes an `inspection-red` delivery with its report in both the
+   delivery and `inspection-finished` record event, so the Client can
+   rule `fix` and reopen the same warm Worker and branch. A refusal is
+   neither green nor red: it records `inspection-finished` with the
+   refusal reason, leaves no delivery for a Client verdict, and reports
+   task state `refused` until an operator resolves the external problem.
+   A project with no `.inspector.json` records `inspection-skipped` and
+   takes the pre-Inspector delivery path unchanged. Rule 9's
+   `discarded-protected-path` outcome and a red Fabrica check never call
+   Inspector, because Fabrica has not reached its own green handoff point.
+
    `delivery.ts` builds the `Delivery` object from the branch's own diff
    (pinned to the commit the line was cut from, via `src/delivery`'s
    `baseCommitOf`), and `src/delivery`'s `validateDelivery` (CONTRACT
@@ -662,13 +681,14 @@ whether a task is `"closed"`.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. Also ticks `onHeartbeat` every `DEFAULT_HEARTBEAT_INTERVAL_MS` while a `brain.work` call is in flight, so a long opaque await still shows up on the record (issue #12) - `do.ts` and `verdict.ts` both wire it to a `"heartbeat"` event - and fires `onCheckStarted` right before the check runs, so `"check-run"` lands twice per attempt (`details.phase: "started"`, then the result-carrying one) and a task genuinely mid-check is distinguishable from one that already finished a check (`queries.ts`'s `stateOf`). |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. |
+| `inspection.ts` | Records the configured Inspector handoff and its green, red, or refused result. A refusal reaches the record and task status but never becomes a red delivery. |
 | `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
 | `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/deliver — shared with `answer.ts`'s resume path). |
 | `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. |

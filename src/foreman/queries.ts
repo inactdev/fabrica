@@ -129,11 +129,22 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
         state = details?.phase === "started" ? "checking" : "working";
         break;
       }
+      case "inspector-called":
+        state = "working";
+        break;
+      case "inspection-finished": {
+        const details = event.details as { verdict?: string } | undefined;
+        state = details?.verdict === "refused" ? "refused" : "working";
+        break;
+      }
+      case "inspection-skipped":
+        state = "working";
+        break;
       case "delivered": {
         // A fix round appends a second "delivered" event on the same
         // task; the forward pass naturally lands on the last one.
         const details = event.details as { outcome?: Delivery["outcome"] } | undefined;
-        state = details?.outcome === "done" ? "delivered" : "failed";
+        state = details?.outcome === "done" || details?.outcome === "inspection-red" ? "delivered" : "failed";
         break;
       }
       case "verdict-recorded": {

@@ -30,13 +30,13 @@ import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { runProductionRound } from "./do.ts";
 import type { AskedDetails } from "./ask.ts";
-import type { FabricaTask } from "../../contract/surface.ts";
+import type { FabricaTask, Inspector } from "../../contract/surface.ts";
 
 export async function answerTask(
   recordHome: string,
   taskId: string,
   answerText: string,
-  opts: { brain: Brain }
+  opts: { brain: Brain; inspector?: Inspector }
 ): Promise<FabricaTask> {
   const events = readEventsForTask(recordHome, taskId);
   if (events.length === 0) {
@@ -121,6 +121,7 @@ export async function answerTask(
     totalAttempts: details.totalAttempts,
     explicitAttempts: details.explicitAttempts,
     isRetry,
+    inspector: opts.inspector,
   });
 }
 

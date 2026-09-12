@@ -18,14 +18,15 @@ import { runAttempts } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
-import type { Delivery, FabricaTask } from "../../contract/surface.ts";
+import { handToInspector } from "./inspection.ts";
+import type { Delivery, FabricaTask, Inspection, Inspector } from "../../contract/surface.ts";
 
 export { DEFAULT_ATTEMPTS } from "./ask.ts";
 
 export async function doTask(
   recordHome: string,
   taskText: string,
-  opts: { project: string; attempts?: number; brain?: Brain }
+  opts: { project: string; attempts?: number; brain?: Brain; inspector?: Inspector }
 ): Promise<FabricaTask> {
   // SPEC.md steps 1-2: register the task, then give the brain one pass
   // at the bare task text (issue #8) before any ProductionLine exists.
@@ -53,6 +54,7 @@ export async function doTask(
     totalAttempts,
     explicitAttempts,
     isRetry: false,
+    inspector: opts.inspector,
   });
 }
 
@@ -67,9 +69,16 @@ export async function runProductionRound(
   recordHome: string,
   taskId: string,
   brief: string,
-  ctx: { project: string; brain: Brain; totalAttempts: number; explicitAttempts: boolean; isRetry: boolean }
+  ctx: {
+    project: string;
+    brain: Brain;
+    totalAttempts: number;
+    explicitAttempts: boolean;
+    isRetry: boolean;
+    inspector?: Inspector;
+  }
 ): Promise<FabricaTask> {
-  const { project, brain, totalAttempts, explicitAttempts, isRetry } = ctx;
+  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector } = ctx;
   // The delivery's summary/evidence want the Client's original one-line
   // ask, not the full brief a resumed round's worker receives - `brief`
   // for an answer.ts retry is request.md plus the whole "## Clarification"
@@ -178,7 +187,7 @@ export async function runProductionRound(
     const undeclaredGateChange =
       protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;
 
-    const outcome: Delivery["outcome"] = undeclaredGateChange
+    let outcome: Delivery["outcome"] = undeclaredGateChange
       ? "discarded-protected-path"
       : lastGate.green
         ? "done"
@@ -234,6 +243,17 @@ export async function runProductionRound(
       return { id: taskId, state: "failed" };
     }
 
+    // A configured project reaches Inspector only after Fabrica committed
+    // the Worker's green result. Inspector owns publishing from here; the
+    // Foreman never pushes the branch itself. A refusal is not a red
+    // verdict and therefore is not delivered for a Client ruling.
+    let inspection: Inspection | undefined;
+    if (outcome === "done") {
+      inspection = await handToInspector(recordHome, taskId, line, inspector);
+      if (inspection?.verdict === "refused") return { id: taskId, state: "refused" };
+      if (inspection?.verdict === "red") outcome = "inspection-red";
+    }
+
     // CONTRACT rule 9 (Client ruling, superseding the original
     // force-reset-and-patch design, and then again superseding a
     // branch-rename design): an undeclared gate change is never force-
@@ -258,6 +278,7 @@ export async function runProductionRound(
       branch: line.branch,
       files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
+      inspection,
     });
 
     // Never present a malformed delivery as done (rule 4) — prove the
@@ -273,7 +294,7 @@ export async function runProductionRound(
       details: { outcome: delivery.outcome, delivery, receipts, project: line.project, totalAttempts, baseCommit },
     });
 
-    return { id: taskId, state: outcome === "done" ? "delivered" : "failed" };
+    return { id: taskId, state: outcome === "done" || outcome === "inspection-red" ? "delivered" : "failed" };
   } finally {
     destroyProductionLine(line);
   }

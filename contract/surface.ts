@@ -97,6 +97,19 @@ export interface GateResult {
   output: string;
 }
 
+/** Inspector's independent verdict after Fabrica's own checks are green.
+ * `refused` is deliberately separate from `red`: no verdict was reached. */
+export interface Inspection {
+  verdict: "green" | "red" | "refused";
+  report: string;
+}
+
+/** The socket for Inspector's local handoff. Inspector reads HEAD from the
+ * checked-out ProductionLine and owns any later publishing itself. */
+export interface Inspector {
+  inspect(request: { branch: string; workdir: string }): Promise<Inspection>;
+}
+
 /** One attempt's structured receipt (rules 5). Cost is recorded from day one. */
 export interface Receipt {
   task: string;
@@ -114,7 +127,7 @@ export interface Receipt {
 
 /** What reaches the Client (rule 4). All fields required. */
 export interface Delivery {
-  outcome: "done" | "failure-report" | "discarded-protected-path";
+  outcome: "done" | "failure-report" | "discarded-protected-path" | "inspection-red";
   confidence: number;
   summary: string;
   evidence: string;
@@ -124,11 +137,13 @@ export interface Delivery {
   files: string[];
   /** Declared gate changes (rule 9): which ratified tests or check settings changed, and why. Empty string when the gate was untouched. */
   gateChanges: string;
+  /** Present only when this branch was handed to Inspector. */
+  inspection?: Inspection;
 }
 
 export interface FabricaTask {
   id: string;
-  state: "asking" | "working" | "checking" | "delivered" | "failed" | "closed";
+  state: "asking" | "working" | "checking" | "delivered" | "failed" | "refused" | "closed";
 }
 
 /**
@@ -147,6 +162,9 @@ export type FabricaEventName =
   | "line-cut"
   | "work-started"
   | "check-run"
+  | "inspector-called"
+  | "inspection-finished"
+  | "inspection-skipped"
   | "delivered"
   | "verdict-recorded"
   | "cap-refused"

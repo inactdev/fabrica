@@ -24,7 +24,8 @@ import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
-import type { Delivery, Receipt } from "../../contract/surface.ts";
+import { handToInspector } from "./inspection.ts";
+import type { Delivery, Inspection, Inspector, Receipt } from "../../contract/surface.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
 
@@ -33,7 +34,7 @@ export async function recordVerdict(
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { brain: Brain }
+  opts: { brain: Brain; inspector?: Inspector }
 ): Promise<void> {
   if (!RULINGS.has(ruling)) {
     throw new ForemanError(
@@ -60,8 +61,18 @@ export async function recordVerdict(
     );
   }
 
-  const delivered = events.filter((e) => e.name === "delivered").at(-1);
-  if (!delivered) {
+  const deliveredIndex = events.map((event) => event.name).lastIndexOf("delivered");
+  const latestInspection = events.filter((event) => event.name === "inspection-finished").at(-1);
+  const inspectionVerdict = (latestInspection?.details as { verdict?: string } | undefined)?.verdict;
+  if (inspectionVerdict === "refused" && events.lastIndexOf(latestInspection!) > deliveredIndex) {
+    throw new ForemanError(
+      "inspection-refused",
+      `fabrica verdict: Inspector reached no verdict for task "${taskId}". Read \`fabrica log ${taskId}\`, ` +
+        "resolve the refusal, then hand the branch to Inspector again before asking the Client to rule on it."
+    );
+  }
+
+  if (deliveredIndex === -1) {
     throw new ForemanError(
       "not-delivered",
       `fabrica verdict: task "${taskId}" has not been delivered yet — there is nothing to rule on until ` +
@@ -108,6 +119,7 @@ export async function recordVerdict(
     baseCommit: baseCommit!,
     priorReceipts,
     priorGateChanges: details?.delivery?.gateChanges || undefined,
+    inspector: opts.inspector,
   });
 }
 
@@ -145,9 +157,10 @@ async function runFixRound(
     baseCommit: string;
     priorReceipts: Receipt[];
     priorGateChanges: string | undefined;
+    inspector?: Inspector;
   }
 ): Promise<void> {
-  const { brain, project, totalAttempts, baseCommit, priorReceipts, priorGateChanges } = ctx;
+  const { brain, project, totalAttempts, baseCommit, priorReceipts, priorGateChanges, inspector } = ctx;
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
@@ -203,7 +216,7 @@ async function runFixRound(
     const undeclaredGateChange =
       protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;
 
-    const outcome: Delivery["outcome"] = undeclaredGateChange
+    let outcome: Delivery["outcome"] = undeclaredGateChange
       ? "discarded-protected-path"
       : lastGate.green
         ? "done"
@@ -237,6 +250,13 @@ async function runFixRound(
       return;
     }
 
+    let inspection: Inspection | undefined;
+    if (outcome === "done") {
+      inspection = await handToInspector(recordHome, taskId, line, inspector);
+      if (inspection?.verdict === "refused") return;
+      if (inspection?.verdict === "red") outcome = "inspection-red";
+    }
+
     const delivery = buildDelivery(outcome, {
       taskText,
       attempts: allReceipts.length,
@@ -244,6 +264,7 @@ async function runFixRound(
       branch: line.branch,
       files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
+      inspection,
     });
 
     validateDelivery(delivery);

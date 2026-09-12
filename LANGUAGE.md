@@ -16,6 +16,7 @@ the language grows or changes, this file changes with it.
 | **Foreman** | The delegator in the middle: queues tasks, routes them to lines, counts everything. Pure code — it delegates and it never thinks. Thinking happens only in Workers and in the Client. |
 | **Worker** | The execution unit: one per attempt, one model inside, works only on its own ProductionLine. |
 | **ProvingGround** | The isolated improvement space: overnight, the factory re-attempts past work, measures, and experiments to get more efficient — graded by the checks and the Client's old verdicts. (Known informally as the gym.) |
+| **Inspector** | The independent local checker Fabrica hands a green branch to after its own checks pass. Inspector can repair mechanical problems and gives a green, red, or refused verdict. |
 
 ## The loop words
 
@@ -27,6 +28,7 @@ the language grows or changes, this file changes with it.
 | **worker** | The spawned doer. Exactly one per attempt. It never sees your real checkout. |
 | **model** | The AI brain inside a worker. Plugged in through an adapter; the rest of the tool never knows which one. |
 | **checks** | The project's own tests, run inside the workspace. They decide pass or fail; they hold no opinions. |
+| **inspection** | Inspector's independent check after Fabrica's own checks are green. A refusal means Inspector reached no verdict, not that the branch is red. |
 | **retry** | On a failed check: one more try by the same worker, told exactly what failed. Counted by code, never decided by a model. |
 | **delivery** | The only thing that leaves the workspace: how sure, assumptions, gaps, and proof. Missing any piece = invalid, never shown. |
 | **verdict** | Your last word on a delivery: accept, fix, or wrong direction. |
@@ -40,8 +42,9 @@ the language grows or changes, this file changes with it.
 The Client hands in a task. Questions come first only if it's unclear.
 The Foreman creates a ProductionLine; one Worker with one model does the
 work on it; the project's checks decide, with one counted retry on
-red. A delivery leaves the line — how sure, assumptions, gaps, proof —
-and the Client gives the verdict. Accept or wrong closes the task on
+red. When a project has Inspector configured, a green branch then goes to
+Inspector before a delivery leaves the line. A delivery says how sure,
+assumptions, gaps, and proof, and the Client gives the verdict. Accept or wrong closes the task on
 the record; fix sends the note back to the same warm Worker. Caps
 watch every step (contract rule 10). The ProvingGround trains on all
 of it, later.

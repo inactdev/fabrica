@@ -10,6 +10,7 @@ import { answerTask } from "./answer.ts";
 import { recordVerdict } from "./verdict.ts";
 import { defaultBrainAdapter } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
+import type { Inspector } from "../../contract/surface.ts";
 import {
   deliveryOf as lookupDelivery,
   eventsOf as lookupEvents,
@@ -33,6 +34,10 @@ export interface ForemanOptions {
    * answer picks up the same warm worker within one process even
    * without this option; this is only the across-process fallback. */
   brain?: Brain;
+  /** Optional Inspector socket. Omitted uses the installed Inspector
+   * command when the ProductionLine contains .inspector.json; tests can
+   * supply a fake to keep the real command and GitHub out of the run. */
+  inspector?: Inspector;
 }
 
 export function createForeman(opts: ForemanOptions): Foreman {
@@ -46,7 +51,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
 
   return {
     async do(taskText, callOpts) {
-      const task = await doTask(recordHome, taskText, callOpts);
+      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector });
       if (callOpts.brain) brainByTask.set(task.id, callOpts.brain);
       return task;
     },
@@ -57,7 +62,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       // of `fabrica do` then `fabrica answer` by hand) falls back the
       // same way verdict() does.
       const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter();
-      return answerTask(recordHome, taskId, text, { brain });
+      return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector });
     },
     async deliveryOf(taskId) {
       return lookupDelivery(recordHome, taskId);
@@ -67,7 +72,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
     },
     async verdict(taskId, ruling, note) {
       const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter();
-      return recordVerdict(recordHome, taskId, ruling, note, { brain });
+      return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector });
     },
     async status() {
       return lookupStatus(recordHome);

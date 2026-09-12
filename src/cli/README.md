@@ -188,8 +188,10 @@ them can reach a running worker.
   ceiling `isQuietTooLong` returns true for it too and the alarm takes
   over the line, because a check still running after that long is the one
   case a live-elapsed reading can't explain (a killed worker, or a check
-  hung inside `runCheck`'s `execSync`). The pre-work `brain.ask()`
-  window is exempt for the same reason - `stateOf` already reads
+  hung inside `runCheck`'s `execSync`). A `refused` task says Inspector
+  reached no verdict and points at `fabrica log <id>`, where the exact
+  refusal report is recorded. The pre-work `brain.ask()` window is exempt
+  for the same reason - `stateOf` already reads
   "working" from `task-received` onward, so `isQuietTooLong` also waits
   for a `"work-started"` event before it will raise the alarm. It takes
   no arguments at all, and refuses any it is given (`parseStatusArgs`)
@@ -212,10 +214,12 @@ them can reach a running worker.
   reached a real delivery, say a `fix` verdict can still wake the worker;
   `asking` points at `fabrica answer`; and a `failed` task that never
   delivered says so plainly - `recordVerdict` would refuse a ruling on
-  it. The loop ends by itself for the two states that provably cannot
-  change again: `closed`, and that same never-delivered `failed` task
+  it. A `refused` task names Inspector and points at its report in the
+  log. The loop ends by itself for the three states that provably cannot
+  change again: `closed`, that same never-delivered `failed` task
   (`fabrica verdict ... fix` refuses it with `not-delivered`, `fabrica
-  answer` with `no-questions-pending`, so nothing can move it). Every
+  answer` with `no-questions-pending`, so nothing can move it), and
+  `refused`, which has no Client delivery or Fabrica retry path. Every
   other terminal state keeps polling, and the notice re-fires whenever
   the state genuinely changes, so a second delivery after a `fix` still
   announces itself. **Stopping the watch never stops the

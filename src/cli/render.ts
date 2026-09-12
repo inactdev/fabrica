@@ -131,6 +131,9 @@ export function formatStatusLine(
   if (task.state === "delivered") {
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
   }
+  if (task.state === "refused") {
+    return `${base}  <- INSPECTOR REACHED NO VERDICT: fabrica log ${task.id}`;
+  }
   // Once a check has run past CHECKING_QUIET_CEILING_MS, quietForMs takes
   // over from the plain elapsed-time line - a check that has been
   // "checking" for days is no longer honest work in progress, it's
@@ -188,6 +191,8 @@ export function formatTerminalNotice(
       // Stopped for clarifying questions before any Worker ran (issue #8)
       // - polling forever here would look like a hang with no way out.
       return `-- task asking - stopped for clarifying questions; answer with \`fabrica answer ${ctx.taskId} -m "<text>"\` to resume it --`;
+    case "refused":
+      return `-- Inspector reached no verdict - resolve the reason in \`fabrica log ${ctx.taskId}\` before handing the branch over again --`;
     default:
       return null;
   }
@@ -228,6 +233,22 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       const d = details as { attempt?: number; phase?: string; green?: boolean };
       if (d.phase === "started") return `check started (attempt ${d.attempt})`;
       return `check finished (attempt ${d.attempt}): ${d.green ? "green" : "red"}`;
+    }
+
+    case "inspector-called": {
+      const d = details as { branch?: string };
+      return d.branch ? `Inspector called for ${d.branch}` : "Inspector called";
+    }
+
+    case "inspection-finished": {
+      const d = details as { verdict?: string; report?: string };
+      const verdict = d.verdict ?? "unknown";
+      return d.report ? `Inspector ${verdict}: ${d.report}` : `Inspector ${verdict}`;
+    }
+
+    case "inspection-skipped": {
+      const d = details as { reason?: string };
+      return d.reason ? `Inspector skipped: ${d.reason}` : "Inspector skipped";
     }
 
     case "delivered": {
