@@ -16,6 +16,16 @@ function command(dir: string, exitCode: number, output: string): string {
   return path;
 }
 
+function commandStreams(dir: string, exitCode: number, stdout: string, stderr: string): string {
+  const path = join(dir, `inspector-streams-${exitCode}.sh`);
+  writeFileSync(
+    path,
+    `#!/bin/sh\nprintf '%s' ${JSON.stringify(stdout)}\nprintf '%s' ${JSON.stringify(stderr)} >&2\nexit ${exitCode}\n`
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
 test("inspectorAdapter maps Inspector's three verdict exit codes without the real binary or GitHub", async () => {
   const workdir = tempDir();
 
@@ -47,6 +57,22 @@ test("inspectorIsConfigured only accepts a project-local Inspector config", () =
   assert.equal(inspectorIsConfigured(workdir), false);
   writeFileSync(join(workdir, ".inspector.json"), "{}\n");
   assert.equal(inspectorIsConfigured(workdir), true);
+});
+
+test("inspectorAdapter bounds streamed output and reports its true byte count", async () => {
+  const workdir = tempDir();
+  const stdout = "x".repeat(MAX_INSPECTION_REPORT_BYTES * 4);
+  const stderr = "reason at end";
+  const total = Buffer.byteLength(stdout) + 1 + Buffer.byteLength(stderr);
+  const inspection = await inspectorAdapter(commandStreams(workdir, 2, stdout, stderr)).inspect({
+    branch: "fabrica/task",
+    workdir,
+  });
+
+  assert.equal(inspection.verdict, "refused");
+  assert.match(inspection.report, new RegExp(`^\\[truncated, showing last \\d+ of ${total} bytes\\]\\n`));
+  assert.match(inspection.report, /reason at end$/);
+  assert.ok(Buffer.byteLength(inspection.report) <= MAX_INSPECTION_REPORT_BYTES);
 });
 
 test("reportForRecord keeps Inspector's final diagnosis within the record limit", () => {

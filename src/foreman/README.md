@@ -115,9 +115,12 @@ return early" below.
    branch, rename it, or otherwise flag it for CI - see "Rule 9: blocked
    by CI, not by Fabrica's own mark" below for why that mark was tried
    and then deliberately removed.
-   When the final Fabrica check is green and this revision has
+   When the final Fabrica check is green and the task's base commit has
    `.inspector.json`, the Foreman records `inspector-called` and invokes
-   Inspector on this checked-out branch before a delivery exists.
+   Inspector on this checked-out branch before a delivery exists. This
+   requirement survives every fix round; removing the config from the
+   final branch produces a refusal rather than letting a Worker skip its
+   own inspection.
    Inspector's green report proceeds to the normal delivery; a red report
    becomes an `inspection-red` delivery with its report in both the
    delivery and `inspection-finished` record event, so the Client can
@@ -125,8 +128,10 @@ return early" below.
    neither green nor red: it records `inspection-finished` with the
    refusal reason, leaves no delivery for a Client verdict, and reports
    task state `refused` until an operator resolves the external problem.
-   A project with no `.inspector.json` records `inspection-skipped` and
-   takes the pre-Inspector delivery path unchanged. Rule 9's
+   A task whose base commit has no `.inspector.json` records
+   `inspection-skipped` and takes the pre-Inspector delivery path
+   unchanged. Heartbeats continue while Inspector is running so a valid
+   wait is not reported as silence. Rule 9's
    `discarded-protected-path` outcome and a red Fabrica check never call
    Inspector, because Fabrica has not reached its own green handoff point.
 

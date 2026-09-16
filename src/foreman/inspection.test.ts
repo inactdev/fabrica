@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
@@ -10,7 +10,8 @@ import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import type { Inspection, Inspector } from "../../contract/surface.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runLogCommand } from "../cli/log-command.ts";
-import { readTaskFile } from "../record/index.ts";
+import { readEventsForTask, readTaskFile } from "../record/index.ts";
+import { handToInspector } from "./inspection.ts";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-inspection-home-"));
@@ -115,6 +116,80 @@ test("an Inspector refusal records its reason as no verdict, never as red", asyn
   assert.equal(await runLogCommand([task.id], { recordHome, ...io }), 0);
   assert.ok(io.out.some((line) => line.includes("Inspector refused: GITHUB_TOKEN is missing")));
   assert.ok(!io.out.some((line) => line.includes("Inspector red")));
+});
+
+test("removing Inspector config cannot bypass a handoff required by the task base commit", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "green", report: "should not be called" });
+  const project = inspectedProject();
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("remove config", {
+    project,
+    brain: fakeBrain({ onWork: (_brief, workdir) => rmSync(join(workdir, ".inspector.json")) }),
+  });
+
+  assert.equal(task.state, "refused");
+  assert.equal(inspector.calls.length, 0);
+  const events = await foreman.events(task.id);
+  assert.ok(!events.some((event) => event.name === "inspection-skipped"));
+  assert.deepEqual(events.filter((event) => event.name === "inspection-finished").at(-1)?.details, {
+    verdict: "refused",
+    report: "Inspector could not run: .inspector.json was removed from the ProductionLine",
+  });
+});
+
+test("a fix round cannot disable inspection established by the task base commit", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "red", report: "needs a fix" });
+  let workRound = 0;
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      workRound += 1;
+      if (workRound === 2) rmSync(join(workdir, ".inspector.json"));
+    },
+  });
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("small change", { project: inspectedProject(), brain });
+  assert.equal((await foreman.deliveryOf(task.id))?.outcome, "inspection-red");
+
+  await foreman.verdict(task.id, "fix", "apply the requested fix");
+
+  assert.equal(inspector.calls.length, 1);
+  assert.equal((await foreman.status()).find((candidate) => candidate.id === task.id)?.state, "refused");
+  const events = await foreman.events(task.id);
+  const verdictIndex = events.map((event) => event.name).lastIndexOf("verdict-recorded");
+  assert.ok(!events.slice(verdictIndex).some((event) => event.name === "inspection-skipped"));
+  assert.equal(
+    (events.filter((event) => event.name === "inspection-finished").at(-1)?.details as Inspection).verdict,
+    "refused"
+  );
+});
+
+test("Inspector handoff records heartbeats while awaiting a verdict", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
+  const inspector: Inspector = {
+    async inspect() {
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      return { verdict: "green", report: "done" };
+    },
+  };
+
+  await handToInspector(
+    recordHome,
+    "heartbeat-task",
+    { taskId: "heartbeat-task", branch: "fabrica/heartbeat-task", project, workdir: project, recordHome },
+    baseCommit,
+    inspector,
+    5
+  );
+
+  const events = readEventsForTask(recordHome, "heartbeat-task");
+  assert.ok(events.some((event) => event.name === "heartbeat"));
+  assert.equal(events.at(-1)?.name, "inspection-finished");
 });
 
 test("a project without Inspector config keeps Fabrica's existing delivery path", async () => {

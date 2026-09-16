@@ -249,7 +249,7 @@ export async function runProductionRound(
     // verdict and therefore is not delivered for a Client ruling.
     let inspection: Inspection | undefined;
     if (outcome === "done") {
-      inspection = await handToInspector(recordHome, taskId, line, inspector);
+      inspection = await handToInspector(recordHome, taskId, line, baseCommit, inspector);
       if (inspection?.verdict === "refused") return { id: taskId, state: "refused" };
       if (inspection?.verdict === "red") outcome = "inspection-red";
     }

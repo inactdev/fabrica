@@ -5,19 +5,22 @@
 
 import { appendEvent } from "../record/index.ts";
 import { defaultInspector, inspectorIsConfigured, reportForRecord } from "../inspector/index.ts";
+import { DEFAULT_HEARTBEAT_INTERVAL_MS, withHeartbeat } from "./attempts.ts";
 import type { Inspection, Inspector, ProductionLine } from "../../contract/surface.ts";
 
 export async function handToInspector(
   recordHome: string,
   taskId: string,
   line: ProductionLine,
-  inspector: Inspector | undefined
+  baseCommit: string,
+  inspector: Inspector | undefined,
+  heartbeatIntervalMs: number = DEFAULT_HEARTBEAT_INTERVAL_MS
 ): Promise<Inspection | undefined> {
-  if (!inspectorIsConfigured(line.workdir)) {
+  if (!inspectorIsConfigured(line.workdir, baseCommit)) {
     appendEvent(recordHome, {
       taskId,
       name: "inspection-skipped",
-      details: { reason: "no .inspector.json at the branch head" },
+      details: { reason: "no .inspector.json at the task base commit" },
     });
     return undefined;
   }
@@ -25,13 +28,24 @@ export async function handToInspector(
   appendEvent(recordHome, { taskId, name: "inspector-called", details: { branch: line.branch } });
 
   let inspection: Inspection;
-  try {
-    inspection = await (inspector ?? defaultInspector()).inspect({ branch: line.branch, workdir: line.workdir });
-  } catch (err) {
+  if (!inspectorIsConfigured(line.workdir)) {
     inspection = {
       verdict: "refused",
-      report: `Inspector could not run: ${err instanceof Error ? err.message : String(err)}`,
+      report: "Inspector could not run: .inspector.json was removed from the ProductionLine",
     };
+  } else {
+    try {
+      inspection = await withHeartbeat(
+        () => appendEvent(recordHome, { taskId, name: "heartbeat", details: { phase: "inspection" } }),
+        heartbeatIntervalMs,
+        () => (inspector ?? defaultInspector()).inspect({ branch: line.branch, workdir: line.workdir })
+      );
+    } catch (err) {
+      inspection = {
+        verdict: "refused",
+        report: `Inspector could not run: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
   inspection = { ...inspection, report: reportForRecord(inspection.report) };
 
