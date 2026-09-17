@@ -69,13 +69,23 @@ The whole tool in one command.
    to the task's transcript file, one batch per attempt (see "Workers are
    invisible by default and watchable always" above).
 5. **Verifies.** Runs the project's check command (see Config below)
-   inside the worktree. Green → delivery. Red → one fix pass by the agent
-   with the failure output, then re-check. Still red → failure report
-   (Contract 2). The counts here (one fix pass) are code, not judgment
-   (Contract 3).
+   inside the worktree. Red → one fix pass by the agent with the failure
+   output, then re-check. Still red → failure report (Contract 2). The
+   counts here (one fix pass) are code, not judgment (Contract 3). If the
+   task's base commit contains `.inspector.json`, a green result commits
+   the branch and directly triggers Inspector; Fabrica never polls it.
+   Inspector may repair and commit mechanical, request-independent
+   failures. Green proceeds to delivery; red carries Inspector's report
+   into a delivery for the Client's request-aware verdict; refused means
+   no Inspector verdict and no delivery. Without that config, green
+   proceeds directly to delivery as before.
 6. **Delivers.** Writes `delivery.md` (block format below), prints it,
-   and leaves the branch in place for review. v1 never pushes, never
-   opens a pull request. The Client merges or discards by hand.
+   and leaves the branch in place for review. Fabrica itself never pushes
+   or opens a pull request. On configured projects, Inspector owns any
+   publication after its independent check; green may publish, but red
+   must remain local. Until Inspector supports that order, its requirement
+   for an already-pushed HEAD produces a recorded refusal. On projects
+   without Inspector, the Client merges or discards by hand.
 7. **Nags for a verdict** on later `fabrica` invocations until one is recorded
    (Contract 6).
 
@@ -91,7 +101,7 @@ The note is free text and is the most valuable training signal captured.
 
 ### `fabrica status`
 One line per open task: id, project, state
-(asking | working | checking | delivered | failed), age.
+(asking | working | checking | delivered | failed | refused), age.
 
 ### `fabrica log <id>`
 Prints the task's full event history; `--transcript` includes the raw
@@ -113,14 +123,15 @@ wake the worker; a task closed by verdict gets a note that the ruling is
 final; a task waiting on questions gets pointed at `fabrica answer`. A
 task that failed before ever delivering - the brain's clarify step
 itself threw, so no Worker ever ran - gets its own note naming that,
-since neither `fix` nor `fabrica answer` can move it either. If the
-answer to "what's next" itself changes - a `fix` verdict re-delivers, an
-answer resumes the work - the note fires again for the new state.
-Watch ends outright, rather than continuing to poll, for the two states
-the record can never move on from again: "closed", and a "failed" task
-that never delivered. Every other terminal state - a real failed
-delivery, "delivered" itself, or "asking" - keeps watch running until
-you stop it yourself.
+since neither `fix` nor `fabrica answer` can move it either. An Inspector
+refusal says no verdict was reached and points to its report in
+`fabrica log`. If the answer to "what's next" itself changes - a `fix`
+verdict re-delivers, an answer resumes the work - the note fires again
+for the new state. Watch ends outright, rather than continuing to poll,
+for the three states the record can never move on from again: "closed",
+a "failed" task that never delivered, and "refused". Every other
+terminal state - a real failed delivery, "delivered" itself, or "asking"
+- keeps watch running until you stop it yourself.
 
 ## The record
 
@@ -210,8 +221,11 @@ legal cap, not an absent one.
     files:      files touched
     gateChanges: declared gate changes (Contract 9), empty when the
                 gate was left alone
+    inspection: Inspector verdict and report when run, empty otherwise
 
-A delivery missing any field must not be presented.
+A delivery missing any required field must not be presented. The
+structured inspection value is optional when Inspector did not run. An
+Inspector refusal produces no delivery at all.
 
 ## The operator's skill
 
@@ -245,8 +259,9 @@ shows how common the problem actually is.
 ## Out of scope for v1 — explicitly
 
 Multiple attempts and judging; model selection or switching; a status
-dashboard beyond `fabrica status`; pushing or opening pull
-requests; running more than one task per project at a time (parallel
+dashboard beyond `fabrica status`; pushing or opening pull requests by
+Fabrica (Inspector owns publication for configured projects); running
+more than one task per project at a time (parallel
 tasks across different projects: allowed, it falls out of isolation);
 voice anything; playground/self-experimentation. The event log is
 designed so all of these can be added without reshaping the record.

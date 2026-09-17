@@ -2,10 +2,10 @@
 // Foreman and report what happened next.
 //
 // Like `fabrica verdict fix`, this never detaches: resuming runs the
-// same isolate/work/verify/deliver pipeline `fabrica do` would have run
-// if the task had never needed to ask, synchronously, so the command can
-// report the outcome directly instead of the Client having to separately
-// poll for it.
+// same isolate/work/verify/inspect/result pipeline `fabrica do` would
+// have run if the task had never needed to ask, synchronously, so the
+// command can report the outcome directly instead of making the Client
+// poll for it separately.
 
 import { createForeman } from "../index.ts";
 import type { Brain, Inspector } from "../index.ts";

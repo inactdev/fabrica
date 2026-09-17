@@ -143,9 +143,9 @@ async function streamTranscript(ctx: {
   let lastCheckingPace = -1;
   // Which state the last terminal notice was issued for, not merely
   // "whether one was" - a `fix` verdict moves a delivered task back to
-  // "working" and then delivers it again, and that second delivery has to
-  // say so. A one-shot latch would leave the stream silently stopping
-  // instead, which is the exact looks-like-a-hang case the notice exists
+  // "working" and then reaches a new delivery or refusal, and that new
+  // result has to say so. A one-shot latch would leave the stream silently
+  // stopping instead, which is the exact looks-like-a-hang case the notice exists
   // to prevent.
   let noticedState: FabricaTask["state"] | null = null;
 
@@ -222,8 +222,8 @@ async function streamTranscript(ctx: {
       stdout(notice);
     }
 
-    // Two states provably cannot change again, and the watch ends for
-    // three: "closed" (recordVerdict refuses any further ruling once the
+    // Three states provably cannot change again, so the watch ends for
+    // "closed" (recordVerdict refuses any further ruling once the
     // last verdict was accept or wrong - src/foreman/verdict.ts's
     // "already-closed"), a "failed" task with no "delivered" event -
     // brain.ask() itself threw before any Worker ran, so `fabrica

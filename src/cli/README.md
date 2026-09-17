@@ -112,8 +112,8 @@ detach from.
 
 Answers the clarifying questions `fabrica do` printed and stopped on
 (issue #8), and resumes the task. Like `fabrica verdict`, this never
-detaches: resuming runs the task's isolate/work/verify/deliver pipeline
-synchronously (`src/foreman/answer.ts`'s `answerTask`, the same
+detaches: resuming runs the task's isolate/work/verify/inspect/result
+pipeline synchronously (`src/foreman/answer.ts`'s `answerTask`, the same
 `runProductionRound` `do()` itself uses once it decides to proceed), so
 the command can report the outcome directly.
 
@@ -450,7 +450,7 @@ calls `runTask`.
 | `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
-| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its two exit-by-itself states (`closed`, and a `failed` task that never delivered), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
+| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its three exit-by-itself states (`closed`, a `failed` task that never delivered, and an Inspector `refused` task), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
 | `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, `QUIET_THRESHOLD_MS`, and `CHECKING_QUIET_CEILING_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `deny-and-log-edit-command.ts` | Reads a `PreToolUse` payload from stdin, denies it, and records `edit-attempt-blocked` - what a harness's session config runs, not something typed by hand (issue #13's prevention half; see that harness's own README under `skill/`). Deliberately the one command that does *not* refuse stray arguments: it promises to always deny and always exit 0 whatever it is handed, and a refusal would turn that fail-closed guarantee into a non-zero exit `PreToolUse` doesn't block on. |

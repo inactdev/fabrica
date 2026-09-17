@@ -1,7 +1,8 @@
 // The loop: SPEC.md "fabrica do". Wires src/record, src/line, src/brain,
-// and src/config together — register the task, ask-or-proceed (issue #8,
-// ask.ts), cut a ProductionLine, run the worker for a counted number of
-// attempts, verify with the project's check, and deliver. See README.md
+// src/config, and src/inspector together - register the task,
+// ask-or-proceed (issue #8, ask.ts), cut a ProductionLine, run the worker
+// for a counted number of attempts, verify with the project's check, then
+// deliver or record an Inspector refusal. See README.md
 // for the design decisions this file leans on (why check.sh, why
 // attempts behaves the way it does, why the promise doesn't resolve
 // early).
@@ -59,7 +60,8 @@ export async function doTask(
 }
 
 /**
- * SPEC.md steps 3-6: isolate, work, verify, deliver. Shared by a task
+ * SPEC.md steps 3-6: isolate, work, verify, inspect when configured,
+ * then deliver or refuse. Shared by a task
  * proceeding straight out of `doTask` and one resuming after `fabrica
  * answer` (answer.ts) - `brief` is whatever the brain should actually
  * receive: the bare task text in doTask's case, request.md plus every

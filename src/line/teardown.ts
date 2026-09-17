@@ -1,9 +1,9 @@
-// Destroys a ProductionLine: removes the throwaway worktree, keeps the
-// branch intact for the Client to review (SPEC: v1 never pushes; the
-// Client merges or discards by hand). Every removal is gated on git's own
-// worktree registry (see safety.ts) — a path is never deleted on say-so
-// alone, and `git worktree remove` itself refuses to touch a repo's main
-// working tree, so a bug here fails closed, not open.
+// Destroys a ProductionLine: removes the throwaway worktree and keeps the
+// branch intact for Client review or Inspector publication. Fabrica never
+// pushes, and Inspector must keep red work local. Every removal is gated
+// on git's own worktree registry (see safety.ts) - a path is never deleted
+// on say-so alone, and `git worktree remove` itself refuses to touch a
+// repo's main working tree, so a bug here fails closed, not open.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
