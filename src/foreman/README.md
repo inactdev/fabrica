@@ -118,9 +118,9 @@ return early" below.
    When the final Fabrica check is green and the task's base commit has
    `.inspector.json`, the Foreman records `inspector-called` and invokes
    Inspector on this checked-out branch before a delivery exists. This
-   requirement survives every fix round; removing the config from the
-   final branch produces a refusal rather than letting a Worker skip its
-   own inspection.
+   requirement survives every fix round; any final config blob that
+   differs from the base commit, including deletion, produces a refusal
+   rather than letting a Worker weaken or skip its own inspection.
    Inspector's green report proceeds to the normal delivery; a red report
    becomes an `inspection-red` delivery with its report in both the
    delivery and `inspection-finished` record event, so the Client can

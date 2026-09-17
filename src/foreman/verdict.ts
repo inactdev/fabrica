@@ -252,7 +252,10 @@ async function runFixRound(
 
     let inspection: Inspection | undefined;
     if (outcome === "done") {
-      inspection = await handToInspector(recordHome, taskId, line, baseCommit, inspector);
+      inspection = await handToInspector(recordHome, taskId, line, baseCommit, inspector, {
+        receipts: allReceipts,
+        totalAttempts,
+      });
       if (inspection?.verdict === "refused") return;
       if (inspection?.verdict === "red") outcome = "inspection-red";
     }

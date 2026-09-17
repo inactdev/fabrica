@@ -1,8 +1,8 @@
 // Read-side of the loop: everything do() writes to events.jsonl, read
 // back. events.jsonl is the single source of truth (SPEC.md "The
-// record") — deliveryOf and receiptsOf don't parse delivery.md; they read
-// the same "delivered" event do() wrote, which carries the structured
-// Delivery and Receipt[] in its `details`.
+// record") - deliveryOf and receiptsOf don't parse delivery.md. Delivery
+// stays on the latest "delivered" event, while receipts come from the
+// latest event carrying them, including an Inspector refusal with no delivery.
 
 import { readEvents, readEventsForTask } from "../record/index.ts";
 import type { FabricaEvent } from "../record/index.ts";
@@ -43,8 +43,10 @@ export function deliveryOf(recordHome: string, taskId: string): Delivery | null 
 }
 
 export function receiptsOf(recordHome: string, taskId: string): Receipt[] {
-  const details = latestDeliveredDetails(recordHome, taskId);
-  return details?.receipts ?? [];
+  const receiptEvent = readEventsForTask(recordHome, taskId)
+    .filter((event) => Array.isArray((event.details as { receipts?: unknown } | undefined)?.receipts))
+    .at(-1);
+  return (receiptEvent?.details as { receipts?: Receipt[] } | undefined)?.receipts ?? [];
 }
 
 /** The most recent "delivered" event's details — a fix round appends a

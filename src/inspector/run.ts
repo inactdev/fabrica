@@ -21,6 +21,20 @@ export function inspectorIsConfigured(workdir: string, revision?: string): boole
   );
 }
 
+export function inspectorConfigMatches(workdir: string, baseRevision: string): boolean {
+  try {
+    const blobAt = (revision: string) =>
+      execFileSync("git", ["rev-parse", "--verify", `${revision}:${INSPECTOR_CONFIG}`], {
+        cwd: workdir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    return blobAt(baseRevision) === blobAt("HEAD");
+  } catch {
+    return false;
+  }
+}
+
 /** The production adapter for the Inspector command installed on PATH. */
 export function defaultInspector(): Inspector {
   return inspectorAdapter();

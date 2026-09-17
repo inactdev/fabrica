@@ -106,6 +106,7 @@ test("an Inspector refusal records its reason as no verdict, never as red", asyn
 
   assert.equal(task.state, "refused");
   assert.equal(await foreman.deliveryOf(task.id), null, "a refusal must not be turned into a Client delivery");
+  assert.equal((await foreman.receiptsOf(task.id)).length, 1, "completed work keeps its attempt receipt");
   assert.equal((await foreman.status()).find((candidate) => candidate.id === task.id)?.state, "refused");
   await assert.rejects(
     () => foreman.verdict(task.id, "accept"),
@@ -133,10 +134,32 @@ test("removing Inspector config cannot bypass a handoff required by the task bas
   assert.equal(inspector.calls.length, 0);
   const events = await foreman.events(task.id);
   assert.ok(!events.some((event) => event.name === "inspection-skipped"));
-  assert.deepEqual(events.filter((event) => event.name === "inspection-finished").at(-1)?.details, {
-    verdict: "refused",
-    report: "Inspector could not run: .inspector.json was removed from the ProductionLine",
+  const details = events.filter((event) => event.name === "inspection-finished").at(-1)?.details as Inspection;
+  assert.equal(details.verdict, "refused");
+  assert.equal(details.report, "Inspector could not run: .inspector.json was removed from the ProductionLine");
+});
+
+test("changing Inspector config cannot weaken inspection established by the task base commit", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "green", report: "should not be called" });
+  const project = inspectedProject();
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("weaken config", {
+    project,
+    brain: fakeBrain({
+      onWork: (_brief, workdir) => writeFileSync(join(workdir, ".inspector.json"), '{"check":"true"}\n'),
+    }),
   });
+
+  assert.equal(task.state, "refused");
+  assert.equal(inspector.calls.length, 0);
+  assert.equal(await foreman.deliveryOf(task.id), null);
+  assert.equal((await foreman.receiptsOf(task.id)).length, 1);
+  const events = await foreman.events(task.id);
+  const details = events.filter((event) => event.name === "inspection-finished").at(-1)?.details as Inspection;
+  assert.equal(details.verdict, "refused");
+  assert.equal(details.report, "Inspector could not run: .inspector.json differs from the task base commit");
 });
 
 test("a fix round cannot disable inspection established by the task base commit", async () => {
@@ -158,6 +181,7 @@ test("a fix round cannot disable inspection established by the task base commit"
 
   assert.equal(inspector.calls.length, 1);
   assert.equal((await foreman.status()).find((candidate) => candidate.id === task.id)?.state, "refused");
+  assert.equal((await foreman.receiptsOf(task.id)).length, 2, "the refused fix round keeps its new receipt");
   const events = await foreman.events(task.id);
   const verdictIndex = events.map((event) => event.name).lastIndexOf("verdict-recorded");
   assert.ok(!events.slice(verdictIndex).some((event) => event.name === "inspection-skipped"));
@@ -184,7 +208,7 @@ test("Inspector handoff records heartbeats while awaiting a verdict", async () =
     { taskId: "heartbeat-task", branch: "fabrica/heartbeat-task", project, workdir: project, recordHome },
     baseCommit,
     inspector,
-    5
+    { heartbeatIntervalMs: 5 }
   );
 
   const events = readEventsForTask(recordHome, "heartbeat-task");
