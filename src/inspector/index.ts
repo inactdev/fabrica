@@ -7,4 +7,4 @@ export {
   MAX_INSPECTION_REPORT_BYTES,
   reportForRecord,
 } from "./run.ts";
-export type { Inspection, Inspector } from "../../contract/surface.ts";
+export type { Inspection, Inspector } from "./types.ts";

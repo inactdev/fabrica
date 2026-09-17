@@ -10,14 +10,13 @@ import { answerTask } from "./answer.ts";
 import { recordVerdict } from "./verdict.ts";
 import { defaultBrainAdapter } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
-import type { Inspector } from "../../contract/surface.ts";
+import type { Foreman, Inspector } from "../inspector/types.ts";
 import {
   deliveryOf as lookupDelivery,
   eventsOf as lookupEvents,
   receiptsOf as lookupReceipts,
   statusOf as lookupStatus,
 } from "./queries.ts";
-import type { Foreman } from "../../contract/surface.ts";
 
 export interface ForemanOptions {
   recordHome: string;

@@ -11,7 +11,8 @@ import {
   reportForRecord,
 } from "../inspector/index.ts";
 import { DEFAULT_HEARTBEAT_INTERVAL_MS, withHeartbeat } from "./attempts.ts";
-import type { Inspection, Inspector, ProductionLine, Receipt } from "../../contract/surface.ts";
+import type { ProductionLine, Receipt } from "../../contract/surface.ts";
+import type { Inspection, Inspector } from "../inspector/index.ts";
 
 interface InspectionOptions {
   heartbeatIntervalMs?: number;

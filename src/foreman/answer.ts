@@ -31,7 +31,7 @@ import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { runProductionRound } from "./do.ts";
 import type { AskedDetails } from "./ask.ts";
-import type { FabricaTask, Inspector } from "../../contract/surface.ts";
+import type { FabricaTask, Inspector } from "../inspector/types.ts";
 
 export async function answerTask(
   recordHome: string,

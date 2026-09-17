@@ -25,7 +25,8 @@ import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { handToInspector } from "./inspection.ts";
-import type { Delivery, Inspection, Inspector, Receipt } from "../../contract/surface.ts";
+import type { Receipt } from "../../contract/surface.ts";
+import type { Delivery, Inspection, Inspector } from "../inspector/types.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
 

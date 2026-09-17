@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
-import type { Inspection, Inspector } from "../../contract/surface.ts";
+import type { Inspection, Inspector } from "../inspector/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runAnswerCommand } from "../cli/answer-command.ts";
 import { runLogCommand } from "../cli/log-command.ts";

@@ -5,7 +5,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { Inspection, Inspector } from "../../contract/surface.ts";
+import type { Inspection, Inspector } from "./types.ts";
 
 export const INSPECTOR_CONFIG = ".inspector.json";
 export const MAX_INSPECTION_REPORT_BYTES = 16 * 1024;

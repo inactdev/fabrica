@@ -20,7 +20,8 @@ import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } fro
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { handToInspector } from "./inspection.ts";
-import type { Delivery, FabricaTask, Inspection, Inspector } from "../../contract/surface.ts";
+import type { Delivery, FabricaTask } from "../inspector/types.ts";
+import type { Inspection, Inspector } from "../inspector/index.ts";
 
 export { DEFAULT_ATTEMPTS } from "./ask.ts";
 

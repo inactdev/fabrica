@@ -3,7 +3,8 @@
 // calls src/delivery's validateDelivery on the result before treating it
 // as real (CONTRACT rule 4, issue #9).
 
-import type { Delivery, GateResult, Inspection } from "../../contract/surface.ts";
+import type { GateResult } from "../../contract/surface.ts";
+import type { Delivery, Inspection } from "../inspector/types.ts";
 import { gateForRecord } from "./attempts.ts";
 
 export function buildDelivery(

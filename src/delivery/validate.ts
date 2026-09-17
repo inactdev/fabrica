@@ -18,7 +18,7 @@
 // whether the checks changed — it compares the gate against the task's
 // pinned base commit (src/foreman/gate-changes.ts).
 
-import type { Delivery } from "../../contract/surface.ts";
+import type { Delivery } from "../inspector/types.ts";
 import { DeliveryError } from "./errors.ts";
 
 const OUTCOMES: ReadonlySet<Delivery["outcome"]> = new Set([
