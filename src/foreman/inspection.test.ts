@@ -9,7 +9,9 @@ import { ForemanError } from "./errors.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import type { Inspection, Inspector } from "../../contract/surface.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { runAnswerCommand } from "../cli/answer-command.ts";
 import { runLogCommand } from "../cli/log-command.ts";
+import { runVerdictCommand } from "../cli/verdict-command.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { handToInspector } from "./inspection.ts";
 
@@ -134,6 +136,7 @@ test("removing Inspector config cannot bypass a handoff required by the task bas
   assert.equal(inspector.calls.length, 0);
   const events = await foreman.events(task.id);
   assert.ok(!events.some((event) => event.name === "inspection-skipped"));
+  assert.ok(!events.some((event) => event.name === "inspector-called"));
   const details = events.filter((event) => event.name === "inspection-finished").at(-1)?.details as Inspection;
   assert.equal(details.verdict, "refused");
   assert.equal(details.report, "Inspector could not run: .inspector.json was removed from the ProductionLine");
@@ -157,6 +160,7 @@ test("changing Inspector config cannot weaken inspection established by the task
   assert.equal(await foreman.deliveryOf(task.id), null);
   assert.equal((await foreman.receiptsOf(task.id)).length, 1);
   const events = await foreman.events(task.id);
+  assert.ok(!events.some((event) => event.name === "inspector-called"));
   const details = events.filter((event) => event.name === "inspection-finished").at(-1)?.details as Inspection;
   assert.equal(details.verdict, "refused");
   assert.equal(details.report, "Inspector could not run: .inspector.json differs from the task base commit");
@@ -177,10 +181,22 @@ test("a fix round cannot disable inspection established by the task base commit"
   const task = await foreman.do("small change", { project: inspectedProject(), brain });
   assert.equal((await foreman.deliveryOf(task.id))?.outcome, "inspection-red");
 
-  await foreman.verdict(task.id, "fix", "apply the requested fix");
+  const io = captureIo();
+  const code = await runVerdictCommand([task.id, "fix", "-m", "apply the requested fix"], {
+    recordHome,
+    brain,
+    ...io,
+  });
 
+  assert.equal(code, 0);
+  assert.deepEqual(io.err, []);
+  assert.deepEqual(io.out, [
+    `fix round 1 recorded: ${task.id} ran again with your note - Inspector refused before reaching a verdict. ` +
+      `Read \`fabrica log ${task.id}\` for the reason; no Client verdict is available.`,
+  ]);
   assert.equal(inspector.calls.length, 1);
   assert.equal((await foreman.status()).find((candidate) => candidate.id === task.id)?.state, "refused");
+  assert.equal(await foreman.deliveryOf(task.id), null);
   assert.equal((await foreman.receiptsOf(task.id)).length, 2, "the refused fix round keeps its new receipt");
   const events = await foreman.events(task.id);
   const verdictIndex = events.map((event) => event.name).lastIndexOf("verdict-recorded");
@@ -189,6 +205,43 @@ test("a fix round cannot disable inspection established by the task base commit"
     (events.filter((event) => event.name === "inspection-finished").at(-1)?.details as Inspection).verdict,
     "refused"
   );
+});
+
+test("an answered Inspector refusal completes the clarification round without requesting a verdict", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "refused", report: "publishing is unavailable" });
+  const foreman = createForeman({ recordHome, inspector });
+  const task = await foreman.do("build me an app", {
+    project: inspectedProject(),
+    brain: fakeBrain({ askQuestions: ["Which database?"] }),
+  });
+  const io = captureIo();
+
+  const code = await runAnswerCommand([task.id, "-m", "Use Postgres."], {
+    recordHome,
+    brain: fakeBrain(),
+    inspector,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(io.err, []);
+  assert.deepEqual(io.out, [
+    `${task.id} resumed with your answer - Inspector refused before reaching a verdict. ` +
+      `Read \`fabrica log ${task.id}\` for the reason; no Client verdict is available.`,
+  ]);
+  assert.equal(await foreman.deliveryOf(task.id), null);
+  const second = captureIo();
+  assert.equal(
+    await runAnswerCommand([task.id, "-m", "Use SQLite instead."], {
+      recordHome,
+      brain: fakeBrain(),
+      inspector,
+      ...second,
+    }),
+    1
+  );
+  assert.match(second.err[0], /already got its one clarification round/);
 });
 
 test("Inspector handoff records heartbeats while awaiting a verdict", async () => {

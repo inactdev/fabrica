@@ -132,13 +132,15 @@ the real CLI, where `fabrica do` and `fabrica answer` are always separate
 invocations - see `src/foreman/README.md`'s "The ask-first seam" for the
 per-instance brain memory this falls back from). SPEC.md's "one
 clarification round by default" is enforced by the Foreman, not this
-file: once a round has actually *delivered*, a second `fabrica answer`
-on the same task refuses with `ForemanError("already-answered")`. A
-round that threw before delivering does not spend the clarification
-round - the command can be run again, and reports whatever the retry
-does (see `src/foreman/README.md`'s "The ask-first seam" for why the
-guard keys on a delivered round rather than on the answer being
-recorded).
+file: once a round has completed with a delivery or an Inspector
+refusal, a second `fabrica answer` on the same task refuses with
+`ForemanError("already-answered")`. A refusal prints that Inspector
+reached no verdict and points to `fabrica log`; it never prints an
+unknown outcome or recommends a Client verdict. A round that threw
+before either result does not spend the clarification round - the
+command can be run again, and reports whatever the retry does (see
+`src/foreman/README.md`'s "The ask-first seam" for why the guard keys on
+a completed round rather than on the answer being recorded).
 
 ### `FABRICA_HOME`
 
@@ -169,7 +171,10 @@ resolves the record home the same way `do-command.ts` does and calls
 `fix` here always uses `defaultBrainAdapter()` (there is no
 same-process `do()` call for this command to remember a brain from,
 unlike the contract tests - see `src/foreman/README.md`'s "What a fix
-costs" section).
+costs" section). If Inspector refuses the fix round, the command reports
+that no verdict was reached and points to `fabrica log` instead of
+falling back to the prior red delivery or recommending another Client
+verdict.
 
 ## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
 

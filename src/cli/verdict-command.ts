@@ -60,8 +60,16 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
     await foreman.verdict(taskId, ruling, note);
 
     if (ruling === "fix") {
-      const delivery = await foreman.deliveryOf(taskId);
       const round = fixRoundOf(recordHome, taskId);
+      const task = (await foreman.status()).find((candidate) => candidate.id === taskId);
+      if (task?.state === "refused") {
+        stdout(
+          `fix round ${round} recorded: ${taskId} ran again with your note - Inspector refused before reaching a verdict. ` +
+            `Read \`fabrica log ${taskId}\` for the reason; no Client verdict is available.`
+        );
+        return 0;
+      }
+      const delivery = await foreman.deliveryOf(taskId);
       stdout(
         `fix round ${round} recorded: ${taskId} ran again with your note - outcome: ${delivery?.outcome ?? "unknown"}. ` +
           `Still open; run \`fabrica verdict ${taskId} accept|fix|wrong\` once you've reviewed it.`

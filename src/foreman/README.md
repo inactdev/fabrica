@@ -127,7 +127,11 @@ return early" below.
    rule `fix` and reopen the same warm Worker and branch. A refusal is
    neither green nor red: it records `inspection-finished` with the
    refusal reason, leaves no delivery for a Client verdict, and reports
-   task state `refused` until an operator resolves the external problem.
+   task state `refused`. A fix-round refusal supersedes the earlier red
+   delivery rather than exposing that stale result again. Refusal is
+   terminal for that round because there is no verdict to repair toward;
+   the operator reads the reason in `fabrica log` and resolves the
+   external handoff problem outside the Client verdict loop.
    A task whose base commit has no `.inspector.json` records
    `inspection-skipped` and takes the pre-Inspector delivery path
    unchanged. Heartbeats continue while Inspector is running so a valid
@@ -483,11 +487,14 @@ rather than reinvented (Client ruling, issue #8 follow-up).
 
 `ForemanError("already-answered")` - v1's "one clarification round by
 default," enforced here rather than left to silently re-ask - fires only
-for a round that actually *completed*: a `"delivered"` event after the
-last `"answers-given"`, not merely `"answers-given"` existing. That
-distinction matters because `runProductionRound` can throw before ever
-reaching `"delivered"` (a missing check command, a moved project path, an
-unreachable brain) - if the guard keyed on `"answers-given"` alone, a task
+for a round that actually *completed*: a `"delivered"` event or an
+Inspector refusal after the last `"answers-given"`, not merely
+`"answers-given"` existing. A refusal completes the round without
+creating a Client delivery because Inspector reached no verdict to fix.
+That distinction matters because `runProductionRound` can throw before
+ever reaching either result (a missing check command, a moved project
+path, an unreachable brain) - if the guard keyed on `"answers-given"`
+alone, a task
 whose resumed round failed for an infrastructure reason would become
 permanently unresumable the moment the Client tried again, with their
 answer already on record and no way back in. Retrying past a genuinely

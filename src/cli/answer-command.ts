@@ -8,7 +8,7 @@
 // poll for it.
 
 import { createForeman } from "../index.ts";
-import type { Brain } from "../index.ts";
+import type { Brain, Inspector } from "../index.ts";
 import { parseAnswerArgs, ANSWER_USAGE } from "./answer-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 
@@ -18,8 +18,9 @@ Answers the clarifying questions \`fabrica do\` printed and stopped on,
 and resumes the task: the brief is extended with your answer, and the
 task runs exactly as it would have if it had never needed to ask. One
 clarification round - the ask-first dial is fixed at "ask" for v1, so
-once a round has actually delivered, this refuses to run again for the
-same task. A round that failed before delivering is not spent: call
+once a round has completed with a delivery or Inspector refusal, this
+refuses to run again for the same task. A round that threw before either
+result is not spent: call
 this again to retry it (the same error comes back until whatever
 caused it is dealt with).
 
@@ -38,6 +39,7 @@ export interface RunAnswerCommandOptions {
    * round against a fake brain. Omitted, createForeman falls back to
    * defaultBrainAdapter(), what every real invocation does. */
   brain?: Brain;
+  inspector?: Inspector;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -50,14 +52,18 @@ export async function runAnswerCommand(argv: string[], opts: RunAnswerCommandOpt
   try {
     const { taskId, text } = parseAnswerArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
-    const foreman = createForeman({ recordHome, brain: opts.brain });
+    const foreman = createForeman({ recordHome, brain: opts.brain, inspector: opts.inspector });
 
-    await foreman.answer(taskId, text);
+    const task = await foreman.answer(taskId, text);
 
-    // answerTask always runs the full pipeline to completion before
-    // resolving (runProductionRound, same as do()) - the resulting task
-    // is always "delivered" or "failed", never "asking" again (v1's
-    // ask-first dial is fixed, so this never re-asks).
+    if (task.state === "refused") {
+      stdout(
+        `${taskId} resumed with your answer - Inspector refused before reaching a verdict. ` +
+          `Read \`fabrica log ${taskId}\` for the reason; no Client verdict is available.`
+      );
+      return 0;
+    }
+
     const delivery = await foreman.deliveryOf(taskId);
     stdout(
       `${taskId} resumed with your answer - outcome: ${delivery?.outcome ?? "unknown"}. ` +

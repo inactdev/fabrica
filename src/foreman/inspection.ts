@@ -36,8 +36,6 @@ export async function handToInspector(
     return undefined;
   }
 
-  appendEvent(recordHome, { taskId, name: "inspector-called", details: { branch: line.branch } });
-
   let inspection: Inspection;
   if (!inspectorIsConfigured(line.workdir)) {
     inspection = {
@@ -50,6 +48,7 @@ export async function handToInspector(
       report: "Inspector could not run: .inspector.json differs from the task base commit",
     };
   } else {
+    appendEvent(recordHome, { taskId, name: "inspector-called", details: { branch: line.branch } });
     try {
       inspection = await withHeartbeat(
         () => appendEvent(recordHome, { taskId, name: "heartbeat", details: { phase: "inspection" } }),
