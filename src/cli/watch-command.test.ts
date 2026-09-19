@@ -321,6 +321,29 @@ test("runWatchCommand: a task whose ask() threw (failed, never delivered) ends t
   );
 });
 
+test("runWatchCommand: an Inspector refusal names the report path and ends the watch", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, { taskId: "t1", name: "inspector-called", details: { branch: "fabrica/t1" } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "inspection-finished",
+    details: { verdict: "refused", report: "GITHUB_TOKEN is missing" },
+  });
+
+  const io = captureIo();
+  const code = await runWatchCommand(["t1"], {
+    recordHome,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.ok(io.out.some((line) => line.includes("Inspector reached no verdict")));
+});
+
 test("runWatchCommand: a task with a real failed DELIVERY keeps polling, unlike an ask() failure", async () => {
   const recordHome = tempRecordHome();
   appendEvent(recordHome, { taskId: "t1", name: "task-received" });

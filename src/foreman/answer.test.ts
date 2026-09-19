@@ -54,7 +54,17 @@ test("answerTask resumes an asking task, extends the brief, and delivers", async
   const events = readEventsForTask(recordHome, asked.id);
   assert.deepEqual(
     events.map((e) => e.name),
-    ["task-received", "questions-asked", "answers-given", "line-cut", "work-started", "check-run", "check-run", "delivered"]
+    [
+      "task-received",
+      "questions-asked",
+      "answers-given",
+      "line-cut",
+      "work-started",
+      "check-run",
+      "check-run",
+      "inspection-skipped",
+      "delivered",
+    ]
   );
 
   const delivery = deliveryOf(recordHome, asked.id);
@@ -199,6 +209,7 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     "work-started",
     "check-run",
     "check-run",
+    "inspection-skipped",
     "delivered",
   ]);
 

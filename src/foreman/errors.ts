@@ -10,6 +10,7 @@ export type ForemanErrorCode =
   | "commit-failed"
   | "unknown-task"
   | "not-delivered"
+  | "inspection-refused"
   | "already-closed"
   | "invalid-verdict"
   | "missing-note"

@@ -63,6 +63,13 @@ round to answer them.
 That folds your answer into the brief and runs the task, this time in
 the foreground.
 
+If the task's base commit contains `.inspector.json`, a green Fabrica
+check triggers Inspector before delivery. Fabrica never pushes the
+branch itself: Inspector may publish green work, returns red work with a
+report for your verdict, and records a refusal without creating a
+Client delivery. See `src/inspector/README.md` for the publishing
+boundary and the current compatibility limitation.
+
 While it runs, you can see where it stands without opening a record file
 yourself:
 
@@ -73,7 +80,9 @@ yourself:
 `status` flags a delivered task as waiting on your verdict, shows a task
 that is running its check with how long it has been at it, and calls a
 working task that has recorded nothing for a while quiet - silence never
-gets to look like progress. `watch` follows one task the same way:
+gets to look like progress. An Inspector refusal is shown separately
+and points to `fabrica log <id>` for the reason. `watch` follows one task
+the same way:
 heartbeats appear live, and the worker's own transcript arrives in a
 batch at the end of each attempt. Stopping `watch` (Ctrl-C) stops only
 the watching; the work runs on in its own process.

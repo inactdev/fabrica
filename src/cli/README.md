@@ -112,8 +112,8 @@ detach from.
 
 Answers the clarifying questions `fabrica do` printed and stopped on
 (issue #8), and resumes the task. Like `fabrica verdict`, this never
-detaches: resuming runs the task's isolate/work/verify/deliver pipeline
-synchronously (`src/foreman/answer.ts`'s `answerTask`, the same
+detaches: resuming runs the task's isolate/work/verify/inspect/result
+pipeline synchronously (`src/foreman/answer.ts`'s `answerTask`, the same
 `runProductionRound` `do()` itself uses once it decides to proceed), so
 the command can report the outcome directly.
 
@@ -132,13 +132,15 @@ the real CLI, where `fabrica do` and `fabrica answer` are always separate
 invocations - see `src/foreman/README.md`'s "The ask-first seam" for the
 per-instance brain memory this falls back from). SPEC.md's "one
 clarification round by default" is enforced by the Foreman, not this
-file: once a round has actually *delivered*, a second `fabrica answer`
-on the same task refuses with `ForemanError("already-answered")`. A
-round that threw before delivering does not spend the clarification
-round - the command can be run again, and reports whatever the retry
-does (see `src/foreman/README.md`'s "The ask-first seam" for why the
-guard keys on a delivered round rather than on the answer being
-recorded).
+file: once a round has completed with a delivery or an Inspector
+refusal, a second `fabrica answer` on the same task refuses with
+`ForemanError("already-answered")`. A refusal prints that Inspector
+reached no verdict and points to `fabrica log`; it never prints an
+unknown outcome or recommends a Client verdict. A round that threw
+before either result does not spend the clarification round - the
+command can be run again, and reports whatever the retry does (see
+`src/foreman/README.md`'s "The ask-first seam" for why the guard keys on
+a completed round rather than on the answer being recorded).
 
 ### `FABRICA_HOME`
 
@@ -169,7 +171,10 @@ resolves the record home the same way `do-command.ts` does and calls
 `fix` here always uses `defaultBrainAdapter()` (there is no
 same-process `do()` call for this command to remember a brain from,
 unlike the contract tests - see `src/foreman/README.md`'s "What a fix
-costs" section).
+costs" section). If Inspector refuses the fix round, the command reports
+that no verdict was reached and points to `fabrica log` instead of
+falling back to the prior red delivery or recommending another Client
+verdict.
 
 ## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
 
@@ -188,8 +193,10 @@ them can reach a running worker.
   ceiling `isQuietTooLong` returns true for it too and the alarm takes
   over the line, because a check still running after that long is the one
   case a live-elapsed reading can't explain (a killed worker, or a check
-  hung inside `runCheck`'s `execSync`). The pre-work `brain.ask()`
-  window is exempt for the same reason - `stateOf` already reads
+  hung inside `runCheck`'s `execSync`). A `refused` task says Inspector
+  reached no verdict and points at `fabrica log <id>`, where the exact
+  refusal report is recorded. The pre-work `brain.ask()` window is exempt
+  for the same reason - `stateOf` already reads
   "working" from `task-received` onward, so `isQuietTooLong` also waits
   for a `"work-started"` event before it will raise the alarm. It takes
   no arguments at all, and refuses any it is given (`parseStatusArgs`)
@@ -212,10 +219,12 @@ them can reach a running worker.
   reached a real delivery, say a `fix` verdict can still wake the worker;
   `asking` points at `fabrica answer`; and a `failed` task that never
   delivered says so plainly - `recordVerdict` would refuse a ruling on
-  it. The loop ends by itself for the two states that provably cannot
-  change again: `closed`, and that same never-delivered `failed` task
+  it. A `refused` task names Inspector and points at its report in the
+  log. The loop ends by itself for the three states that provably cannot
+  change again: `closed`, that same never-delivered `failed` task
   (`fabrica verdict ... fix` refuses it with `not-delivered`, `fabrica
-  answer` with `no-questions-pending`, so nothing can move it). Every
+  answer` with `no-questions-pending`, so nothing can move it), and
+  `refused`, which has no Client delivery or Fabrica retry path. Every
   other terminal state keeps polling, and the notice re-fires whenever
   the state genuinely changes, so a second delivery after a `fix` still
   announces itself. **Stopping the watch never stops the
@@ -441,7 +450,7 @@ calls `runTask`.
 | `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
-| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its two exit-by-itself states (`closed`, and a `failed` task that never delivered), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
+| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its three exit-by-itself states (`closed`, a `failed` task that never delivered, and an Inspector `refused` task), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
 | `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `isQuietTooLong`, `checkStartedAt`, `QUIET_THRESHOLD_MS`, and `CHECKING_QUIET_CEILING_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `deny-and-log-edit-command.ts` | Reads a `PreToolUse` payload from stdin, denies it, and records `edit-attempt-blocked` - what a harness's session config runs, not something typed by hand (issue #13's prevention half; see that harness's own README under `skill/`). Deliberately the one command that does *not* refuse stray arguments: it promises to always deny and always exit 0 whatever it is handed, and a refusal would turn that fail-closed guarantee into a non-zero exit `PreToolUse` doesn't block on. |

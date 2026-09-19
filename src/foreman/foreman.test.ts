@@ -68,7 +68,7 @@ test("events() returns this task's events only, in order", async () => {
     eventsA.map((e) => e.name),
     // "check-run" lands twice per attempt: once when the check starts
     // (details.phase === "started", issue #12) and once with its result.
-    ["task-received", "line-cut", "work-started", "check-run", "check-run", "delivered"]
+    ["task-received", "line-cut", "work-started", "check-run", "check-run", "inspection-skipped", "delivered"]
   );
 
   const eventsB = await foreman.events(taskB.id);

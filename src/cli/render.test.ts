@@ -244,6 +244,24 @@ test("formatEventLine: check-run started vs finished read as prose, not JSON", (
   assert.equal(red, "t2  check-run  check finished (attempt 1): red");
 });
 
+test("formatEventLine: Inspector events name the handoff and report the verdict", () => {
+  const called = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "inspector-called",
+    details: { branch: "fabrica/x" },
+  });
+  const refused = formatEventLine({
+    occurredAt: "t1",
+    taskId: "x",
+    name: "inspection-finished",
+    details: { verdict: "refused", report: "GITHUB_TOKEN is missing" },
+  });
+
+  assert.equal(called, "t0  inspector-called  Inspector called for fabrica/x");
+  assert.equal(refused, "t1  inspection-finished  Inspector refused: GITHUB_TOKEN is missing");
+});
+
 test("formatEventLine: delivered summarizes without carrying the check's raw output", () => {
   const line = formatEventLine({
     occurredAt: "t0",
@@ -481,6 +499,7 @@ test("formatTerminalNotice: only terminal-ish states get one", () => {
   assert.match(formatTerminalNotice("delivered", ctx)!, /task delivered/);
   assert.match(formatTerminalNotice("closed", ctx)!, /task closed/);
   assert.match(formatTerminalNotice("asking", ctx)!, /fabrica answer t1/);
+  assert.match(formatTerminalNotice("refused", ctx)!, /Inspector reached no verdict/);
   assert.equal(formatTerminalNotice("working", ctx), null);
   assert.equal(formatTerminalNotice("checking", ctx), null);
 });

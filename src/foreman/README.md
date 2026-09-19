@@ -5,8 +5,9 @@
 public entry point here from `contract/`). It is the delegator LANGUAGE.md
 calls the Foreman: it registers a task, cuts a ProductionLine, runs a
 Worker for a counted number of attempts, verifies the result with the
-project's own check, and writes a delivery — wiring `src/record`,
-`src/line`, `src/brain`, and `src/config` into the one loop SPEC.md calls
+project's own check, hands a configured green branch to Inspector, and
+writes either a delivery or a recorded refusal. It wires `src/record`,
+`src/line`, `src/brain`, `src/config`, and `src/inspector` into the one loop SPEC.md calls
 "fabrica do". It is pure code: it delegates and counts, it never decides
 anything a model should decide instead.
 
@@ -29,6 +30,9 @@ const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
   See "`verdict(taskId, ruling, note?)`" below for why `verdict()` itself
   has no brain parameter of its own, and "The ask-first seam" for
   `answer()`'s identical reasoning.
+- **`inspector`** — an optional test seam for Inspector's handoff. Omit
+  it in production to use the installed command; pass a fake to test the
+  three Inspector verdicts without a real command or GitHub.
 
 The return value satisfies `Foreman` (`contract/surface.ts`): `do`,
 `answer`, `deliveryOf`, `receiptsOf`, `verdict`, `status`, `events`,
@@ -36,9 +40,9 @@ The return value satisfies `Foreman` (`contract/surface.ts`): `do`,
 
 ## `do(taskText, { project, attempts?, brain? })`
 
-One call runs the whole loop to completion — register, cut, work, check,
-possibly retry, deliver, tear down — and only then resolves. That is a
-deliberate simplification, not an oversight: see "Why `do()` doesn't
+One call runs the whole loop to completion - register, cut, work, check,
+possibly retry, deliver or refuse, tear down - and only then resolves.
+That is a deliberate simplification, not an oversight: see "Why `do()` doesn't
 return early" below.
 
 1. **Registers and asks-or-proceeds** (`ask.ts`'s `registerAndAsk` -
@@ -99,8 +103,8 @@ return early" below.
    outcome is forced to `discarded-protected-path` regardless of whether
    the check went green - recorded honestly, not thrown away (see "Rule
    9: blocked by CI, not by Fabrica's own mark" below).
-6. **Commits, builds, and validates the delivery**: any changes still
-   sitting uncommitted in the worktree are committed onto the
+6. **Commits, hands off, builds, and validates the delivery**: any changes
+   still sitting uncommitted in the worktree are committed onto the
    ProductionLine's branch (`commit.ts`) before that worktree is
    destroyed - see `src/delivery/README.md`'s "files-list-vs-teardown
    decision" for why. This runs for every outcome uniformly, including
@@ -111,6 +115,30 @@ return early" below.
    branch, rename it, or otherwise flag it for CI - see "Rule 9: blocked
    by CI, not by Fabrica's own mark" below for why that mark was tried
    and then deliberately removed.
+   When the final Fabrica check is green and the task's base commit has
+   `.inspector.json`, the Foreman records `inspector-called` and invokes
+   Inspector on this checked-out branch before a delivery exists. This
+   requirement survives every fix round; any final config blob that
+   differs from the base commit, including deletion, produces a refusal
+   rather than letting a Worker weaken or skip its own inspection.
+   Inspector's green report proceeds to the normal delivery; a red report
+   becomes an `inspection-red` delivery with its report in both the
+   delivery and `inspection-finished` record event, so the Client can
+   rule `fix` and reopen the same warm Worker and branch. A refusal is
+   neither green nor red: it records `inspection-finished` with the
+   refusal reason, leaves no delivery for a Client verdict, and reports
+   task state `refused`. A fix-round refusal supersedes the earlier red
+   delivery rather than exposing that stale result again. Refusal is
+   terminal for that round because there is no verdict to repair toward;
+   the operator reads the reason in `fabrica log` and resolves the
+   external handoff problem outside the Client verdict loop.
+   A task whose base commit has no `.inspector.json` records
+   `inspection-skipped` and takes the pre-Inspector delivery path
+   unchanged. Heartbeats continue while Inspector is running so a valid
+   wait is not reported as silence. Rule 9's
+   `discarded-protected-path` outcome and a red Fabrica check never call
+   Inspector, because Fabrica has not reached its own green handoff point.
+
    `delivery.ts` builds the `Delivery` object from the branch's own diff
    (pinned to the commit the line was cut from, via `src/delivery`'s
    `baseCommitOf`), and `src/delivery`'s `validateDelivery` (CONTRACT
@@ -381,10 +409,12 @@ to proceed, it runs the whole loop to completion before resolving. (The
 one early return is the ask-first seam below, and it isn't detachment:
 nothing is left running, because no ProductionLine was ever cut.)
 
-That's deliberate, not a shortcut taken by accident: every contract test
-calls `await foreman.do(...)` and immediately inspects `deliveryOf` and
-`receiptsOf`, which only makes sense if the delivery already exists by
-the time the promise resolves. "Detached" is a property of the CLI a
+That's deliberate, not a shortcut taken by accident: the contract tests
+call `await foreman.do(...)` and immediately inspect the final record
+result. For the unconfigured projects those tests use, that means
+`deliveryOf` and `receiptsOf`; a configured Inspector refusal instead
+leaves no delivery but records its receipts and reason before the promise
+resolves. "Detached" is a property of the CLI a
 Client types at — spawning the loop in a background process and
 returning control to the shell right away — not a property this
 programmatic seam can have while staying testable synchronously.
@@ -432,7 +462,7 @@ like a started one" - `queries.ts`'s `stateOf` reports this state as
 `"failed"`, and `src/cli/wait-for-ask-outcome.ts` watches for it
 directly rather than only ever finding out via a timeout). An empty
 result falls through to `runProductionRound` (do.ts), the exact same
-isolate/work/verify/deliver pipeline this file always ran, now factored
+isolate/work/verify/inspect/result pipeline this file runs, now factored
 out so `answer.ts` can reach it too.
 
 **`answer.ts`'s `answerTask`** is what `fabrica answer <id> -m "<text>"`
@@ -459,11 +489,14 @@ rather than reinvented (Client ruling, issue #8 follow-up).
 
 `ForemanError("already-answered")` - v1's "one clarification round by
 default," enforced here rather than left to silently re-ask - fires only
-for a round that actually *completed*: a `"delivered"` event after the
-last `"answers-given"`, not merely `"answers-given"` existing. That
-distinction matters because `runProductionRound` can throw before ever
-reaching `"delivered"` (a missing check command, a moved project path, an
-unreachable brain) - if the guard keyed on `"answers-given"` alone, a task
+for a round that actually *completed*: a `"delivered"` event or an
+Inspector refusal after the last `"answers-given"`, not merely
+`"answers-given"` existing. A refusal completes the round without
+creating a Client delivery because Inspector reached no verdict to fix.
+That distinction matters because `runProductionRound` can throw before
+ever reaching either result (a missing check command, a moved project
+path, an unreachable brain) - if the guard keyed on `"answers-given"`
+alone, a task
 whose resumed round failed for an infrastructure reason would become
 permanently unresumable the moment the Client tried again, with their
 answer already on record and no way back in. Retrying past a genuinely
@@ -546,26 +579,29 @@ owned by `src/cli/README.md`'s step 5, not restated here.
 list of Receipts — only markdown/text files a person reads
 (`delivery.md`, `transcript.log`, …). Rather than invent a place to store
 structured data outside the record, `do()` puts the whole `Delivery`
-object and the full `Receipt[]` array straight into the `"delivered"`
-event's `details` field (alongside the `project` and `baseCommit` a later
-fix round needs, plus the `totalAttempts` `do()` ran with, kept as a
-record only - `queries.ts`'s `DeliveredDetails`, and "What a fix costs"
-below). `deliveryOf` and `receiptsOf` (`queries.ts`) read the *latest*
-`"delivered"` event back and return its `details.delivery` /
-`details.receipts` directly — no markdown parsing, no second source of
-truth. `delivery.md` still gets written, as a human-readable rendering of
-the exact same object, matching the same "events.jsonl is authoritative;
-everything else is a convenience view of it" design `src/record/README.md`
-already documents for `brief.md`.
+object and the full `Receipt[]` array into the `"delivered"` event's
+`details` field (alongside the `project` and `baseCommit` a later fix
+round needs, plus the `totalAttempts` `do()` ran with, kept as a record
+only - `queries.ts`'s `DeliveredDetails`, and "What a fix costs" below).
+An Inspector refusal has no Delivery, so its `"inspection-finished"`
+event carries the cumulative receipts and the same resume metadata
+instead. `deliveryOf` returns the latest delivery unless a newer refusal
+superseded it; `receiptsOf` reads the latest event carrying receipts. No
+reader parses markdown or creates a second source of truth.
+`delivery.md` is still written for real deliveries as a human-readable
+rendering of the exact same object, matching the same "events.jsonl is
+authoritative; everything else is a convenience view of it" design
+`src/record/README.md` already documents for `brief.md`.
 
 The one thing the record does *not* store whole is a check's output:
 `attempts.ts`'s `gateForRecord` keeps only the tail, behind a marker
 naming what was dropped. Every receipt is re-serialized onto each later
-`"delivered"` event of the same task, and the whole events file is read
-and parsed for every query, so a check free to print up to `check.ts`'s
-64MB buffer can't go in verbatim. The same cap applies wherever else
-check output is stored, not just to a receipt's `checks`: `delivery.ts`
-runs `ctx.lastGate` through that same `gateForRecord` before building a
+result event of the same task, whether `"delivered"` or a refused
+`"inspection-finished"`. The whole events file is read and parsed for
+every query, so a check free to print up to `check.ts`'s 64MB buffer
+can't go in verbatim. The same cap applies wherever else check output is
+stored, not just to a receipt's `checks`: `delivery.ts` runs
+`ctx.lastGate` through that same `gateForRecord` before building a
 Delivery's `evidence` (both in `buildDelivery` and in
 `buildCommitFailureDelivery`), since a Delivery is stored on the very
 same event. The live `GateResult` is left untouched - the next attempt's
@@ -584,9 +620,10 @@ attempt that looked "delivered" the moment its check went green can still
 turn into `"discarded-protected-path"` a moment later). Since
 `events.jsonl` is append-only, that receipt can't be corrected in place —
 so `do()` computes every receipt's final `outcome` before it ever calls
-`appendEvent`, and logs the whole batch once, on its `"delivered"` event,
-already correct. A `fix` verdict's round does the same, appending its own
-`"delivered"` event carrying the cumulative receipts.
+`appendEvent`, and logs the whole batch once on the round's final result
+event, already correct. A `fix` verdict's round does the same, carrying
+cumulative receipts on either its new `"delivered"` event or a refused
+`"inspection-finished"` event.
 
 ## `verdict(taskId, ruling, note?)` — rule 6, "you get the last word"
 
@@ -612,10 +649,11 @@ whether a task is `"closed"`.
   `initialSession` set to the last receipt's session id and
   `startAttempt` continuing the numbering, so the record shows one
   running attempt count across the whole task, not a count that resets
-  per fix. A second `"delivered"` event is appended with the fix round's
-  own outcome and the **cumulative** receipts (prior + this round) —
-  `queries.ts`'s `deliveryOf`/`receiptsOf`/`stateOf` all read the
-  *last* `"delivered"` event for exactly this reason, not the first.
+  per fix. A completed fix round records **cumulative** receipts (prior
+  + this round). A delivery appends a second `"delivered"` event; an
+  Inspector refusal appends only `"inspection-finished"` and supersedes
+  the prior delivery. `queries.ts` therefore reads the latest event
+  appropriate to each value rather than assuming every fix re-delivers.
 
   This calls `reopenProductionLine` directly rather than going through
   `runProductionRound`, so a fix round appends `"work-started"` but no
@@ -662,18 +700,19 @@ whether a task is `"closed"`.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. Also ticks `onHeartbeat` every `DEFAULT_HEARTBEAT_INTERVAL_MS` while a `brain.work` call is in flight, so a long opaque await still shows up on the record (issue #12) - `do.ts` and `verdict.ts` both wire it to a `"heartbeat"` event - and fires `onCheckStarted` right before the check runs, so `"check-run"` lands twice per attempt (`details.phase: "started"`, then the result-carrying one) and a task genuinely mid-check is distinguishable from one that already finished a check (`queries.ts`'s `stateOf`). |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. |
+| `inspection.ts` | Records the configured Inspector handoff and its green, red, or refused result. A refusal reaches the record and task status but never becomes a red delivery. |
 | `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
-| `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/deliver — shared with `answer.ts`'s resume path). |
+| `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/inspect/result, shared with `answer.ts`'s resume path). |
 | `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong, re-enters the same line and worker on fix. |
-| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf` — all read from `events.jsonl`, and all key off the *last* matching event so a fix round's second `"delivered"` (or a later verdict) is what's read back. `fixRoundOf` instead counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. |
+| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal, while `receiptsOf` reads the latest event carrying receipts. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. |
 | `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path and `answer()` both use. |

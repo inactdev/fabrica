@@ -44,12 +44,17 @@
 <line class="conn" x1="210" y1="331" x2="266" y2="331"/>
 <rect class="box teal" x="268" y="306" width="252" height="50" rx="8"/><text class="th" x="394" y="327" text-anchor="middle">The project's tests decide</text><text class="ts" x="394" y="346" text-anchor="middle">run right here, in the copy</text>
 <path class="arr" d="M 520 331 L 542 331 L 542 257 L 524 257" marker-end="url(#arrow)"/>
+<line class="arr" x1="394" y1="356" x2="394" y2="366" marker-end="url(#arrow)"/>
+
+<rect class="box teal" x="60" y="374" width="150" height="28" rx="14"/><text class="th" x="135" y="392" text-anchor="middle">INSPECTION</text>
+<line class="conn" x1="210" y1="388" x2="266" y2="388"/>
+<rect class="box teal" x="268" y="366" width="252" height="44" rx="8"/><text class="th" x="394" y="385" text-anchor="middle">Inspector, when configured</text><text class="ts" x="394" y="402" text-anchor="middle">green/red deliver · refusal stops</text>
 
 <line class="arr" x1="400" y1="420" x2="400" y2="436" marker-end="url(#arrow)"/>
 
 <rect class="box gray" x="60" y="455" width="150" height="28" rx="14"/><text class="th" x="135" y="473" text-anchor="middle">DELIVERY</text>
 <line class="conn" x1="210" y1="469" x2="248" y2="469"/>
-<rect class="box gray" x="250" y="442" width="300" height="54" rx="8"/><text class="th" x="400" y="464" text-anchor="middle">What leaves the workspace</text><text class="ts" x="400" y="484" text-anchor="middle">how sure · assumptions · gaps · proof</text>
+<rect class="box gray" x="250" y="442" width="300" height="54" rx="8"/><text class="th" x="400" y="464" text-anchor="middle">What reaches you for a verdict</text><text class="ts" x="400" y="484" text-anchor="middle">how sure · assumptions · gaps · proof</text>
 <line class="arr" x1="400" y1="496" x2="400" y2="512" marker-end="url(#arrow)"/>
 
 <rect class="box purple" x="60" y="531" width="150" height="28" rx="14"/><text class="th" x="135" y="549" text-anchor="middle">VERDICT</text>

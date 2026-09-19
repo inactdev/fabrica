@@ -117,9 +117,11 @@ construction.
 
 What it deliberately leaves alone is the branch - `fabrica/<taskId>`
 survives destruction exactly where its last commit left it. That's on
-purpose: v1 never pushes and never opens a pull request, so the branch
-sitting there untouched is how the Client reviews the work afterward and
-merges or discards it by hand (SPEC.md).
+purpose: Fabrica itself never pushes or opens a pull request. On a
+project without Inspector, the surviving branch is how the Client reviews
+and merges or discards the work by hand. On a configured project,
+Inspector receives that same checked-out branch and owns any publication
+of green work; red work remains local (see `src/inspector/README.md`).
 
 One consequence worth knowing: only what was *committed* inside the
 worktree survives destruction, because a branch stores commits, not

@@ -165,7 +165,7 @@ export function gateForRecord(gate: GateResult): GateResult {
  * The real trigger is unexceptional: `appendEvent` throws on a short
  * write, ENOSPC, or EACCES. A missed heartbeat costs nothing more than a
  * `fabrica status` reading "quiet"; a lost task costs the work. */
-async function withHeartbeat<T>(
+export async function withHeartbeat<T>(
   tick: (() => void) | undefined,
   intervalMs: number,
   fn: () => Promise<T>

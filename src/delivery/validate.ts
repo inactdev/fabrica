@@ -18,14 +18,16 @@
 // whether the checks changed — it compares the gate against the task's
 // pinned base commit (src/foreman/gate-changes.ts).
 
-import type { Delivery } from "../../contract/surface.ts";
+import type { Delivery } from "../inspector/types.ts";
 import { DeliveryError } from "./errors.ts";
 
 const OUTCOMES: ReadonlySet<Delivery["outcome"]> = new Set([
   "done",
   "failure-report",
   "discarded-protected-path",
+  "inspection-red",
 ]);
+const INSPECTION_VERDICTS = new Set(["green", "red", "refused"]);
 
 // The string-valued fields: required, but an empty string is a legitimate
 // answer (e.g. `gaps: ""` when nothing was left undone), so only presence
@@ -41,13 +43,13 @@ export function validateDelivery(value: unknown): asserts value is Delivery {
   if (d.outcome === undefined) {
     throw new DeliveryError(
       "malformed",
-      'delivery is missing required field "outcome" (must be "done", "failure-report", or "discarded-protected-path")'
+      'delivery is missing required field "outcome" (must be "done", "failure-report", "discarded-protected-path", or "inspection-red")'
     );
   }
   if (typeof d.outcome !== "string" || !OUTCOMES.has(d.outcome as Delivery["outcome"])) {
     throw new DeliveryError(
       "malformed",
-      `delivery's "outcome" field is invalid (must be "done", "failure-report", or "discarded-protected-path")`
+      `delivery's "outcome" field is invalid (must be "done", "failure-report", "discarded-protected-path", or "inspection-red")`
     );
   }
 
@@ -64,6 +66,19 @@ export function validateDelivery(value: unknown): asserts value is Delivery {
     }
     if (typeof d[field] !== "string") {
       throw new DeliveryError("malformed", `delivery's "${field}" field is not a string`);
+    }
+  }
+
+  if (d.inspection !== undefined) {
+    if (typeof d.inspection !== "object" || d.inspection === null) {
+      throw new DeliveryError("malformed", `delivery's "inspection" field is not an object`);
+    }
+    const inspection = d.inspection as Record<string, unknown>;
+    if (typeof inspection.verdict !== "string" || !INSPECTION_VERDICTS.has(inspection.verdict)) {
+      throw new DeliveryError("malformed", `delivery's "inspection.verdict" field is invalid`);
+    }
+    if (typeof inspection.report !== "string") {
+      throw new DeliveryError("malformed", `delivery's "inspection.report" field is not a string`);
     }
   }
 

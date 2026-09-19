@@ -10,8 +10,9 @@
 // issue #8) - resuming here never calls brain.ask() again, regardless
 // of whether the extended brief would still look ambiguous to it.
 //
-// "Already answered" means a round that actually DELIVERED, not merely
-// one that was recorded: if runProductionRound throws before finishing,
+// "Already answered" means a round that actually completed with a
+// delivery or an Inspector refusal, not merely one that was recorded:
+// if runProductionRound throws before finishing,
 // the task must stay resumable, not get stuck forever with the Client's
 // answer on record and no way back in - see the guard below. What that
 // buys is resumability and an honest error every time, NOT a guarantee
@@ -30,13 +31,13 @@ import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { runProductionRound } from "./do.ts";
 import type { AskedDetails } from "./ask.ts";
-import type { FabricaTask } from "../../contract/surface.ts";
+import type { FabricaTask, Inspector } from "../inspector/types.ts";
 
 export async function answerTask(
   recordHome: string,
   taskId: string,
   answerText: string,
-  opts: { brain: Brain }
+  opts: { brain: Brain; inspector?: Inspector }
 ): Promise<FabricaTask> {
   const events = readEventsForTask(recordHome, taskId);
   if (events.length === 0) {
@@ -47,11 +48,11 @@ export async function answerTask(
   }
 
   // The LAST "questions-asked" is the round awaiting an answer; a prior
-  // "answers-given" that went on to actually deliver means this round is
-  // already spent - v1's one-clarification-round default, enforced here
-  // rather than left to silently re-ask. The guard keys on a COMPLETED
-  // round (answers-given followed by delivered), not merely on
-  // answers-given existing: if a previous `fabrica answer` call recorded
+  // "answers-given" that went on to a delivery or an Inspector refusal
+  // means this round is already spent - v1's one-clarification-round
+  // default, enforced here rather than left to silently re-ask. The guard
+  // keys on a COMPLETED round, not merely on answers-given existing: if a
+  // previous `fabrica answer` call recorded
   // the answer but then runProductionRound threw before finishing, the
   // task must stay resumable - refusing here on the mere presence of
   // answers-given would leave it permanently stuck, with the Client's
@@ -68,7 +69,13 @@ export async function answerTask(
   }
   const eventsSinceAsked = events.slice(askedIndex + 1);
   const answeredIndex = eventsSinceAsked.map((e) => e.name).lastIndexOf("answers-given");
-  if (answeredIndex !== -1 && eventsSinceAsked.slice(answeredIndex + 1).some((e) => e.name === "delivered")) {
+  const roundCompleted = eventsSinceAsked.slice(answeredIndex + 1).some(
+    (event) =>
+      event.name === "delivered" ||
+      (event.name === "inspection-finished" &&
+        (event.details as { verdict?: string } | undefined)?.verdict === "refused")
+  );
+  if (answeredIndex !== -1 && roundCompleted) {
     throw new ForemanError(
       "already-answered",
       `fabrica answer: task "${taskId}" already got its one clarification round (SPEC.md's ask-first ` +
@@ -121,6 +128,7 @@ export async function answerTask(
     totalAttempts: details.totalAttempts,
     explicitAttempts: details.explicitAttempts,
     isRetry,
+    inspector: opts.inspector,
   });
 }
 

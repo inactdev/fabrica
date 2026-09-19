@@ -3,7 +3,8 @@
 // calls src/delivery's validateDelivery on the result before treating it
 // as real (CONTRACT rule 4, issue #9).
 
-import type { Delivery, GateResult } from "../../contract/surface.ts";
+import type { GateResult } from "../../contract/surface.ts";
+import type { Delivery, Inspection } from "../inspector/types.ts";
 import { gateForRecord } from "./attempts.ts";
 
 export function buildDelivery(
@@ -15,6 +16,7 @@ export function buildDelivery(
     branch: string;
     files: string[];
     declaredGateChanges: string | undefined;
+    inspection?: Inspection;
   }
 ): Delivery {
   const summary =
@@ -22,8 +24,10 @@ export function buildDelivery(
       ? `Completed: ${ctx.taskText}`
       : outcome === "failure-report"
         ? `The project's check did not pass after ${ctx.attempts} attempt(s).`
-        : "The project's checks changed without a declared gate change (rule 9) - blocked from " +
-          "merging until the Client reviews it and chooses to override.";
+        : outcome === "inspection-red"
+          ? "Inspector reported the committed branch red after Fabrica's own checks passed."
+          : "The project's checks changed without a declared gate change (rule 9) - blocked from " +
+            "merging until the Client reviews it and chooses to override.";
 
   const checkOutput = gateForRecord(ctx.lastGate).output;
 
@@ -31,18 +35,22 @@ export function buildDelivery(
     outcome === "discarded-protected-path"
       ? "check.sh no longer matches what the ProductionLine started with, and no gateChanges " +
         `declaration came with it. Last check: ${checkOutput}`
-      : checkOutput;
+      : outcome === "inspection-red"
+        ? `Fabrica's check passed:\n${checkOutput}\n\nInspector reported:\n${ctx.inspection?.report ?? "no report"}`
+        : checkOutput;
 
   const gaps =
     outcome === "failure-report"
       ? "The project's check did not pass; see evidence for the failure output."
-      : outcome === "discarded-protected-path"
-        ? `The work is not discarded - it is committed on \`${ctx.branch}\` like any other outcome. ` +
-          "The merge is meant to be blocked by a repository CI gate reading the pull request's diff " +
-          "for the touched protected path - today only Fabrica's own repository has one " +
-          "(https://github.com/inactdev/fabrica/issues/55 tracks giving every managed project its " +
-          "own). Only the Client can review the undeclared change and override that check to merge it."
-        : "";
+      : outcome === "inspection-red"
+        ? "Inspector could not reach green after its mechanical repairs. The Client can give a fix verdict for work that needs the request's context."
+        : outcome === "discarded-protected-path"
+          ? `The work is not discarded - it is committed on \`${ctx.branch}\` like any other outcome. ` +
+            "The merge is meant to be blocked by a repository CI gate reading the pull request's diff " +
+            "for the touched protected path - today only Fabrica's own repository has one " +
+            "(https://github.com/inactdev/fabrica/issues/55 tracks giving every managed project its " +
+            "own). Only the Client can review the undeclared change and override that check to merge it."
+          : "";
 
   return {
     outcome,
@@ -54,6 +62,7 @@ export function buildDelivery(
     branch: ctx.branch,
     files: ctx.files,
     gateChanges: ctx.declaredGateChanges ?? "",
+    ...(ctx.inspection === undefined ? {} : { inspection: ctx.inspection }),
   };
 }
 
@@ -102,6 +111,7 @@ export function renderDeliveryMarkdown(delivery: Delivery): string {
       `confidence: ${delivery.confidence}`,
       `summary:    ${delivery.summary}`,
       `evidence:   ${delivery.evidence}`,
+      `inspection: ${delivery.inspection ? `${delivery.inspection.verdict}: ${delivery.inspection.report}` : ""}`,
       `assumptions: ${delivery.assumptions}`,
       `gaps:       ${delivery.gaps}`,
       `branch:     ${delivery.branch}`,

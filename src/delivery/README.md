@@ -23,16 +23,25 @@ validateDelivery({
 });
 ```
 
-Checks that every field `Delivery` requires is actually present and the
-right shape - `outcome` is one of the three literal strings, `confidence`
-is a finite number, `files` is an array of strings, the rest are strings.
-Throws a `DeliveryError` (`code: "malformed"`) naming the first field
-that's wrong, so the message itself says what to fix.
+Checks that every required field `Delivery` requires is actually present
+and the right shape - `outcome` is one of four literal strings,
+`confidence` is a finite number, `files` is an array of strings, and the
+other required fields are strings. An optional `inspection` must contain
+one of Inspector's three verdicts and its text report. Throws a
+`DeliveryError` (`code: "malformed"`) naming the first field that's
+wrong, so the message itself says what to fix.
 
 An empty string passes. `gaps: ""` and `assumptions: ""` are legitimate
 answers - "there were no gaps" - not missing data; only an absent or
 wrong-typed field counts as malformed. Same for `files: []`: a task that
 touched nothing is a real outcome, not an incomplete one.
+
+`inspection-red` is distinct from `failure-report`: Fabrica's own check
+was green, but Inspector's independent check remained red. It carries
+Inspector's report to the Client so a request-aware `fix` verdict can
+re-enter the same Worker and branch. An Inspector refusal has no delivery
+at all, because it reached no verdict; the Foreman records its reason
+separately for the operator.
 
 Structural only, and deliberately so: it takes `unknown` and never
 touches the filesystem or git, so it works the same way on a delivery

@@ -4,10 +4,9 @@
 // (request.md, answers.md, brief.md, plan.md, delivery.md, verdict,
 // transcript.log) is a convenience view of it.
 
-// FabricaEvent/FabricaEventName are declared once in contract/surface.ts
-// (issue #45) and imported here as a type only - erased at compile time,
-// so this creates no runtime dependency on contract/.
-import type { FabricaEvent, FabricaEventName } from "../../contract/surface.ts";
+// The base record shapes are ratified in contract/surface.ts. Inspector's
+// trigger and result events extend that closed set in src/inspector/types.ts.
+import type { FabricaEvent, FabricaEventName } from "../inspector/types.ts";
 export type { FabricaEvent, FabricaEventName };
 
 /** Input to appendEvent: `occurredAt` is stamped by the record, never the caller. */

@@ -1,12 +1,13 @@
 // Read-side of the loop: everything do() writes to events.jsonl, read
 // back. events.jsonl is the single source of truth (SPEC.md "The
-// record") — deliveryOf and receiptsOf don't parse delivery.md; they read
-// the same "delivered" event do() wrote, which carries the structured
-// Delivery and Receipt[] in its `details`.
+// record") - deliveryOf and receiptsOf don't parse delivery.md. Delivery
+// comes from the latest "delivered" event unless a newer Inspector refusal
+// superseded it, while receipts come from the latest event carrying them.
 
 import { readEvents, readEventsForTask } from "../record/index.ts";
 import type { FabricaEvent } from "../record/index.ts";
-import type { Delivery, FabricaTask, Receipt } from "../../contract/surface.ts";
+import type { Receipt } from "../../contract/surface.ts";
+import type { Delivery, FabricaTask } from "../inspector/types.ts";
 
 export function eventsOf(recordHome: string, taskId: string): FabricaEvent[] {
   return readEventsForTask(recordHome, taskId);
@@ -38,13 +39,24 @@ export interface DeliveredDetails {
 }
 
 export function deliveryOf(recordHome: string, taskId: string): Delivery | null {
-  const details = latestDeliveredDetails(recordHome, taskId);
-  return details?.delivery ?? null;
+  const events = readEventsForTask(recordHome, taskId);
+  const deliveredIndex = events.map((event) => event.name).lastIndexOf("delivered");
+  const refusedIndex = events
+    .map(
+      (event) =>
+        event.name === "inspection-finished" &&
+        (event.details as { verdict?: string } | undefined)?.verdict === "refused"
+    )
+    .lastIndexOf(true);
+  if (refusedIndex > deliveredIndex) return null;
+  return (events[deliveredIndex]?.details as DeliveredDetails | undefined)?.delivery ?? null;
 }
 
 export function receiptsOf(recordHome: string, taskId: string): Receipt[] {
-  const details = latestDeliveredDetails(recordHome, taskId);
-  return details?.receipts ?? [];
+  const receiptEvent = readEventsForTask(recordHome, taskId)
+    .filter((event) => Array.isArray((event.details as { receipts?: unknown } | undefined)?.receipts))
+    .at(-1);
+  return (receiptEvent?.details as { receipts?: Receipt[] } | undefined)?.receipts ?? [];
 }
 
 /** The most recent "delivered" event's details — a fix round appends a
@@ -129,11 +141,22 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
         state = details?.phase === "started" ? "checking" : "working";
         break;
       }
+      case "inspector-called":
+        state = "working";
+        break;
+      case "inspection-finished": {
+        const details = event.details as { verdict?: string } | undefined;
+        state = details?.verdict === "refused" ? "refused" : "working";
+        break;
+      }
+      case "inspection-skipped":
+        state = "working";
+        break;
       case "delivered": {
         // A fix round appends a second "delivered" event on the same
         // task; the forward pass naturally lands on the last one.
         const details = event.details as { outcome?: Delivery["outcome"] } | undefined;
-        state = details?.outcome === "done" ? "delivered" : "failed";
+        state = details?.outcome === "done" || details?.outcome === "inspection-red" ? "delivered" : "failed";
         break;
       }
       case "verdict-recorded": {
