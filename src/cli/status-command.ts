@@ -30,7 +30,9 @@ history.
 A task whose \`brain.ask()\` threw before any Worker ever ran has no \`fix\`
 path back and never will again; it stays listed - marked "FAILED,
 UNRESOLVABLE" and sorted after the entries still actually moving - rather
-than vanishing or blending in with ordinary open work.
+than vanishing or blending in with ordinary open work. An Inspector
+refusal also sorts after live work, but says Inspector reached no verdict:
+it is neither a failure nor a quiet task.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -84,13 +86,11 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
       return 0;
     }
 
-    // Dead-end (ask-failed) tasks sort after the entries still actually
-    // moving, so a reader scanning top-down sees real open work first -
-    // see formatStatusLine's "FAILED, UNRESOLVABLE" branch for why they
-    // stay listed at all rather than being dropped (issue #12 review
-    // finding, Client ruling). isDeadEnd is the one definition of that
-    // rule, shared with render.ts's own marker, so this sort and that
-    // label can never silently disagree on what counts as a dead end.
+    // Dead-end tasks sort after the entries still actually moving, so a
+    // reader scanning top-down sees real open work first. isDeadEnd is
+    // the one definition shared with render.ts's marker, so an ask
+    // failure and an Inspector refusal with no verdict cannot drift from
+    // this sort order.
     const sorted = [...openTasks].sort((a, b) => {
       const aDeadEnd = isDeadEnd(a.task.state, a.hasDelivery);
       const bDeadEnd = isDeadEnd(b.task.state, b.hasDelivery);

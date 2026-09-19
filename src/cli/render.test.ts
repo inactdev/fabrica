@@ -351,6 +351,21 @@ test("describeLiveness: null for a checking task with no recorded start at all (
   assert.equal(describeLiveness("checking", events, Date.now() + CHECKING_QUIET_CEILING_MS * 10), null);
 });
 
+test("describeLiveness: an Inspector refusal says no verdict was reached, never that the task is quiet", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    {
+      occurredAt: new Date(start).toISOString(),
+      taskId: "t1",
+      name: "inspection-finished",
+      details: { verdict: "refused", report: "container runtime unavailable" },
+    },
+  ];
+
+  assert.equal(describeLiveness("refused", events, start + PRE_WORK_QUIET_CEILING_MS * 10), "Inspector reached no verdict");
+  assert.equal(isQuietTooLong("refused", events, start + PRE_WORK_QUIET_CEILING_MS * 10), false);
+});
+
 test("isDeadEnd: a failed task with no delivery is a dead end", () => {
   assert.equal(isDeadEnd("failed", false), true);
 });
@@ -359,7 +374,12 @@ test("isDeadEnd: a failed task WITH a delivery is not a dead end - a fix verdict
   assert.equal(isDeadEnd("failed", true), false);
 });
 
-test("isDeadEnd: any non-failed state is never a dead end, regardless of delivery", () => {
+test("isDeadEnd: an Inspector refusal is a dead end, regardless of an earlier delivery", () => {
+  assert.equal(isDeadEnd("refused", false), true);
+  assert.equal(isDeadEnd("refused", true), true);
+});
+
+test("isDeadEnd: all other states are not dead ends", () => {
   assert.equal(isDeadEnd("working", false), false);
   assert.equal(isDeadEnd("checking", false), false);
   assert.equal(isDeadEnd("delivered", false), false);

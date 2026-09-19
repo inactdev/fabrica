@@ -195,6 +195,30 @@ test("runStatusCommand: a red delivery shows failed, not delivered, and carries 
   assert.doesNotMatch(io.out[0], /AWAITING YOUR VERDICT/);
 });
 
+test("runStatusCommand: an Inspector refusal sorts after live work and says no verdict was reached", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "refusal", name: "task-received" });
+  appendEvent(recordHome, { taskId: "refusal", name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, { taskId: "refusal", name: "inspector-called", details: { branch: "fabrica/refusal" } });
+  appendEvent(recordHome, {
+    taskId: "refusal",
+    name: "inspection-finished",
+    details: { verdict: "refused", report: "container runtime unavailable" },
+  });
+  appendEvent(recordHome, { taskId: "asking", name: "task-received" });
+  appendEvent(recordHome, { taskId: "asking", name: "questions-asked", details: { questions: ["Which endpoint?"] } });
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 2);
+  assert.match(io.out[0], /^asking\s/);
+  assert.match(io.out[1], /^refusal\s/);
+  assert.match(io.out[1], /INSPECTOR REACHED NO VERDICT/);
+  assert.doesNotMatch(io.out[1], /failed|quiet/i);
+});
+
 // Client ruling, issue #12 review finding (status-lists-ask-failed-tasks-
 // forever): a task whose brain.ask() itself threw has no fix path back
 // and never will again - it must stay in the listing (never hidden), but

@@ -243,18 +243,12 @@ async function streamTranscript(ctx: {
       stdout(notice);
     }
 
-    // Two states provably cannot change again, and the watch ends for
-    // both: "closed" (recordVerdict refuses any further ruling once the
-    // last verdict was accept or wrong - src/foreman/verdict.ts's
-    // "already-closed"), and a "failed" task with no "delivered" event -
-    // brain.ask() itself threw before any Worker ran, so `fabrica
-    // verdict ... fix` refuses it with "not-delivered" and `fabrica
-    // answer` refuses it with "no-questions-pending" (issue #12 review
-    // finding, Client ruling: identical property to "closed", so it gets
-    // the same treatment). A genuine failed DELIVERY, "asking", and
-    // "delivered" all still keep polling - a `fix` verdict or a `fabrica
-    // answer` genuinely wakes those back up, and this watch should show
-    // it when it happens.
+    // A closed task, an ask failure before delivery, and an Inspector
+    // refusal with no verdict cannot move again. isDeadEnd is the one
+    // shared definition for the latter two, so this exit condition stays
+    // aligned with status and terminal notices. A failed delivery,
+    // "asking", and "delivered" still keep polling - a `fix` verdict or
+    // `fabrica answer` can wake those back up.
     return state === "closed" || isDeadEnd(state, hasDelivery);
   };
 

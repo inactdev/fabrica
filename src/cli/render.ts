@@ -95,8 +95,8 @@ export function checkStartedAt(events: FabricaEvent[]): Date | null {
  * QUIET_THRESHOLD_MS, a task "checking" whose check has run past
  * CHECKING_QUIET_CEILING_MS, or a pre-work task (see
  * PRE_WORK_QUIET_CEILING_MS) whose silence since task-received has run
- * past that window's own ceiling - a delivered, failed, or closed task
- * is quiet by definition and that's not the same fact. Client ruling
+ * past that window's own ceiling - a delivered, failed, refused, or
+ * closed task is finished rather than quiet. Client ruling
  * (issue #12 review finding): no state stays exempt forever - "checking"
  * and the pre-work window both get their own long-but-finite ceilings
  * instead of an unconditional pass, each sized to that window's own
@@ -111,6 +111,7 @@ export function checkStartedAt(events: FabricaEvent[]): Date | null {
  * from a `brain.ask()` call (or the `createProductionLine` step right
  * after it) simply still being in flight. */
 export function isQuietTooLong(state: FabricaTask["state"], events: FabricaEvent[], now: number = Date.now()): boolean {
+  if (isDeadEnd(state, events.some((event) => event.name === "delivered"))) return false;
   if (state === "checking") {
     const startedAt = checkStartedAt(events);
     return startedAt !== null && now - startedAt.getTime() > CHECKING_QUIET_CEILING_MS;
@@ -155,16 +156,11 @@ export function formatStatusLine(
   if (task.state === "delivered") {
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
   }
-  if (task.state === "refused") {
-    return `${base}  <- INSPECTOR REACHED NO VERDICT: fabrica log ${task.id}`;
-  }
-  // brain.ask() threw before any Worker ever ran - recordVerdict refuses
-  // a `fix` with "not-delivered", so this task cannot ever move again.
-  // The Client's ruling (issue #12 review finding) is neither to hide
-  // these nor let them read as ordinary open work: mark it plainly as the
-  // dead end it is, so it isn't mistaken for something still in progress.
   if (isDeadEnd(task.state, opts.hasDelivery)) {
-    return `${base}  <- FAILED, UNRESOLVABLE: brain's clarify step threw before any work started - see \`fabrica log ${task.id}\``;
+    if (task.state === "failed") {
+      return `${base}  <- FAILED, UNRESOLVABLE: brain's clarify step threw before any work started - see \`fabrica log ${task.id}\``;
+    }
+    return `${base}  <- ${(opts.liveness ?? "Inspector reached no verdict").toUpperCase()}: fabrica log ${task.id}`;
   }
   // Whatever describeLiveness decided - "checking, 2m so far", a quiet
   // alarm (whichever wording fits), or nothing - is exactly what shows
@@ -175,19 +171,12 @@ export function formatStatusLine(
   return opts.liveness ? `${base}  <- ${opts.liveness}` : base;
 }
 
-/** A task whose `brain.ask()` itself threw before any Worker ever ran -
- * `recordVerdict` refuses a `fix` on it with "not-delivered", so it can
- * never move again (see `formatStatusLine`'s "FAILED, UNRESOLVABLE"
- * branch, `formatTerminalNotice`'s "failed before any work started"
- * branch, and `watch-command.ts`'s poll-loop exit condition, which all
- * mean exactly this). The one definition of that rule, taking a bare
- * state rather than a task object so every one of those callers - some
- * of which only ever hold the state, not a full `FabricaTask` - can call
- * it directly without wrapping it first: independent copies of the same
- * predicate is how they'd silently drift apart (issue #12 review
- * finding). */
+/** The one definition of a task that cannot move again in its current
+ * round: `brain.ask()` failed before delivery, or Inspector reached no
+ * verdict. It keeps status sorting, terminal notices, quiet detection,
+ * and watch's exit condition aligned. */
 export function isDeadEnd(state: FabricaTask["state"], hasDelivery: boolean): boolean {
-  return state === "failed" && !hasDelivery;
+  return state === "refused" || (state === "failed" && !hasDelivery);
 }
 
 /** The one wording for an ordinary "working" task gone quiet, shared by
@@ -213,7 +202,9 @@ export function formatQuietNotice(elapsedMs: number, lastSignal: string): string
  * literal last event, never asks a separate "has a heartbeat ever
  * landed" (or any other "ever, anywhere") question. The set covered is
  * exhaustive for a "working" task's last event (verified against
- * `stateOf`'s switch in `src/foreman/queries.ts`): `task-received` and
+ * `stateOf`'s switch in `src/foreman/queries.ts`). An Inspector refusal
+ * is the one terminal liveness case, named below before a quiet reading:
+ * `task-received` and
  * `line-cut` are the only things that can land before `work-started`
  * (the pre-work window), `heartbeat` and a finished `check-run` are the
  * only things that can land after it without changing the state away
@@ -231,6 +222,10 @@ function nameLastSignal(event: FabricaEvent): string {
       return "work started";
     case "check-run":
       return "the check finished";
+    case "inspection-finished": {
+      const details = event.details as { verdict?: string } | undefined;
+      return details?.verdict === "refused" ? "Inspector reached no verdict" : "Inspector finished";
+    }
     case "answers-given":
       return "the answer was recorded";
     case "line-cut":
@@ -258,8 +253,9 @@ export function formatCheckingQuietNotice(elapsedMs: number): string {
 /** What to say about a task's liveness right now - "checking, 2m so
  * far" for a check genuinely still in progress, the quiet alarm past a
  * ceiling (whichever wording fits: `formatCheckingQuietNotice` for
- * "checking", `formatQuietNotice` otherwise), or null when neither
- * applies. The one definition of that decision AND the elapsed-time
+ * "checking", `formatQuietNotice` otherwise), an Inspector refusal's
+ * no-verdict outcome, or null when neither applies. The one definition
+ * of that decision AND the elapsed-time
  * arithmetic under it - `checkStartedAt` for "checking", the record's
  * literal last event otherwise (read inline, see below), since those are
  * different quantities that only coincide by accident (a heartbeat
@@ -275,6 +271,11 @@ export function formatCheckingQuietNotice(elapsedMs: number): string {
  * that - this function only ever answers "what does it look like,"
  * never "when to show it again." */
 export function describeLiveness(state: FabricaTask["state"], events: FabricaEvent[], now: number): string | null {
+  if (isDeadEnd(state, events.some((event) => event.name === "delivered"))) {
+    if (state !== "refused") return null;
+    const last = events[events.length - 1];
+    return last ? nameLastSignal(last) : "Inspector reached no verdict";
+  }
   if (state === "checking") {
     const startedAt = checkStartedAt(events);
     if (startedAt === null) return null; // defensive: shouldn't happen for a real task
@@ -308,20 +309,20 @@ export function formatTerminalNotice(
   state: FabricaTask["state"],
   ctx: { taskId: string; hasDelivery: boolean }
 ): string | null {
+  if (isDeadEnd(state, ctx.hasDelivery)) {
+    if (state === "refused") {
+      return `-- Inspector reached no verdict - resolve the reason in \`fabrica log ${ctx.taskId}\` before handing the branch over again --`;
+    }
+    return (
+      `-- task failed before any work started - the brain's clarify step threw, so nothing was ever ` +
+      `delivered and there is no \`fix\` path; \`fabrica log ${ctx.taskId}\` has the reason --`
+    );
+  }
+
   switch (state) {
     case "delivered":
       return `-- task delivered - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
     case "failed":
-      if (isDeadEnd(state, ctx.hasDelivery)) {
-        // The only way to be "failed" with no "delivered" event on the
-        // record: brain.ask() itself threw, before any Worker ran (see
-        // stateOf's "ask-failed" branch). Nothing was ever delivered, so
-        // there is nothing to rule on.
-        return (
-          `-- task failed before any work started - the brain's clarify step threw, so nothing was ever ` +
-          `delivered and there is no \`fix\` path; \`fabrica log ${ctx.taskId}\` has the reason --`
-        );
-      }
       return `-- task failed - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
     case "closed":
       // Rule 6: closed means the Client's verdict is recorded and final -
@@ -331,8 +332,6 @@ export function formatTerminalNotice(
       // Stopped for clarifying questions before any Worker ran (issue #8)
       // - polling forever here would look like a hang with no way out.
       return `-- task asking - stopped for clarifying questions; answer with \`fabrica answer ${ctx.taskId} -m "<text>"\` to resume it --`;
-    case "refused":
-      return `-- Inspector reached no verdict - resolve the reason in \`fabrica log ${ctx.taskId}\` before handing the branch over again --`;
     default:
       return null;
   }

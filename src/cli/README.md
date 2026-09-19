@@ -234,16 +234,16 @@ them can reach a running worker.
   reached a real delivery, say a `fix` verdict can still wake the worker;
   `asking` points at `fabrica answer`; and a `failed` task that never
   delivered says so plainly - `recordVerdict` would refuse a ruling on
-  it. A `refused` task names Inspector and points at its report in the
-  log. The loop ends by itself for the three states that provably cannot
-  change again: `closed`, that same never-delivered `failed` task
-  (`fabrica verdict ... fix` refuses it with `not-delivered`, `fabrica
-  answer` with `no-questions-pending`, so nothing can move it), and
-  `refused`, which has no Client delivery or Fabrica retry path. Every
-  other terminal state keeps polling, and the notice re-fires whenever
-  the state genuinely changes, so a second delivery after a `fix` still
-  announces itself. **Stopping the watch never stops the
-  work**: this command only ever *reads* `events.jsonl` and
+  it. An Inspector refusal says no verdict was reached and points at its
+  report in the log. The loop ends by itself for the three states that
+  provably cannot change again: `closed`, that same never-delivered
+  `failed` task (`fabrica verdict ... fix` refuses it with
+  `not-delivered`, `fabrica answer` with `no-questions-pending`, so
+  nothing can move it), and an Inspector refusal, which has no Client
+  delivery or Fabrica retry path. Every other terminal state keeps
+  polling, and the notice re-fires whenever the state genuinely changes,
+  so a second delivery after a `fix` still announces itself. **Stopping
+  the watch never stops the work**: this command only ever *reads* `events.jsonl` and
   `transcript.log`, so Ctrl-C ends the polling loop and nothing else.
   Never add anything here that reaches toward the detached process
   `fabrica do` spawned.
@@ -256,12 +256,12 @@ notice (`formatTerminalNotice`), the collapsed heartbeat run
 catch-up), the status line, the event line, and the transcript line each
 have exactly one definition, so an edit to any of them can't drift
 between commands. The same holds for the one judgement all of this hangs
-on: `isDeadEnd(state, hasDelivery)` is the single definition of "failed
-with nothing ever delivered", called by `status`'s "FAILED,
-UNRESOLVABLE" marker and its sort, by `formatTerminalNotice`'s
-failed-before-any-work branch, and by `watch`'s poll-loop exit
-condition - it takes a bare state, not a task, so a caller holding only
-the state calls it directly instead of hand-writing the check again.
+on: `isDeadEnd(state, hasDelivery)` is the single definition of a task
+that cannot move again in its current round - either a failed clarify
+step before delivery or an Inspector refusal with no verdict. It drives
+`status`'s dead-end marker and sort, `formatTerminalNotice`, quiet
+suppression, and `watch`'s poll-loop exit condition, so those views
+cannot disagree about whether the task is still live.
 
 Both `status` and `watch` read the record once per render, then derive
 everything else from the events already in hand: `status` takes

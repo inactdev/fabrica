@@ -429,7 +429,7 @@ test("runWatchCommand: a task whose ask() threw (failed, never delivered) ends t
   );
 });
 
-test("runWatchCommand: an Inspector refusal names the report path and ends the watch", async () => {
+test("runWatchCommand: an Inspector refusal names no verdict and ends the watch", async () => {
   const recordHome = tempRecordHome();
   appendEvent(recordHome, { taskId: "t1", name: "task-received" });
   appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
@@ -441,15 +441,21 @@ test("runWatchCommand: an Inspector refusal names the report path and ends the w
   });
 
   const io = captureIo();
+  const safetyStop = new AbortController();
+  const timer = setTimeout(() => safetyStop.abort(), 1_000);
   const code = await runWatchCommand(["t1"], {
     recordHome,
+    signal: safetyStop.signal,
     installSigintHandler: false,
     pollIntervalMs: 10,
     ...io,
   });
+  clearTimeout(timer);
 
   assert.equal(code, 0);
+  assert.equal(safetyStop.signal.aborted, false, "watch should end for a refusal, not wait for its safety stop");
   assert.ok(io.out.some((line) => line.includes("Inspector reached no verdict")));
+  assert.ok(!io.out.some((line) => /failed|quiet/i.test(line)), `expected no false failure or quiet alarm, got: ${JSON.stringify(io.out)}`);
 });
 
 test("runWatchCommand: a task with a real failed DELIVERY keeps polling, unlike an ask() failure", async () => {
