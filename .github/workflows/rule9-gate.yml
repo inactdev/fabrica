@@ -31,6 +31,14 @@
 # 3000-file cap and the mid-run-push race below apply once, not twice),
 # with its own PATTERNS variable and its own wording.
 #
+# ISSUE #96 - a third, separately-worded check below temporarily blocks
+# `*.test.ts`. A test change changes what "correct" means, so until the
+# examiner (github.com/inactdev/inspector#7) exists the Client reviews
+# every one directly. This is deliberately crude and temporary: remove
+# this pass when github.com/inactdev/fabrica/issues/96 is resolved. It
+# runs AFTER the contract pass so a contract test keeps the contract
+# message above, rather than being described only as a test change.
+#
 # SAFETY-CRITICAL - read before editing this file:
 #
 # This job runs on `pull_request_target`, not `pull_request`, so GitHub
@@ -128,6 +136,14 @@ jobs:
           CONTRACT_PROTECTED_PATHS: |
             contract/**
             CONTRACT.md
+          # Issue #96: tests define what "correct" means. Until Inspector's
+          # examiner exists (inactdev/inspector#7), every test change needs
+          # the Client's direct review. This is a temporary stopgap, tracked
+          # by github.com/inactdev/fabrica/issues/96, and must be removed
+          # when the examiner lands. It follows the contract pass below so
+          # contract tests retain the contract-specific message.
+          TEST_PROTECTED_PATHS: |
+            *.test.ts
         run: |
           # The API listing needs no checkout at all - GitHub supplies the
           # file list directly from the pull request, which is also the
@@ -213,5 +229,21 @@ jobs:
               done
             done <<< "$touched"
           done <<< "$CONTRACT_PROTECTED_PATHS"
+
+          # Issue #96 deliberately follows the contract loop: contract tests
+          # are contract changes first, while every other test change needs
+          # the Client's review until Inspector's examiner exists.
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            while IFS=$'\t' read -r file previous_file; do
+              for candidate in "$file" "$previous_file"; do
+                [ -n "$candidate" ] || continue
+                if [[ "$candidate" == $pattern ]]; then
+                  echo "::error::This pull request touches \"$candidate\", a test change that changes what Fabrica considers correct. Until Inspector's examiner exists, the Client must review and merge every test change directly (github.com/inactdev/fabrica/issues/96)."
+                  exit 1
+                fi
+              done
+            done <<< "$touched"
+          done <<< "$TEST_PROTECTED_PATHS"
 
           echo "No protected path touched."
