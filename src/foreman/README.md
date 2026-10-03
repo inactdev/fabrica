@@ -317,6 +317,17 @@ whether work passes deserves the Client's eyes every time; Fabrica's own
 delivery record still tells the two apart for the Client's benefit
 (`gateChanges`), the CI check does not need to.
 
+**Temporary test-change review.** Issue #96 adds a third, separately-worded
+workflow pass for `*.test.ts`, after the contract pass. A contract test is a
+contract change first and keeps that message; any other test change says it
+changes what Fabrica considers correct and needs the Client's review. This is
+a temporary stopgap until Inspector's examiner (inactdev/inspector#7) lands,
+then it must be removed. `gate-changes.ts` deliberately does not mirror this
+list: it detects undeclared Worker edits to the active `check.sh` and chooses a
+recorded task outcome, while this CI-only rule reviews every pull request's
+test changes, declared or not. Treating a test edit as a
+`discarded-protected-path` outcome would conflate those separate decisions.
+
 **Protecting its own definition.** An earlier version of this workflow
 ran on plain `pull_request`, which has a sharp edge review caught twice:
 GitHub reads a `pull_request` workflow's *definition* from the PR's own
@@ -368,9 +379,12 @@ override; any other PR clears that check. The same job also runs a second,
 separately-worded pass over the same file list for `contract/**` and
 `CONTRACT.md` (`CONTRACT_PROTECTED_PATHS`, issue #53) - not a third rule
 9 case, since changing the contract is allowed and only needs to never
-merge itself; the workflow file's own header comment owns that reasoning,
-and `contract/rule9-gate.contract-paths.test.ts` proves the pattern list
-and its distinct wording are there. The job's `permissions:` are scoped to
+merge itself. A third, temporary pass then checks `*.test.ts` (issue #96):
+contract tests retain the earlier contract message, while other test changes
+need the Client's direct review until Inspector's examiner
+(inactdev/inspector#7) lands. The workflow file's own header comment owns
+that reasoning, and `contract/rule9-gate.contract-paths.test.ts` proves the
+pattern lists and distinct wording are there. The job's `permissions:` are scoped to
 `pull-requests: read` only, the minimum the API call needs, rather than
 inheriting the default token scope. The job name stays
 `block-protected-path-change` regardless of any other change to this
@@ -381,8 +395,9 @@ block a merge — that's a GitHub repository setting, not something this
 code can turn on for you; see the workflow file's own header comment.
 
 **A red check here is sometimes the correct outcome.** A PR that edits
-the workflow, or (since issue #53) touches `contract/` or `CONTRACT.md`,
-fails this check itself - by design, every time. GitHub runs the *base
+the workflow, touches `contract/` or `CONTRACT.md` (since issue #53), or
+touches a test file (temporarily, issue #96), fails this check itself - by
+design, every time. GitHub runs the *base
 branch's* copy of the workflow, so the branch's own version never
 executes and nothing committed on the branch can turn that check green;
 the only thing the running job reads from the PR is the list of

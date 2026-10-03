@@ -6,10 +6,11 @@
 // alone: only the Client merges it.
 //
 // Enforcement lives entirely in .github/workflows/rule9-gate.yml, in the
-// same job as rule 9's own check but as a second, separately-worded
-// matching pass — see that file's own header comment for the full
-// reasoning. There is no Fabrica code involved at all (no detection
-// module to unit-test), so the only way to prove the protection exists
+// same job as rule 9's own check but as separately-worded matching passes.
+// The contract pass stays before the temporary test pass so a contract test
+// is reported as a contract change, not merely as a test change. There is no
+// Fabrica code involved at all (no detection module to unit-test), so the
+// only way to prove the protection exists
 // is to read the workflow's own source and check its pattern list — the
 // same "the file itself is the answer key" spirit as rule7's watchdog
 // test, applied to a CI file instead of a contract/*.test.ts file.
@@ -55,7 +56,7 @@ function readBlockScalarLines(source: string, key: string): string[] | null {
   return lines;
 }
 
-test("rule9-gate.yml protects contract/ and CONTRACT.md, distinctly from rule 9's own protected paths", () => {
+test("rule9-gate.yml protects contract paths and separately blocks non-contract test changes", () => {
   const source = readFileSync(workflowPath, "utf8");
 
   // The job name is load-bearing (wired into required-status-check
@@ -127,6 +128,60 @@ test("rule9-gate.yml protects contract/ and CONTRACT.md, distinctly from rule 9'
     /only the client/i,
     "the contract-path failure message must say only the Client may merge it"
   );
+
+  // Issue #96 temporarily requires the Client to review every test
+  // change until Inspector's examiner exists. This third pass must stay
+  // after the contract pass: contract tests match both patterns, but the
+  // contract message is the meaningful one and must win.
+  const testPatterns = readBlockScalarLines(source, "TEST_PROTECTED_PATHS");
+  assert.ok(testPatterns, "no TEST_PROTECTED_PATHS block found in rule9-gate.yml");
+  assert.ok(
+    testPatterns.length > 0,
+    "TEST_PROTECTED_PATHS must list at least one pattern"
+  );
+
+  const matchesTestPattern = (candidate: string) =>
+    testPatterns.some((pattern) => bashGlobToRegExp(pattern).test(candidate));
+
+  assert.ok(
+    matchesTestPattern("src/foreman/gate-changes.test.ts"),
+    "a nested src test file must be protected"
+  );
+  assert.ok(
+    !matchesTestPattern("src/foreman/gate-changes.ts"),
+    "the near-miss non-test source file gate-changes.ts must not be protected as a test"
+  );
+
+  const testLoop = source.match(
+    /while IFS= read -r pattern; do\n(?:(?!while IFS= read -r pattern; do)[\s\S])*?done <<< "\$TEST_PROTECTED_PATHS"/
+  );
+  assert.ok(testLoop, "no loop over TEST_PROTECTED_PATHS found in rule9-gate.yml");
+
+  const testErrors = [...testLoop[0].matchAll(/::error::([^\n]*)/g)].map((match) => match[1]);
+  assert.equal(
+    testErrors.length,
+    1,
+    "the TEST_PROTECTED_PATHS loop must emit exactly one failure message"
+  );
+  assert.match(
+    testErrors[0],
+    /test change/i,
+    "the test-path failure message must name the test change"
+  );
+  assert.match(
+    testErrors[0],
+    /only the client|client must review/i,
+    "the test-path failure message must require the Client's review"
+  );
+  assert.notEqual(
+    testErrors[0],
+    contractErrors[0],
+    "the test-path failure message must not reuse the contract-path wording"
+  );
+
+  const contractLoopStart = source.indexOf(contractLoop[0]);
+  const testLoopStart = source.indexOf(testLoop[0]);
+  assert.ok(testLoopStart > contractLoopStart, "the test pass must follow the contract pass");
 
   const allErrors = [...source.matchAll(/::error::([^\n]*)/g)].map((match) => match[1]);
   assert.equal(
