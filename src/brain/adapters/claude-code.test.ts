@@ -252,6 +252,36 @@ test("claudeCodeAdapter carries cost, duration, and token usage on a 'usage' tra
   });
 });
 
+test("claudeCodeAdapter passes maxSpendUsd as --max-budget-usd", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
+
+  const result = await brain.work("ECHO_ARGS", makeFakeCliWorkdir(), { maxSpendUsd: 1.25 });
+
+  const argsSeen: string[] = JSON.parse(result.transcript[0].text);
+  assert.equal(argsSeen[argsSeen.indexOf("--max-budget-usd") + 1], "1.25");
+});
+
+// The real binary, verified on 2.1.295: hitting --max-budget-usd exits 1
+// with a result line carrying is_error: true, subtype
+// "error_max_budget_usd", and the real total_cost_usd (which can already
+// be past the budget - the CLI checks after a turn, not during one). That
+// is the cap working, not the brain failing: the attempt's spend must
+// reach the receipt so the Foreman can stop the task honestly, instead of
+// a thrown error losing the money on the record.
+test("claudeCodeAdapter returns normally, cost included, when the budget runs out", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
+
+  const result = await brain.work("BUDGET_EXHAUSTED", makeFakeCliWorkdir(), { maxSpendUsd: 0.1 });
+
+  const usageEntry = result.transcript.find((e) => e.kind === "usage");
+  assert.ok(usageEntry, "no usage entry - the spend of a budget-stopped call was lost");
+  assert.equal(JSON.parse(usageEntry.text).totalCostUsd, 0.1427);
+  assert.ok(result.transcript.some((e) => e.kind === "budget-exhausted"));
+  assert.equal(result.session, "fake-session-123");
+});
+
 test("claudeCodeAdapter throws ClaudeCodeError('cli-error') on a non-zero exit with no JSON on stdout", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });

@@ -25,7 +25,8 @@ import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { handToInspector } from "./inspection.ts";
-import type { Receipt } from "../../contract/surface.ts";
+import { costLabelOf, recordCapStop, recordReceipt, requireRoomToStart, spendLimitsFor, spendUnknownUnderCap } from "./caps.ts";
+import type { Caps, Receipt } from "../../contract/surface.ts";
 import type { Delivery, Inspection, Inspector } from "../inspector/types.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
@@ -35,7 +36,7 @@ export async function recordVerdict(
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { brain: Brain; inspector?: Inspector }
+  opts: { brain: Brain; inspector?: Inspector; caps?: Caps }
 ): Promise<void> {
   if (!RULINGS.has(ruling)) {
     throw new ForemanError(
@@ -103,6 +104,11 @@ export async function recordVerdict(
     );
   }
 
+  // Rule 10: a fix spends money, so it is held to the caps like any new
+  // start - checked before the verdict is recorded, so a refused fix can
+  // simply be asked for again once there is room.
+  if (ruling === "fix") requireRoomToStart(recordHome, taskId, opts.caps, { project: latestDeliveredDetails(recordHome, taskId)?.project });
+
   // Write the human-readable verdict file before the record event that
   // closes (or reopens) the loop on it — same principle as the
   // commit-failure delivery in do.ts writing delivery.md before its
@@ -121,6 +127,7 @@ export async function recordVerdict(
     priorReceipts,
     priorGateChanges: details?.delivery?.gateChanges || undefined,
     inspector: opts.inspector,
+    caps: opts.caps,
   });
 }
 
@@ -159,9 +166,10 @@ async function runFixRound(
     priorReceipts: Receipt[];
     priorGateChanges: string | undefined;
     inspector?: Inspector;
+    caps?: Caps;
   }
 ): Promise<void> {
-  const { brain, project, totalAttempts, baseCommit, priorReceipts, priorGateChanges, inspector } = ctx;
+  const { brain, project, totalAttempts, baseCommit, priorReceipts, priorGateChanges, inspector, caps } = ctx;
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
@@ -183,7 +191,7 @@ async function runFixRound(
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
-    const { receipts: newReceipts, lastGate, declaredGateChanges: roundGateChanges } = await runAttempts({
+    const { receipts: newReceipts, lastGate, declaredGateChanges: roundGateChanges, capStop } = await runAttempts({
       brain,
       brief: buildFixBrief(originalBrief, note),
       workdir: line.workdir,
@@ -191,6 +199,8 @@ async function runFixRound(
       check,
       totalAttempts: 1,
       stopEarlyOnGreen: true,
+      spendLimits: spendLimitsFor(recordHome, taskId, caps),
+      onReceipt: (receipt) => recordReceipt(recordHome, receipt),
       initialSession: lastSession,
       startAttempt: priorReceipts.length + 1,
       onCheckStarted: (attempt) => {
@@ -219,9 +229,11 @@ async function runFixRound(
 
     let outcome: Delivery["outcome"] = undeclaredGateChange
       ? "discarded-protected-path"
-      : lastGate.green
-        ? "done"
-        : "failure-report";
+      : capStop
+        ? "cap-stopped"
+        : lastGate.green
+          ? "done"
+          : "failure-report";
 
     if (outcome === "discarded-protected-path") {
       newReceipts[newReceipts.length - 1].outcome = "discarded-protected-path";
@@ -242,7 +254,7 @@ async function runFixRound(
         error: err.message,
       });
       validateDelivery(delivery);
-      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
+      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
       appendEvent(recordHome, {
         taskId,
         name: "delivered",
@@ -269,10 +281,14 @@ async function runFixRound(
       files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
       inspection,
+      capStop,
+      taskId,
+      spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, caps),
     });
 
     validateDelivery(delivery);
-    writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
+    if (capStop) recordCapStop(recordHome, taskId, capStop, delivery.summary);
+    writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
     appendEvent(recordHome, {
       taskId,
       name: "delivered",

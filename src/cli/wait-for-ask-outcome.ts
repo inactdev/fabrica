@@ -1,8 +1,8 @@
 // After spawnDetachedTask resolves with a taskId, the detached child is
 // still running doTask() (src/foreman/do.ts) - which now (issue #8) does
 // register -> ask -> maybe isolate/work, all inside that one call. This
-// polls the task's own record for whichever of three outcomes lands
-// first, so `fabrica do` can print numbered questions and stop (SPEC.md
+// polls the task's own record for whichever outcome lands first (a
+// spending cap's refusal, rule 10, comes before any of the others), so `fabrica do` can print numbered questions and stop (SPEC.md
 // step 2), or report a real failure, instead of only ever printing the
 // task id.
 //
@@ -22,11 +22,13 @@
 import { createForeman } from "../index.ts";
 
 export interface AskOutcome {
-  status: "asking" | "proceeding" | "failed";
+  status: "asking" | "proceeding" | "failed" | "cap-refused";
   /** Populated only when status is "asking". */
   questions: string[];
   /** Populated only when status is "failed" - brain.ask()'s own error
-   * message, verbatim (src/foreman/ask.ts's "ask-failed" event). */
+   * message, verbatim (src/foreman/ask.ts's "ask-failed" event) - or
+   * "cap-refused" - the refusal's own message, numbers and unmeasured
+   * task ids included (src/foreman/caps.ts). */
   reason?: string;
 }
 
@@ -51,6 +53,12 @@ export async function waitForAskOutcome(
     if (asked) {
       const details = asked.details as { questions?: string[] } | undefined;
       return { status: "asking", questions: details?.questions ?? [] };
+    }
+    // Rule 10 refuses before ask() ever runs, so this is checked first.
+    const refused = events.find((e) => e.name === "cap-refused");
+    if (refused) {
+      const details = refused.details as { message?: string } | undefined;
+      return { status: "cap-refused", questions: [], reason: details?.message ?? "a spending cap refused it" };
     }
     const failed = events.filter((e) => e.name === "ask-failed").at(-1);
     if (failed) {

@@ -6,6 +6,8 @@
 import type { GateResult } from "../../contract/surface.ts";
 import type { Delivery, Inspection } from "../inspector/types.ts";
 import { gateForRecord } from "./attempts.ts";
+import type { CapStop } from "./attempts.ts";
+import { formatUsd, SPEND_UNKNOWN_LINE } from "./spend.ts";
 
 export function buildDelivery(
   outcome: Delivery["outcome"],
@@ -17,8 +19,16 @@ export function buildDelivery(
     files: string[];
     declaredGateChanges: string | undefined;
     inspection?: Inspection;
+    /** Required for outcome "cap-stopped": what stopped it. */
+    capStop?: CapStop;
+    taskId?: string;
+    /** Rule 10: true when a cap is set and some attempt of this task has
+     * an unknown cost - the report then says new work is blocked. */
+    spendUnknownUnderCap?: boolean;
   }
 ): Delivery {
+  if (outcome === "cap-stopped") return buildCapStoppedDelivery(ctx);
+
   const summary =
     outcome === "done"
       ? `Completed: ${ctx.taskText}`
@@ -52,17 +62,61 @@ export function buildDelivery(
             "own). Only the Client can review the undeclared change and override that check to merge it."
           : "";
 
+  const spendNote = ctx.spendUnknownUnderCap
+    ? `${SPEND_UNKNOWN_LINE}: this task's cost was never measured. Record it with ` +
+      `\`fabrica cost ${ctx.taskId} <usd>\` before new work can start.`
+    : "";
+
   return {
     outcome,
     confidence: outcome === "done" ? 100 : 0,
     summary,
     evidence,
     assumptions: "",
-    gaps,
+    gaps: [gaps, spendNote].filter(Boolean).join("\n\n"),
     branch: ctx.branch,
     files: ctx.files,
     gateChanges: ctx.declaredGateChanges ?? "",
     ...(ctx.inspection === undefined ? {} : { inspection: ctx.inspection }),
+  };
+}
+
+/** Rule 10's honest report for a task a cap stopped: it says the cap
+ * stopped it, with the numbers, and is never worded as the work having
+ * failed. The work so far is committed on the branch like any outcome. */
+function buildCapStoppedDelivery(ctx: {
+  attempts: number;
+  lastGate: GateResult;
+  branch: string;
+  files: string[];
+  declaredGateChanges: string | undefined;
+  capStop?: CapStop;
+  taskId?: string;
+}): Delivery {
+  const stop = ctx.capStop!;
+  const lastCheck = `The last check (attempt ${stop.attempt}) was ${ctx.lastGate.green ? "green" : "red"}.`;
+  const summary =
+    stop.reason === "spend-unknown"
+      ? `${SPEND_UNKNOWN_LINE}. Stopped after attempt ${stop.attempt}: its cost was never measured, and a ` +
+        "spending cap is set, so the task stopped rather than spend money nobody can count."
+      : `Stopped by the per-task cap of ${formatUsd(stop.capUsd!)}: this task has spent ${formatUsd(stop.spentUsd)} ` +
+        `over ${ctx.attempts} attempt(s), so no further attempt was started.`;
+  const gaps =
+    stop.reason === "spend-unknown"
+      ? `A cap stopped this task, not its work. ${lastCheck} New work stays blocked until the real cost is ` +
+        `recorded with \`fabrica cost ${ctx.taskId} <usd>\`. The work so far is committed on \`${ctx.branch}\`.`
+      : `A cap stopped this task, not its work. ${lastCheck} The work so far is committed on \`${ctx.branch}\`. ` +
+        "To continue, raise [caps].perTaskUsd in projects.toml, then give a fix verdict.";
+  return {
+    outcome: "cap-stopped",
+    confidence: 0,
+    summary,
+    evidence: gateForRecord(ctx.lastGate).output,
+    assumptions: "",
+    gaps,
+    branch: ctx.branch,
+    files: ctx.files,
+    gateChanges: ctx.declaredGateChanges ?? "",
   };
 }
 
@@ -105,9 +159,10 @@ export function buildCommitFailureDelivery(ctx: {
 /** Human-readable rendering of a Delivery (SPEC.md's field order), for
  * `delivery.md` — a convenience view; the "delivered" event's `details`
  * carries the structured object deliveryOf() actually reads. */
-export function renderDeliveryMarkdown(delivery: Delivery): string {
+export function renderDeliveryMarkdown(delivery: Delivery, cost?: string): string {
   return (
     [
+      ...(cost === undefined ? [] : [`cost:       ${cost}`]),
       `confidence: ${delivery.confidence}`,
       `summary:    ${delivery.summary}`,
       `evidence:   ${delivery.evidence}`,

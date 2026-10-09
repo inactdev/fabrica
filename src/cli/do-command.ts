@@ -11,28 +11,14 @@
 // process has already exited, which is the whole point of detachment
 // (see the module README's "Why detached execution" section).
 
-import { ConfigError, loadConfig } from "../index.ts";
-import type { FabricaConfig } from "../index.ts";
+import { ConfigError } from "../index.ts";
 import { CliError } from "./errors.ts";
+import { loadConfigOrDefault } from "./load-config.ts";
 import { DO_USAGE, parseDoArgs } from "./do-args.ts";
 import { resolveProjectPath } from "./resolve-project.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { spawnDetachedTask } from "./spawn-detached.ts";
 import { waitForAskOutcome } from "./wait-for-ask-outcome.ts";
-
-/** A record home with no projects.toml yet has no registered projects
- * and no caps - not an error. do()'s own resolveCheckCommand treats a
- * missing file the same way (falls back to the check.sh convention);
- * this mirrors that instead of refusing a first `fabrica do` ever run
- * against a plain `--project <path>` before any project is registered. */
-function loadConfigOrDefault(recordHome: string): FabricaConfig {
-  try {
-    return loadConfig(recordHome);
-  } catch (err) {
-    if (err instanceof ConfigError && err.code === "not-found") return { caps: {}, projects: {} };
-    throw err;
-  }
-}
 
 export const DO_HELP = `Usage: ${DO_USAGE}
 
@@ -40,8 +26,9 @@ Runs a task against a project. If the task is materially ambiguous, the
 worker's first pass produces numbered questions instead of doing any
 work - they print here and the command stops; answer with
 \`fabrica answer <id> -m "<text>"\` to resume it. That case still exits 0.
-If that first pass fails outright, before any work starts, the real
-reason prints here and the command exits non-zero. Otherwise runs
+If that first pass fails outright, or a spending cap refuses the task
+before any work starts, the real reason prints here and the command
+exits non-zero. Otherwise runs
 detached: prints the task id and returns immediately while the work
 continues in the background. The transcript streams live to the task's
 record as it runs.
@@ -132,6 +119,14 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
       // it, instead of a script reading a success code off a task that
       // never got past its own first step.
       stderr(`fabrica do: the task failed before any work started: ${outcome.reason}`);
+      return 1;
+    }
+
+    if (outcome.status === "cap-refused") {
+      // Rule 10 (issue #11, Client ruling 2026-10-08): a refusal by a cap -
+      // including SPEND UNKNOWN, which names each unmeasured task - is a
+      // non-zero exit, never a warning a script reads past.
+      stderr(`fabrica do: refused before any work started. ${outcome.reason}`);
       return 1;
     }
 

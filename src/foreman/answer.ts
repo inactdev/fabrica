@@ -31,13 +31,15 @@ import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { runProductionRound } from "./do.ts";
 import type { AskedDetails } from "./ask.ts";
+import { requireRoomToStart } from "./caps.ts";
+import type { Caps } from "../../contract/surface.ts";
 import type { FabricaTask, Inspector } from "../inspector/types.ts";
 
 export async function answerTask(
   recordHome: string,
   taskId: string,
   answerText: string,
-  opts: { brain: Brain; inspector?: Inspector }
+  opts: { brain: Brain; inspector?: Inspector; caps?: Caps }
 ): Promise<FabricaTask> {
   const events = readEventsForTask(recordHome, taskId);
   if (events.length === 0) {
@@ -108,6 +110,11 @@ export async function answerTask(
 
   const details = events[askedIndex].details as AskedDetails;
 
+  // Rule 10, before the answer is recorded: a refused resume leaves the
+  // task exactly as resumable as it was, so the same `fabrica answer`
+  // works once there is room again.
+  requireRoomToStart(recordHome, taskId, opts.caps, { project: details.project });
+
   // Write the human-readable record before the record event that resumes
   // the task on it - same principle as verdict.ts writing the "verdict"
   // file before "verdict-recorded": a failure between the two must never
@@ -129,6 +136,7 @@ export async function answerTask(
     explicitAttempts: details.explicitAttempts,
     isRetry,
     inspector: opts.inspector,
+    caps: opts.caps,
   });
 }
 

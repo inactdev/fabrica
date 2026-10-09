@@ -204,12 +204,13 @@ async function forEachLiveHarness(
   }
 }
 
-test("real session: the shipped settings.json actually runs do/status/log/watch and actually denies verdict/answer, including a chained bypass attempt", async (t) => {
+test("real session: the shipped settings.json actually runs do/status/log/watch and actually denies verdict/answer/cost, including a chained bypass attempt", async (t) => {
   await forEachLiveHarness(t, "fabrica-live-permissions-", async (checkPermissionBoundary, harness, scratch) => {
     const attempts = [
       ...FREE_ATTEMPTS,
       "fabrica verdict task-1 accept -m note",
       "fabrica answer task-1 -m answer-text",
+      "fabrica cost task-1 0.42",
       "fabrica status && fabrica verdict task-1 accept -m note",
     ];
 
@@ -244,6 +245,11 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
       `${harness}: no real permission_denials entry named the standalone answer attempt - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
     );
     assert.ok(
+      includesCommand(result.deniedCommands, "fabrica cost task-1 0.42"),
+      `${harness}: no real permission_denials entry named the cost attempt - the AI driver may be able to ` +
+        `record a cost and clear its own SPEND UNKNOWN block - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+    );
+    assert.ok(
       includesCommand(result.deniedCommands, "fabrica status && fabrica verdict task-1 accept -m note"),
       `${harness}: the chained "fabrica status && fabrica verdict ..." attempt was not denied as a whole - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
     );
@@ -255,7 +261,7 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
     // controls called out. Here it adds real information: does the
     // side effect (nothing ran) agree with the engine's own report,
     // or did something slip through despite the reported denial.
-    for (const deniedArgs of ["verdict task-1 accept -m note", "answer task-1 -m answer-text"]) {
+    for (const deniedArgs of ["verdict task-1 accept -m note", "answer task-1 -m answer-text", "cost task-1 0.42"]) {
       assert.equal(
         includesCommand(result.executedArgs, deniedArgs),
         false,

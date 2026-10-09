@@ -20,6 +20,8 @@ import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } fro
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { handToInspector } from "./inspection.ts";
+import { costLabelOf, recordCapStop, recordReceipt, spendLimitsFor, spendUnknownUnderCap } from "./caps.ts";
+import type { Caps } from "../../contract/surface.ts";
 import type { Delivery, FabricaTask } from "../inspector/types.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 
@@ -28,7 +30,7 @@ export { DEFAULT_ATTEMPTS } from "./ask.ts";
 export async function doTask(
   recordHome: string,
   taskText: string,
-  opts: { project: string; attempts?: number; brain?: Brain; inspector?: Inspector }
+  opts: { project: string; attempts?: number; brain?: Brain; inspector?: Inspector; caps?: Caps }
 ): Promise<FabricaTask> {
   // SPEC.md steps 1-2: register the task, then give the brain one pass
   // at the bare task text (issue #8) before any ProductionLine exists.
@@ -57,6 +59,7 @@ export async function doTask(
     explicitAttempts,
     isRetry: false,
     inspector: opts.inspector,
+    caps: opts.caps,
   });
 }
 
@@ -79,9 +82,10 @@ export async function runProductionRound(
     explicitAttempts: boolean;
     isRetry: boolean;
     inspector?: Inspector;
+    caps?: Caps;
   }
 ): Promise<FabricaTask> {
-  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector } = ctx;
+  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, caps } = ctx;
   // The delivery's summary/evidence want the Client's original one-line
   // ask, not the full brief a resumed round's worker receives - `brief`
   // for an answer.ts retry is request.md plus the whole "## Clarification"
@@ -160,7 +164,7 @@ export async function runProductionRound(
     // open task without waiting for delivery.
     appendEvent(recordHome, { taskId, name: "work-started", details: { project: line.project } });
 
-    const { receipts, lastGate, declaredGateChanges } = await runAttempts({
+    const { receipts, lastGate, declaredGateChanges, capStop } = await runAttempts({
       brain,
       brief,
       workdir: line.workdir,
@@ -168,6 +172,8 @@ export async function runProductionRound(
       check,
       totalAttempts,
       stopEarlyOnGreen: !explicitAttempts,
+      spendLimits: spendLimitsFor(recordHome, taskId, caps),
+      onReceipt: (receipt) => recordReceipt(recordHome, receipt),
       onCheckStarted: (attempt) => {
         appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, phase: "started" } });
       },
@@ -192,9 +198,11 @@ export async function runProductionRound(
 
     let outcome: Delivery["outcome"] = undeclaredGateChange
       ? "discarded-protected-path"
-      : lastGate.green
-        ? "done"
-        : "failure-report";
+      : capStop
+        ? "cap-stopped"
+        : lastGate.green
+          ? "done"
+          : "failure-report";
 
     if (outcome === "discarded-protected-path") {
       receipts[receipts.length - 1].outcome = "discarded-protected-path";
@@ -237,7 +245,7 @@ export async function runProductionRound(
         error: err.message,
       });
       validateDelivery(delivery);
-      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
+      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
       appendEvent(recordHome, {
         taskId,
         name: "delivered",
@@ -285,6 +293,9 @@ export async function runProductionRound(
       files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
       inspection,
+      capStop,
+      taskId,
+      spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, caps),
     });
 
     // Never present a malformed delivery as done (rule 4) — prove the
@@ -293,7 +304,8 @@ export async function runProductionRound(
     // there is nothing left to verify it against (src/delivery/README.md).
     validateDelivery(delivery);
 
-    writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery));
+    if (capStop) recordCapStop(recordHome, taskId, capStop, delivery.summary);
+    writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
     appendEvent(recordHome, {
       taskId,
       name: "delivered",

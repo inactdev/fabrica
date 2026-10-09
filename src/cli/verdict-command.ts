@@ -12,6 +12,7 @@ import { createForeman, fixRoundOf } from "../index.ts";
 import type { Brain } from "../index.ts";
 import { parseVerdictArgs, VERDICT_USAGE } from "./verdict-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
+import { loadConfigOrDefault } from "./load-config.ts";
 
 export const VERDICT_HELP = `Usage: ${VERDICT_USAGE}
 
@@ -55,7 +56,7 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
   try {
     const { taskId, ruling, note } = parseVerdictArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
-    const foreman = createForeman({ recordHome, brain: opts.brain });
+    const foreman = createForeman({ recordHome, brain: opts.brain, caps: loadConfigOrDefault(recordHome).caps });
 
     await foreman.verdict(taskId, ruling, note);
 

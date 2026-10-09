@@ -15,6 +15,17 @@ export { fixRoundOf } from "./foreman/index.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
 export { readTranscript, eventsByTask, stateOf } from "./foreman/index.ts";
 export { followTask } from "./foreman/index.ts";
+// Rule 10's ledger, for `fabrica status` and `fabrica cost` (issue #11).
+export {
+  capsActive,
+  describeTaskCost,
+  describeUnmeasured,
+  formatUsd,
+  hasAttempts,
+  SPEND_UNKNOWN_LINE,
+  taskSpend,
+  unmeasuredSpend,
+} from "./foreman/index.ts";
 export type { TaskFollower, TaskProgress } from "./foreman/index.ts";
 export type { TranscriptEntry } from "../contract/surface.ts";
 export type {
@@ -31,14 +42,14 @@ export type { DeliveryErrorCode } from "./delivery/index.ts";
 // The brain socket: a CLI never picks an adapter by name (CONTRACT rule
 // 8) - it asks for whichever one v1 wires in by default.
 export { defaultBrainAdapter } from "./brain/index.ts";
-export type { Brain } from "../contract/surface.ts";
+export type { Brain, Caps } from "../contract/surface.ts";
 
 // Config: the record home's project registry and caps (SPEC.md
 // "Config"), needed by the CLI to resolve `--project <path-or-name>`
 // before it ever calls createForeman.
 export { loadConfig, projectsTomlPath, requireProject } from "./config/index.ts";
 export { ConfigError } from "./config/index.ts";
-export type { ConfigErrorCode, Caps, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
+export type { ConfigErrorCode, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
 
 // Off-the-books nets (issue #13), prevention half: recordBlockedEditAttempt
 // is what `fabrica deny-and-log-edit` (src/cli/deny-and-log-edit-command.ts,

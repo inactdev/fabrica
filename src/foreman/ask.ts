@@ -17,6 +17,8 @@
 import { appendEvent, registerTask, writeTaskFile } from "../record/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
+import { requireRoomToStart } from "./caps.ts";
+import type { Caps } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with
  * the failure output, then re-check - a ceiling of 2 worker runs. */
@@ -63,7 +65,7 @@ export interface RegisterAndAskResult {
 export async function registerAndAsk(
   recordHome: string,
   taskText: string,
-  opts: { project: string; brain?: Brain; attempts?: number }
+  opts: { project: string; brain?: Brain; attempts?: number; caps?: Caps }
 ): Promise<RegisterAndAskResult> {
   const brain = opts.brain;
   if (!brain) {
@@ -91,6 +93,11 @@ export async function registerAndAsk(
   // `fabrica answer` only has to append a round to answers.md and
   // re-derive brief.md from what's already there.
   writeTaskFile(recordHome, taskId, "brief.md", taskText);
+
+  // Rule 10: refused before anything spends - ask() itself costs money
+  // on a metered brain. Registered first so the refusal, with its
+  // numbers, lands on this task's own record (`fabrica log <id>`).
+  requireRoomToStart(recordHome, taskId, opts.caps, { project: opts.project });
 
   // A task must never look started when its very first step never ran -
   // "ask-failed" is what lets an outside observer (fabrica do's own

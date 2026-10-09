@@ -20,11 +20,10 @@ const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
 - **`recordHome`** — where the record lives (`src/record/README.md`). Every
   task this Foreman touches reads and writes under here; nothing in this
   module ever falls back to a fixed default path.
-- **`caps`** — `{ perTaskUsd?, perDayUsd? }`. Accepted so this factory's
-  shape matches `contract/surface.ts`'s `Foreman` exactly. Not
-  enforced here: CONTRACT rule 10 ("It cannot outspend you") is issue
-  #11's job, not this loop's. Passing it today has no effect; omitting it
-  has no effect either.
+- **`caps`** — `{ perTaskUsd?, perDayUsd? }`, `contract/surface.ts`'s
+  `Caps`. CONTRACT rule 10 ("It cannot outspend you"), enforced on every
+  task, resumed round, and fix round this Foreman starts - see "Rule 10:
+  spending caps" below. Omitted, no cap applies.
 - **`brain`** — used by `verdict()`'s "fix" path and by `answer()`, as a
   fallback for when this instance never saw a `do()` call for that task.
   See "`verdict(taskId, ruling, note?)`" below for why `verdict()` itself
@@ -36,7 +35,7 @@ const foreman = createForeman({ recordHome: "/Users/ari/.fabrica" });
 
 The return value satisfies `Foreman` (`contract/surface.ts`): `do`,
 `answer`, `deliveryOf`, `receiptsOf`, `verdict`, `status`, `events`,
-`recordPath`.
+`recordCost`, `recordPath`.
 
 ## `do(taskText, { project, attempts?, brain? })`
 
@@ -711,11 +710,88 @@ whether a task is `"closed"`.
   to `defaultBrainAdapter()`, the same real adapter `do()` already uses
   by default via the CLI.
 
+## Rule 10: spending caps (issue #11)
+
+**Where cost comes from.** A brain reports what one `work()` call cost on
+a transcript entry with kind `"usage"`, whose text is JSON
+`{ "totalCostUsd": number | null, ... }` (documented on
+`contract/surface.ts`'s `TranscriptEntry`). `attempts.ts` sums every
+usage entry into the attempt's `Receipt.costUsd`. If any of them is
+null or unreadable, or there is none at all, the cost is `null` and the
+receipt carries `costUnknown: true`. Unknown is never counted as $0.
+
+**Where spend is counted from.** Only the record, read fresh every time
+(`spend.ts`). Each attempt appends a `"receipt-recorded"` event the
+moment it exists, so a task still running, or one that throws later,
+still has its spend on the record. Receipts that only ever landed on a
+`"delivered"` event (records written before issue #11) are counted too,
+once per task and attempt. A restart, a second process, or a fresh
+Foreman all get the same total.
+
+**"Daily" is a rolling 24 hours ending now, not a calendar day.** It
+uses each receipt's `startedAt`. No clock or time zone decides when the
+day ends, and there is no midnight at which a full day's budget comes
+back at once. Spend ages out exactly 24 hours after it started.
+
+**At the start of any spend** (`caps.ts`'s `requireRoomToStart`: a new
+task right after it is registered and before `ask()`, a `fabrica answer`
+resume before the answer is recorded, a `fix` verdict before it is
+recorded), the task is refused when:
+
+1. a cap is set and any attempt anywhere on the record has an unknown
+   cost not yet recorded by hand. This holds however old the attempt
+   is: it stays until its cost is recorded. The error names each
+   unmeasured task and its `fabrica cost <id> <usd>` command
+   (`spend-unknown`).
+2. the last 24 hours' known spend is at or past `perDayUsd`
+   (`cap-refused`, with both figures in the message).
+3. this task's own spend, every round counted, is at or past
+   `perTaskUsd` (relevant for a resume or a fix).
+
+A refusal appends `"cap-refused"` to the refused task's own record, with
+the same message, before it throws. A brand-new task refused this way is
+`failed` and can never move again (a new `fabrica do` is a new task). A
+refused resume or fix leaves the task as it was, so the same command
+works once there is room.
+
+**While a task runs**, the remaining per-task budget goes to the brain
+as `BrainWorkOptions.maxSpendUsd`, a hint an adapter may honor mid-call.
+The reference adapter passes it as `--max-budget-usd`. The guaranteed
+stop is the check after every attempt: if a cap is set and the attempt's
+cost is unknown, or the task's spend has reached `perTaskUsd`, no
+further attempt starts. The task is then delivered as outcome
+`"cap-stopped"`, which is distinguishable from `"failure-report"`: its
+summary says the cap stopped it, with the numbers. The work so far is
+still committed, Inspector is not called, and `"cap-stopped"` lands on
+the record. The one exception is work that already finished green on
+its own terms (an early green, or the last attempt green). Nothing was
+cut short there, so it delivers normally. Its receipts still show the
+real cost, and when that cost is unknown under a cap, its `gaps` says
+new work is blocked.
+
+**One attempt can overshoot `perTaskUsd`.** The between-attempts check
+cannot interrupt a call already in flight. An adapter that ignores
+`maxSpendUsd` therefore spends whatever its one attempt costs. Even the
+reference adapter's CLI checks its budget only after each turn: one
+turn cost $0.14 against a $0.0001 budget when verified on 2.1.295.
+
+**Clearing an unknown cost.** `recordCost(taskId, usd)` (`fabrica cost
+<taskId> <usd>`, owner-only) appends `"cost-recorded"` with the figure
+and the attempt numbers it covers, which are exactly the ones still
+unknown at that moment. A later attempt with an unknown cost is unknown
+again until it is recorded too. It refuses a figure that is not a finite
+amount of zero or more, and refuses a task with nothing unmeasured. That
+way a block only clears when a real cost is recorded, and the same spend
+is never counted twice.
+
+`ask()` returns no cost (`BrainAskResult` has no field for one), so the
+clarify step's own spend is not metered yet.
+
 ## Files
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, and rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`. |
 | `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
@@ -730,6 +806,8 @@ whether a task is `"closed"`.
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal, while `receiptsOf` reads the latest event carrying receipts. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. |
 | `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
+| `spend.ts` | Rule 10's ledger, derived from the record: `costFromTranscript`, `daySpend` (rolling 24 hours), `taskSpend`, `unmeasuredSpend`, and the shared wording (`formatUsd`, `describeTaskCost`, `SPEND_UNKNOWN_LINE`). |
+| `caps.ts` | Rule 10's enforcement: `requireRoomToStart`, the per-round `spendLimitsFor`, the `"receipt-recorded"`/`"cap-stopped"` writers, and `recordCost`. See "Rule 10: spending caps" above. |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path and `answer()` both use. |
 
 `GateResult`, `Receipt`, `Delivery`, `FabricaTask`, `BrainAskResult`, and

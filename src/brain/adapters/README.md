@@ -41,11 +41,15 @@ adapter often runs against a flat-rate subscription with no per-call
 price at all - for those, the honest value is `null`, not an invented
 number.
 
-This has a consequence for CONTRACT rule 10 worth flagging early: caps
-are enforced in dollars, and a brain that reports `null` spend cannot be
-metered by cost the same way a priced one can. Solving that is issue
-#11's job, not this one - but whoever builds cap enforcement should meet
-this fact here, not discover it there.
+An adapter reports cost on a `kind: "usage"` transcript entry,
+`{ "totalCostUsd": number | null, ... }` (`contract/surface.ts`'s
+`TranscriptEntry`). No usage entry at all means unknown. Under CONTRACT
+rule 10 (issue #11), an unknown cost is never counted as zero. While a
+cap is set, it stops the task and blocks all new work until the owner
+records the real figure with `fabrica cost`. An adapter whose tool can
+report a figure should therefore always report it. One that can stop
+mid-call at a budget should honor `BrainWorkOptions.maxSpendUsd`, and
+one that can't should ignore it, never fail on it.
 
 ## v1 ordering
 

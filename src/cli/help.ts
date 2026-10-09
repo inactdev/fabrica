@@ -7,6 +7,7 @@ export const COMMANDS = [
   "do",
   "verdict",
   "answer",
+  "cost",
   "status",
   "log",
   "watch",
@@ -28,9 +29,13 @@ Commands:
   verdict <taskId> <accept|fix|wrong> [-m "<note>"]
       Record your ruling on a delivered task - closes it (accept/wrong)
       or sends a correction back to the same worker (fix).
+  cost <taskId> <usd>
+      Owner-only. Record the real cost of a task whose spend was never
+      measured - clears a SPEND UNKNOWN block on new work.
   status
-      One line per open task: id, project, state, age. Flags a
-      delivered task as awaiting your verdict.
+      One line per open task: id, project, state, age, cost. Flags a
+      delivered task as awaiting your verdict, and says when unmeasured
+      spend is blocking new work.
   log <taskId> [--transcript]
       Print one task's full event history; --transcript adds the raw
       agent output.
