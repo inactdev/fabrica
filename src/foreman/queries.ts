@@ -146,6 +146,10 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
         // "asking" would wrongly suggest the answer never registered.
         state = "working";
         break;
+      case "task-failed":
+        // #73: any error after task-received and before a delivery.
+        state = "failed";
+        break;
       case "ask-failed":
         // brain.ask() itself threw (issue #8 follow-up, Client ruling) -
         // the task never got past its own first step, so it's failed,

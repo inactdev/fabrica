@@ -26,9 +26,10 @@ Runs a task against a project. If the task is materially ambiguous, the
 worker's first pass produces numbered questions instead of doing any
 work - they print here and the command stops; answer with
 \`fabrica answer <id> -m "<text>"\` to resume it. That case still exits 0.
-If that first pass fails outright, or a spending cap refuses the task
-before any work starts, the real reason prints here and the command
-exits non-zero. Otherwise runs
+If the task fails before any work starts - its first pass throws, a
+spending cap refuses it, or anything else stops it - the real reason
+prints here and the command exits non-zero. There is no time limit on
+that first pass; a "still waiting" line prints every 15 seconds. Otherwise runs
 detached: prints the task id and returns immediately while the work
 continues in the background. The transcript streams live to the task's
 record as it runs.
@@ -47,10 +48,8 @@ export interface RunDoCommandOptions {
    * real spawn-and-discover mechanism against a fake brain. */
   entryScript?: string;
   timeoutMs?: number;
-  /** Test-only: how long to wait for the task to ask, fail, or reach
-   * "work-started" before giving up and treating it as proceeding, and
-   * how often to poll while waiting. See wait-for-ask-outcome.ts. */
-  askTimeoutMs?: number;
+  /** Test-only: how often to poll the record while waiting for the task
+   * to ask, fail, or reach "work-started". See wait-for-ask-outcome.ts. */
   askPollMs?: number;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -67,7 +66,7 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
     const config = loadConfigOrDefault(recordHome);
     const projectPath = resolveProjectPath(config, projectArg);
 
-    const { taskId } = await spawnDetachedTask({
+    const { taskId, isRunning } = await spawnDetachedTask({
       recordHome,
       projectPath,
       taskText,
@@ -77,13 +76,14 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
 
     // SPEC.md step 2 (issue #8): the task's own first pass, running
     // inside the detached process, decides ask-or-proceed before any
-    // ProductionLine is cut. This waits (bounded) to find out which, so
-    // an ambiguous task's questions print here and the command stops,
-    // rather than only ever printing the id and leaving the Client to
-    // discover the stop some other way.
+    // ProductionLine is cut. This waits - with no fixed cutoff, saying
+    // so every 15s (#73) - to find out which, so an ambiguous task's
+    // questions print here and the command stops, and a failed start
+    // prints its reason, rather than only ever printing the id.
     const outcome = await waitForAskOutcome(recordHome, taskId, {
-      timeoutMs: opts.askTimeoutMs,
       pollMs: opts.askPollMs,
+      onStillWaiting: stderr,
+      isAlive: isRunning,
     });
 
     // stdout stays exactly the task id, one line, nothing else, in every

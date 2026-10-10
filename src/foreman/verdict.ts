@@ -20,6 +20,7 @@ import { latestDeliveredDetails } from "./queries.ts";
 import { gateWasTouched } from "./gate-changes.ts";
 import { prepareRound, roundOutcome } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
+import { recordingFailure } from "./task-failure.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
@@ -119,7 +120,8 @@ export async function recordVerdict(
 
   if (ruling !== "fix") return;
 
-  await runFixRound(recordHome, taskId, note!, {
+  // #73: whatever throws in the fix round lands on the record as task-failed.
+  await recordingFailure(recordHome, taskId, () => runFixRound(recordHome, taskId, note!, {
     brain: opts.brain,
     project: project!,
     totalAttempts,
@@ -129,7 +131,7 @@ export async function recordVerdict(
     inspector: opts.inspector,
     checkBox: opts.checkBox,
     caps: opts.caps,
-  });
+  }));
 }
 
 /** Told exactly what the Client asked for, on top of the original ask -

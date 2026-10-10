@@ -218,19 +218,23 @@ failure was.
 
 The gap is closed (issue #85) by forwarding a credential from the host's
 environment, never by baking one into the image. `claude setup-token`
-mints a long-lived token meant for exactly this kind of headless use;
-whoever configures Fabrica stores it somewhere their shell exports from
-(`~/.fabrica/brain.env`, mode 600, sourced from their shell profile, is
-the shape this was set up with) and `index.ts`'s `defaultBrainAdapter()`
-forwards exactly one variable, `CLAUDE_CODE_OAUTH_TOKEN`, into
-`ClaudeCodeAdapterOptions.env` when it is set in this process's
-environment. Nothing else from the host environment crosses the
+mints a long-lived token meant for exactly this kind of headless use.
+`index.ts`'s `defaultBrainAdapter(recordHome)` forwards exactly one
+variable, `CLAUDE_CODE_OAUTH_TOKEN`, into `ClaudeCodeAdapterOptions.env`:
+from this process's environment when it is set there, otherwise from
+`<recordHome>/brain.env`, which Fabrica reads itself (Client ruling
+2026-10-10). No shell profile has to export it. That file must hold only
+a `CLAUDE_CODE_OAUTH_TOKEN=...` line and be mode 600; anything else is
+refused, naming the file and `chmod 600`. The token goes only into the
+container's env-file - never into Fabrica's own process environment,
+never into a log. Nothing else from the host environment crosses the
 container wall - that option is an explicit allowlist, not a
-pass-through, and `index.test.ts` asserts both halves: forwarded when
-set, and an empty options object (not a filtered one) when it is unset,
-even with other credentials sitting in the same environment. With the
-variable unset, behavior is exactly what it was before: the adapter runs
-with no credential and real tasks fail at the authentication step.
+pass-through. With neither source, the adapter's first call (the
+clarifying step, before any worker starts) refuses with a message naming
+`claude setup-token` and the file path, and the task records it as
+`ask-failed`. The token is looked up at that first call, not when the
+adapter is built, so a command that never needs a worker (an `accept`
+verdict) never needs a token.
 
 Because the token arrives by environment rather than being baked in, the
 caveat on `claude-code.test.ts`'s capability-spike guard still holds as

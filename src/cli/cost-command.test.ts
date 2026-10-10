@@ -19,7 +19,7 @@ import { runDoCommand } from "./do-command.ts";
 import { runStatusCommand } from "./status-command.ts";
 
 const FAKE_ENTRY = fileURLToPath(new URL("./helpers/fake-run-task-entry.ts", import.meta.url));
-const FAST_ASK_WAIT = { askTimeoutMs: 5_000, askPollMs: 20 };
+const FAST_ASK_WAIT = { askPollMs: 20 };
 
 function captureIo() {
   const out: string[] = [];

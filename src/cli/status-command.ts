@@ -135,7 +135,9 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
       const liveness = describeLiveness(task.state, events, now);
 
       const cost = describeTaskCost(taskSpend(events, task.id), hasAttempts(events, task.id));
-      const failedBecause = refusedByCap(events) ? "a spending cap refused it before any work started" : undefined;
+      const failedBecause = refusedByCap(events)
+        ? "a spending cap refused it before any work started"
+        : taskFailedMessage(events);
       stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery, cost, failedBecause }));
     }
 
@@ -148,4 +150,11 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
 
 function refusedByCap(events: FabricaEvent[]): boolean {
   return events.some((e) => e.name === "cap-refused") && !events.some((e) => e.name === "work-started");
+}
+
+/** #73: the reason a task failed before any delivery, as recorded. */
+function taskFailedMessage(events: FabricaEvent[]): string | undefined {
+  const failed = events.filter((e) => e.name === "task-failed").at(-1);
+  const message = (failed?.details as { message?: string } | undefined)?.message;
+  return message === undefined ? undefined : `the task failed: ${message.split("\n")[0]}`;
 }

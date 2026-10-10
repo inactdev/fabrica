@@ -41,7 +41,9 @@ export interface SpawnDetachedTaskOptions {
 /** Spawns the task's loop in a separate, detached process and resolves
  * with its id as soon as that process registers the task - it does
  * NOT wait for the task to finish. */
-export async function spawnDetachedTask(opts: SpawnDetachedTaskOptions): Promise<{ taskId: string }> {
+export async function spawnDetachedTask(
+  opts: SpawnDetachedTaskOptions
+): Promise<{ taskId: string; isRunning: () => boolean }> {
   const { recordHome, projectPath, taskText, entryScript = DEFAULT_ENTRY_SCRIPT, timeoutMs } = opts;
 
   // A first-ever `fabrica do` on a fresh machine has no recordHome yet -
@@ -55,6 +57,13 @@ export async function spawnDetachedTask(opts: SpawnDetachedTaskOptions): Promise
     { detached: true, stdio: ["ignore", logFd, logFd] }
   );
   closeSync(logFd); // the child holds its own duplicated copy from here on
+
+  // Whether the task's process is still running, for a caller waiting on
+  // its record: once it has exited, what it recorded is all there is.
+  let exited = false;
+  child.once("exit", () => {
+    exited = true;
+  });
 
   const spawnFailure = new Promise<never>((_, reject) => {
     child.once("error", (err: NodeJS.ErrnoException) => {
@@ -73,7 +82,7 @@ export async function spawnDetachedTask(opts: SpawnDetachedTaskOptions): Promise
       watchForTaskId({ recordHome, taskText, timeoutMs, signal: watchCancel.signal }),
       spawnFailure,
     ]);
-    return { taskId };
+    return { taskId, isRunning: () => !exited };
   } finally {
     watchCancel.abort();
     child.removeAllListeners("error");

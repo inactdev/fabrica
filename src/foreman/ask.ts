@@ -18,6 +18,7 @@ import { appendEvent, registerTask, writeTaskFile } from "../record/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { requireRoomToStart } from "./caps.ts";
+import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
 import type { Caps } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with
@@ -65,7 +66,7 @@ export interface RegisterAndAskResult {
 export async function registerAndAsk(
   recordHome: string,
   taskText: string,
-  opts: { project: string; brain?: Brain; attempts?: number; caps?: Caps }
+  opts: { project: string; brain?: Brain; attempts?: number; caps?: Caps; onTaskRegistered?: (taskId: string) => void }
 ): Promise<RegisterAndAskResult> {
   const brain = opts.brain;
   if (!brain) {
@@ -86,6 +87,7 @@ export async function registerAndAsk(
   const totalAttempts = opts.attempts ?? DEFAULT_ATTEMPTS;
 
   const { id: taskId } = registerTask(recordHome, taskText);
+  opts.onTaskRegistered?.(taskId);
   // Ownership split: registerTask (src/record) writes request.md as part
   // of registration - the record owns what the Client said. The Foreman
   // writes brief.md here, afterwards - the Foreman owns what a Worker is
@@ -94,34 +96,40 @@ export async function registerAndAsk(
   // re-derive brief.md from what's already there.
   writeTaskFile(recordHome, taskId, "brief.md", taskText);
 
-  // Rule 10: refused before anything spends - ask() itself costs money
-  // on a metered brain. Registered first so the refusal, with its
-  // numbers, lands on this task's own record (`fabrica log <id>`).
-  requireRoomToStart(recordHome, taskId, opts.caps, { project: opts.project });
+  return recordingFailure(recordHome, taskId, async () => {
+    // Before anything spends, the clarifying step included: the project
+    // must be a real git repository's root.
+    requireGitRoot(opts.project);
 
-  // A task must never look started when its very first step never ran -
-  // "ask-failed" is what lets an outside observer (fabrica do's own
-  // process, src/cli/wait-for-ask-outcome.ts) tell that apart from
-  // "still thinking," instead of the record staying silent at
-  // "task-received" while this throws and the CLI's bounded wait times
-  // out into a false success (Client ruling, issue #8 follow-up: a
-  // failed task must never look like a started one). Rethrown after
-  // recording, unchanged - every direct caller of registerAndAsk/doTask
-  // still sees the real error; only the record gains a trace of it.
-  let asked: { questions?: string[] };
-  try {
-    asked = await brain.ask(taskText);
-  } catch (err) {
-    const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };
-    appendEvent(recordHome, { taskId, name: "ask-failed", details });
-    throw err;
-  }
-  const questions = (asked.questions ?? []).filter((q) => q.trim().length > 0);
+    // Rule 10: refused before anything spends - ask() itself costs money
+    // on a metered brain. Registered first so the refusal, with its
+    // numbers, lands on this task's own record (`fabrica log <id>`).
+    requireRoomToStart(recordHome, taskId, opts.caps, { project: opts.project });
 
-  if (questions.length > 0) {
-    const details: AskedDetails = { questions, project: opts.project, totalAttempts, explicitAttempts };
-    appendEvent(recordHome, { taskId, name: "questions-asked", details });
-  }
+    // A task must never look started when its very first step never ran -
+    // "ask-failed" is what lets an outside observer (fabrica do's own
+    // process, src/cli/wait-for-ask-outcome.ts) tell that apart from
+    // "still thinking," instead of the record staying silent at
+    // "task-received" while this throws and the CLI's bounded wait times
+    // out into a false success (Client ruling, issue #8 follow-up: a
+    // failed task must never look like a started one). Rethrown after
+    // recording, unchanged - every direct caller of registerAndAsk/doTask
+    // still sees the real error; only the record gains a trace of it.
+    let asked: { questions?: string[] };
+    try {
+      asked = await brain.ask(taskText);
+    } catch (err) {
+      const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };
+      appendEvent(recordHome, { taskId, name: "ask-failed", details });
+      throw markRecorded(err);
+    }
+    const questions = (asked.questions ?? []).filter((q) => q.trim().length > 0);
 
-  return { taskId, brief: taskText, questions, project: opts.project, totalAttempts, explicitAttempts };
+    if (questions.length > 0) {
+      const details: AskedDetails = { questions, project: opts.project, totalAttempts, explicitAttempts };
+      appendEvent(recordHome, { taskId, name: "questions-asked", details });
+    }
+
+    return { taskId, brief: taskText, questions, project: opts.project, totalAttempts, explicitAttempts };
+  });
 }

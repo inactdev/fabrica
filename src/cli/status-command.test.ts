@@ -353,3 +353,18 @@ test("runStatusCommand: a measured task shows its cost in dollars", async () => 
 
   assert.match(io.out[0], /cost: \$0\.0421/);
 });
+
+test("runStatusCommand: a task-failed task shows FAILED with its reason, not working", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "line-cut", details: { branch: "fabrica/t1", reopened: false } });
+  appendEvent(recordHome, { taskId: "t1", name: "task-failed", details: { message: "no check.sh in /some/project" } });
+  const io = captureIo();
+
+  await runStatusCommand([], { recordHome, ...io });
+
+  assert.match(io.out[0], /^t1\s.*\sfailed\s/);
+  assert.match(io.out[0], /FAILED/);
+  assert.match(io.out[0], /no check\.sh in \/some\/project/);
+  assert.doesNotMatch(io.out[0], /working|quiet/);
+});

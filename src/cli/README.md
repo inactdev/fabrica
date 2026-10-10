@@ -223,7 +223,7 @@ them can reach a running worker.
   (`task-received` before `"work-started"` lands) gets the same
   no-state-exempt-forever treatment on its own, much shorter ceiling
   (`PRE_WORK_QUIET_CEILING_MS`, 5 minutes - sized to
-  `wait-for-ask-outcome.ts`'s 60s CLI wait, not copied from the checking
+  a real clarifying step's duration, not copied from the checking
   ceiling), and it likewise never claims a heartbeat that window never
   has: the ordinary quiet notice names the record's literal last event,
   so a window with no heartbeat in it says "work started" or "the task
@@ -458,7 +458,7 @@ runs should never write anything there - `doTask` and the shipped adapter
 communicate through the record and the transcript, not their own
 process's stdio - but an unexpected crash in this process, as opposed to
 a normal task failure (which is `do()`'s own concern, already visible
-through the delivery), would otherwise vanish with no one watching.
+through the delivery), would otherwise vanish with no one watching. Every line in it starts with an ISO timestamp and the task's id (`task-log.ts`), so a line ties back to its task; a line written before the task is registered carries `(no-task-yet)` instead.
 
 ## `run-task.ts` vs. `run-task-entry.ts`
 

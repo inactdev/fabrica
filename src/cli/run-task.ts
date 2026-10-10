@@ -22,10 +22,10 @@ export async function runTask(
   projectPath: string,
   taskText: string,
   brain: Brain,
-  judges: { inspector?: Inspector; checkBox?: CheckBox } = {}
+  extra: { inspector?: Inspector; checkBox?: CheckBox; onTaskRegistered?: (taskId: string) => void } = {}
 ): Promise<void> {
   // Rule 10: the caps in projects.toml are law for every task this
   // process starts - read here, in the process that actually spends.
-  const foreman = createForeman({ recordHome, caps: loadConfigOrDefault(recordHome).caps, ...judges });
+  const foreman = createForeman({ recordHome, caps: loadConfigOrDefault(recordHome).caps, ...extra });
   await foreman.do(taskText, { project: projectPath, brain });
 }
