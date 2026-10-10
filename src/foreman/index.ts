@@ -19,3 +19,4 @@ export {
   taskSpend,
   unmeasuredSpend,
 } from "./spend.ts";
+export { requireGitRoot } from "./task-failure.ts";

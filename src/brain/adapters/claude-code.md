@@ -256,7 +256,13 @@ anything - `runContained` expects to find it already there - so build it
 once before any contained call, and rebuild it whenever that file
 changes, from the repository root:
 
-    docker build -t fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .
+    docker build --build-arg DOCKERFILE_SHA256=$(shasum -a 256 src/brain/adapters/docker/Dockerfile | cut -d' ' -f1) \
+      -t fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .
+
+The build arg stamps the image with the Dockerfile's hash (a LABEL,
+`fabrica.dockerfile-sha256`), which is how `fabrica doctor` tells a
+current image from one built before the Dockerfile last changed - it
+prints this exact command, hash filled in, when they differ.
 
 Everything in it is digest- or version-pinned, so a rebuild that changed
 nothing installs exactly what the last one did.

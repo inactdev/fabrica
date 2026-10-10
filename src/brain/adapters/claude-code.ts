@@ -28,12 +28,12 @@ export class ClaudeCodeError extends Error {
   }
 }
 
-// Built from src/brain/adapters/docker/Dockerfile (`docker build -t
-// fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .`,
-// once, before this adapter's default image can be found) - see that
+// Built from src/brain/adapters/docker/Dockerfile (the build command,
+// with the Dockerfile-hash stamp `fabrica doctor` checks, is in that
+// file; once, before this adapter's default image can be found) - see that
 // file and claude-code.md's "Process containment" section for what it
 // installs and why a fresh build has nothing authenticated yet.
-const DEFAULT_IMAGE = "fabrica-claude-code:latest";
+export const DEFAULT_IMAGE = "fabrica-claude-code:latest";
 
 export interface ClaudeCodeAdapterOptions {
   /** Value for `claude --model` (an alias like "sonnet" or a full model

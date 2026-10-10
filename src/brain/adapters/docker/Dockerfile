@@ -7,8 +7,11 @@
 # see claude-code.md's "Process containment" section for why, and for
 # the separate, deliberate decision that closes that gap.
 #
-# Build once, before contained calls can find this image:
-#   docker build -t fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .
+# Build once, before contained calls can find this image, from the
+# repository root - `fabrica doctor` prints this exact command, with the
+# hash filled in, whenever the image is missing or out of date:
+#   docker build --build-arg DOCKERFILE_SHA256=$(shasum -a 256 src/brain/adapters/docker/Dockerfile | cut -d' ' -f1) \
+#     -t fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .
 #
 # Pinned to an exact digest, not the floating "20-alpine" tag: pulled
 # once and cached, so container spin-up stays fast and reproducible
@@ -46,3 +49,8 @@ RUN apk add --no-cache git bash
 RUN npm install -g @anthropic-ai/claude-code@2.1.222
 COPY --from=go /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:$PATH"
+
+# Stamps the image with the hash of this file, so `fabrica doctor` can
+# tell a current image from one built before this file last changed.
+ARG DOCKERFILE_SHA256=""
+LABEL fabrica.dockerfile-sha256=$DOCKERFILE_SHA256
