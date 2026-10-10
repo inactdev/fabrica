@@ -14,10 +14,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
-export function makeFixtureRepo(checkCmd = "exit 0"): string {
+/** The Inspector config every fixture carries unless asked not to, so a
+ * task on it is judged by Inspector (a fake one in tests - see
+ * fake-inspector.ts). `{ inspector: false }` leaves it out, for the
+ * self-tested path where no Inspector is configured. */
+export const FIXTURE_INSPECTOR_CONFIG = '{"check":"./check.sh","image":"alpine"}\n';
+
+export function makeFixtureRepo(checkCmd = "exit 0", opts: { inspector?: boolean } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "fabrica-fixture-"));
   writeFileSync(join(dir, "app.txt"), "hello from the fixture app\n");
   writeFileSync(join(dir, "check.sh"), `#!/bin/sh\n${checkCmd}\n`);
+  if (opts.inspector !== false) writeFileSync(join(dir, ".inspector.json"), FIXTURE_INSPECTOR_CONFIG);
   execSync("chmod +x check.sh", { cwd: dir });
   execSync("git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init", {
     cwd: dir,

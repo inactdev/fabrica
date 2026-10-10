@@ -20,6 +20,7 @@ import { runDoCommand } from "./do-command.ts";
 import { runWatchCommand } from "./watch-command.ts";
 import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS } from "./render.ts";
 import type { Brain } from "../index.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 
 // See status-command.test.ts's matching test: runCheck is synchronous
 // execSync, so a slow check blocks its own process's event loop start to
@@ -67,7 +68,7 @@ function slowBrain(delayMs: number): Brain {
 test("runWatchCommand: prints existing transcript, then stops cleanly on abort", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome }).do("small change", { project, brain: fakeBrain() });
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
   const io = captureIo();
   const controller = new AbortController();
 
@@ -93,7 +94,7 @@ test("runWatchCommand: streams a transcript entry that lands after watching star
   // do() registers the task (writes request.md, appends task-received)
   // synchronously before its first await, so the task directory already
   // exists the instant this call returns its (still-pending) promise.
-  const donePromise = createForeman({ recordHome }).do("a slow task", { project, brain });
+  const donePromise = createForeman({ recordHome, inspector: fixtureInspector() }).do("a slow task", { project, brain });
   const taskId = readdirSync(join(recordHome, "tasks"))[0];
 
   const io = captureIo();
@@ -205,7 +206,7 @@ test("runWatchCommand: a live heartbeat that lands after catch-up still prints a
 
 test("runWatchCommand: a task mid-check streams its real elapsed time live, never a quiet alarm", async () => {
   const recordHome = tempRecordHome();
-  const project = makeFixtureRepo("sleep 2 && exit 0");
+  const project = makeFixtureRepo("sleep 2 && exit 0", { inspector: false });
 
   const doIo = { out: [] as string[], stdout: (l: string) => doIo.out.push(l), stderr: () => {} };
   await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...doIo });
@@ -526,7 +527,7 @@ test("runWatchCommand: bad usage refuses with exact instructions", async () => {
 test("runWatchCommand: aborting an already-aborted signal returns immediately", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome }).do("small change", { project, brain: fakeBrain() });
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
   const io = captureIo();
   const controller = new AbortController();
   controller.abort();

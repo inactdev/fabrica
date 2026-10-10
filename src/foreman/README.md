@@ -89,14 +89,26 @@ return early" below.
    that; a crash landing in a few-line gap is rare enough, and its
    failure obvious enough, that documenting it beats building machinery
    to prevent it.
-3. **Resolves the check command** (`resolve-check.ts`) and refuses before
-   any Worker runs if there isn't one (`check.ts`'s `requireCheckCommand`)
-   — CONTRACT rule 2 allows no path around the gate, so a task with
-   nothing to verify against is refused up front, not after burning a
-   Worker call on it.
+3. **Chooses who judges each attempt** (`judge.ts`, issue #64). Fabrica
+   never runs a project's check on the host: the check command is a file
+   the Worker just edited. Two modes:
+   - **Inspector** - Inspector is installed and the task's base commit
+     has `.inspector.json`. Each attempt is committed and handed to
+     Inspector (`-branch fabrica/<taskId>`); its containerized run is the
+     verdict. Fabrica runs no check of its own and records none.
+   - **Self-test** - otherwise, never a refusal. The check
+     (`resolve-check.ts`) runs once per attempt inside the Worker's own
+     box (the adapter's `CheckBox`), and refuses before any Worker runs
+     if there is none (`requireCheckCommand`). That is the builder
+     checking the builder, so a green delivery says "self-tested in the
+     worker's box; no Inspector; not independently checked" and leaves
+     the push to the Client. A box that cannot run the check (exit 127,
+     no Docker) is a `not-verified` delivery, never a red.
 4. **Runs the attempt loop** (`attempts.ts`): calls `brain.work(...)`,
-   then runs the check, for up to `attempts` rounds. See "How `attempts`
-   actually behaves" below — it is not simply "retry until green."
+   then the judge, for up to `attempts` rounds. Red (Inspector's report,
+   or the box's output) is the next attempt's correction brief; green
+   stops early. See "How `attempts` actually behaves" below — it is not
+   simply "retry until green."
 5. **Checks for an undeclared gate change** (`gate-changes.ts`) — CONTRACT
    rule 9. If the check script changed and nothing declared it, the
    outcome is forced to `discarded-protected-path` regardless of whether
@@ -114,14 +126,13 @@ return early" below.
    branch, rename it, or otherwise flag it for CI - see "Rule 9: blocked
    by CI, not by Fabrica's own mark" below for why that mark was tried
    and then deliberately removed.
-   When the final Fabrica check is green and the task's base commit has
-   `.inspector.json`, the Foreman records `inspector-called` and invokes
+   In Inspector mode every attempt records `inspector-called` and invokes
    Inspector on this checked-out branch before a delivery exists. This
    requirement survives every fix round; any final config blob that
    differs from the base commit, including deletion, produces a refusal
    rather than letting a Worker weaken or skip its own inspection.
    Inspector's green report proceeds to the normal delivery; a red report
-   becomes an `inspection-red` delivery with its report in both the
+   on the last attempt becomes an `inspection-red` delivery with its report in both the
    delivery and `inspection-finished` record event, so the Client can
    rule `fix` and reopen the same warm Worker and branch. A refusal is
    neither green nor red: it records `inspection-finished` with the
@@ -131,12 +142,10 @@ return early" below.
    terminal for that round because there is no verdict to repair toward;
    the operator reads the reason in `fabrica log` and resolves the
    external handoff problem outside the Client verdict loop.
-   A task whose base commit has no `.inspector.json` records
-   `inspection-skipped` and takes the pre-Inspector delivery path
-   unchanged. Heartbeats continue while Inspector is running so a valid
-   wait is not reported as silence. Rule 9's
-   `discarded-protected-path` outcome and a red Fabrica check never call
-   Inspector, because Fabrica has not reached its own green handoff point.
+   A self-tested task records `inspection-skipped`, with the reason (no
+   `.inspector.json` at the base commit, or Inspector not installed),
+   before its first attempt. Heartbeats continue while Inspector is
+   running so a valid wait is not reported as silence.
 
    `delivery.ts` builds the `Delivery` object from the branch's own diff
    (pinned to the commit the line was cut from, via `src/delivery`'s
@@ -238,7 +247,7 @@ A task run against that exact path gets `bin/ci` as its check command; a
 task run against any other path (every contract test's throwaway fixture
 repos, or an ad hoc path before it's ever registered) gets the
 `check.sh` convention. Nothing about how `do()` runs changes between the
-two — only which command `runCheck` executes.
+two — only which command the self-test runs in the Worker's box.
 
 ## What CONTRACT rule 9 protects, and what it doesn't yet
 
@@ -612,7 +621,7 @@ The one thing the record does *not* store whole is a check's output:
 naming what was dropped. Every receipt is re-serialized onto each later
 result event of the same task, whether `"delivered"` or a refused
 `"inspection-finished"`. The whole events file is read and parsed for
-every query, so a check free to print up to `check.ts`'s 64MB buffer
+every query, so a check free to print any amount
 can't go in verbatim. The same cap applies wherever else check output is
 stored, not just to a receipt's `checks`: `delivery.ts` runs
 `ctx.lastGate` through that same `gateForRecord` before building a
@@ -792,8 +801,8 @@ clarify step's own spend is not metered yet.
 | File | Holds |
 | --- | --- |
 | `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, and rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`. |
-| `check.ts` | Runs the check command; refuses up front when the `check.sh` convention applies and there's no script. |
-| `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention. |
+| `judge.ts` | Who judges each attempt (issue #64): Inspector, or a self-test in the Worker's box. `prepareRound` picks the mode; `roundOutcome` turns the last judgement into a delivery outcome. Nothing here runs a check on the host - `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`. |
+| `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention; `requireCheckCommand` refuses a self-tested task with none. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. Also ticks `onHeartbeat` every `DEFAULT_HEARTBEAT_INTERVAL_MS` while a `brain.work` call is in flight, so a long opaque await still shows up on the record (issue #12) - `do.ts` and `verdict.ts` both wire it to a `"heartbeat"` event - and fires `onCheckStarted` right before the check runs, so `"check-run"` lands twice per attempt (`details.phase: "started"`, then the result-carrying one) and a task genuinely mid-check is distinguishable from one that already finished a check (`queries.ts`'s `stateOf`). |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |

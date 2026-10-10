@@ -8,6 +8,7 @@ import { readEvents, readEventsForTask } from "../record/index.ts";
 import type { FabricaEvent } from "../record/index.ts";
 import type { Receipt } from "../../contract/surface.ts";
 import type { Delivery, FabricaTask } from "../inspector/types.ts";
+import { deliveredState } from "./delivery.ts";
 
 export function eventsOf(recordHome: string, taskId: string): FabricaEvent[] {
   return readEventsForTask(recordHome, taskId);
@@ -53,10 +54,18 @@ export function deliveryOf(recordHome: string, taskId: string): Delivery | null 
 }
 
 export function receiptsOf(recordHome: string, taskId: string): Receipt[] {
-  const receiptEvent = readEventsForTask(recordHome, taskId)
+  const events = readEventsForTask(recordHome, taskId);
+  const receiptEvent = events
     .filter((event) => Array.isArray((event.details as { receipts?: unknown } | undefined)?.receipts))
     .at(-1);
-  return (receiptEvent?.details as { receipts?: Receipt[] } | undefined)?.receipts ?? [];
+  const receipts = [...((receiptEvent?.details as { receipts?: Receipt[] } | undefined)?.receipts ?? [])];
+  // An attempt that ended with no delivery (Inspector refused) is on the
+  // record only as its own "receipt-recorded" event.
+  for (const event of events) {
+    const receipt = event.name === "receipt-recorded" ? (event.details as { receipt?: Receipt }).receipt : undefined;
+    if (receipt && !receipts.some((r) => r.attempt === receipt.attempt)) receipts.push(receipt);
+  }
+  return receipts.sort((a, b) => a.attempt - b.attempt);
 }
 
 /** The most recent "delivered" event's details — a fix round appends a
@@ -166,7 +175,7 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
         // A fix round appends a second "delivered" event on the same
         // task; the forward pass naturally lands on the last one.
         const details = event.details as { outcome?: Delivery["outcome"] } | undefined;
-        state = details?.outcome === "done" || details?.outcome === "inspection-red" ? "delivered" : "failed";
+        state = deliveredState(details?.outcome);
         break;
       }
       case "verdict-recorded": {

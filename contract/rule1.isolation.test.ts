@@ -9,13 +9,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
+import { fakeInspector } from "./helpers/fake-inspector.ts";
 import { makeFixtureRepo, fingerprint } from "./helpers/fixture.ts";
 
 test("rule 1: the Client's checkout is untouched, byte for byte", async () => {
   const project = makeFixtureRepo("exit 0");
   const before = fingerprint(project);
 
-  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")), inspector: fakeInspector("green") });
   await foreman.do("append one line to app.txt", { project, brain: fakeBrain() });
 
   const after = fingerprint(project);

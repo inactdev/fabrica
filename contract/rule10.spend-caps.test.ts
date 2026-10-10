@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
+import { fakeInspector } from "./helpers/fake-inspector.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
 test("rule 10: a task beyond the daily cap is refused, numbers shown", async () => {
@@ -17,6 +18,7 @@ test("rule 10: a task beyond the daily cap is refused, numbers shown", async () 
   const foreman = createForeman({
     recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")),
     caps: { perDayUsd: 0 },
+    inspector: fakeInspector("green"),
   });
 
   await assert.rejects(
@@ -28,7 +30,7 @@ test("rule 10: a task beyond the daily cap is refused, numbers shown", async () 
 
 test("rule 10: every receipt carries the money field", async () => {
   const project = makeFixtureRepo("exit 0");
-  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")), inspector: fakeInspector("green") });
 
   const task = await foreman.do("small change", { project, brain: fakeBrain() });
   const receipts = await foreman.receiptsOf(task.id);
@@ -53,9 +55,9 @@ function home(): string {
 test("rule 10: a daily-cap refusal shows the cap and the spend, and lands on the record", async () => {
   const recordHome = home();
   const project = makeFixtureRepo("exit 0");
-  await createForeman({ recordHome }).do("first task", { project, brain: fakeBrain({ costUsd: 6.5 }) });
+  await createForeman({ recordHome, inspector: fakeInspector("green") }).do("first task", { project, brain: fakeBrain({ costUsd: 6.5 }) });
 
-  const foreman = createForeman({ recordHome, caps: { perDayUsd: 5 } });
+  const foreman = createForeman({ recordHome, caps: { perDayUsd: 5 }, inspector: fakeInspector("green") });
   await assert.rejects(
     () => foreman.do("second task", { project, brain: fakeBrain({ costUsd: 1 }) }),
     (err: Error) => /\$5\.00/.test(err.message) && /\$6\.50/.test(err.message),
@@ -72,7 +74,7 @@ test("rule 10: a daily-cap refusal shows the cap and the spend, and lands on the
 
 test("rule 10: a task is hard-stopped when it crosses its per-task cap mid-run", async () => {
   const project = makeFixtureRepo("exit 1");
-  const foreman = createForeman({ recordHome: home(), caps: { perTaskUsd: 5 } });
+  const foreman = createForeman({ recordHome: home(), caps: { perTaskUsd: 5 }, inspector: fakeInspector("red") });
   const brain = fakeBrain({ costUsd: 3 });
 
   const task = await foreman.do("keeps failing, keeps spending", { project, brain, attempts: 4 });
@@ -99,7 +101,7 @@ test("rule 10: a task is hard-stopped when it crosses its per-task cap mid-run",
 test("rule 10: spend of unknown cost does not count as zero against a cap", async () => {
   const recordHome = home();
   const project = makeFixtureRepo("exit 0");
-  const foreman = createForeman({ recordHome, caps: { perDayUsd: 100 } });
+  const foreman = createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fakeInspector("green") });
 
   const unmeasured = await foreman.do("an unmeasured task", { project, brain: fakeBrain({ costUsd: null }) });
   const [receipt] = await foreman.receiptsOf(unmeasured.id);
@@ -117,7 +119,7 @@ test("rule 10: spend of unknown cost does not count as zero against a cap", asyn
 
 test("rule 10: a usage entry with null cost under a cap stops the task, SPEND UNKNOWN in the report", async () => {
   const project = makeFixtureRepo("exit 1");
-  const foreman = createForeman({ recordHome: home(), caps: { perTaskUsd: 100 } });
+  const foreman = createForeman({ recordHome: home(), caps: { perTaskUsd: 100 }, inspector: fakeInspector("red") });
   const brain = fakeBrain({ costUsd: null });
 
   const task = await foreman.do("spends an unknown amount", { project, brain, attempts: 3 });
@@ -131,7 +133,7 @@ test("rule 10: a usage entry with null cost under a cap stops the task, SPEND UN
 test("rule 10: recording the cost by hand clears the block", async () => {
   const recordHome = home();
   const project = makeFixtureRepo("exit 0");
-  const foreman = createForeman({ recordHome, caps: { perDayUsd: 100 } });
+  const foreman = createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fakeInspector("green") });
   const unmeasured = await foreman.do("an unmeasured task", { project, brain: fakeBrain({ costUsd: null }) });
 
   await assert.rejects(() => foreman.recordCost(unmeasured.id, Number.NaN), /cost/i);
@@ -157,12 +159,12 @@ test("rule 10: recording the cost by hand clears the block", async () => {
 test("rule 10: the day's total survives a restart", async () => {
   const recordHome = home();
   const project = makeFixtureRepo("exit 0");
-  await createForeman({ recordHome, caps: { perDayUsd: 5 } }).do("spends past the cap", {
+  await createForeman({ recordHome, caps: { perDayUsd: 5 }, inspector: fakeInspector("green") }).do("spends past the cap", {
     project,
     brain: fakeBrain({ costUsd: 6 }),
   });
 
-  const fresh = createForeman({ recordHome, caps: { perDayUsd: 5 } });
+  const fresh = createForeman({ recordHome, caps: { perDayUsd: 5 }, inspector: fakeInspector("green") });
   await assert.rejects(
     () => fresh.do("would exceed the cap given that history", { project, brain: fakeBrain({ costUsd: 1 }) }),
     /\$6\.00/,

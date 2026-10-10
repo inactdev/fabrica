@@ -12,6 +12,7 @@ import { createForeman } from "../index.ts";
 import { readEventsForTask } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { main } from "./main.ts";
 import { runCostCommand } from "./cost-command.ts";
 import { runDoCommand } from "./do-command.ts";
@@ -30,7 +31,7 @@ async function blockedHome(): Promise<{ recordHome: string; project: string; unm
   const recordHome = mkdtempSync(join(tmpdir(), "fabrica-cli-cost-"));
   writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 100\n");
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome, caps: { perDayUsd: 100 } }).do("unmeasured", {
+  const task = await createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fixtureInspector() }).do("unmeasured", {
     project,
     brain: fakeBrain({ costUsd: null }),
   });

@@ -11,13 +11,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
+import { fakeInspector } from "./helpers/fake-inspector.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
 test("rule 8: the whole lifecycle runs on a completely fake brain", async () => {
   const project = makeFixtureRepo("exit 0");
   const brain = fakeBrain();
 
-  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")), inspector: fakeInspector("green") });
   const task = await foreman.do("small change", { project, brain });
 
   assert.ok(brain.calls >= 1, "the plugged-in brain was never used");

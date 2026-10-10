@@ -18,10 +18,15 @@ export interface Inspection {
  * checked-out ProductionLine and owns any later publishing itself. */
 export interface Inspector {
   inspect(request: { branch: string; workdir: string }): Promise<Inspection>;
+  /** Whether this Inspector can run at all (its command is installed).
+   * Omitted means it can - a test's fake always can. */
+  installed?(): boolean;
 }
 
 export type Delivery = Omit<ContractDelivery, "outcome"> & {
-  outcome: ContractDelivery["outcome"] | "inspection-red";
+  /** "not-verified": self-tested, but the worker's box could not run the
+   * check at all - nothing judged the work, which is not the same as red. */
+  outcome: ContractDelivery["outcome"] | "inspection-red" | "not-verified";
   /** Present only when this branch was handed to Inspector. */
   inspection?: Inspection;
 };

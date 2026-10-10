@@ -9,7 +9,7 @@
 // (issue #65) - see `fixRoundOf` for where the number comes from.
 
 import { createForeman, fixRoundOf } from "../index.ts";
-import type { Brain } from "../index.ts";
+import type { Brain, CheckBox, Inspector } from "../index.ts";
 import { parseVerdictArgs, VERDICT_USAGE } from "./verdict-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
@@ -44,6 +44,10 @@ export interface RunVerdictCommandOptions {
    * Omitted, createForeman falls back to defaultBrainAdapter(), which is
    * what every real invocation does. */
   brain?: Brain;
+  /** Test-only, like `brain`: the fix round's judges. Omitted, the real
+   * Inspector (or the real worker's box) judges it. */
+  inspector?: Inspector;
+  checkBox?: CheckBox;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -56,7 +60,13 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
   try {
     const { taskId, ruling, note } = parseVerdictArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
-    const foreman = createForeman({ recordHome, brain: opts.brain, caps: loadConfigOrDefault(recordHome).caps });
+    const foreman = createForeman({
+      recordHome,
+      brain: opts.brain,
+      inspector: opts.inspector,
+      checkBox: opts.checkBox,
+      caps: loadConfigOrDefault(recordHome).caps,
+    });
 
     await foreman.verdict(taskId, ruling, note);
 

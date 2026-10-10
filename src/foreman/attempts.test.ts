@@ -1,35 +1,36 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAttempts, gateForRecord, MAX_RECEIPT_CHECK_OUTPUT_BYTES } from "./attempts.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import type { Brain } from "../brain/index.ts";
+import type { Judge } from "./judge.ts";
 
 const HEAD_MARKER = "FIRST-LINE-OF-CHECK-OUTPUT";
 const TAIL_MARKER = "LAST-LINE-OF-CHECK-OUTPUT";
 
-/** A workdir whose check prints far more than a receipt may store, and
- * fails - the shape of a verbose test suite going red. */
-function workdirWithNoisyRedCheck(): string {
-  const workdir = mkdtempSync(join(tmpdir(), "fabrica-attempts-"));
-  const script = join(workdir, "check.sh");
-  const filler = `${"x".repeat(79)}\n`.repeat(4000);
-  writeFileSync(script, `#!/bin/sh\necho "${HEAD_MARKER}"\ncat <<'EOF'\n${filler}EOF\necho "${TAIL_MARKER}"\nexit 1\n`);
-  chmodSync(script, 0o755);
-  return workdir;
+/** A judge whose red verdict carries far more output than a receipt may
+ * store - the shape of a verbose test suite going red. */
+const noisyRedJudge: Judge = async () => ({
+  kind: "verdict",
+  gate: { green: false, output: `${HEAD_MARKER}\n${`${"x".repeat(79)}\n`.repeat(4000)}${TAIL_MARKER}\n` },
+});
+
+const greenJudge: Judge = async () => ({ kind: "verdict", gate: { green: true, output: "ok" } });
+
+function scratchWorkdir(): string {
+  return mkdtempSync(join(tmpdir(), "fabrica-attempts-"));
 }
 
 test("a receipt stores only the tail of a long check output, behind a truncation marker", async () => {
-  const workdir = workdirWithNoisyRedCheck();
-
   const { receipts } = await runAttempts({
     brain: fakeBrain(),
     brief: "do the thing",
-    workdir,
+    workdir: scratchWorkdir(),
     taskId: "task-1",
-    check: "./check.sh",
+    judge: noisyRedJudge,
     totalAttempts: 1,
     stopEarlyOnGreen: false,
   });
@@ -46,15 +47,14 @@ test("a receipt stores only the tail of a long check output, behind a truncation
 });
 
 test("the next attempt's correction brief still gets the untruncated check output", async () => {
-  const workdir = workdirWithNoisyRedCheck();
   const briefs: string[] = [];
 
   const { receipts } = await runAttempts({
     brain: fakeBrain({ onWork: (brief) => briefs.push(brief) }),
     brief: "do the thing",
-    workdir,
+    workdir: scratchWorkdir(),
     taskId: "task-1",
-    check: "./check.sh",
+    judge: noisyRedJudge,
     totalAttempts: 2,
     stopEarlyOnGreen: false,
   });
@@ -105,19 +105,15 @@ function slowBrain(delayMs: number): Brain {
   };
 }
 
-function fastCheckWorkdir(): string {
-  return mkdtempSync(join(tmpdir(), "fabrica-attempts-"));
-}
-
 test("runAttempts: onHeartbeat fires repeatedly while brain.work is in flight", async () => {
   const beats: number[] = [];
 
   await runAttempts({
     brain: slowBrain(300),
     brief: "do it",
-    workdir: fastCheckWorkdir(),
+    workdir: scratchWorkdir(),
     taskId: "t1",
-    check: "exit 0",
+    judge: greenJudge,
     totalAttempts: 1,
     stopEarlyOnGreen: true,
     heartbeatIntervalMs: 10,
@@ -137,9 +133,9 @@ test("runAttempts: heartbeat stops the instant brain.work resolves", async () =>
   await runAttempts({
     brain: slowBrain(20),
     brief: "do it",
-    workdir: fastCheckWorkdir(),
+    workdir: scratchWorkdir(),
     taskId: "t1",
-    check: "exit 0",
+    judge: greenJudge,
     totalAttempts: 1,
     stopEarlyOnGreen: true,
     heartbeatIntervalMs: 5,
@@ -161,9 +157,9 @@ test("runAttempts: a throwing onHeartbeat loses the beat, never the task", async
   const result = await runAttempts({
     brain: slowBrain(40),
     brief: "do it",
-    workdir: fastCheckWorkdir(),
+    workdir: scratchWorkdir(),
     taskId: "t1",
-    check: "exit 0",
+    judge: greenJudge,
     totalAttempts: 1,
     stopEarlyOnGreen: true,
     heartbeatIntervalMs: 5,
@@ -175,19 +171,37 @@ test("runAttempts: a throwing onHeartbeat loses the beat, never the task", async
 
   assert.ok(beats >= 2, `the tick should keep firing after a throw, got ${beats}`);
   assert.equal(result.receipts.length, 1);
-  assert.equal(result.lastGate.green, true);
+  assert.equal(result.lastGate?.green, true);
 });
 
 test("runAttempts: no onHeartbeat given, no timer runs (no crash, no leak)", async () => {
   const result = await runAttempts({
     brain: slowBrain(5),
     brief: "do it",
-    workdir: fastCheckWorkdir(),
+    workdir: scratchWorkdir(),
     taskId: "t1",
-    check: "exit 0",
+    judge: greenJudge,
     totalAttempts: 1,
     stopEarlyOnGreen: true,
   });
 
   assert.equal(result.receipts.length, 1);
+});
+
+test("runAttempts: a judgement with no verdict stops the loop, whatever the budget", async () => {
+  const brain = fakeBrain();
+  const result = await runAttempts({
+    brain,
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: async () => ({ kind: "not-verified", reason: "no toolchain" }),
+    totalAttempts: 3,
+    stopEarlyOnGreen: false,
+  });
+
+  assert.equal(brain.calls, 1);
+  assert.equal(result.lastJudgement.kind, "not-verified");
+  assert.equal(result.lastGate, undefined);
+  assert.equal(result.receipts[0].checks, null);
 });

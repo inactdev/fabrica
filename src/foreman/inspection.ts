@@ -1,6 +1,5 @@
-// Records the Foreman's handoff to Inspector. A green Fabrica check is
-// necessary but not sufficient for delivery on a configured project:
-// Inspector supplies the independent verdict. A refusal means no verdict,
+// Records the Foreman's handoff to Inspector. On a configured project,
+// Inspector's run is the only check (issue #64): Fabrica runs none. A refusal means no verdict,
 // so it is recorded without being changed into a red result.
 
 import { appendEvent } from "../record/index.ts";

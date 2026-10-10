@@ -13,6 +13,7 @@ import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runAnswerCommand } from "./answer-command.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-answer-command-"));
@@ -26,7 +27,7 @@ function captureIo() {
 
 test("runAnswerCommand: resumes an asking task and reports the outcome", async () => {
   const recordHome = tempRecordHome();
-  const task = await createForeman({ recordHome }).do("build me an app", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain({ askQuestions: ["What database should this use?"] }),
   });
@@ -34,7 +35,7 @@ test("runAnswerCommand: resumes an asking task and reports the outcome", async (
   const brain = fakeBrain();
   const io = captureIo();
 
-  const code = await runAnswerCommand([task.id, "-m", "Use Postgres."], { recordHome, brain, ...io });
+  const code = await runAnswerCommand([task.id, "-m", "Use Postgres."], { recordHome, inspector: fixtureInspector(), brain, ...io });
 
   assert.equal(code, 0, io.err[0]);
   assert.deepEqual(io.err, []);
@@ -44,7 +45,7 @@ test("runAnswerCommand: resumes an asking task and reports the outcome", async (
   ]);
   assert.equal(brain.calls, 1);
 
-  const mine = (await createForeman({ recordHome }).status()).find((t) => t.id === task.id);
+  const mine = (await createForeman({ recordHome, inspector: fixtureInspector() }).status()).find((t) => t.id === task.id);
   assert.equal(mine?.state, "delivered");
 });
 
@@ -52,7 +53,7 @@ test("runAnswerCommand: bad usage refuses with exact instructions and exit 1", a
   const recordHome = tempRecordHome();
   const io = captureIo();
 
-  const code = await runAnswerCommand(["some-task"], { recordHome, ...io });
+  const code = await runAnswerCommand(["some-task"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
@@ -63,7 +64,7 @@ test("runAnswerCommand: an unknown task id refuses with the Foreman's own messag
   const recordHome = tempRecordHome();
   const io = captureIo();
 
-  const code = await runAnswerCommand(["no-such-task", "-m", "an answer"], { recordHome, ...io });
+  const code = await runAnswerCommand(["no-such-task", "-m", "an answer"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
@@ -72,13 +73,13 @@ test("runAnswerCommand: an unknown task id refuses with the Foreman's own messag
 
 test("runAnswerCommand: a task with no pending questions refuses", async () => {
   const recordHome = tempRecordHome();
-  const task = await createForeman({ recordHome }).do("small change", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain(),
   });
   const io = captureIo();
 
-  const code = await runAnswerCommand([task.id, "-m", "an answer"], { recordHome, ...io });
+  const code = await runAnswerCommand([task.id, "-m", "an answer"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 1);
   assert.match(io.err[0], /never asked a clarifying question/);
@@ -86,14 +87,14 @@ test("runAnswerCommand: a task with no pending questions refuses", async () => {
 
 test("runAnswerCommand: answering the same task twice refuses the second time", async () => {
   const recordHome = tempRecordHome();
-  const task = await createForeman({ recordHome }).do("build me an app", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain({ askQuestions: ["Which?"] }),
   });
-  await runAnswerCommand([task.id, "-m", "First answer."], { recordHome, brain: fakeBrain(), ...captureIo() });
+  await runAnswerCommand([task.id, "-m", "First answer."], { recordHome, inspector: fixtureInspector(), brain: fakeBrain(), ...captureIo() });
   const io = captureIo();
 
-  const code = await runAnswerCommand([task.id, "-m", "Second answer."], { recordHome, brain: fakeBrain(), ...io });
+  const code = await runAnswerCommand([task.id, "-m", "Second answer."], { recordHome, inspector: fixtureInspector(), brain: fakeBrain(), ...io });
 
   assert.equal(code, 1);
   assert.match(io.err[0], /already got its one clarification round/);

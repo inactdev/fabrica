@@ -9,6 +9,7 @@ import { ForemanError } from "./errors.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
 import { runAnswerCommand } from "../cli/answer-command.ts";
 import { runLogCommand } from "../cli/log-command.ts";
 import { runVerdictCommand } from "../cli/verdict-command.ts";
@@ -79,7 +80,9 @@ test("an Inspector red report reaches the Client and a fix returns to the same w
   const brain = fakeBrain();
   const foreman = createForeman({ recordHome, inspector });
 
-  const task = await foreman.do("small change", { project: inspectedProject(), brain });
+  // One attempt, so Inspector's red goes to the Client rather than into a
+  // second attempt's brief.
+  const task = await foreman.do("small change", { project: inspectedProject(), brain, attempts: 1 });
   const redDelivery = await foreman.deliveryOf(task.id);
 
   assert.equal(task.state, "delivered", "Inspector red still reaches the Client for a verdict");
@@ -178,7 +181,7 @@ test("a fix round cannot disable inspection established by the task base commit"
   });
   const foreman = createForeman({ recordHome, inspector });
 
-  const task = await foreman.do("small change", { project: inspectedProject(), brain });
+  const task = await foreman.do("small change", { project: inspectedProject(), brain, attempts: 1 });
   assert.equal((await foreman.deliveryOf(task.id))?.outcome, "inspection-red");
 
   const io = captureIo();
@@ -269,12 +272,15 @@ test("Inspector handoff records heartbeats while awaiting a verdict", async () =
   assert.equal(events.at(-1)?.name, "inspection-finished");
 });
 
-test("a project without Inspector config keeps Fabrica's existing delivery path", async () => {
+test("a project without Inspector config is self-tested in the worker's box, never handed to Inspector", async () => {
   const recordHome = freshHome();
   const inspector = fakeInspector({ verdict: "green", report: "should not be called" });
-  const foreman = createForeman({ recordHome, inspector });
+  const foreman = createForeman({ recordHome, inspector, checkBox: fixtureCheckBox().box });
 
-  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
+  const task = await foreman.do("small change", {
+    project: makeFixtureRepo("exit 0", { inspector: false }),
+    brain: fakeBrain(),
+  });
 
   assert.equal(task.state, "delivered");
   const delivery = await foreman.deliveryOf(task.id);

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { claudeCodeAdapter, ClaudeCodeError, resolveGitMounts } from "./claude-code.ts";
+import { claudeCodeAdapter, claudeCodeCheckBox, ClaudeCodeError, resolveGitMounts } from "./claude-code.ts";
 import { createProductionLine, destroyProductionLine } from "../../line/index.ts";
 import { makeFixtureHome, makeFixtureProject } from "../../line/helpers/fixture.ts";
 import { LineError } from "../../line/index.ts";
@@ -343,6 +343,25 @@ test("claudeCodeAdapter throws ClaudeCodeError('cli-error') when the containeriz
 // resolved refuses the run outright, with a message telling the Client
 // to initialize git first - never a Worker running with git silently
 // unavailable. See resolveGitMounts's own comment.
+test("claudeCodeCheckBox runs the check inside the box, never on the host, and reports a missing command as exit 127", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const line = createProductionLine({ project: makeFixtureProject(), taskId: "check-box", recordHome: makeFixtureHome() });
+  const hostMarker = join(mkdtempSync(join(tmpdir(), "fabrica-check-box-host-")), "ran-on-host");
+  try {
+    const box = claudeCodeCheckBox({ image: TEST_IMAGE });
+
+    const ran = await box(line.workdir, `echo in-the-box; touch "${hostMarker}" 2>/dev/null; exit 3`);
+    assert.deepEqual([ran.ran, ran.ran && ran.exitCode], [true, 3]);
+    assert.ok(ran.ran && ran.output.includes("in-the-box"));
+    assert.equal(existsSync(hostMarker), false, "the check reached the host's filesystem");
+
+    const missing = await box(line.workdir, "definitely-not-a-command");
+    assert.ok(missing.ran && missing.exitCode === 127, JSON.stringify(missing));
+  } finally {
+    destroyProductionLine(line);
+  }
+});
+
 test("resolveGitMounts refuses a workdir with no git repository, telling the Client to initialize git first", () => {
   const noGitDir = mkdtempSync(join(tmpdir(), "fabrica-claude-code-nogit-"));
 

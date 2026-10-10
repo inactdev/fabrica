@@ -701,3 +701,14 @@ test("formatTerminalNotice: only terminal-ish states get one", () => {
   assert.equal(formatTerminalNotice("working", ctx), null);
   assert.equal(formatTerminalNotice("checking", ctx), null);
 });
+
+test("formatEventLine: a check the worker's box could not run reads as not run, never as red", () => {
+  const line = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "check-run",
+    details: { attempt: 1, notVerified: "the box has no command the check needs (./check.sh -> exit 127)\nsh: npm: not found" },
+  });
+  assert.match(line, /check could not run \(attempt 1\): the box has no command the check needs/);
+  assert.doesNotMatch(line, /red/);
+});

@@ -1,9 +1,29 @@
 // Resolves which check command a ProductionLine should run — the one
 // place src/config actually participates in the loop (SPEC.md "Config").
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { ConfigError, loadConfig } from "../config/index.ts";
-import { DEFAULT_CHECK_COMMAND } from "./check.ts";
+import { ForemanError } from "./errors.ts";
+
+export const DEFAULT_CHECK_COMMAND = "./check.sh";
+
+/** Throws ForemanError("missing-check") when the default convention would
+ * apply but there's no check.sh to run — rule 2 allows no path around the
+ * gate, so `do()` refuses before any worker runs, when there is nothing
+ * yet to verify with, rather than after. A configured check command (from
+ * projects.toml) is trusted as-is; it need not be a file at all. Only the
+ * self-tested path needs this: with Inspector, Fabrica runs no check. */
+export function requireCheckCommand(workdir: string, check: string): void {
+  if (check === DEFAULT_CHECK_COMMAND && !existsSync(join(workdir, "check.sh"))) {
+    throw new ForemanError(
+      "missing-check",
+      `${workdir} has no check.sh. No check command, no verified work, no ` +
+        `exceptions. Add an executable check.sh at the project's root, or ` +
+        `register this project in projects.toml with a check command.`
+    );
+  }
+}
 
 /**
  * If `projects.toml` at `recordHome` registers a project whose `path`

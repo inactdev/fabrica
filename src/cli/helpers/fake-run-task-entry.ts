@@ -14,6 +14,8 @@
 // receives, the same way the reference adapter's own fake CLI fixture
 // keys its scenarios off `brief`.
 import { fakeBrain } from "../../brain/helpers/fake-brain.ts";
+import { fixtureInspector } from "../../../contract/helpers/fake-inspector.ts";
+import { fixtureCheckBox } from "../../../contract/helpers/fake-check-box.ts";
 import { runTask } from "../run-task.ts";
 
 const [, , recordHome, projectPath, taskText] = process.argv;
@@ -25,7 +27,12 @@ try {
   const askError = taskText.includes("ASK_FAILS_SOMETHING")
     ? new Error("simulated: the brain is unreachable (no credential configured)")
     : undefined;
-  await runTask(recordHome, projectPath, taskText, fakeBrain({ askQuestions, askError }));
+  // Neither the real Inspector nor the real worker's box: fakes that read
+  // the fixture's check.sh to answer, and run nothing.
+  await runTask(recordHome, projectPath, taskText, fakeBrain({ askQuestions, askError }), {
+    inspector: fixtureInspector(),
+    checkBox: fixtureCheckBox().box,
+  });
 } catch (err) {
   console.error(`fake-run-task-entry: ${(err as Error).message}`);
   process.exit(1);

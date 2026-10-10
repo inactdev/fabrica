@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../src/index.ts";
 import { fakeBrain } from "./helpers/fake-brain.ts";
+import { fakeInspector } from "./helpers/fake-inspector.ts";
 import { makeFixtureRepo } from "./helpers/fixture.ts";
 
 test("rule 9: an UNDECLARED edit to the project's checks is recorded, not discarded", async () => {
@@ -41,7 +42,7 @@ test("rule 9: an UNDECLARED edit to the project's checks is recorded, not discar
     },
   });
 
-  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")), inspector: fakeInspector("green") });
   const task = await foreman.do("make the build green", { project, brain: cheat });
 
   const delivery = await foreman.deliveryOf(task.id);
@@ -86,7 +87,7 @@ test("rule 9: a DECLARED gate change is delivered, declaration attached", async 
     gateChanges: "check.sh: the brief changes the pass condition",
   });
 
-  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")) });
+  const foreman = createForeman({ recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")), inspector: fakeInspector("green") });
   const task = await foreman.do("change what green means", { project, brain: honest });
 
   const delivery = await foreman.deliveryOf(task.id);

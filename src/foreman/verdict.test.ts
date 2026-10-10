@@ -10,6 +10,7 @@ import { recordVerdict } from "./verdict.ts";
 import { readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-verdict-home-"));
@@ -31,7 +32,7 @@ function tamperingBrain() {
 
 test("accept closes the task and leaves the delivery untouched", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
 
   await foreman.verdict(task.id, "accept", "looks right");
@@ -43,7 +44,7 @@ test("accept closes the task and leaves the delivery untouched", async () => {
 
 test("wrong closes the task plainly, as a real outcome, not a hidden failure", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
 
   await foreman.verdict(task.id, "wrong", "not what I asked for");
@@ -57,7 +58,7 @@ test("wrong closes the task plainly, as a real outcome, not a hidden failure", a
 test("fix re-enters the same warm worker session on the same line", async () => {
   const recordHome = freshHome();
   const brain = fakeBrain();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
 
   assert.equal(brain.calls, 1);
@@ -90,7 +91,7 @@ test("fix re-enters the same warm worker session on the same line", async () => 
 test("fix draws from no budget of its own - the Client can rule it any number of times (issue #65)", async () => {
   const recordHome = freshHome();
   const brain = fakeBrain();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   // Default budget is 2 attempts; a green first attempt stops early (1
   // used), leaving exactly 1 attempt in do()'s own budget - which used
   // to cap fix at exactly one round. A third round here proves there is
@@ -117,7 +118,7 @@ test("fix draws from no budget of its own - the Client can rule it any number of
 
 test("a verdict on an already-closed task refuses", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
   await foreman.verdict(task.id, "accept", "good");
 
@@ -129,7 +130,7 @@ test("a verdict on an already-closed task refuses", async () => {
 
 test("a verdict before delivery refuses", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   // No task-received or delivered event at all for this id.
   await assert.rejects(
@@ -140,7 +141,7 @@ test("a verdict before delivery refuses", async () => {
 
 test("fix without a note refuses, naming the note as what's missing", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
 
   await assert.rejects(
@@ -151,7 +152,7 @@ test("fix without a note refuses, naming the note as what's missing", async () =
 
 test("an unrecognized ruling refuses rather than silently doing nothing", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
 
   const verdict = foreman.verdict as (taskId: string, ruling: string, note?: string) => Promise<void>;
@@ -164,7 +165,7 @@ test("an unrecognized ruling refuses rather than silently doing nothing", async 
 test("a fix round measures rule 9 against the task's pristine base, not what the last round left on the branch", async () => {
   const recordHome = freshHome();
   const project = makeFixtureRepo("exit 0");
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   const task = await foreman.do("small change", { project, brain: tamperingBrain() });
   assert.equal(deliveryOf(recordHome, task.id)?.outcome, "discarded-protected-path");
@@ -175,7 +176,7 @@ test("a fix round measures rule 9 against the task's pristine base, not what the
   const innocent = fakeBrain({
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "more.txt"), "the correction\n"),
   });
-  await recordVerdict(recordHome, task.id, "fix", "also add more.txt", { brain: innocent });
+  await recordVerdict(recordHome, task.id, "fix", "also add more.txt", { brain: innocent, inspector: fixtureInspector() });
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(
@@ -189,7 +190,7 @@ test("a fix round measures rule 9 against the task's pristine base, not what the
 test("a fix round that puts the gate back the way it was is not flagged for it", async () => {
   const recordHome = freshHome();
   const project = makeFixtureRepo("exit 0");
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   const task = await foreman.do("small change", { project, brain: tamperingBrain() });
   assert.equal(deliveryOf(recordHome, task.id)?.outcome, "discarded-protected-path");
@@ -197,7 +198,7 @@ test("a fix round that puts the gate back the way it was is not flagged for it",
   const honest = fakeBrain({
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "check.sh"), PRISTINE_CHECK),
   });
-  await recordVerdict(recordHome, task.id, "fix", "put check.sh back the way it was", { brain: honest });
+  await recordVerdict(recordHome, task.id, "fix", "put check.sh back the way it was", { brain: honest, inspector: fixtureInspector() });
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "done", "restoring the gate to its base state is not a gate change");
@@ -207,7 +208,7 @@ test("a fix round that puts the gate back the way it was is not flagged for it",
 test("a gate change declared in an earlier round still counts for the fix round that inherits it", async () => {
   const recordHome = freshHome();
   const project = makeFixtureRepo("exit 0");
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   const declarer = fakeBrain({
     gateChanges: "check.sh now echoes before exiting, as the Client asked",
@@ -219,7 +220,7 @@ test("a gate change declared in an earlier round still counts for the fix round 
   const quiet = fakeBrain({
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "more.txt"), "the correction\n"),
   });
-  await recordVerdict(recordHome, task.id, "fix", "also add more.txt", { brain: quiet });
+  await recordVerdict(recordHome, task.id, "fix", "also add more.txt", { brain: quiet, inspector: fixtureInspector() });
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "done", "a declaration made for a change still on the branch travels with it");
@@ -229,7 +230,7 @@ test("a gate change declared in an earlier round still counts for the fix round 
 test("a fix still runs after a red do() run already spent both default attempts", async () => {
   const recordHome = freshHome();
   const brain = fakeBrain();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 1"), brain });
   assert.equal(brain.calls, 2, "default policy: one attempt, one fix pass on red, both spent already");
 
@@ -239,7 +240,7 @@ test("a fix still runs after a red do() run already spent both default attempts"
 
 test("the human-readable verdict file is written before the closing record event, so a crash between the two never hides what the Client said", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
 
   // Force the record event write to fail deterministically, without

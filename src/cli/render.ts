@@ -22,7 +22,7 @@ export const QUIET_THRESHOLD_MS = DEFAULT_HEARTBEAT_INTERVAL_MS * 3;
  * exists to prevent. Its only job is catching the case a live-elapsed
  * reading genuinely can't explain: the detached worker was killed
  * (machine reboot, OOM) or the check itself hung while blocked inside
- * `runCheck`'s `execSync`, so the record's last event stays a
+ * the worker's box, so the record's last event stays a
  * `"check-run"` with `phase: "started"` forever, with no matching
  * finish ever coming. Client ruling (issue #12 review finding) is
  * explicit that this is a time ceiling, not process-liveness detection
@@ -255,7 +255,7 @@ function nameLastSignal(event: FabricaEvent): string {
  * `formatQuietNotice`'s "no signal since <the record's last event>":
  * during a check that last event is the check's own `"started"` one -
  * nothing else lands there, since `attempts.ts`'s heartbeat interval
- * only wraps `brain.work`, never `runCheck` - and `nameLastSignal`
+ * only wraps `brain.work`, never the check - and `nameLastSignal`
  * would label it "the check finished", which is precisely what has not
  * happened (issue #12 review finding, Client ruling). */
 export function formatCheckingQuietNotice(elapsedMs: number): string {
@@ -381,8 +381,12 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     }
 
     case "check-run": {
-      const d = details as { attempt?: number; phase?: string; green?: boolean };
-      if (d.phase === "started") return `check started (attempt ${d.attempt})`;
+      const d = details as { attempt?: number; phase?: string; green?: boolean; where?: string; notVerified?: string };
+      const where = d.where ? ` in the ${d.where}` : "";
+      if (d.phase === "started") return `check started${where} (attempt ${d.attempt})`;
+      // The worker's box could not run the check at all: not verified,
+      // which must never read as red.
+      if (d.notVerified !== undefined) return `check could not run (attempt ${d.attempt}): ${d.notVerified.split("\n")[0]}`;
       return `check finished (attempt ${d.attempt}): ${d.green ? "green" : "red"}`;
     }
 
@@ -421,8 +425,8 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
 
     case "delivered": {
       // Deliberately excludes delivery.evidence and receipts[].checks -
-      // both carry the check's raw stdout+stderr (runCheck's own 64MB
-      // maxBuffer), which is exactly the unbounded-line problem this
+      // both carry the check's raw stdout+stderr (any size), which is
+      // exactly the unbounded-line problem this
       // rendering exists to fix. "What happened," not the whole output.
       const d = details as {
         outcome?: string;

@@ -11,26 +11,25 @@ import { appendEvent, appendTaskFile, readTaskFile, writeTaskFile } from "../rec
 import { createProductionLine, destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
-import { requireCheckCommand, DEFAULT_CHECK_COMMAND } from "./check.ts";
-import { resolveCheckCommand } from "./resolve-check.ts";
-import { gateWasTouched, requireGateBaseline } from "./gate-changes.ts";
+import { gateWasTouched } from "./gate-changes.ts";
+import { prepareRound, roundOutcome } from "./judge.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
-import { buildDelivery, buildCommitFailureDelivery, renderDeliveryMarkdown } from "./delivery.ts";
+import { buildDelivery, buildCommitFailureDelivery, deliveredState, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
-import { handToInspector } from "./inspection.ts";
 import { costLabelOf, recordCapStop, recordReceipt, spendLimitsFor, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { Delivery, FabricaTask } from "../inspector/types.ts";
-import type { Inspection, Inspector } from "../inspector/index.ts";
+import type { Inspector } from "../inspector/index.ts";
+import type { CheckBox } from "../brain/index.ts";
 
 export { DEFAULT_ATTEMPTS } from "./ask.ts";
 
 export async function doTask(
   recordHome: string,
   taskText: string,
-  opts: { project: string; attempts?: number; brain?: Brain; inspector?: Inspector; caps?: Caps }
+  opts: { project: string; attempts?: number; brain?: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
 ): Promise<FabricaTask> {
   // SPEC.md steps 1-2: register the task, then give the brain one pass
   // at the bare task text (issue #8) before any ProductionLine exists.
@@ -59,6 +58,7 @@ export async function doTask(
     explicitAttempts,
     isRetry: false,
     inspector: opts.inspector,
+    checkBox: opts.checkBox,
     caps: opts.caps,
   });
 }
@@ -82,10 +82,11 @@ export async function runProductionRound(
     explicitAttempts: boolean;
     isRetry: boolean;
     inspector?: Inspector;
+    checkBox?: CheckBox;
     caps?: Caps;
   }
 ): Promise<FabricaTask> {
-  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, caps } = ctx;
+  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, checkBox, caps } = ctx;
   // The delivery's summary/evidence want the Client's original one-line
   // ask, not the full brief a resumed round's worker receives - `brief`
   // for an answer.ts retry is request.md plus the whole "## Clarification"
@@ -142,7 +143,7 @@ export async function runProductionRound(
     // The line demonstrably exists now - recorded here, inside the try,
     // so teardown still runs if this append itself fails, and before
     // anything that can throw between the cut and "work-started"
-    // (requireCheckCommand, requireGateBaseline). A later resume reads
+    // (prepareRound's own refusals). A later resume reads
     // this event and nothing else to know it must reopen this branch
     // rather than cut a new one.
     appendEvent(recordHome, { taskId, name: "line-cut", details: { branch: line.branch, reopened: isRetry } });
@@ -153,10 +154,13 @@ export async function runProductionRound(
     // branch while the task is still running.
     const baseCommit = baseCommitOf(line.workdir);
 
-    const check = resolveCheckCommand(recordHome, line.project);
-    requireCheckCommand(line.workdir, check);
-    const protectedPathApplies = check === DEFAULT_CHECK_COMMAND;
-    if (protectedPathApplies) requireGateBaseline(line.workdir, baseCommit);
+    // Who judges each attempt: Inspector, or the worker's own box (issue
+    // #64) - never a check run on the host.
+    const { judge, mode, protectedPathApplies } = prepareRound(recordHome, taskId, line, baseCommit, {
+      inspector,
+      checkBox,
+      commitMessage: `fabrica: ${taskId}`,
+    });
 
     // `project` rides on work-started's details, not a dedicated event -
     // it's the earliest point in the loop the resolved project path is
@@ -164,22 +168,16 @@ export async function runProductionRound(
     // open task without waiting for delivery.
     appendEvent(recordHome, { taskId, name: "work-started", details: { project: line.project } });
 
-    const { receipts, lastGate, declaredGateChanges, capStop } = await runAttempts({
+    const { receipts, lastGate, lastJudgement, declaredGateChanges, capStop } = await runAttempts({
       brain,
       brief,
       workdir: line.workdir,
       taskId,
-      check,
+      judge,
       totalAttempts,
       stopEarlyOnGreen: !explicitAttempts,
       spendLimits: spendLimitsFor(recordHome, taskId, caps),
       onReceipt: (receipt) => recordReceipt(recordHome, receipt),
-      onCheckStarted: (attempt) => {
-        appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, phase: "started" } });
-      },
-      onCheckRun: (attempt, gate) => {
-        appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, green: gate.green } });
-      },
       onHeartbeat: (attempt) => {
         appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
       },
@@ -193,16 +191,19 @@ export async function runProductionRound(
       },
     });
 
+    // Inspector reached no verdict: recorded as such, never as red, and
+    // nothing is delivered for a Client ruling.
+    if (lastJudgement.kind === "refused") return { id: taskId, state: "refused" };
+
     const undeclaredGateChange =
       protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;
 
-    let outcome: Delivery["outcome"] = undeclaredGateChange
-      ? "discarded-protected-path"
-      : capStop
-        ? "cap-stopped"
-        : lastGate.green
-          ? "done"
-          : "failure-report";
+    const outcome: Delivery["outcome"] = roundOutcome({
+      undeclaredGateChange,
+      capStopped: capStop !== undefined,
+      lastJudgement,
+      mode,
+    });
 
     if (outcome === "discarded-protected-path") {
       receipts[receipts.length - 1].outcome = "discarded-protected-path";
@@ -223,10 +224,16 @@ export async function runProductionRound(
     // commitWorktreeChanges already asks the index directly and no-ops
     // when there is nothing staged, so a separate "is there anything to
     // commit" check here would only re-answer the same question.
-    try {
-      commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
-    } catch (err) {
-      if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
+    let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
+    if (commitError === undefined) {
+      try {
+        commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+      } catch (err) {
+        if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
+        commitError = err.message;
+      }
+    }
+    if (commitError !== undefined) {
       // A commit failure here (a stale lock, a full disk, a read-only
       // mount) used to propagate straight out of doTask: `finally` below
       // still force-removes the worktree, destroying the Worker's
@@ -242,7 +249,7 @@ export async function runProductionRound(
         lastGate,
         branch: line.branch,
         declaredGateChanges,
-        error: err.message,
+        error: commitError,
       });
       validateDelivery(delivery);
       writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
@@ -254,19 +261,6 @@ export async function runProductionRound(
       return { id: taskId, state: "failed" };
     }
 
-    // A configured project reaches Inspector only after Fabrica committed
-    // the Worker's green result. Inspector owns publishing from here; the
-    // Foreman never pushes the branch itself. A refusal is not a red
-    // verdict and therefore is not delivered for a Client ruling.
-    let inspection: Inspection | undefined;
-    if (outcome === "done") {
-      inspection = await handToInspector(recordHome, taskId, line, baseCommit, inspector, {
-        receipts,
-        totalAttempts,
-      });
-      if (inspection?.verdict === "refused") return { id: taskId, state: "refused" };
-      if (inspection?.verdict === "red") outcome = "inspection-red";
-    }
 
     // CONTRACT rule 9 (Client ruling, superseding the original
     // force-reset-and-patch design, and then again superseding a
@@ -292,7 +286,9 @@ export async function runProductionRound(
       branch: line.branch,
       files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
-      inspection,
+      inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
+      selfTested: mode.mode === "self-test",
+      notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
       capStop,
       taskId,
       spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, caps),
@@ -312,7 +308,7 @@ export async function runProductionRound(
       details: { outcome: delivery.outcome, delivery, receipts, project: line.project, totalAttempts, baseCommit },
     });
 
-    return { id: taskId, state: outcome === "done" || outcome === "inspection-red" ? "delivered" : "failed" };
+    return { id: taskId, state: deliveredState(outcome) };
   } finally {
     destroyProductionLine(line);
   }

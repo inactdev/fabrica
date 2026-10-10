@@ -43,6 +43,7 @@ export type { DeliveryErrorCode } from "./delivery/index.ts";
 // 8) - it asks for whichever one v1 wires in by default.
 export { defaultBrainAdapter } from "./brain/index.ts";
 export type { Brain, Caps } from "../contract/surface.ts";
+export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
 
 // Config: the record home's project registry and caps (SPEC.md
 // "Config"), needed by the CLI to resolve `--project <path-or-name>`

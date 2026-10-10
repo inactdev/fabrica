@@ -12,6 +12,8 @@ import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runDoCommand } from "./do-command.ts";
 import { runStatusCommand } from "./status-command.ts";
 import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS } from "./render.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
+import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
 
 // A real, separate detached process (see do-command.test.ts): runCheck is
 // synchronous execSync, so a slow check blocks that process's own event
@@ -40,7 +42,7 @@ test("runStatusCommand: no tasks at all says so plainly", async () => {
 test("runStatusCommand: a delivered task is flagged as awaiting the Client's verdict", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome }).do("small change", { project, brain: fakeBrain() });
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
   const io = captureIo();
 
   const code = await runStatusCommand([], { recordHome, ...io });
@@ -56,8 +58,8 @@ test("runStatusCommand: a delivered task is flagged as awaiting the Client's ver
 test("runStatusCommand: a closed task (verdict recorded) drops off the list", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome }).do("small change", { project, brain: fakeBrain() });
-  await createForeman({ recordHome }).verdict(task.id, "accept", "good");
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
+  await createForeman({ recordHome, inspector: fixtureInspector() }).verdict(task.id, "accept", "good");
   const io = captureIo();
 
   const code = await runStatusCommand([], { recordHome, ...io });
@@ -105,7 +107,8 @@ async function statusUntil(recordHome: string, wanted: RegExp, timeoutMs = 20_00
 
 test("runStatusCommand: a task mid-check says so plainly, with real elapsed time, never quiet", async () => {
   const recordHome = tempRecordHome();
-  const project = makeFixtureRepo("sleep 2 && exit 0");
+  // Self-tested: "checking" is the worker's box running the check.
+  const project = makeFixtureRepo("sleep 2 && exit 0", { inspector: false });
 
   const doIo = { out: [] as string[], err: [] as string[], stdout: (l: string) => doIo.out.push(l), stderr: () => {} };
   await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...doIo });
@@ -184,8 +187,12 @@ test("runStatusCommand: the checking alarm's elapsed time tracks the check's own
 
 test("runStatusCommand: a red delivery shows failed, not delivered, and carries no verdict flag", async () => {
   const recordHome = tempRecordHome();
-  const project = makeFixtureRepo("exit 1");
-  const task = await createForeman({ recordHome }).do("small change", { project, brain: fakeBrain() });
+  // Self-tested: with Inspector, red is inspection-red, awaiting a verdict.
+  const project = makeFixtureRepo("exit 1", { inspector: false });
+  const task = await createForeman({ recordHome, checkBox: fixtureCheckBox().box }).do("small change", {
+    project,
+    brain: fakeBrain(),
+  });
   const io = captureIo();
 
   const code = await runStatusCommand([], { recordHome, ...io });
@@ -228,7 +235,7 @@ test("runStatusCommand: an ask-failed task stays listed, marked unresolvable, no
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
   await assert.rejects(
-    createForeman({ recordHome }).do("small change", {
+    createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
       project,
       brain: fakeBrain({ askError: new Error("the brain is unreachable") }),
     })
@@ -250,12 +257,12 @@ test("runStatusCommand: an ask-failed task sorts after a task that's still genui
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
   await assert.rejects(
-    createForeman({ recordHome }).do("dead end", {
+    createForeman({ recordHome, inspector: fixtureInspector() }).do("dead end", {
       project,
       brain: fakeBrain({ askError: new Error("the brain is unreachable") }),
     })
   );
-  const openTask = await createForeman({ recordHome }).do("still open", {
+  const openTask = await createForeman({ recordHome, inspector: fixtureInspector() }).do("still open", {
     project,
     brain: fakeBrain({ askQuestions: ["what should this do?"] }),
   });
@@ -311,7 +318,7 @@ test("fabrica status keeps showing SPEND UNKNOWN across fresh processes until th
   const recordHome = tempRecordHome();
   writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 100\n");
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome, caps: { perDayUsd: 100 } }).do("unmeasured", {
+  const task = await createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fixtureInspector() }).do("unmeasured", {
     project,
     brain: fakeBrain({ costUsd: null }),
   });
@@ -327,7 +334,7 @@ test("fabrica status keeps showing SPEND UNKNOWN across fresh processes until th
 test("runStatusCommand: with no cap set, an unmeasured task still shows cost: unknown, never nothing", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  await createForeman({ recordHome }).do("unmeasured", { project, brain: fakeBrain({ costUsd: null }) });
+  await createForeman({ recordHome, inspector: fixtureInspector() }).do("unmeasured", { project, brain: fakeBrain({ costUsd: null }) });
   const io = captureIo();
 
   await runStatusCommand([], { recordHome, ...io });
@@ -339,7 +346,7 @@ test("runStatusCommand: with no cap set, an unmeasured task still shows cost: un
 test("runStatusCommand: a measured task shows its cost in dollars", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  await createForeman({ recordHome }).do("measured", { project, brain: fakeBrain({ costUsd: 0.0421 }) });
+  await createForeman({ recordHome, inspector: fixtureInspector() }).do("measured", { project, brain: fakeBrain({ costUsd: 0.0421 }) });
   const io = captureIo();
 
   await runStatusCommand([], { recordHome, ...io });
