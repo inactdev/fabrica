@@ -11,6 +11,7 @@ import { readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
+import { withStandingQuestion } from "./standing-question.ts";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-verdict-home-"));
@@ -72,9 +73,11 @@ test("fix re-enters the same warm worker session on the same line", async () => 
   const sessions = [...brain.historyBySession.keys()];
   assert.deepEqual(sessions, [firstSession], "fix continued the same session, it did not start a new one");
   assert.deepEqual(brain.historyBySession.get(firstSession!), [
-    "small change",
-    `small change\n\n---\n\nThe Client reviewed your previous delivery and asked for a change. ` +
-      `Keep everything that was already right, and fix exactly this:\n\nwrong button spot`,
+    withStandingQuestion("small change"),
+    withStandingQuestion(
+      `small change\n\n---\n\nThe Client reviewed your previous delivery and asked for a change. ` +
+        `Keep everything that was already right, and fix exactly this:\n\nwrong button spot`
+    ),
   ]);
 
   const mine = (await foreman.status()).find((t) => t.id === task.id);

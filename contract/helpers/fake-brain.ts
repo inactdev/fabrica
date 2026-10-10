@@ -10,6 +10,8 @@ export interface FakeBrainHandle extends Brain {
   readonly calls: number;
   /** The options each work() call received, in call order. */
   readonly workOptions: readonly (BrainWorkOptions | undefined)[];
+  /** Every brief work() received, in call order. */
+  readonly briefs: readonly string[];
 }
 
 export function fakeBrain(
@@ -28,6 +30,7 @@ export function fakeBrain(
 ): FakeBrainHandle {
   let calls = 0;
   const workOptions: (BrainWorkOptions | undefined)[] = [];
+  const briefs: string[] = [];
   return {
     name: "fake",
     model: "fake-1",
@@ -37,12 +40,16 @@ export function fakeBrain(
     get workOptions() {
       return workOptions;
     },
+    get briefs() {
+      return briefs;
+    },
     async ask(_brief: string): Promise<BrainAskResult> {
       return opts.askQuestions ? { questions: opts.askQuestions } : {};
     },
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions) {
       calls += 1;
       workOptions.push(workOpts);
+      briefs.push(brief);
       opts.onWork?.(workdir);
       const transcript: TranscriptEntry[] = [
         { occurredAt: new Date().toISOString(), kind: "text", text: `fake brain saw: ${brief}` },
