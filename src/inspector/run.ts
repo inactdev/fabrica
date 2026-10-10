@@ -77,7 +77,12 @@ export function inspectorAdapter(command: string = "inspector", opts: InspectorA
  * once. The value is only ever returned - never printed, logged, or put
  * in Fabrica's own process environment. */
 function githubToken(env: NodeJS.ProcessEnv): string {
-  if (env.GITHUB_TOKEN && env.GITHUB_TOKEN.trim().length > 0) return env.GITHUB_TOKEN;
+  return resolveGithubToken(env).token;
+}
+
+/** The token Inspector will get, and where it came from - never printed. */
+export function resolveGithubToken(env: NodeJS.ProcessEnv): { token: string; source: "GITHUB_TOKEN" | "gh auth token" } {
+  if (env.GITHUB_TOKEN && env.GITHUB_TOKEN.trim().length > 0) return { token: env.GITHUB_TOKEN, source: "GITHUB_TOKEN" };
   let token = "";
   try {
     token = execFileSync("gh", ["auth", "token"], {
@@ -95,12 +100,12 @@ function githubToken(env: NodeJS.ProcessEnv): string {
         "start the task again. Nothing was started."
     );
   }
-  return token;
+  return { token, source: "gh auth token" };
 }
 
 /** Whether `command` names an executable: a path as given, a bare name on
  * PATH. Looked up without running anything. */
-function commandIsInstalled(command: string, env: NodeJS.ProcessEnv): boolean {
+export function commandIsInstalled(command: string, env: NodeJS.ProcessEnv): boolean {
   const candidates =
     isAbsolute(command) || command.includes("/")
       ? [command]

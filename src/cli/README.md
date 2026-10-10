@@ -195,6 +195,22 @@ a real cost being recorded. Owner-only: the shipped harness settings under
 `src/foreman/README.md`'s "Rule 10: spending caps" for how spend is
 counted (a rolling 24 hours, not a calendar day) and enforced.
 
+## `fabrica doctor [--live]`
+
+A preflight that spends nothing (Client ruling 2026-10-10): one line per
+check, `OK` or `FAIL ... - fix: <the exact fix>`, and exit 1 on any FAIL.
+It checks Node (against the version `.inspector.json`'s image runs), the
+checkout and branch `fabrica` runs from, Docker, the worker image (present,
+and stamped with the current Dockerfile's hash), the worker token (from
+the environment or `brain.env`, mode 600), the GitHub token Inspector
+needs, `inspector` on PATH taking `-branch`, every registered project
+(exists, git root, a check, an `origin` remote), the caps, and any SPEND
+UNKNOWN block. `--live` adds one minimal real call with the worker token
+(a few cents) and reports it alive or dead. No check prints a token. The
+adapter- and Inspector-specific checks live beside those modules
+(`src/brain/adapters/doctor-checks.ts`, `src/inspector/doctor-checks.ts`);
+this command only prints them.
+
 ## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
 
 Issue #12 - the Client's eyes on a detached task, without reading record
@@ -490,6 +506,7 @@ calls `runTask`.
 | `verdict-command.ts` | Resolves the record home and calls `Foreman.verdict` for `fabrica verdict`; `VERDICT_HELP` is `verdict --help`'s text. |
 | `cost-command.ts` | `fabrica cost <taskId> <usd>` (issue #11): parses the figure strictly and calls `Foreman.recordCost`; `COST_HELP` is `cost --help`'s text. |
 | `load-config.ts` | `loadConfigOrDefault` - `projects.toml`, or no projects and no caps when there is none yet. Shared by every command that needs caps. |
+| `doctor-command.ts` | `fabrica doctor`: runs the checks above as injectable `DoctorProbes` (tests never touch this machine's Docker, tokens or PATH) plus the per-project, caps and spend checks; `DOCTOR_HELP` is `doctor --help`'s text. |
 | `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. |
 | `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |

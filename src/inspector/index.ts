@@ -8,3 +8,4 @@ export {
   reportForRecord,
 } from "./run.ts";
 export type { Inspection, Inspector } from "./types.ts";
+export { githubTokenStatus, inspectorBranchStatus } from "./doctor-checks.ts";
