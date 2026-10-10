@@ -91,6 +91,9 @@ interface ClaudeStreamLine {
   };
   api_error_status?: number;
   result?: string;
+  /** "error_max_budget_usd" when --max-budget-usd ran out. */
+  subtype?: string;
+  errors?: string[];
 }
 
 function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: BrainWorkOptions): string[] {
@@ -118,6 +121,11 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
   // exit code 0 (verified against the real binary). Nothing extra to
   // enforce here.
   if (workOpts?.reasoningEffort) args.push("--effort", workOpts.reasoningEffort);
+  // Rule 10's per-task cap as a hint (BrainWorkOptions.maxSpendUsd). The
+  // real binary checks it after each turn, not during one, so a call can
+  // still finish a little past it - the Foreman's own check after the
+  // attempt is the guaranteed stop.
+  if (workOpts?.maxSpendUsd !== undefined) args.push("--max-budget-usd", String(workOpts.maxSpendUsd));
   return args;
 }
 
@@ -314,7 +322,14 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       const lines = parseLines(stdout);
       const result = [...lines].reverse().find((l) => l.type === "result");
 
-      if (exitCode !== 0 || result?.is_error) {
+      // The budget running out is the cap working, not the brain failing
+      // (verified on 2.1.295: exit 1, is_error true, subtype
+      // "error_max_budget_usd", the real cost on the result line). It
+      // returns normally so the spend reaches the receipt and the Foreman
+      // can stop the task honestly - a throw here would lose the money.
+      const budgetExhausted = result?.subtype === "error_max_budget_usd";
+
+      if (!budgetExhausted && (exitCode !== 0 || result?.is_error)) {
         const detail = result?.result ?? (stderr.trim() || `exit code ${exitCode}`);
         const status = result?.api_error_status ? ` (api_error_status ${result.api_error_status})` : "";
         throw new ClaudeCodeError("cli-error", `${detail}${status}`);
@@ -376,7 +391,14 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       const lines = parseLines(stdout);
       const result = [...lines].reverse().find((l) => l.type === "result");
 
-      if (exitCode !== 0 || result?.is_error) {
+      // The budget running out is the cap working, not the brain failing
+      // (verified on 2.1.295: exit 1, is_error true, subtype
+      // "error_max_budget_usd", the real cost on the result line). It
+      // returns normally so the spend reaches the receipt and the Foreman
+      // can stop the task honestly - a throw here would lose the money.
+      const budgetExhausted = result?.subtype === "error_max_budget_usd";
+
+      if (!budgetExhausted && (exitCode !== 0 || result?.is_error)) {
         const detail = result?.result ?? (stderr.trim() || `exit code ${exitCode}`);
         const status = result?.api_error_status ? ` (api_error_status ${result.api_error_status})` : "";
         throw new ClaudeCodeError("cli-error", `${detail}${status}`);
@@ -390,6 +412,13 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       }
 
       const transcript = toTranscript(lines);
+      if (budgetExhausted) {
+        transcript.push({
+          occurredAt: new Date().toISOString(),
+          kind: "budget-exhausted",
+          text: result.errors?.join("; ") || "reached the maximum budget for this call",
+        });
+      }
       // The Brain interface has no field of its own for cost/duration/
       // token usage (contract/surface.ts's Brain.work() only returns
       // transcript, gateChanges, and session) - but the issue that

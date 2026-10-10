@@ -39,8 +39,11 @@ const skillDir = join(repoRoot, "skill");
 // The commands that record the Client's own judgment rather than
 // reading or starting work. A command added to main.ts that ends up in
 // neither this list nor an allow pattern fails the coverage test below
-// instead of silently falling through either way.
-const DECIDING_COMMANDS = ["verdict", "answer"];
+// instead of silently falling through either way. `cost` (issue #11) is
+// owner-only too: it records a dollar figure only the owner can look
+// up, and it is the one thing that clears a SPEND UNKNOWN block - an AI
+// driver that could run it could unblock its own spending.
+const DECIDING_COMMANDS = ["verdict", "answer", "cost"];
 
 // Commands whose only legitimate caller is a harness's own hook
 // runner, never the chat agent's Bash tool - deliberately absent from
@@ -219,7 +222,7 @@ test("main.ts's real dispatch is fully covered: deciding and hook-only commands 
   }
 });
 
-test("fabrica verdict and fabrica answer are never auto-approved, including through a chained command", () => {
+test("fabrica verdict, answer, and cost are never auto-approved, including through a chained command", () => {
   const templates = harnessSettings();
   assert.ok(templates.length > 0, "no harness ships a settings.json to check");
 
@@ -234,6 +237,10 @@ test("fabrica verdict and fabrica answer are never auto-approved, including thro
     "fabrica do 'x' | fabrica verdict task-1 accept",
     "fabrica log task-1 && fabrica answer task-1 -m 'x'",
     "fabrica status --json\nfabrica verdict task-1 accept",
+    "fabrica cost",
+    "fabrica cost task-1 0.42",
+    "fabrica status && fabrica cost task-1 0",
+    "fabrica log task-1; fabrica cost task-1 0",
   ];
 
   for (const settings of templates) {
@@ -241,7 +248,7 @@ test("fabrica verdict and fabrica answer are never auto-approved, including thro
       assert.notEqual(
         evaluate(settings, attempt),
         "allow",
-        `${settings.harness}: "${attempt}" auto-approves - a verdict/answer command must never run unprompted`
+        `${settings.harness}: "${attempt}" auto-approves - a verdict/answer/cost command must never run unprompted`
       );
     }
   }

@@ -11,6 +11,7 @@ import { createForeman } from "../index.ts";
 import type { Brain, Inspector } from "../index.ts";
 import { parseAnswerArgs, ANSWER_USAGE } from "./answer-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
+import { loadConfigOrDefault } from "./load-config.ts";
 
 export const ANSWER_HELP = `Usage: ${ANSWER_USAGE}
 
@@ -52,7 +53,12 @@ export async function runAnswerCommand(argv: string[], opts: RunAnswerCommandOpt
   try {
     const { taskId, text } = parseAnswerArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
-    const foreman = createForeman({ recordHome, brain: opts.brain, inspector: opts.inspector });
+    const foreman = createForeman({
+      recordHome,
+      brain: opts.brain,
+      inspector: opts.inspector,
+      caps: loadConfigOrDefault(recordHome).caps,
+    });
 
     const task = await foreman.answer(taskId, text);
 

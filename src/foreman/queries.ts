@@ -114,9 +114,19 @@ export function statusOf(recordHome: string): FabricaTask[] {
  * hand - not something this ordinary status/log/watch work needs to touch. */
 export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
   let state: FabricaTask["state"] = "working";
+  let begun = false;
 
   for (const event of events) {
     switch (event.name) {
+      case "cap-refused":
+        // Rule 10 refused this task's very first start - it never ran and
+        // never will (a new `fabrica do` is a new task). A refused resume
+        // or fix leaves the state as it was: that task can still be
+        // answered or fixed once there is room.
+        if (!begun) state = "failed";
+        break;
+      case "task-received":
+        break;
       case "questions-asked":
         state = "asking";
         break;
@@ -173,6 +183,7 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
       default:
         break;
     }
+    if (event.name !== "task-received" && event.name !== "cap-refused") begun = true;
   }
 
   return state;

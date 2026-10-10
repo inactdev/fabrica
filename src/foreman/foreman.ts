@@ -11,6 +11,8 @@ import { recordVerdict } from "./verdict.ts";
 import { defaultBrainAdapter } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
 import type { Foreman, Inspector } from "../inspector/types.ts";
+import type { Caps } from "../../contract/surface.ts";
+import { recordCost } from "./caps.ts";
 import {
   deliveryOf as lookupDelivery,
   eventsOf as lookupEvents,
@@ -20,10 +22,10 @@ import {
 
 export interface ForemanOptions {
   recordHome: string;
-  /** Rule 10: hard dollar limits. Accepted for shape compatibility with
-   * contract/surface.ts's Foreman; not enforced here — that's issue #11's
-   * job, not this loop's. */
-  caps?: { perTaskUsd?: number; perDayUsd?: number };
+  /** Rule 10: hard dollar limits (contract/surface.ts's Caps), enforced
+   * on every task, resumed round, and fix round this Foreman starts.
+   * Omitted, no cap applies. */
+  caps?: Caps;
   /** Fallback for a "fix" verdict's or an answer()'s brain when this
    * Foreman instance never saw a do() call for that task (a fresh
    * process running `fabrica verdict` or `fabrica answer` on its own,
@@ -40,7 +42,7 @@ export interface ForemanOptions {
 }
 
 export function createForeman(opts: ForemanOptions): Foreman {
-  const { recordHome } = opts;
+  const { recordHome, caps } = opts;
   // Remembers which brain a do() call on THIS instance used for each
   // task, so a same-process "fix" verdict re-enters the exact same warm
   // worker rather than a fresh defaultBrainAdapter() instance. Empty
@@ -50,7 +52,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
 
   return {
     async do(taskText, callOpts) {
-      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector });
+      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, caps });
       if (callOpts.brain) brainByTask.set(task.id, callOpts.brain);
       return task;
     },
@@ -61,7 +63,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       // of `fabrica do` then `fabrica answer` by hand) falls back the
       // same way verdict() does.
       const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter();
-      return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector });
+      return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector, caps });
     },
     async deliveryOf(taskId) {
       return lookupDelivery(recordHome, taskId);
@@ -71,10 +73,13 @@ export function createForeman(opts: ForemanOptions): Foreman {
     },
     async verdict(taskId, ruling, note) {
       const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter();
-      return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector });
+      return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector, caps });
     },
     async status() {
       return lookupStatus(recordHome);
+    },
+    async recordCost(taskId, usd) {
+      recordCost(recordHome, taskId, usd);
     },
     async events(taskId) {
       return lookupEvents(recordHome, taskId);

@@ -3,7 +3,7 @@
 // identically everywhere it shows up rather than three slightly different
 // home-grown formats.
 
-import { DEFAULT_HEARTBEAT_INTERVAL_MS } from "../index.ts";
+import { DEFAULT_HEARTBEAT_INTERVAL_MS, formatUsd } from "../index.ts";
 import type { FabricaEvent, FabricaTask, TranscriptEntry } from "../index.ts";
 
 /** Longer than this since the last recorded event on a still-working task,
@@ -147,18 +147,30 @@ export function formatAge(ms: number): string {
  * actually observed. */
 export function formatStatusLine(
   task: FabricaTask,
-  opts: { project: string | null; ageMs: number; liveness: string | null; hasDelivery: boolean }
+  opts: {
+    project: string | null;
+    ageMs: number;
+    liveness: string | null;
+    hasDelivery: boolean;
+    /** Rule 10: the task's cost in one phrase ("$0.0421", "unknown",
+     * "no attempts yet") - omitted, the line says nothing about cost. */
+    cost?: string;
+    /** Why a failed task with no delivery never started, when it was not
+     * the brain's clarify step (e.g. a spending cap refused it). */
+    failedBecause?: string;
+  }
 ): string {
   const project = opts.project ?? "unknown project";
   const age = formatAge(opts.ageMs);
-  const base = `${task.id}  ${project}  ${task.state}  ${age} old`;
+  const base = `${task.id}  ${project}  ${task.state}  ${age} old${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}`;
 
   if (task.state === "delivered") {
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
   }
   if (isDeadEnd(task.state, opts.hasDelivery)) {
     if (task.state === "failed") {
-      return `${base}  <- FAILED, UNRESOLVABLE: brain's clarify step threw before any work started - see \`fabrica log ${task.id}\``;
+      const because = opts.failedBecause ?? "brain's clarify step threw before any work started";
+      return `${base}  <- FAILED, UNRESOLVABLE: ${because} - see \`fabrica log ${task.id}\``;
     }
     return `${base}  <- ${(opts.liveness ?? "Inspector reached no verdict").toUpperCase()}: fabrica log ${task.id}`;
   }
@@ -383,6 +395,23 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       const d = details as { verdict?: string; report?: string };
       const verdict = d.verdict ?? "unknown";
       return d.report ? `Inspector ${verdict}: ${d.report}` : `Inspector ${verdict}`;
+    }
+
+    case "cap-refused":
+    case "cap-stopped": {
+      const d = details as { message?: string };
+      return d.message ?? fallbackDetail(details);
+    }
+
+    case "receipt-recorded": {
+      const d = details as { receipt?: { attempt?: number; costUsd?: number | null } };
+      const cost = d.receipt?.costUsd;
+      return `attempt ${d.receipt?.attempt} cost ${typeof cost === "number" ? formatUsd(cost) : "unknown"}`;
+    }
+
+    case "cost-recorded": {
+      const d = details as { usd?: number; attempts?: number[] };
+      return `cost recorded by hand: ${formatUsd(d.usd ?? 0)} for attempt(s) ${(d.attempts ?? []).join(", ")}`;
     }
 
     case "inspection-skipped": {

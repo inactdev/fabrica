@@ -12,6 +12,7 @@ import { LOG_HELP, runLogCommand } from "./log-command.ts";
 import { WATCH_HELP, runWatchCommand } from "./watch-command.ts";
 import { DENY_AND_LOG_EDIT_HELP, runDenyAndLogEditCommand } from "./deny-and-log-edit-command.ts";
 import { VERIFY_HOOK_HELP, runVerifyHookCommand } from "./verify-hook-command.ts";
+import { COST_HELP, runCostCommand } from "./cost-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
 
 export async function main(
@@ -54,6 +55,14 @@ export async function main(
       return 0;
     }
     return runAnswerCommand(rest, io);
+  }
+
+  if (command === "cost") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(COST_HELP);
+      return 0;
+    }
+    return runCostCommand(rest, io);
   }
 
   if (command === "status") {

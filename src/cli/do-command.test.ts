@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { createForeman } from "../index.ts";
+import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { readEventsForTask } from "../record/index.ts";
 import { runDoCommand } from "./do-command.ts";
 
@@ -258,4 +260,51 @@ test("runDoCommand: a malformed projects.toml is a real refusal, not silently ig
 
   assert.equal(code, 1);
   assert.match(io.err[0], /projects\.toml/);
+});
+
+// Issue #11, Client ruling 2026-10-08, part 1: an unknown cost under a
+// cap is a non-zero exit naming the unmeasured task - not a warning, not
+// a log line, and not a refusal that leaves the operator guessing which
+// task to look at.
+test("runDoCommand: an unknown cost under a cap exits non-zero, naming the unmeasured task", async () => {
+  const recordHome = tempRecordHome();
+  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 100\n");
+  const project = makeFixtureRepo("exit 0");
+  const unmeasured = await createForeman({ recordHome, caps: { perDayUsd: 100 } }).do("unmeasured", {
+    project,
+    brain: fakeBrain({ costUsd: null }),
+  });
+  const io = captureIo();
+
+  const code = await runDoCommand(["any task at all", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1, "fabrica do proceeded past an unmeasured spend");
+  assert.equal(io.out.length, 1, "stdout must still be exactly the (refused) task's id");
+  const stderr = io.err.join("\n");
+  assert.match(stderr, /SPEND UNKNOWN - tasks blocked/);
+  assert.ok(stderr.includes(unmeasured.id), `the refusal does not name the unmeasured task ${unmeasured.id}: ${stderr}`);
+  assert.match(stderr, new RegExp(`fabrica cost ${unmeasured.id} <usd>`));
+  assert.ok(readEventsForTask(recordHome, io.out[0]).some((e) => e.name === "cap-refused"));
+});
+
+test("runDoCommand: a daily-cap refusal exits non-zero with the numbers", async () => {
+  const recordHome = tempRecordHome();
+  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 0\n");
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["any task at all", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /\$0\.00/);
 });

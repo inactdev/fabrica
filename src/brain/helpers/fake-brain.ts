@@ -1,11 +1,11 @@
 // A fake brain for src/-side tests (test-only fixture, not exported from
 // the module barrel - contract/helpers/fake-brain.ts is the equivalent
-// fixture for the contract suite and is off limits to edit). Unlike that
+// fixture for the contract suite, changed only under a Client ruling). Unlike that
 // simpler fixture, this one actually tracks sessions, so tests here can
 // prove the warm-session guarantee from SPEC.md: a retry into the same
 // session id continues that session's history rather than restarting it.
 
-import type { Brain, BrainAskResult, BrainWorkResult, TranscriptEntry } from "../types.ts";
+import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
 
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
@@ -20,6 +20,8 @@ export interface FakeBrainHandle extends Brain {
   readonly reasoningEffortsRequested: readonly (string | undefined)[];
   /** Every brief passed to ask(), in call order. */
   readonly askCalls: readonly string[];
+  /** The options each work() call received, in call order. */
+  readonly workOptions: readonly (BrainWorkOptions | undefined)[];
 }
 
 export function fakeBrain(
@@ -36,6 +38,13 @@ export function fakeBrain(
      * distinct from askQuestions (a brain that answered, just with
      * questions). Ignored if askQuestions is also set. */
     askError?: Error;
+    /** Rule 10: what each work() call reports spending, on a "usage"
+     * transcript entry (contract/surface.ts's TranscriptEntry). A number
+     * is the same cost every call; a function picks it per call (1-based).
+     * Null reports a cost the brain cannot say; omitted, no usage entry
+     * is emitted at all - an unmeasured call, exactly like the null case
+     * to whatever reads it. */
+    costUsd?: number | null | ((call: number) => number | null);
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -43,6 +52,7 @@ export function fakeBrain(
   const historyBySession = new Map<string, string[]>();
   const reasoningEffortsRequested: (string | undefined)[] = [];
   const askCalls: string[] = [];
+  const workOptions: (BrainWorkOptions | undefined)[] = [];
 
   return {
     name: "fake",
@@ -59,6 +69,9 @@ export function fakeBrain(
     get askCalls() {
       return askCalls;
     },
+    get workOptions() {
+      return workOptions;
+    },
     async ask(brief: string): Promise<BrainAskResult> {
       askCalls.push(brief);
       if (opts.askError) throw opts.askError;
@@ -66,6 +79,7 @@ export function fakeBrain(
     },
     async work(brief, workdir, workOpts) {
       calls += 1;
+      workOptions.push(workOpts);
       reasoningEffortsRequested.push(workOpts?.reasoningEffort);
       opts.onWork?.(brief, workdir, workOpts?.reasoningEffort);
 
@@ -79,8 +93,17 @@ export function fakeBrain(
         kind: "text",
         text: `fake brain saw ${history.length} brief(s) on session ${session}: ${history.join(" | ")}`,
       };
+      const transcript: TranscriptEntry[] = [entry];
+      if (opts.costUsd !== undefined) {
+        const costUsd = typeof opts.costUsd === "function" ? opts.costUsd(calls) : opts.costUsd;
+        transcript.push({
+          occurredAt: new Date().toISOString(),
+          kind: "usage",
+          text: JSON.stringify({ totalCostUsd: costUsd }),
+        });
+      }
       const result: BrainWorkResult = {
-        transcript: [entry],
+        transcript,
         session,
       };
       if (opts.gateChanges !== undefined) result.gateChanges = opts.gateChanges;

@@ -176,6 +176,25 @@ that no verdict was reached and points to `fabrica log` instead of
 falling back to the prior red delivery or recommending another Client
 verdict.
 
+## `fabrica cost <taskId> <usd>`
+
+Issue #11, Client ruling 2026-10-08. While a spending cap is set in
+`projects.toml`'s `[caps]`, an attempt whose cost was never measured
+blocks every new start: `fabrica do` exits 1 naming each unmeasured task,
+and `fabrica status` opens with `SPEND UNKNOWN - tasks blocked` until it
+is resolved. That line is derived from the record on every run, so it
+survives restarts. This command is the way out. The owner looks the real
+figure up and records it: `fabrica cost 20261009-fix-login 0.42`. It
+refuses anything that is not a plain dollar amount of zero or more, and
+refuses a task with nothing unmeasured, so a block never clears without
+a real cost being recorded. Owner-only: the shipped harness settings under
+`skill/` deny it to an AI driver, next to `verdict` and `answer`.
+
+`fabrica do`, `answer`, `verdict`, and the detached runner all read
+`[caps]` from `projects.toml` and pass it to the Foreman. See
+`src/foreman/README.md`'s "Rule 10: spending caps" for how spend is
+counted (a rolling 24 hours, not a calendar day) and enforced.
+
 ## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
 
 Issue #12 - the Client's eyes on a detached task, without reading record
@@ -183,7 +202,8 @@ files himself. All three are strictly read-only over the record; none of
 them can reach a running worker.
 
 - **`status`** lists every open task, one line each: id, project, state,
-  age. A `delivered` task is flagged as awaiting the Client's verdict -
+  age, cost (`cost: unknown` for unmeasured spend, never a silent $0, and
+  `cost: no attempts yet` before any attempt ran). A `delivered` task is flagged as awaiting the Client's verdict -
   nothing else in the tool says a task is waiting on him. A `working`
   task with no recorded activity for longer than `QUIET_THRESHOLD_MS` is
   flagged "quiet" rather than left looking identical to progress; a
@@ -468,6 +488,8 @@ calls `runTask`.
 | `answer-command.ts` | Resolves the record home and calls `Foreman.answer` for `fabrica answer`; `ANSWER_HELP` is `answer --help`'s text. |
 | `verdict-args.ts` | Parses `fabrica verdict`'s arguments. |
 | `verdict-command.ts` | Resolves the record home and calls `Foreman.verdict` for `fabrica verdict`; `VERDICT_HELP` is `verdict --help`'s text. |
+| `cost-command.ts` | `fabrica cost <taskId> <usd>` (issue #11): parses the figure strictly and calls `Foreman.recordCost`; `COST_HELP` is `cost --help`'s text. |
+| `load-config.ts` | `loadConfigOrDefault` - `projects.toml`, or no projects and no caps when there is none yet. Shared by every command that needs caps. |
 | `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. |
 | `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
@@ -481,7 +503,7 @@ calls `runTask`.
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
-| `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether the task asked, failed before it started, or is proceeding. |
+| `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
 | `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`. |
 | `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `unknown-task`, `project-not-found`, `spawn-failed`, `registration-timeout`. |

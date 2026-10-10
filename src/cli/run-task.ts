@@ -15,8 +15,11 @@
 
 import { createForeman } from "../index.ts";
 import type { Brain } from "../index.ts";
+import { loadConfigOrDefault } from "./load-config.ts";
 
 export async function runTask(recordHome: string, projectPath: string, taskText: string, brain: Brain): Promise<void> {
-  const foreman = createForeman({ recordHome });
+  // Rule 10: the caps in projects.toml are law for every task this
+  // process starts - read here, in the process that actually spends.
+  const foreman = createForeman({ recordHome, caps: loadConfigOrDefault(recordHome).caps });
   await foreman.do(taskText, { project: projectPath, brain });
 }

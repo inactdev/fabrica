@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -291,4 +292,57 @@ test("runStatusCommand: a task stuck before work-started past its own ceiling is
   assert.match(io.out[0], /working/, "state itself is still working - only ask() is unaccounted for");
   assert.match(io.out[0], /no signal since the task was received/, "task-received is the record's actual last event here");
   assert.doesNotMatch(io.out[0], /heartbeat/, "attempts.ts's heartbeat interval never wraps brain.ask()");
+});
+
+// Issue #11, Client ruling 2026-10-08, part 2: the SPEND UNKNOWN line is
+// persistent - derived from the record on every run, so it survives a
+// restart and stays until the real cost is recorded. Each run below is a
+// genuinely separate OS process running the real `fabrica` binary, so a
+// line held in one process's memory could not pass.
+function runRealStatus(recordHome: string): string {
+  const bin = fileURLToPath(new URL("./bin.mjs", import.meta.url));
+  return execFileSync(process.execPath, [bin, "status"], {
+    env: { ...process.env, FABRICA_HOME: recordHome },
+    encoding: "utf8",
+  });
+}
+
+test("fabrica status keeps showing SPEND UNKNOWN across fresh processes until the cost is recorded", async () => {
+  const recordHome = tempRecordHome();
+  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 100\n");
+  const project = makeFixtureRepo("exit 0");
+  const task = await createForeman({ recordHome, caps: { perDayUsd: 100 } }).do("unmeasured", {
+    project,
+    brain: fakeBrain({ costUsd: null }),
+  });
+
+  const first = runRealStatus(recordHome);
+  const second = runRealStatus(recordHome);
+  for (const output of [first, second]) {
+    assert.ok(output.split("\n").includes("SPEND UNKNOWN - tasks blocked"), `missing the SPEND UNKNOWN line:\n${output}`);
+    assert.ok(output.includes(`fabrica cost ${task.id} <usd>`), `the way out is not named:\n${output}`);
+  }
+});
+
+test("runStatusCommand: with no cap set, an unmeasured task still shows cost: unknown, never nothing", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  await createForeman({ recordHome }).do("unmeasured", { project, brain: fakeBrain({ costUsd: null }) });
+  const io = captureIo();
+
+  await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(io.out.length, 1, "no cap is set, so nothing is blocked and no SPEND UNKNOWN line belongs here");
+  assert.match(io.out[0], /cost: unknown/);
+});
+
+test("runStatusCommand: a measured task shows its cost in dollars", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  await createForeman({ recordHome }).do("measured", { project, brain: fakeBrain({ costUsd: 0.0421 }) });
+  const io = captureIo();
+
+  await runStatusCommand([], { recordHome, ...io });
+
+  assert.match(io.out[0], /cost: \$0\.0421/);
 });

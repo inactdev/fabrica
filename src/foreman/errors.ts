@@ -16,7 +16,11 @@ export type ForemanErrorCode =
   | "missing-note"
   | "no-questions-pending"
   | "already-answered"
-  | "missing-answer";
+  | "missing-answer"
+  | "cap-refused"
+  | "spend-unknown"
+  | "invalid-cost"
+  | "nothing-to-record";
 
 export class ForemanError extends Error {
   readonly code: ForemanErrorCode;

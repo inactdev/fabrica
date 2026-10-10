@@ -4,8 +4,20 @@
 // his verdict (CONTRACT rule 6), and nothing else in this listing says
 // that unless this command does.
 
-import { eventsByTask, stateOf } from "../index.ts";
+import {
+  capsActive,
+  describeTaskCost,
+  describeUnmeasured,
+  eventsByTask,
+  hasAttempts,
+  SPEND_UNKNOWN_LINE,
+  stateOf,
+  taskSpend,
+  unmeasuredSpend,
+} from "../index.ts";
+import type { FabricaEvent } from "../index.ts";
 import { CliError } from "./errors.ts";
+import { loadConfigOrDefault } from "./load-config.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { describeLiveness, formatStatusLine, isDeadEnd, projectFromEvents } from "./render.ts";
 
@@ -26,6 +38,13 @@ worker has even started (its own, much shorter ceiling, since a real
 answer from the brain arrives in well under a minute). A closed task
 (verdict recorded) drops off this list - see \`fabrica log <id>\` for its
 history.
+
+Every line carries the task's cost so far - "cost: unknown" when an
+attempt's spend was never measured, never a silent $0. While a spending
+cap is set, any unmeasured spend blocks all new work, and this listing
+opens with "${SPEND_UNKNOWN_LINE}" and the \`fabrica cost\` command
+that clears each one. That line is read from the record on every run,
+so it stays until the real cost is recorded.
 
 A task whose \`brain.ask()\` threw before any Worker ever ran has no \`fix\`
 path back and never will again; it stays listed - marked "FAILED,
@@ -71,11 +90,23 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
   try {
     parseStatusArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
+    const { caps } = loadConfigOrDefault(recordHome);
 
     // One pass over events.jsonl for the whole listing. Asking the
     // Foreman for the task list and then for each task's events would
     // re-read and re-parse the entire log once per open task.
-    const openTasks = Array.from(eventsByTask(recordHome), ([id, events]) => ({
+    const byTask = eventsByTask(recordHome);
+
+    // Rule 10 (issue #11, Client ruling 2026-10-08): derived from the
+    // record on every run, closed tasks included, so the block survives
+    // a restart and is shown until the real cost is recorded.
+    const unmeasured = capsActive(caps) ? unmeasuredSpend([...byTask.values()].flat()) : [];
+    if (unmeasured.length > 0) {
+      stdout(SPEND_UNKNOWN_LINE);
+      for (const line of describeUnmeasured(unmeasured)) stdout(`  ${line}`);
+    }
+
+    const openTasks = Array.from(byTask, ([id, events]) => ({
       task: { id, state: stateOf(events) },
       events,
       hasDelivery: events.some((e) => e.name === "delivered"),
@@ -103,7 +134,9 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
       const ageMs = firstEvent ? now - new Date(firstEvent.occurredAt).getTime() : 0;
       const liveness = describeLiveness(task.state, events, now);
 
-      stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery }));
+      const cost = describeTaskCost(taskSpend(events, task.id), hasAttempts(events, task.id));
+      const failedBecause = refusedByCap(events) ? "a spending cap refused it before any work started" : undefined;
+      stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery, cost, failedBecause }));
     }
 
     return 0;
@@ -111,4 +144,8 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     stderr(err instanceof Error ? err.message : String(err));
     return 1;
   }
+}
+
+function refusedByCap(events: FabricaEvent[]): boolean {
+  return events.some((e) => e.name === "cap-refused") && !events.some((e) => e.name === "work-started");
 }

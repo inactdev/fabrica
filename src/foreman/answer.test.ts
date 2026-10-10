@@ -62,6 +62,7 @@ test("answerTask resumes an asking task, extends the brief, and delivers", async
       "work-started",
       "check-run",
       "check-run",
+      "receipt-recorded",
       "inspection-skipped",
       "delivered",
     ]
@@ -209,6 +210,7 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     "work-started",
     "check-run",
     "check-run",
+    "receipt-recorded",
     "inspection-skipped",
     "delivered",
   ]);

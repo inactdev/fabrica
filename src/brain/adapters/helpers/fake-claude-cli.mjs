@@ -83,6 +83,21 @@ switch (brief) {
     process.exitCode = 1;
     break;
   }
+  case "BUDGET_EXHAUSTED": {
+    // The real binary's shape when --max-budget-usd runs out (verified
+    // on 2.1.295): exit 1, is_error true, no "result" text, and the real
+    // cost, already past the budget.
+    line({ type: "assistant", message: { content: [{ type: "text", text: "Starting." }] } });
+    const { result: _result, ...rest } = resultLine({
+      is_error: true,
+      subtype: "error_max_budget_usd",
+      total_cost_usd: 0.1427,
+      errors: ["Reached maximum budget ($0.1)"],
+    });
+    line(rest);
+    process.exitCode = 1;
+    break;
+  }
   case "SUCCESS_NO_RESULT_LINE": {
     line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
     break;

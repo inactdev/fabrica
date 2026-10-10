@@ -362,19 +362,31 @@ want in one place: `total_cost_usd`, `duration_ms`, and a per-token
 
 Rather than drop that data because the interface has no dedicated slot
 for it, this adapter appends it as one more `TranscriptEntry`, `kind:
-"usage"`, `text` the JSON string above, always last. The Foreman
-(`src/foreman/`, issue #7) now assembles `Receipt`s but still records
-`costUsd: null` - reading this entry back out of the transcript is issue
-#11's job - and either way the data sits there without this adapter
-having reshaped the `Brain` seam to fit its own tool, which is the thing
-`adapters/README.md` asks every adapter to guard against.
+"usage"`, `text` the JSON string above, always last. The Foreman reads
+it back into `Receipt.costUsd` (issue #11; the `"usage"` kind and its
+`totalCostUsd` field are now documented on `contract/surface.ts`'s
+`TranscriptEntry`), without this adapter having reshaped the `Brain` seam
+to fit its own tool, which is the thing `adapters/README.md` asks every
+adapter to guard against.
+
+`BrainWorkOptions.maxSpendUsd` (rule 10's remaining per-task budget) is
+passed as `--max-budget-usd`. Verified against the real 2.1.295 binary:
+when the budget runs out, the CLI exits 1 with a result line carrying
+`is_error: true`, `subtype: "error_max_budget_usd"`, no `result` text,
+and the real `total_cost_usd`, which can already be well past the budget
+(one turn cost $0.14 against a $0.0001 budget), since the CLI checks
+after a turn, not during one. That is the cap working, not the brain
+failing, so this adapter returns normally in that one case. It adds a
+`kind: "budget-exhausted"` entry plus the usual `"usage"` entry, so the
+spend reaches the receipt and the Foreman stops the task honestly,
+instead of a thrown error losing the money on the record.
 
 This account is a flat-rate subscription (`claude auth status` reports
 `"subscriptionType": "max"`), so the dollar figure above is notional -
 real to compute, but it doesn't move a bill the way a metered API call
 would (see issue #6's design comments). It's recorded anyway, faithfully,
-in whatever unit the tool itself reports it in; deciding what a receipt
-does with a notional figure is issue #11's job, not this file's.
+in whatever unit the tool itself reports it in; the caps treat it as real
+dollars, which is the safe direction to be wrong in.
 
 ## `gateChanges`
 

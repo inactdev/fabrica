@@ -3,6 +3,7 @@
     "deny": [
       "Bash(fabrica verdict *)",
       "Bash(fabrica answer *)",
+      "Bash(fabrica cost *)",
       "Bash(rm *)",
       "Bash(mv *)",
       "Bash(cp *)",

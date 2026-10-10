@@ -52,5 +52,6 @@ export interface Foreman {
   verdict(taskId: string, ruling: "accept" | "fix" | "wrong", note?: string): Promise<void>;
   status(): Promise<FabricaTask[]>;
   events(taskId: string): Promise<FabricaEvent[]>;
+  recordCost(taskId: string, usd: number): Promise<void>;
   recordPath(): string;
 }
