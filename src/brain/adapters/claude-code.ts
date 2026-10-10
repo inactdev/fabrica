@@ -336,7 +336,9 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         throw new ClaudeCodeError("cli-error", `${detail}${status}`);
       }
 
-      return result?.result ? parseAskResult(result.result) : {};
+      // Rule 10: the clarifying step's own cost; null when the CLI gave none.
+      const costUsd = typeof result?.total_cost_usd === "number" ? result.total_cost_usd : null;
+      return { ...(result?.result ? parseAskResult(result.result) : {}), costUsd };
     },
 
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions): Promise<BrainWorkResult> {

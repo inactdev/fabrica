@@ -86,7 +86,7 @@ test("runDoCommand: a materially ambiguous task's stdout is exactly the task id,
   // No worker ran - nothing beyond registration and the ask itself is on
   // the record yet.
   const events = readEventsForTask(recordHome, taskId).map((e) => e.name);
-  assert.deepEqual(events, ["task-received", "questions-asked"]);
+  assert.deepEqual(events, ["task-received", "ask-cost-recorded", "questions-asked"]);
 });
 
 test("runDoCommand: a materially ambiguous task prints the numbered questions and how to answer them, to stderr", async () => {
