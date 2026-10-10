@@ -11,6 +11,9 @@
 
 import { defaultBrainAdapter } from "../index.ts";
 import { runTask } from "./run-task.ts";
+import { prefixTaskLog } from "./task-log.ts";
+
+const setLogTaskId = prefixTaskLog();
 
 const [, , recordHome, projectPath, taskText] = process.argv;
 
@@ -23,7 +26,7 @@ if (recordHome === undefined || projectPath === undefined || taskText === undefi
 }
 
 try {
-  await runTask(recordHome, projectPath, taskText, defaultBrainAdapter());
+  await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome), { onTaskRegistered: setLogTaskId });
 } catch (err) {
   console.error(`fabrica do: task on "${projectPath}" failed: ${(err as Error).message}`);
   process.exit(1);

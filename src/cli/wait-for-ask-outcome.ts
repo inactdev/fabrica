@@ -1,25 +1,21 @@
 // After spawnDetachedTask resolves with a taskId, the detached child is
-// still running doTask() (src/foreman/do.ts) - which now (issue #8) does
-// register -> ask -> maybe isolate/work, all inside that one call. This
-// polls the task's own record for whichever outcome lands first (a
-// spending cap's refusal, rule 10, comes before any of the others), so `fabrica do` can print numbered questions and stop (SPEC.md
-// step 2), or report a real failure, instead of only ever printing the
-// task id.
+// still running doTask() (src/foreman/do.ts): register -> ask -> maybe
+// isolate/work, all inside that one call. This polls the task's own
+// record for whichever outcome lands first - a spending cap's refusal
+// (rule 10), questions, a failed clarifying step ("ask-failed"), any
+// other failure before work starts ("task-failed", #73), or
+// "work-started" - so `fabrica do` can print numbered questions and stop
+// (SPEC.md step 2), or report a real failure, instead of only ever
+// printing the task id.
 //
-// The timeout is for the genuinely-slow-brain case only, and it is
-// exactly that - a real timeout, not a stand-in for "the task failed."
-// A brain that throws (src/foreman/ask.ts's "ask-failed", e.g. the
-// reference adapter's documented credential gap - the live path today)
-// is detected directly and reported as "failed", never left to exhaust
-// the clock. Only a brain that is simply slow, or a task that fails for
-// an unrelated reason before ever reaching "work-started" (e.g. a
-// missing check command - a known, separate gap this does not close),
-// falls through to the timeout, which still resolves "proceeding" - the
-// task itself is unaffected by what this observes, and keeps running
-// (or, in that separate gap's case, has already failed silently
-// upstream of what this function can see).
+// There is no fixed cutoff (Client ruling 2026-10-10): a slow clarifying
+// step is waited out, with a "still waiting" line every 15s, rather than
+// reported as "proceeding" - which is how a task that never started used
+// to look like one that did. The one other way out is the task's own
+// process ending with nothing recorded, which is a failure, not a wait.
 
 import { createForeman } from "../index.ts";
+import type { FabricaEvent } from "../index.ts";
 
 export interface AskOutcome {
   status: "asking" | "proceeding" | "failed" | "cap-refused";
@@ -32,10 +28,22 @@ export interface AskOutcome {
   reason?: string;
 }
 
+/** How often `fabrica do` says it is still waiting (#73): long enough not
+ * to flood the terminal, short enough that silence never reads as done. */
+export const STILL_WAITING_INTERVAL_MS = 15_000;
+export const STILL_WAITING_LINE = "still waiting on the clarifying step";
+
 export async function waitForAskOutcome(
   recordHome: string,
   taskId: string,
-  opts: { timeoutMs?: number; pollMs?: number } = {}
+  opts: {
+    pollMs?: number;
+    noticeMs?: number;
+    onStillWaiting?: (line: string) => void;
+    /** Whether the task's own process is still running. Once it is not,
+     * whatever it recorded is all there will ever be. */
+    isAlive?: () => boolean;
+  } = {}
 ): Promise<AskOutcome> {
   // Each poll is a full read+parse of the record home's whole
   // events.jsonl (every task, "delivered" payloads included), so the
@@ -43,32 +51,53 @@ export async function waitForAskOutcome(
   // imperceptible to someone waiting on a real model call, and keeps
   // this from re-parsing the entire history a thousand times per
   // `fabrica do`.
-  const { timeoutMs = 60_000, pollMs = 250 } = opts;
+  const { pollMs = 250, noticeMs = STILL_WAITING_INTERVAL_MS, onStillWaiting, isAlive } = opts;
   const foreman = createForeman({ recordHome });
-  const deadline = Date.now() + timeoutMs;
+  let nextNotice = Date.now() + noticeMs;
 
   for (;;) {
-    const events = await foreman.events(taskId);
-    const asked = events.filter((e) => e.name === "questions-asked").at(-1);
-    if (asked) {
-      const details = asked.details as { questions?: string[] } | undefined;
-      return { status: "asking", questions: details?.questions ?? [] };
+    // Read whether the process was alive before reading the record, so
+    // an outcome it wrote just before exiting is never missed.
+    const alive = isAlive ? isAlive() : true;
+    const outcome = outcomeFrom(await foreman.events(taskId));
+    if (outcome) return outcome;
+    if (!alive) {
+      return {
+        status: "failed",
+        questions: [],
+        reason: `the task's process ended without recording an outcome - see ${recordHome}/cli.log`,
+      };
     }
-    // Rule 10 refuses before ask() ever runs, so this is checked first.
-    const refused = events.find((e) => e.name === "cap-refused");
-    if (refused) {
-      const details = refused.details as { message?: string } | undefined;
-      return { status: "cap-refused", questions: [], reason: details?.message ?? "a spending cap refused it" };
+    if (onStillWaiting && Date.now() >= nextNotice) {
+      onStillWaiting(STILL_WAITING_LINE);
+      nextNotice = Date.now() + noticeMs;
     }
-    const failed = events.filter((e) => e.name === "ask-failed").at(-1);
-    if (failed) {
-      const details = failed.details as { error?: string } | undefined;
-      return { status: "failed", questions: [], reason: details?.error ?? "unknown error" };
-    }
-    if (events.some((e) => e.name === "work-started")) {
-      return { status: "proceeding", questions: [] };
-    }
-    if (Date.now() >= deadline) return { status: "proceeding", questions: [] };
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
+}
+
+function outcomeFrom(events: FabricaEvent[]): AskOutcome | undefined {
+  // Rule 10 refuses before ask() ever runs, so this is checked first.
+  const refused = events.find((e) => e.name === "cap-refused");
+  if (refused) {
+    const details = refused.details as { message?: string } | undefined;
+    return { status: "cap-refused", questions: [], reason: details?.message ?? "a spending cap refused it" };
+  }
+  const asked = events.filter((e) => e.name === "questions-asked").at(-1);
+  if (asked) {
+    const details = asked.details as { questions?: string[] } | undefined;
+    return { status: "asking", questions: details?.questions ?? [] };
+  }
+  const askFailed = events.filter((e) => e.name === "ask-failed").at(-1);
+  if (askFailed) {
+    const details = askFailed.details as { error?: string } | undefined;
+    return { status: "failed", questions: [], reason: details?.error ?? "unknown error" };
+  }
+  const failed = events.filter((e) => e.name === "task-failed").at(-1);
+  if (failed) {
+    const details = failed.details as { message?: string } | undefined;
+    return { status: "failed", questions: [], reason: details?.message ?? "unknown error" };
+  }
+  if (events.some((e) => e.name === "work-started")) return { status: "proceeding", questions: [] };
+  return undefined;
 }
