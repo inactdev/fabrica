@@ -188,6 +188,7 @@ test("a fix round cannot disable inspection established by the task base commit"
   const code = await runVerdictCommand([task.id, "fix", "-m", "apply the requested fix"], {
     recordHome,
     brain,
+    inspector,
     ...io,
   });
 
