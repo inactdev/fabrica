@@ -223,9 +223,12 @@ mints a long-lived token meant for exactly this kind of headless use.
 variable, `CLAUDE_CODE_OAUTH_TOKEN`, into `ClaudeCodeAdapterOptions.env`:
 from this process's environment when it is set there, otherwise from
 `<recordHome>/brain.env`, which Fabrica reads itself (Client ruling
-2026-10-10). No shell profile has to export it. That file must hold only
-a `CLAUDE_CODE_OAUTH_TOKEN=...` line and be mode 600; anything else is
-refused, naming the file and `chmod 600`. The token goes only into the
+2026-10-10). No shell profile has to export it. That file must be mode
+600 (otherwise refused, naming `chmod 600`) and hold exactly one
+`CLAUDE_CODE_OAUTH_TOKEN=...` line, optionally written
+`export CLAUDE_CODE_OAUTH_TOKEN=...` so a shell can source the same file.
+Every other line is ignored, never forwarded; no token line, an empty
+one, or two of them is refused, naming the file. The token goes only into the
 container's env-file - never into Fabrica's own process environment,
 never into a log. Nothing else from the host environment crosses the
 container wall - that option is an explicit allowlist, not a

@@ -40,13 +40,42 @@ test("unset in the environment, it is read from <recordHome>/brain.env - that on
   assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, before, "the token leaked into Fabrica's own environment");
 });
 
-test("brain.env with anything but the one variable is refused, naming the file", () => {
-  const home = recordHome({ content: "CLAUDE_CODE_OAUTH_TOKEN=fake\nANTHROPIC_API_KEY=also-fake\n", mode: 0o600 });
-  assert.throws(
-    () => credentialEnvFrom({}, home),
-    (err: Error) => err.message.includes(join(home, "brain.env")) && /CLAUDE_CODE_OAUTH_TOKEN=/.test(err.message)
-  );
+test("brain.env: an optional leading `export ` on the token line is accepted", () => {
+  const home = recordHome({ content: "export CLAUDE_CODE_OAUTH_TOKEN=fake-exported\n", mode: 0o600 });
+  assert.deepEqual(credentialEnvFrom({}, home), { env: { CLAUDE_CODE_OAUTH_TOKEN: "fake-exported" } });
 });
+
+test("brain.env: a second variable or any other line is ignored, never forwarded", () => {
+  const home = recordHome({
+    content: [
+      "ANTHROPIC_API_KEY=must-not-be-forwarded",
+      "export AWS_SECRET_ACCESS_KEY=must-not-be-forwarded",
+      "export CLAUDE_CODE_OAUTH_TOKEN=fake-the-one",
+      "not a variable at all",
+      "exportCLAUDE_CODE_OAUTH_TOKEN=must-not-be-read",
+      "",
+    ].join("\n"),
+    mode: 0o600,
+  });
+  assert.deepEqual(credentialEnvFrom({}, home), { env: { CLAUDE_CODE_OAUTH_TOKEN: "fake-the-one" } });
+});
+
+for (const [label, content] of [
+  ["no token line", "ANTHROPIC_API_KEY=also-fake\n"],
+  ["an empty token", "export CLAUDE_CODE_OAUTH_TOKEN=\n"],
+  ["two token lines", "CLAUDE_CODE_OAUTH_TOKEN=fake-one\nexport CLAUDE_CODE_OAUTH_TOKEN=fake-two\n"],
+] as const) {
+  test(`brain.env with ${label} is refused, naming the file and never printing a value`, () => {
+    const home = recordHome({ content, mode: 0o600 });
+    assert.throws(
+      () => credentialEnvFrom({}, home),
+      (err: Error) =>
+        err.message.includes(join(home, "brain.env")) &&
+        /CLAUDE_CODE_OAUTH_TOKEN=/.test(err.message) &&
+        !/fake/.test(err.message)
+    );
+  });
+}
 
 test("brain.env readable by group or others is refused, naming chmod 600", () => {
   for (const mode of [0o640, 0o604, 0o644]) {

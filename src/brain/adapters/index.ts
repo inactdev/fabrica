@@ -55,18 +55,20 @@ export function credentialEnvFrom(env: NodeJS.ProcessEnv, recordHome: string): C
         `worker token. Run \`chmod 600 ${path}\`, then try again.`
     );
   }
-  const lines = readFileSync(path, "utf8")
+  // Only the token line is read - an optional `export ` lets the same file
+  // be sourced by a shell - and every other line is ignored, never forwarded.
+  const tokenLine = new RegExp(`^(?:export\\s+)?${CREDENTIAL_VAR}=(.*)$`);
+  const tokens = readFileSync(path, "utf8")
     .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"));
-  const prefix = `${CREDENTIAL_VAR}=`;
-  if (lines.length !== 1 || !lines[0].startsWith(prefix) || lines[0].length === prefix.length) {
+    .map((line) => tokenLine.exec(line.trim())?.[1])
+    .filter((token): token is string => token !== undefined);
+  if (tokens.length !== 1 || tokens[0].length === 0) {
     throw new Error(
-      `${path} must hold exactly one line, ${CREDENTIAL_VAR}=<token>, and nothing else. Run \`claude setup-token\` ` +
-        `for a token if you need one.`
+      `${path} must hold exactly one line ${CREDENTIAL_VAR}=<token> (optionally after \`export \`). Run ` +
+        `\`claude setup-token\` for a token if you need one.`
     );
   }
-  return { env: { [CREDENTIAL_VAR]: lines[0].slice(prefix.length) } };
+  return { env: { [CREDENTIAL_VAR]: tokens[0] } };
 }
 
 /** The real worker. Its token is looked up at its first call, not here,
