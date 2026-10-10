@@ -6,6 +6,7 @@ export type ForemanErrorCode =
   | "no-brain"
   | "invalid-attempts"
   | "missing-check"
+  | "inspector-not-ready"
   | "gate-baseline-unreadable"
   | "commit-failed"
   | "unknown-task"

@@ -21,6 +21,10 @@ export interface Inspector {
   /** Whether this Inspector can run at all (its command is installed).
    * Omitted means it can - a test's fake always can. */
   installed?(): boolean;
+  /** Called once before a task's first worker starts in Inspector mode.
+   * Throws, with a message to show the Client verbatim, when Inspector
+   * could not run for a reason known up front (no GitHub token). */
+  prepare?(): void;
 }
 
 export type Delivery = Omit<ContractDelivery, "outcome"> & {

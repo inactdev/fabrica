@@ -128,6 +128,14 @@ export function prepareRound(
   if (mode.mode === "self-test") {
     requireCheckCommand(line.workdir, check);
     appendEvent(recordHome, { taskId, name: "inspection-skipped", details: { reason: mode.reason } });
+  } else {
+    // Anything Inspector can tell is missing up front (its GitHub token,
+    // issue #103) refuses here, before any worker starts.
+    try {
+      mode.inspector.prepare?.();
+    } catch (err) {
+      throw new ForemanError("inspector-not-ready", err instanceof Error ? err.message : String(err));
+    }
   }
   const protectedPathApplies =
     check === DEFAULT_CHECK_COMMAND && (mode.mode === "self-test" || existsSync(join(line.workdir, "check.sh")));

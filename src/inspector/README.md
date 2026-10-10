@@ -4,6 +4,10 @@
 
 The handoff is trigger-driven: after each attempt's work is committed, the Foreman invokes Inspector directly and waits for that process. Fabrica runs no check of its own (issue #64); Inspector's run is the verdict, and a red report becomes the next attempt's correction brief. The call is `inspector -repo <worktree> -branch fabrica/<taskId>`: Inspector requires `-branch`, the one branch it may publish to after a green result. Neither module polls for an Inspector result. Exit 0 is `green`, exit 1 is `red`, and exit 2 is `refused`; every unexpected exit is also a refusal, never a red verdict. The Foreman records the call and report in `events.jsonl`; this module only knows how to make the call. Streamed output is kept as a bounded tail while Inspector runs, and its stored report is capped at 16 KiB with the true total byte count, retaining the end where command-line tools normally print the diagnosis.
 
+## The GitHub token (issue #103)
+
+Inspector needs `GITHUB_TOKEN` to publish a green result. If Fabrica's own environment has it, it passes through. If not, the adapter runs `gh auth token` once and sets `GITHUB_TOKEN` in the inspector child's environment only. It never touches Fabrica's own process environment or the worker's box, and never prints or logs the token. If `gh` is missing or not logged in, `prepare()` throws, and the Foreman refuses the task (`inspector-not-ready`) before any worker starts, naming `gh auth login`. A new machine needs only "install, log in to GitHub, go" - no hand-added profile line.
+
 ## Publishing boundary
 
 Fabrica commits the Worker's changes before this call, but never pushes them. Inspector owns publishing under [inspector#18](https://github.com/inactdev/inspector/issues/18): green work may be pushed by Inspector only after its independent check, and red work must remain local. Inspector repairs and commits mechanical failures that do not require the Client's request context before it reports green. Request-aware changes return as a red report for the Client's verdict instead.

@@ -800,7 +800,7 @@ clarify step's own spend is not metered yet.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, and rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`, and `inspector-not-ready` (Inspector mode with no GitHub token - see `src/inspector/README.md`). |
 | `judge.ts` | Who judges each attempt (issue #64): Inspector, or a self-test in the Worker's box. `prepareRound` picks the mode; `roundOutcome` turns the last judgement into a delivery outcome. Nothing here runs a check on the host - `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention; `requireCheckCommand` refuses a self-tested task with none. |
 | `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
