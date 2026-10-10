@@ -122,3 +122,16 @@ the Client's memory.
 *Checked by:* a test that sets the daily cap to zero and proves a new
 task is refused with the numbers in the message — and a test proving
 every receipt carries the money field.
+
+**11. It asks itself first.**
+Before a worker changes anything, it is asked one standing question: if
+its planned solution works, is it the best one, all things considered -
+safest first, then most accurate, then fastest? It must name one
+alternative it rejected and why, and write that down before it starts.
+Fabrica's own code puts this question at the start of every brief - the
+first attempt, a retry after a red check, a fix you asked for, a round
+resumed after your answers. It is never left to a file the worker might
+or might not read.
+*Checked by:* a test with a fake worker that records every brief it
+receives - first attempt, retry after red, fix round, and answered
+round - and proves each one begins with the standing question.

@@ -19,6 +19,7 @@ import { ForemanError } from "./errors.ts";
 import { latestDeliveredDetails } from "./queries.ts";
 import { gateWasTouched } from "./gate-changes.ts";
 import { prepareRound, roundOutcome } from "./judge.ts";
+import { withStandingQuestion } from "./standing-question.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
@@ -135,9 +136,9 @@ export async function recordVerdict(
  * mirrors attempts.ts's correctionBrief, but from the Client's review
  * rather than a failed check. */
 function buildFixBrief(originalBrief: string, note: string): string {
-  return (
+  return withStandingQuestion(
     `${originalBrief}\n\n---\n\nThe Client reviewed your previous delivery and asked for a change. ` +
-    `Keep everything that was already right, and fix exactly this:\n\n${note}`
+      `Keep everything that was already right, and fix exactly this:\n\n${note}`
   );
 }
 

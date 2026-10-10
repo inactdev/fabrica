@@ -21,6 +21,7 @@ import { runWatchCommand } from "./watch-command.ts";
 import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS } from "./render.ts";
 import type { Brain } from "../index.ts";
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
+import { withStandingQuestion } from "../foreman/standing-question.ts";
 
 // See status-command.test.ts's matching test: runCheck is synchronous
 // execSync, so a slow check blocks its own process's event loop start to
@@ -118,7 +119,7 @@ test("runWatchCommand: streams a transcript entry that lands after watching star
 
   assert.equal(code, 0);
   assert.ok(
-    io.out.some((line) => line.includes("slow brain did: a slow task")),
+    io.out.some((line) => line.includes(`slow brain did: ${withStandingQuestion("a slow task")}`)),
     `expected the streamed transcript entry, got: ${JSON.stringify(io.out)}`
   );
   assert.ok(io.out.some((line) => line.includes("task delivered")));

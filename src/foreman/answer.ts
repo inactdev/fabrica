@@ -30,6 +30,7 @@ import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTask
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { runProductionRound } from "./do.ts";
+import { withStandingQuestion } from "./standing-question.ts";
 import type { AskedDetails } from "./ask.ts";
 import { requireRoomToStart } from "./caps.ts";
 import type { Caps } from "../../contract/surface.ts";
@@ -130,7 +131,9 @@ export async function answerTask(
 
   appendEvent(recordHome, { taskId, name: "answers-given", details: { answer: answerText } });
 
-  return runProductionRound(recordHome, taskId, brief, {
+  // brief.md keeps the task's own words; the worker's copy gets the
+  // standing question (rule 11) in front.
+  return runProductionRound(recordHome, taskId, withStandingQuestion(brief), {
     project: details.project,
     brain: opts.brain,
     totalAttempts: details.totalAttempts,

@@ -9,6 +9,7 @@
 import type { Brain, TranscriptEntry } from "../brain/index.ts";
 import type { GateResult, Receipt } from "../../contract/surface.ts";
 import type { Judge, Judgement } from "./judge.ts";
+import { withStandingQuestion } from "./standing-question.ts";
 import { costFromTranscript } from "./spend.ts";
 
 /** How often a "heartbeat" event lands while a Worker's single `brain.work`
@@ -116,7 +117,7 @@ export async function runAttempts(opts: {
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
 
-    const thisBrief = lastGate && !lastGate.green ? correctionBrief(brief, lastGate) : brief;
+    const thisBrief = withStandingQuestion(lastGate && !lastGate.green ? correctionBrief(brief, lastGate) : brief);
     // What is left of the task's own cap, as a hint an adapter that can
     // stop mid-call honors - the check after this attempt is the
     // guaranteed stop either way.
@@ -245,8 +246,8 @@ export async function withHeartbeat<T>(
 
 /** Told exactly what failed (SPEC.md step 5), never a bare "try again." */
 function correctionBrief(originalBrief: string, failedGate: GateResult): string {
-  return (
+  return withStandingQuestion(
     `${originalBrief}\n\n---\n\nYour previous attempt did not pass the project's check. ` +
-    `Fix exactly this and nothing else:\n\n${failedGate.output}`
+      `Fix exactly this and nothing else:\n\n${failedGate.output}`
   );
 }
