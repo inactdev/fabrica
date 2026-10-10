@@ -16,7 +16,11 @@ export function readEvents(recordHome: string): FabricaEvent[] {
     throw err;
   }
 
-  return text
+  // appendEvent writes each line whole, newline last, so text after the
+  // final newline is a line still being written. It is left for the next
+  // read, the same way the tail reader (tail.ts) withholds one.
+  const complete = text.slice(0, text.lastIndexOf("\n") + 1);
+  return complete
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as FabricaEvent);

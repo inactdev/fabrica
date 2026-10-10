@@ -4,7 +4,8 @@ import { spawn } from "node:child_process";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { appendEvent } from "./append.ts";
+import { appendFileSync } from "node:fs";
+import { appendEvent, recordPath } from "./append.ts";
 import { readEvents, readEventsForTask } from "./read.ts";
 import { makeTestHome } from "./helpers/test-home.ts";
 
@@ -85,4 +86,28 @@ test("readEvents: a reader polling during concurrent writers never throws or see
   assert.equal(exitCode, 0);
   assert.equal(readEvents(recordHome).length, 500);
   assert.ok(pollCount > 0, "sanity: the poll loop must actually have run at least once");
+});
+
+// What a reader polling during a write can see: the newest line written
+// only partway, with no newline yet. The tail reader (tail.ts) already
+// withholds such a line until its newline lands; readEvents must too,
+// rather than throw on it. A deterministic stand-in for the race the
+// concurrent-writers test above can only hit by timing.
+test("readEvents: skips a trailing partial line with no newline yet, and returns it once it is whole", () => {
+  const recordHome = makeTestHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  const whole = JSON.stringify({ occurredAt: new Date().toISOString(), taskId: "t1", name: "work-started" });
+  appendFileSync(recordPath(recordHome), whole.slice(0, 20));
+
+  assert.deepEqual(
+    readEvents(recordHome).map((e) => e.name),
+    ["task-received"],
+    "a line still being written was read as an event, or made the read throw"
+  );
+
+  appendFileSync(recordPath(recordHome), `${whole.slice(20)}\n`);
+  assert.deepEqual(
+    readEvents(recordHome).map((e) => e.name),
+    ["task-received", "work-started"]
+  );
 });
