@@ -8,6 +8,7 @@ import { appendEvent } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runLogCommand } from "./log-command.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-log-command-"));
@@ -22,7 +23,7 @@ function captureIo() {
 test("runLogCommand: prints the task's full event history, in order", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome }).do("small change", { project, brain: fakeBrain() });
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
   const io = captureIo();
 
   const code = await runLogCommand([task.id], { recordHome, ...io });
@@ -30,15 +31,15 @@ test("runLogCommand: prints the task's full event history, in order", async () =
   assert.equal(code, 0);
   assert.deepEqual(io.err, []);
   const names = io.out.map((line) => line.split(/\s+/)[1]);
-  // "check-run" lands twice per attempt: once when the check starts
-  // (details.phase === "started", issue #12) and once with its result.
-  assert.deepEqual(names, ["task-received", "line-cut", "work-started", "check-run", "check-run", "receipt-recorded", "inspection-skipped", "delivered"]);
+  // With Inspector, each attempt is judged by Inspector's own run, never a
+  // Fabrica "check-run" (issue #64).
+  assert.deepEqual(names, ["task-received", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "delivered"]);
 });
 
 test("runLogCommand: --transcript appends the worker's raw transcript", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome }).do("small change", { project, brain: fakeBrain() });
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
   const io = captureIo();
 
   const code = await runLogCommand([task.id, "--transcript"], { recordHome, ...io });
@@ -51,7 +52,7 @@ test("runLogCommand: --transcript appends the worker's raw transcript", async ()
 test("runLogCommand: without --transcript, no transcript section at all", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  const task = await createForeman({ recordHome }).do("small change", { project, brain: fakeBrain() });
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
   const io = captureIo();
 
   await runLogCommand([task.id], { recordHome, ...io });

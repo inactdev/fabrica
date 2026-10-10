@@ -3,8 +3,8 @@
 // its process result into the three verdicts the Foreman records.
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants, existsSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import type { Inspection, Inspector } from "./types.ts";
 
 export const INSPECTOR_CONFIG = ".inspector.json";
@@ -43,10 +43,30 @@ export function defaultInspector(): Inspector {
 /** Allows tests to run a throwaway command without invoking real Inspector. */
 export function inspectorAdapter(command: string = "inspector"): Inspector {
   return {
-    async inspect({ workdir }) {
-      return runInspector(command, workdir);
+    async inspect({ branch, workdir }) {
+      return runInspector(command, workdir, branch);
+    },
+    installed() {
+      return commandIsInstalled(command);
     },
   };
+}
+
+/** Whether `command` names an executable: a path as given, a bare name on
+ * PATH. Looked up without running anything. */
+function commandIsInstalled(command: string): boolean {
+  const candidates =
+    isAbsolute(command) || command.includes("/")
+      ? [command]
+      : (process.env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, command));
+  return candidates.some((path) => {
+    try {
+      accessSync(path, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 interface OutputTail {
@@ -80,14 +100,19 @@ function outputReport(stdout: OutputTail, stderr: OutputTail, exitCode: number |
   return boundedReport(tail, total, true) || `Inspector exited ${exitCode ?? "after a signal"}.`;
 }
 
-async function runInspector(command: string, workdir: string): Promise<Inspection> {
+async function runInspector(command: string, workdir: string, branch: string): Promise<Inspection> {
   const result = await new Promise<{
     stdout: OutputTail;
     stderr: OutputTail;
     exitCode: number | null;
     error?: Error;
   }>((resolve) => {
-    const child = spawn(command, ["-repo", workdir], { cwd: workdir, stdio: ["ignore", "pipe", "pipe"] });
+    // -branch is required by Inspector: the one branch it may publish to
+    // after a green result. Without it, Inspector refuses every handoff.
+    const child = spawn(command, ["-repo", workdir, "-branch", branch], {
+      cwd: workdir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const stdout: OutputTail = { total: 0, tail: Buffer.alloc(0) };
     const stderr: OutputTail = { total: 0, tail: Buffer.alloc(0) };
     let settled = false;

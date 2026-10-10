@@ -83,3 +83,21 @@ test("reportForRecord keeps Inspector's final diagnosis within the record limit"
   assert.match(saved, /reason at end$/);
   assert.ok(Buffer.byteLength(saved, "utf8") < Buffer.byteLength(report, "utf8"));
 });
+
+test("inspectorAdapter names the branch Inspector may publish: -branch fabrica/<taskId>", async () => {
+  const workdir = tempDir();
+  const path = join(workdir, "inspector-args.sh");
+  writeFileSync(path, '#!/bin/sh\nprintf \'%s \' "$@"\nexit 0\n');
+  chmodSync(path, 0o755);
+
+  const inspection = await inspectorAdapter(path).inspect({ branch: "fabrica/task-1", workdir });
+
+  assert.equal(inspection.report, `-repo ${workdir} -branch fabrica/task-1`);
+});
+
+test("inspectorAdapter reports whether its command is installed", () => {
+  const workdir = tempDir();
+  assert.equal(inspectorAdapter(command(workdir, 0, "ok")).installed?.(), true);
+  assert.equal(inspectorAdapter(join(workdir, "missing-inspector")).installed?.(), false);
+  assert.equal(inspectorAdapter("sh").installed?.(), true, "a bare name is looked up on PATH");
+});

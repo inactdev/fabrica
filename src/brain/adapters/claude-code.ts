@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
+import type { CheckBox } from "../check-box.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
@@ -443,5 +444,39 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         session: result.session_id,
       };
     },
+  };
+}
+
+/** Self-tests a project with no Inspector (issue #64, mode b): runs its
+ * check command once inside this adapter's own worker box - the same
+ * image, the same workdir and read-only git mounts, and the same network
+ * the worker itself had - never on the host. No credential and no session
+ * home go in: the check needs neither. A box that cannot start is
+ * reported as not run, so it is never mistaken for a red check. */
+export function claudeCodeCheckBox(opts: { image?: string } = {}): CheckBox {
+  const image = opts.image ?? DEFAULT_IMAGE;
+  return async (workdir, command) => {
+    let mounts: { readOnlyMounts: ReadOnlyMount[]; sanitizedConfigDir: string };
+    try {
+      mounts = resolveGitMounts(workdir);
+    } catch (err) {
+      return { ran: false, reason: `could not prepare the worker's box: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    try {
+      const { stdout, stderr, exitCode } = await runContained("sh", ["-c", command], {
+        workdir,
+        network: "allowed",
+        image,
+        readOnlyMounts: mounts.readOnlyMounts,
+      });
+      return { ran: true, exitCode: exitCode ?? -1, output: [stdout, stderr].filter((s) => s.length > 0).join("\n") };
+    } catch (err) {
+      if (err instanceof ContainmentError) {
+        return { ran: false, reason: `could not start the worker's box (image ${image}): ${err.message}` };
+      }
+      throw err;
+    } finally {
+      rmSync(mounts.sanitizedConfigDir, { recursive: true, force: true });
+    }
   };
 }

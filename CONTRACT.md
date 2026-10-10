@@ -31,8 +31,10 @@ Fabrica may only call work done if the project's own checks — its tests,
 its quality rules (the "verification gate") — passed on that throwaway
 copy. If they didn't pass, you get an honest failure report instead.
 There is no third option, and no path around the gate.
-*Checked by:* a test that breaks the checks on purpose and proves the
-result comes back as a failure report, never as "done."
+*Checked by:* two tests that make the checks fail on purpose: a red
+Inspector result comes back as inspection-red, and without Inspector a
+red self-test in the worker's box comes back as a failure report -
+never as "done."
 
 **3. Three means three.**
 When you give a number — attempts, retries, anything — Fabrica does

@@ -8,13 +8,14 @@ import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runTask } from "./run-task.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 
 test("runTask: runs a task to completion through createForeman, same as a direct do() call", async () => {
   const recordHome = mkdtempSync(join(tmpdir(), "fabrica-cli-run-task-"));
   const project = makeFixtureRepo("exit 0");
   const brain = fakeBrain();
 
-  await runTask(recordHome, project, "make a small change", brain);
+  await runTask(recordHome, project, "make a small change", brain, { inspector: fixtureInspector() });
 
   assert.ok(brain.calls >= 1);
   // There is exactly one task in this fresh recordHome - find it and

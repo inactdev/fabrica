@@ -8,7 +8,7 @@
 // poll for it separately.
 
 import { createForeman } from "../index.ts";
-import type { Brain, Inspector } from "../index.ts";
+import type { Brain, CheckBox, Inspector } from "../index.ts";
 import { parseAnswerArgs, ANSWER_USAGE } from "./answer-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
@@ -41,6 +41,7 @@ export interface RunAnswerCommandOptions {
    * defaultBrainAdapter(), what every real invocation does. */
   brain?: Brain;
   inspector?: Inspector;
+  checkBox?: CheckBox;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -57,6 +58,7 @@ export async function runAnswerCommand(argv: string[], opts: RunAnswerCommandOpt
       recordHome,
       brain: opts.brain,
       inspector: opts.inspector,
+      checkBox: opts.checkBox,
       caps: loadConfigOrDefault(recordHome).caps,
     });
 

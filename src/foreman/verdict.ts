@@ -17,17 +17,16 @@ import { destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { latestDeliveredDetails } from "./queries.ts";
-import { DEFAULT_CHECK_COMMAND, requireCheckCommand } from "./check.ts";
-import { resolveCheckCommand } from "./resolve-check.ts";
-import { gateWasTouched, requireGateBaseline } from "./gate-changes.ts";
+import { gateWasTouched } from "./gate-changes.ts";
+import { prepareRound, roundOutcome } from "./judge.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
-import { handToInspector } from "./inspection.ts";
 import { costLabelOf, recordCapStop, recordReceipt, requireRoomToStart, spendLimitsFor, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps, Receipt } from "../../contract/surface.ts";
-import type { Delivery, Inspection, Inspector } from "../inspector/types.ts";
+import type { Delivery, Inspector } from "../inspector/types.ts";
+import type { CheckBox } from "../brain/index.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
 
@@ -36,7 +35,7 @@ export async function recordVerdict(
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { brain: Brain; inspector?: Inspector; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
 ): Promise<void> {
   if (!RULINGS.has(ruling)) {
     throw new ForemanError(
@@ -127,6 +126,7 @@ export async function recordVerdict(
     priorReceipts,
     priorGateChanges: details?.delivery?.gateChanges || undefined,
     inspector: opts.inspector,
+    checkBox: opts.checkBox,
     caps: opts.caps,
   });
 }
@@ -166,10 +166,11 @@ async function runFixRound(
     priorReceipts: Receipt[];
     priorGateChanges: string | undefined;
     inspector?: Inspector;
+    checkBox?: CheckBox;
     caps?: Caps;
   }
 ): Promise<void> {
-  const { brain, project, totalAttempts, baseCommit, priorReceipts, priorGateChanges, inspector, caps } = ctx;
+  const { brain, project, totalAttempts, baseCommit, priorReceipts, priorGateChanges, inspector, checkBox, caps } = ctx;
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
@@ -184,31 +185,26 @@ async function runFixRound(
   const line = reopenProductionLine({ project, taskId, recordHome });
 
   try {
-    const check = resolveCheckCommand(recordHome, line.project);
-    requireCheckCommand(line.workdir, check);
-    const protectedPathApplies = check === DEFAULT_CHECK_COMMAND;
-    if (protectedPathApplies) requireGateBaseline(line.workdir, baseCommit);
+    const { judge, mode, protectedPathApplies } = prepareRound(recordHome, taskId, line, baseCommit, {
+      inspector,
+      checkBox,
+      commitMessage: `fabrica: ${taskId} (fix)`,
+    });
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
-    const { receipts: newReceipts, lastGate, declaredGateChanges: roundGateChanges, capStop } = await runAttempts({
+    const { receipts: newReceipts, lastGate, lastJudgement, declaredGateChanges: roundGateChanges, capStop } = await runAttempts({
       brain,
       brief: buildFixBrief(originalBrief, note),
       workdir: line.workdir,
       taskId,
-      check,
+      judge,
       totalAttempts: 1,
       stopEarlyOnGreen: true,
       spendLimits: spendLimitsFor(recordHome, taskId, caps),
       onReceipt: (receipt) => recordReceipt(recordHome, receipt),
       initialSession: lastSession,
       startAttempt: priorReceipts.length + 1,
-      onCheckStarted: (attempt) => {
-        appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, phase: "started" } });
-      },
-      onCheckRun: (attempt, gate) => {
-        appendEvent(recordHome, { taskId, name: "check-run", details: { attempt, green: gate.green } });
-      },
       onHeartbeat: (attempt) => {
         appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
       },
@@ -222,18 +218,19 @@ async function runFixRound(
       },
     });
 
+    if (lastJudgement.kind === "refused") return;
+
     const declaredGateChanges = mergeGateDeclarations(priorGateChanges, roundGateChanges);
 
     const undeclaredGateChange =
       protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;
 
-    let outcome: Delivery["outcome"] = undeclaredGateChange
-      ? "discarded-protected-path"
-      : capStop
-        ? "cap-stopped"
-        : lastGate.green
-          ? "done"
-          : "failure-report";
+    const outcome: Delivery["outcome"] = roundOutcome({
+      undeclaredGateChange,
+      capStopped: capStop !== undefined,
+      lastJudgement,
+      mode,
+    });
 
     if (outcome === "discarded-protected-path") {
       newReceipts[newReceipts.length - 1].outcome = "discarded-protected-path";
@@ -241,17 +238,23 @@ async function runFixRound(
 
     const allReceipts = [...priorReceipts, ...newReceipts];
 
-    try {
-      commitWorktreeChanges(line.workdir, `fabrica: ${taskId} (fix)`);
-    } catch (err) {
-      if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
+    let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
+    if (commitError === undefined) {
+      try {
+        commitWorktreeChanges(line.workdir, `fabrica: ${taskId} (fix)`);
+      } catch (err) {
+        if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
+        commitError = err.message;
+      }
+    }
+    if (commitError !== undefined) {
       newReceipts[newReceipts.length - 1].outcome = "failed";
       const delivery = buildCommitFailureDelivery({
         attempts: allReceipts.length,
         lastGate,
         branch: line.branch,
         declaredGateChanges,
-        error: err.message,
+        error: commitError,
       });
       validateDelivery(delivery);
       writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
@@ -263,16 +266,6 @@ async function runFixRound(
       return;
     }
 
-    let inspection: Inspection | undefined;
-    if (outcome === "done") {
-      inspection = await handToInspector(recordHome, taskId, line, baseCommit, inspector, {
-        receipts: allReceipts,
-        totalAttempts,
-      });
-      if (inspection?.verdict === "refused") return;
-      if (inspection?.verdict === "red") outcome = "inspection-red";
-    }
-
     const delivery = buildDelivery(outcome, {
       taskText,
       attempts: allReceipts.length,
@@ -280,7 +273,9 @@ async function runFixRound(
       branch: line.branch,
       files: diffFiles(line.project, line.branch, baseCommit),
       declaredGateChanges,
-      inspection,
+      inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
+      selfTested: mode.mode === "self-test",
+      notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
       capStop,
       taskId,
       spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, caps),

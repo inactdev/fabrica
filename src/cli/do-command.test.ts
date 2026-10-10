@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { readEventsForTask } from "../record/index.ts";
@@ -270,7 +271,7 @@ test("runDoCommand: an unknown cost under a cap exits non-zero, naming the unmea
   const recordHome = tempRecordHome();
   writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 100\n");
   const project = makeFixtureRepo("exit 0");
-  const unmeasured = await createForeman({ recordHome, caps: { perDayUsd: 100 } }).do("unmeasured", {
+  const unmeasured = await createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fixtureInspector() }).do("unmeasured", {
     project,
     brain: fakeBrain({ costUsd: null }),
   });

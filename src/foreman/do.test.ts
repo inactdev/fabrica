@@ -11,17 +11,18 @@ import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { LineError } from "../line/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-foreman-home-"));
 }
 
 test("doTask on a green project delivers after exactly one attempt", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain();
 
-  const task = await doTask(recordHome, "small change", { project, brain });
+  const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
 
   assert.equal(task.state, "delivered");
   assert.equal(brain.calls, 1);
@@ -45,7 +46,8 @@ test("doTask writes brief.md verbatim from the request, for every task", async (
   const taskText = "small change, worth checking brief.md holds exactly this text";
 
   const delivered = await doTask(recordHome, taskText, {
-    project: makeFixtureRepo("exit 0"),
+    project: makeFixtureRepo("exit 0", { inspector: false }),
+    checkBox: fixtureCheckBox().box,
     brain: fakeBrain(),
   });
   assert.equal(readTaskFile(recordHome, delivered.id, "brief.md"), taskText);
@@ -53,7 +55,8 @@ test("doTask writes brief.md verbatim from the request, for every task", async (
   // Verbatim regardless of how the task ends — a failed task is still
   // evidence of what a Worker was actually given.
   const failed = await doTask(recordHome, taskText, {
-    project: makeFixtureRepo("exit 1"),
+    project: makeFixtureRepo("exit 1", { inspector: false }),
+    checkBox: fixtureCheckBox().box,
     brain: fakeBrain(),
   });
   assert.equal(failed.state, "failed");
@@ -61,11 +64,11 @@ test("doTask writes brief.md verbatim from the request, for every task", async (
 });
 
 test("doTask on an always-red project runs the default fix pass, then reports failure", async () => {
-  const project = makeFixtureRepo("exit 1");
+  const project = makeFixtureRepo("exit 1", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain();
 
-  const task = await doTask(recordHome, "any change", { project, brain });
+  const task = await doTask(recordHome, "any change", { project, brain, checkBox: fixtureCheckBox().box });
 
   assert.equal(task.state, "failed");
   assert.equal(brain.calls, 2, "default policy: one attempt, one fix pass on red");
@@ -89,11 +92,11 @@ test("doTask on an always-red project runs the default fix pass, then reports fa
 });
 
 test("doTask with explicit attempts runs exactly that many even once green", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain();
 
-  const task = await doTask(recordHome, "counted attempts", { project, attempts: 4, brain });
+  const task = await doTask(recordHome, "counted attempts", { project, attempts: 4, brain, checkBox: fixtureCheckBox().box });
 
   assert.equal(brain.calls, 4);
 
@@ -118,7 +121,7 @@ test("doTask refuses when the project has no check command at all", async () => 
   const brain = fakeBrain();
 
   await assert.rejects(
-    () => doTask(recordHome, "do something", { project, brain }),
+    () => doTask(recordHome, "do something", { project, brain, checkBox: fixtureCheckBox().box }),
     (err: unknown) => err instanceof ForemanError && err.code === "missing-check"
   );
 
@@ -126,7 +129,7 @@ test("doTask refuses when the project has no check command at all", async () => 
 });
 
 test("doTask honors a registered project's own check command over the check.sh convention", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   // This project's check.sh would fail; the registered command overrides it.
   writeFileSync(join(project, "check.sh"), "#!/bin/sh\nexit 1\n");
   const { execSync } = await import("node:child_process");
@@ -142,7 +145,7 @@ test("doTask honors a registered project's own check command over the check.sh c
   );
   const brain = fakeBrain();
 
-  const task = await doTask(recordHome, "small change", { project, brain });
+  const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
 
   assert.equal(task.state, "delivered");
   const delivery = deliveryOf(recordHome, task.id);
@@ -159,14 +162,14 @@ test("doTask destroys the ProductionLine's worktree even when the check command 
   });
   const recordHome = freshHome();
 
-  await assert.rejects(() => doTask(recordHome, "do something", { project, brain: fakeBrain() }));
+  await assert.rejects(() => doTask(recordHome, "do something", { project, brain: fakeBrain(), checkBox: fixtureCheckBox().box }));
 
   const worktrees = execSync("git worktree list", { cwd: project, encoding: "utf8" });
   assert.equal(worktrees.trim().split("\n").length, 1, "only the main worktree should remain");
 });
 
 test("doTask rejects when no brain is provided", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
 
   await assert.rejects(
@@ -176,7 +179,7 @@ test("doTask rejects when no brain is provided", async () => {
 });
 
 test("doTask on an undeclared gate change keeps the work on the ordinary branch, it does not discard it", async () => {
-  const project = makeFixtureRepo("exit 1");
+  const project = makeFixtureRepo("exit 1", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({
     onWork: (_brief, workdir) => {
@@ -185,7 +188,7 @@ test("doTask on an undeclared gate change keeps the work on the ordinary branch,
     },
   });
 
-  const task = await doTask(recordHome, "make it pass", { project, brain });
+  const task = await doTask(recordHome, "make it pass", { project, brain, checkBox: fixtureCheckBox().box });
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "discarded-protected-path");
@@ -202,7 +205,7 @@ test("doTask on an undeclared gate change keeps the work on the ordinary branch,
 });
 
 test("doTask keeps the work on the ordinary branch on an undeclared gate change even when the worker commits it itself", async () => {
-  const project = makeFixtureRepo("exit 1");
+  const project = makeFixtureRepo("exit 1", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({
     onWork: (_brief, workdir) => {
@@ -215,7 +218,7 @@ test("doTask keeps the work on the ordinary branch on an undeclared gate change 
     },
   });
 
-  const task = await doTask(recordHome, "make it pass", { project, brain });
+  const task = await doTask(recordHome, "make it pass", { project, brain, checkBox: fixtureCheckBox().box });
 
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.outcome, "discarded-protected-path");
@@ -232,7 +235,7 @@ test("doTask keeps the work on the ordinary branch on an undeclared gate change 
 });
 
 test("doTask records files touched by the worker in the delivery", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({
     onWork: (_brief, workdir) => {
@@ -241,7 +244,7 @@ test("doTask records files touched by the worker in the delivery", async () => {
     },
   });
 
-  const task = await doTask(recordHome, "edit files", { project, brain });
+  const task = await doTask(recordHome, "edit files", { project, brain, checkBox: fixtureCheckBox().box });
   const delivery = deliveryOf(recordHome, task.id);
 
   assert.deepEqual([...(delivery?.files ?? [])].sort(), ["app.txt", "new-file.txt"]);
@@ -255,7 +258,7 @@ test("doTask records files touched by the worker in the delivery", async () => {
 // without a trace. Client ruling (option A, commit-failure-loses-work-
 // and-record): the record must always say what happened.
 test("doTask records an honest failure-report, not silence, when the pre-teardown commit itself fails", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({
     onWork: (_brief, workdir) => {
@@ -268,7 +271,7 @@ test("doTask records an honest failure-report, not silence, when the pre-teardow
     },
   });
 
-  const task = await doTask(recordHome, "make it pass", { project, brain });
+  const task = await doTask(recordHome, "make it pass", { project, brain, checkBox: fixtureCheckBox().box });
 
   assert.equal(task.state, "failed");
 
@@ -285,11 +288,11 @@ test("doTask records an honest failure-report, not silence, when the pre-teardow
 // Issue #8's own definition of done, scenario 1: a materially ambiguous
 // task returns numbered questions and starts no worker.
 test("doTask stops and returns 'asking' when the brain finds the task materially ambiguous, without starting a worker", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({ askQuestions: ["What database should this use?", "Multi-tenant?"] });
 
-  const task = await doTask(recordHome, "build me an app", { project, brain });
+  const task = await doTask(recordHome, "build me an app", { project, brain, checkBox: fixtureCheckBox().box });
 
   assert.equal(task.state, "asking");
   assert.equal(brain.calls, 0, "no worker should run before the Client answers");
@@ -314,11 +317,11 @@ test("doTask stops and returns 'asking' when the brain finds the task materially
 // still consulted (ask() is called once), but nothing about the outcome
 // changes.
 test("doTask on an unambiguous task is unaffected: ask() is consulted but the task runs exactly as before", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain(); // no askQuestions configured - nothing to ask
 
-  const task = await doTask(recordHome, "small change", { project, brain });
+  const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
 
   assert.equal(task.state, "delivered");
   assert.deepEqual(brain.askCalls, ["small change"], "the brain's first pass still runs");
@@ -327,7 +330,7 @@ test("doTask on an unambiguous task is unaffected: ask() is consulted but the ta
   const events = readEventsForTask(recordHome, task.id);
   assert.deepEqual(
     events.map((e) => e.name),
-    ["task-received", "line-cut", "work-started", "check-run", "check-run", "receipt-recorded", "inspection-skipped", "delivered"],
+    ["task-received", "line-cut", "inspection-skipped", "work-started", "check-run", "check-run", "receipt-recorded", "delivered"],
     "no questions-asked/answers-given events for a task nothing needed to ask about"
   );
 
@@ -344,7 +347,7 @@ test("doTask on an unambiguous task is unaffected: ask() is consulted but the ta
 // recreated while the project's own branches survived) must never be
 // silently adopted just because it shares a name.
 test("runProductionRound on a first-ever round (isRetry: false) refuses loudly even if a same-named branch already exists", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const taskId = "not-actually-a-retry";
   // A branch that has nothing to do with this call - standing in for a
@@ -359,13 +362,14 @@ test("runProductionRound on a first-ever round (isRetry: false) refuses loudly e
         totalAttempts: 2,
         explicitAttempts: false,
         isRetry: false,
+        checkBox: fixtureCheckBox().box,
       }),
     (err: unknown) => err instanceof LineError && err.code === "cut-failed"
   );
 });
 
 test("runProductionRound with isRetry: true reopens the task's own branch", async () => {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const taskId = "a-genuine-retry";
 
@@ -377,6 +381,7 @@ test("runProductionRound with isRetry: true reopens the task's own branch", asyn
     totalAttempts: 1,
     explicitAttempts: true,
     isRetry: false,
+    checkBox: fixtureCheckBox().box,
   });
   assert.equal(first.state, "delivered");
 
@@ -388,6 +393,7 @@ test("runProductionRound with isRetry: true reopens the task's own branch", asyn
     totalAttempts: 1,
     explicitAttempts: true,
     isRetry: true,
+    checkBox: fixtureCheckBox().box,
   });
   assert.equal(second.state, "delivered");
 });

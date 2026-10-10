@@ -33,13 +33,14 @@ import { runProductionRound } from "./do.ts";
 import type { AskedDetails } from "./ask.ts";
 import { requireRoomToStart } from "./caps.ts";
 import type { Caps } from "../../contract/surface.ts";
+import type { CheckBox } from "../brain/index.ts";
 import type { FabricaTask, Inspector } from "../inspector/types.ts";
 
 export async function answerTask(
   recordHome: string,
   taskId: string,
   answerText: string,
-  opts: { brain: Brain; inspector?: Inspector; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
 ): Promise<FabricaTask> {
   const events = readEventsForTask(recordHome, taskId);
   if (events.length === 0) {
@@ -136,6 +137,7 @@ export async function answerTask(
     explicitAttempts: details.explicitAttempts,
     isRetry,
     inspector: opts.inspector,
+    checkBox: opts.checkBox,
     caps: opts.caps,
   });
 }

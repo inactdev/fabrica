@@ -12,6 +12,7 @@ import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import type { Brain } from "../brain/index.ts";
 import { LineError } from "../line/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-answer-home-"));
@@ -28,7 +29,7 @@ test("answerTask resumes an asking task, extends the brief, and delivers", async
   assert.equal(asked.state, "asking");
 
   const workBrain = fakeBrain();
-  const task = await answerTask(recordHome, asked.id, "Use Postgres.", { brain: workBrain });
+  const task = await answerTask(recordHome, asked.id, "Use Postgres.", { brain: workBrain, inspector: fixtureInspector() });
 
   assert.equal(task.state, "delivered");
   assert.equal(workBrain.calls, 1);
@@ -60,10 +61,9 @@ test("answerTask resumes an asking task, extends the brief, and delivers", async
       "answers-given",
       "line-cut",
       "work-started",
-      "check-run",
-      "check-run",
+      "inspector-called",
+      "inspection-finished",
       "receipt-recorded",
-      "inspection-skipped",
       "delivered",
     ]
   );
@@ -84,7 +84,7 @@ test("answerTask's delivery summary stays the original one-line request, not the
   const askBrain = fakeBrain({ askQuestions: ["What database should this use?"] });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
 
-  await answerTask(recordHome, asked.id, "Use Postgres.", { brain: fakeBrain() });
+  await answerTask(recordHome, asked.id, "Use Postgres.", { brain: fakeBrain(), inspector: fixtureInspector() });
 
   const delivery = deliveryOf(recordHome, asked.id);
   assert.equal(delivery?.summary, "Completed: build me an app");
@@ -101,7 +101,7 @@ test("answerTask never calls ask() again - one clarification round by default", 
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
 
   const workBrain = fakeBrain({ askQuestions: ["Still ambiguous?"] });
-  const task = await answerTask(recordHome, asked.id, "Whatever works.", { brain: workBrain });
+  const task = await answerTask(recordHome, asked.id, "Whatever works.", { brain: workBrain, inspector: fixtureInspector() });
 
   assert.equal(task.state, "delivered", "resuming must proceed to work, never ask again");
   assert.deepEqual(workBrain.askCalls, [], "the resumed round must not call ask() at all");
@@ -114,7 +114,7 @@ test("answerTask honors the original attempts budget from the do() call", async 
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain, attempts: 3 });
 
   const workBrain = fakeBrain();
-  await answerTask(recordHome, asked.id, "An answer.", { brain: workBrain });
+  await answerTask(recordHome, asked.id, "An answer.", { brain: workBrain, inspector: fixtureInspector() });
 
   assert.equal(workBrain.calls, 3, "an explicit attempts count is honored on the resumed round too");
 });
@@ -123,7 +123,7 @@ test("answerTask rejects an unknown task id", async () => {
   const recordHome = freshHome();
 
   await assert.rejects(
-    () => answerTask(recordHome, "no-such-task", "an answer", { brain: fakeBrain() }),
+    () => answerTask(recordHome, "no-such-task", "an answer", { brain: fakeBrain(), inspector: fixtureInspector() }),
     (err: unknown) => err instanceof ForemanError && err.code === "unknown-task"
   );
 });
@@ -131,10 +131,10 @@ test("answerTask rejects an unknown task id", async () => {
 test("answerTask rejects a task that never asked a clarifying question", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const task = await doTask(recordHome, "small change", { project, brain: fakeBrain() });
+  const task = await doTask(recordHome, "small change", { project, brain: fakeBrain(), inspector: fixtureInspector() });
 
   await assert.rejects(
-    () => answerTask(recordHome, task.id, "an answer", { brain: fakeBrain() }),
+    () => answerTask(recordHome, task.id, "an answer", { brain: fakeBrain(), inspector: fixtureInspector() }),
     (err: unknown) => err instanceof ForemanError && err.code === "no-questions-pending"
   );
 });
@@ -144,10 +144,10 @@ test("answerTask rejects a second answer for the same task - the dial is fixed a
   const recordHome = freshHome();
   const askBrain = fakeBrain({ askQuestions: ["Which?"] });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
-  await answerTask(recordHome, asked.id, "First answer.", { brain: fakeBrain() });
+  await answerTask(recordHome, asked.id, "First answer.", { brain: fakeBrain(), inspector: fixtureInspector() });
 
   await assert.rejects(
-    () => answerTask(recordHome, asked.id, "Second answer.", { brain: fakeBrain() }),
+    () => answerTask(recordHome, asked.id, "Second answer.", { brain: fakeBrain(), inspector: fixtureInspector() }),
     (err: unknown) => err instanceof ForemanError && err.code === "already-answered"
   );
 });
@@ -180,7 +180,7 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
   };
 
   await assert.rejects(
-    () => answerTask(recordHome, asked.id, "First attempt.", { brain: unreachableBrain }),
+    () => answerTask(recordHome, asked.id, "First attempt.", { brain: unreachableBrain, inspector: fixtureInspector() }),
     /simulated: the brain is unreachable/
   );
 
@@ -188,7 +188,7 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
   // reachable again) and retries - this must not be refused as
   // already-answered, since the first attempt never delivered.
   const workBrain = fakeBrain();
-  const task = await answerTask(recordHome, asked.id, "Second attempt.", { brain: workBrain });
+  const task = await answerTask(recordHome, asked.id, "Second attempt.", { brain: workBrain, inspector: fixtureInspector() });
 
   assert.equal(task.state, "delivered");
   assert.equal(workBrain.calls, 1);
@@ -208,10 +208,9 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     "answers-given",
     "line-cut",
     "work-started",
-    "check-run",
-    "check-run",
+    "inspector-called",
+    "inspection-finished",
     "receipt-recorded",
-    "inspection-skipped",
     "delivered",
   ]);
 
@@ -243,7 +242,7 @@ test("answerTask retries as a first round when the previous resume died before t
 
   const firstBrain = fakeBrain();
   await assert.rejects(
-    () => answerTask(recordHome, asked.id, "First attempt.", { brain: firstBrain }),
+    () => answerTask(recordHome, asked.id, "First attempt.", { brain: firstBrain, inspector: fixtureInspector() }),
     (err: unknown) => err instanceof LineError && err.code === "not-a-repo"
   );
   assert.equal(firstBrain.calls, 0, "no worker can have run without a line to run it on");
@@ -256,7 +255,7 @@ test("answerTask retries as a first round when the previous resume died before t
   // fresh line, not try to reopen one that never existed.
   renameSync(moved, project);
   const workBrain = fakeBrain();
-  const task = await answerTask(recordHome, asked.id, "Second attempt.", { brain: workBrain });
+  const task = await answerTask(recordHome, asked.id, "Second attempt.", { brain: workBrain, inspector: fixtureInspector() });
 
   assert.equal(task.state, "delivered");
   assert.equal(workBrain.calls, 1);
@@ -280,7 +279,7 @@ test("answerTask rejects a blank answer", async () => {
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
 
   await assert.rejects(
-    () => answerTask(recordHome, asked.id, "   ", { brain: fakeBrain() }),
+    () => answerTask(recordHome, asked.id, "   ", { brain: fakeBrain(), inspector: fixtureInspector() }),
     (err: unknown) => err instanceof ForemanError && err.code === "missing-answer"
   );
 });

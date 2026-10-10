@@ -7,6 +7,8 @@ import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
+import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-foreman-fabrica-home-"));
@@ -14,13 +16,13 @@ function freshHome(): string {
 
 test("createForeman().recordPath() points at events.jsonl under the given record home", () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   assert.equal(foreman.recordPath(), join(recordHome, "events.jsonl"));
 });
 
 test("status() lists a delivered task as delivered, not closed, before any verdict", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const project = makeFixtureRepo("exit 0");
 
   const task = await foreman.do("small change", { project, brain: fakeBrain() });
@@ -33,8 +35,10 @@ test("status() lists a delivered task as delivered, not closed, before any verdi
 
 test("status() lists a failed task as failed", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
-  const project = makeFixtureRepo("exit 1");
+  // Self-tested: with Inspector, a red result is an inspection-red
+  // delivery awaiting the Client's verdict, not a failed task.
+  const foreman = createForeman({ recordHome, checkBox: fixtureCheckBox().box });
+  const project = makeFixtureRepo("exit 1", { inspector: false });
 
   const task = await foreman.do("small change", { project, brain: fakeBrain() });
 
@@ -46,7 +50,7 @@ test("status() lists a failed task as failed", async () => {
 
 test("verdict() on an unknown task id refuses plainly", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   await assert.rejects(
     () => foreman.verdict("some-task-id", "accept"),
@@ -56,7 +60,7 @@ test("verdict() on an unknown task id refuses plainly", async () => {
 
 test("events() returns this task's events only, in order", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const project = makeFixtureRepo("exit 0");
 
   const taskA = await foreman.do("task a", { project, brain: fakeBrain() });
@@ -66,9 +70,9 @@ test("events() returns this task's events only, in order", async () => {
   assert.ok(eventsA.every((e) => e.taskId === taskA.id));
   assert.deepEqual(
     eventsA.map((e) => e.name),
-    // "check-run" lands twice per attempt: once when the check starts
-    // (details.phase === "started", issue #12) and once with its result.
-    ["task-received", "line-cut", "work-started", "check-run", "check-run", "receipt-recorded", "inspection-skipped", "delivered"]
+    // With Inspector, each attempt is judged by Inspector's own run, never a
+    // Fabrica "check-run" (issue #64).
+    ["task-received", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "delivered"]
   );
 
   const eventsB = await foreman.events(taskB.id);
@@ -77,7 +81,7 @@ test("events() returns this task's events only, in order", async () => {
 
 test("deliveryOf() and receiptsOf() return null/empty for an unknown task id", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   assert.equal(await foreman.deliveryOf("no-such-task"), null);
   assert.deepEqual(await foreman.receiptsOf("no-such-task"), []);
@@ -85,7 +89,7 @@ test("deliveryOf() and receiptsOf() return null/empty for an unknown task id", a
 
 test("status() lists an asking task as asking, and answer() moves it on", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const project = makeFixtureRepo("exit 0");
 
   const asked = await foreman.do("build me an app", {
@@ -110,7 +114,7 @@ test("status() lists an asking task as asking, and answer() moves it on", async 
 // its own (contract/surface.ts's Foreman.answer takes none).
 test("answer() reuses the exact brain a same-instance do() call was given", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const project = makeFixtureRepo("exit 0");
   const brain = fakeBrain({ askQuestions: ["Which?"] });
 
@@ -122,7 +126,7 @@ test("answer() reuses the exact brain a same-instance do() call was given", asyn
 
 test("answer() on an unknown task id refuses plainly", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   await assert.rejects(
     () => foreman.answer("some-task-id", "an answer"),
@@ -135,7 +139,7 @@ test("answer() on an unknown task id refuses plainly", async () => {
 // (stateOf's own fallback) or missing from status() entirely.
 test("status() lists a task whose ask() threw as failed", async () => {
   const recordHome = freshHome();
-  const foreman = createForeman({ recordHome });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const project = makeFixtureRepo("exit 0");
   const brain = fakeBrain({ askError: new Error("simulated: the brain is unreachable") });
 

@@ -3,7 +3,7 @@ export type { ForemanOptions } from "./foreman.ts";
 export { ForemanError } from "./errors.ts";
 export type { ForemanErrorCode } from "./errors.ts";
 export { DEFAULT_ATTEMPTS } from "./do.ts";
-export { DEFAULT_CHECK_COMMAND } from "./check.ts";
+export { DEFAULT_CHECK_COMMAND } from "./resolve-check.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./attempts.ts";
 export { readTranscript } from "./transcript.ts";
 export { followTask } from "./follow.ts";

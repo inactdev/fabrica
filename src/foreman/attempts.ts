@@ -7,8 +7,8 @@
 // is a number honored, not a ceiling the code is free to cut short.
 
 import type { Brain, TranscriptEntry } from "../brain/index.ts";
-import { runCheck } from "./check.ts";
 import type { GateResult, Receipt } from "../../contract/surface.ts";
+import type { Judge, Judgement } from "./judge.ts";
 import { costFromTranscript } from "./spend.ts";
 
 /** How often a "heartbeat" event lands while a Worker's single `brain.work`
@@ -24,7 +24,10 @@ export interface AttemptLoopResult {
    * reflects its own check result; the caller overwrites the last entry
    * only if rule 9's gate-change check forces discarded-protected-path. */
   receipts: Receipt[];
-  lastGate: GateResult;
+  /** The last red or green verdict; absent when no attempt reached one. */
+  lastGate: GateResult | undefined;
+  /** How the last attempt was judged - a verdict, or why there was none. */
+  lastJudgement: Judgement;
   /** The most recent gateChanges declaration seen, if any attempt gave one. */
   declaredGateChanges: string | undefined;
   /** Set when rule 10 stopped the loop before it would otherwise have
@@ -55,7 +58,9 @@ export async function runAttempts(opts: {
   brief: string;
   workdir: string;
   taskId: string;
-  check: string;
+  /** Judges each attempt once its work is done (judge.ts): Inspector, or
+   * the worker's own box. Never a check run on the host. */
+  judge: Judge;
   totalAttempts: number;
   stopEarlyOnGreen: boolean;
   /** Verdict rule 6's "fix" path: resume the same warm worker session
@@ -67,13 +72,6 @@ export async function runAttempts(opts: {
    * from where the task's prior rounds left off, instead of restarting
    * at 1, so the record shows one running count across the whole task. */
   startAttempt?: number;
-  /** Fires the instant a check starts running, before its (synchronous,
-   * blocking) result is known - issue #12's "say what it's doing": with
-   * this, status/watch can report "checking, Xm so far" using a real
-   * recorded start time instead of guessing, and correctly stay silent
-   * about "quiet too long" for a check that is simply still running. */
-  onCheckStarted?: (attempt: number) => void;
-  onCheckRun?: (attempt: number, gate: GateResult) => void;
   onTranscript?: (transcript: TranscriptEntry[]) => void;
   /** Fires roughly every `heartbeatIntervalMs` while a `brain.work` call
    * for `attempt` is still in flight. Omitted, no heartbeat runs. */
@@ -92,13 +90,11 @@ export async function runAttempts(opts: {
     brief,
     workdir,
     taskId,
-    check,
+    judge,
     totalAttempts,
     stopEarlyOnGreen,
     initialSession,
     startAttempt,
-    onCheckStarted,
-    onCheckRun,
     onTranscript,
     onHeartbeat,
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -109,6 +105,7 @@ export async function runAttempts(opts: {
   const receipts: Receipt[] = [];
   let session: string | undefined = initialSession;
   let lastGate: GateResult | undefined;
+  let lastJudgement: Judgement | undefined;
   let declaredGateChanges: string | undefined;
   let spentUsd = spendLimits?.priorKnownUsd ?? 0;
   let capStop: CapStop | undefined;
@@ -137,10 +134,10 @@ export async function runAttempts(opts: {
     if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
 
     const durationMs = Date.now() - t0;
-    onCheckStarted?.(attempt);
-    const gate = runCheck(workdir, check);
-    onCheckRun?.(attempt, gate);
-    lastGate = gate;
+    const judgement = await judge(attempt);
+    lastJudgement = judgement;
+    const gate = judgement.kind === "verdict" ? judgement.gate : undefined;
+    if (gate) lastGate = gate;
 
     const costUsd = costFromTranscript(workResult.transcript);
     if (costUsd !== null) spentUsd += costUsd;
@@ -155,15 +152,15 @@ export async function runAttempts(opts: {
       costUnknown: costUsd === null,
       session: session ?? null,
       reasoningEffort: null,
-      checks: gateForRecord(gate),
-      outcome: gate.green ? "delivered" : "failed",
+      checks: gate ? gateForRecord(gate) : null,
+      outcome: gate?.green ? "delivered" : "failed",
     };
     receipts.push(receipt);
 
     // Rule 10: an unknown cost under any cap, or the task's own spend at
     // its cap, stops the loop - unless the work already finished green on
     // its own terms, in which case nothing was cut short.
-    const finishedGreen = gate.green && (stopEarlyOnGreen || attempt === lastAttempt);
+    const finishedGreen = gate !== undefined && gate.green && (stopEarlyOnGreen || attempt === lastAttempt);
     if (spendLimits && !finishedGreen) {
       if (spendLimits.capsActive && costUsd === null) {
         capStop = { reason: "spend-unknown", attempt, spentUsd };
@@ -174,18 +171,20 @@ export async function runAttempts(opts: {
     if (capStop) receipt.outcome = "cap-stopped";
     onReceipt?.(receipt);
 
-    if (capStop || (gate.green && stopEarlyOnGreen)) break;
+    // No verdict (Inspector refused, the box could not run the check, the
+    // commit failed) means nothing a further attempt could correct from.
+    if (capStop || !gate || (gate.green && stopEarlyOnGreen)) break;
   }
 
-  return { receipts, lastGate: lastGate!, declaredGateChanges, ...(capStop ? { capStop } : {}) };
+  return { receipts, lastGate, lastJudgement: lastJudgement!, declaredGateChanges, ...(capStop ? { capStop } : {}) };
 }
 
 /** How much of a check's output anything stored in the record keeps — a
  * Receipt's `checks`, and (via delivery.ts) a Delivery's `evidence`. Both
  * land in the append-only record, are re-serialized onto every later
  * "delivered" event of the same task, and the whole events file is read
- * and parsed for every query — so a check free to print up to check.ts's
- * 64MB buffer cannot be stored whole. The live GateResult is left
+ * and parsed for every query — so a check's full output cannot be
+ * stored whole. The live GateResult is left
  * untouched: the next attempt's correction brief still gets the complete
  * output. */
 export const MAX_RECEIPT_CHECK_OUTPUT_BYTES = 16 * 1024;

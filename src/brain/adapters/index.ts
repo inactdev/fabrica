@@ -5,8 +5,9 @@
 // logic yet, only a seam for src/brain/index.ts to re-export without
 // naming a vendor itself.
 
-import { claudeCodeAdapter, type ClaudeCodeAdapterOptions } from "./claude-code.ts";
+import { claudeCodeAdapter, claudeCodeCheckBox, type ClaudeCodeAdapterOptions } from "./claude-code.ts";
 import type { Brain } from "../types.ts";
+import type { CheckBox } from "../check-box.ts";
 
 /** The one host environment variable a contained worker may inherit
  * (issue #85) - the headless credential `claude setup-token` mints.
@@ -29,4 +30,9 @@ export function credentialEnvFrom(env: NodeJS.ProcessEnv): ClaudeCodeAdapterOpti
 
 export function defaultBrainAdapter(): Brain {
   return claudeCodeAdapter(credentialEnvFrom(process.env));
+}
+
+/** The default worker's box, for self-testing a project with no Inspector. */
+export function defaultCheckBox(): CheckBox {
+  return claudeCodeCheckBox();
 }

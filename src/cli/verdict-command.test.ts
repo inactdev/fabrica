@@ -20,6 +20,7 @@ import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runVerdictCommand } from "./verdict-command.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-verdict-command-"));
@@ -33,37 +34,37 @@ function captureIo() {
 
 test("runVerdictCommand: accept closes the task and reports so", async () => {
   const recordHome = tempRecordHome();
-  const task = await createForeman({ recordHome }).do("small change", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain(),
   });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "accept", "-m", "looks right"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "accept", "-m", "looks right"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 0);
   assert.deepEqual(io.err, []);
   assert.equal(io.out.length, 1);
   assert.match(io.out[0], new RegExp(`^accept recorded: ${task.id} is closed\\.$`));
 
-  const mine = (await createForeman({ recordHome }).status()).find((t) => t.id === task.id);
+  const mine = (await createForeman({ recordHome, inspector: fixtureInspector() }).status()).find((t) => t.id === task.id);
   assert.equal(mine?.state, "closed");
 });
 
 test("runVerdictCommand: wrong closes the task and reports so", async () => {
   const recordHome = tempRecordHome();
-  const task = await createForeman({ recordHome }).do("small change", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain(),
   });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "wrong", "-m", "not what I asked for"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "wrong", "-m", "not what I asked for"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 0);
   assert.match(io.out[0], new RegExp(`^wrong recorded: ${task.id} is closed\\.$`));
 
-  const verdictEvent = (await createForeman({ recordHome }).events(task.id))
+  const verdictEvent = (await createForeman({ recordHome, inspector: fixtureInspector() }).events(task.id))
     .filter((e) => e.name === "verdict-recorded")
     .at(-1);
   assert.equal(
@@ -80,14 +81,14 @@ test("runVerdictCommand: wrong closes the task and reports so", async () => {
 test("runVerdictCommand: the spec's `fix -m \"<note>\"` form succeeds past the task's original attempt budget", async () => {
   const recordHome = tempRecordHome();
   const brain = fakeBrain();
-  const task = await createForeman({ recordHome }).do("small change", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
     project: makeFixtureRepo("exit 0"),
     brain,
     attempts: 1,
   });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "fix", "-m", "wrong button spot"], { recordHome, brain, ...io });
+  const code = await runVerdictCommand([task.id, "fix", "-m", "wrong button spot"], { recordHome, inspector: fixtureInspector(), brain, ...io });
 
   assert.equal(code, 0, io.err[0]);
   assert.deepEqual(io.err, []);
@@ -97,7 +98,7 @@ test("runVerdictCommand: the spec's `fix -m \"<note>\"` form succeeds past the t
   ]);
   assert.equal(brain.calls, 2, "the fix round woke the worker despite the original budget of 1 being spent");
 
-  const verdictEvent = (await createForeman({ recordHome }).events(task.id))
+  const verdictEvent = (await createForeman({ recordHome, inspector: fixtureInspector() }).events(task.id))
     .filter((e) => e.name === "verdict-recorded")
     .at(-1);
   assert.equal(
@@ -118,13 +119,13 @@ test("runVerdictCommand: a fix that runs reports the round's outcome and that th
   const brain = fakeBrain();
   // Attempts omitted, so the default budget of 2 applies and the green
   // first attempt leaves one unspent for the fix round to consume.
-  const task = await createForeman({ recordHome }).do("small change", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
     project: makeFixtureRepo("exit 0"),
     brain,
   });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "fix", "-m", "wrong button spot"], { recordHome, brain, ...io });
+  const code = await runVerdictCommand([task.id, "fix", "-m", "wrong button spot"], { recordHome, inspector: fixtureInspector(), brain, ...io });
 
   assert.equal(code, 0, io.err[0]);
   assert.deepEqual(io.err, []);
@@ -134,7 +135,7 @@ test("runVerdictCommand: a fix that runs reports the round's outcome and that th
   ]);
   assert.equal(brain.calls, 2, "the fix round woke the worker exactly once more");
 
-  const mine = (await createForeman({ recordHome }).status()).find((t) => t.id === task.id);
+  const mine = (await createForeman({ recordHome, inspector: fixtureInspector() }).status()).find((t) => t.id === task.id);
   assert.notEqual(mine?.state, "closed", "a fix leaves the task open for the Client's next word");
 });
 
@@ -142,7 +143,7 @@ test("runVerdictCommand: bad usage refuses with exact instructions and exit 1", 
   const recordHome = tempRecordHome();
   const io = captureIo();
 
-  const code = await runVerdictCommand(["some-task"], { recordHome, ...io });
+  const code = await runVerdictCommand(["some-task"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
@@ -154,7 +155,7 @@ test("runVerdictCommand: an unknown task id refuses with the Foreman's own messa
   const recordHome = tempRecordHome();
   const io = captureIo();
 
-  const code = await runVerdictCommand(["no-such-task", "accept"], { recordHome, ...io });
+  const code = await runVerdictCommand(["no-such-task", "accept"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
@@ -163,7 +164,7 @@ test("runVerdictCommand: an unknown task id refuses with the Foreman's own messa
 
 test("runVerdictCommand: a ProductionLine refusal is printed, not thrown as a stack trace", async () => {
   const recordHome = tempRecordHome();
-  const task = await createForeman({ recordHome }).do("small change", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain(),
   });
@@ -173,7 +174,7 @@ test("runVerdictCommand: a ProductionLine refusal is printed, not thrown as a st
   mkdirSync(join(recordHome, "tasks", task.id, "worktree"), { recursive: true });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "fix", "-m", "one more pass"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "fix", "-m", "one more pass"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
@@ -187,7 +188,7 @@ test("runVerdictCommand: a ProductionLine refusal is printed, not thrown as a st
 // task that already carries a verdict.
 test("runVerdictCommand: an error from a layer it knows nothing about is still printed, not thrown", async () => {
   const recordHome = tempRecordHome();
-  const task = await createForeman({ recordHome }).do("small change", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain(),
   });
@@ -196,7 +197,7 @@ test("runVerdictCommand: an error from a layer it knows nothing about is still p
   mkdirSync(join(recordHome, "tasks", task.id, "verdict"), { recursive: true });
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "accept", "-m", "looks right"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "accept", "-m", "looks right"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 1);
   assert.deepEqual(io.out, []);
@@ -206,14 +207,14 @@ test("runVerdictCommand: an error from a layer it knows nothing about is still p
 
 test("runVerdictCommand: a verdict on an already-closed task refuses", async () => {
   const recordHome = tempRecordHome();
-  const task = await createForeman({ recordHome }).do("small change", {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain(),
   });
-  await createForeman({ recordHome }).verdict(task.id, "accept", "good");
+  await createForeman({ recordHome, inspector: fixtureInspector() }).verdict(task.id, "accept", "good");
   const io = captureIo();
 
-  const code = await runVerdictCommand([task.id, "wrong", "-m", "actually no"], { recordHome, ...io });
+  const code = await runVerdictCommand([task.id, "wrong", "-m", "actually no"], { recordHome, inspector: fixtureInspector(), ...io });
 
   assert.equal(code, 1);
   assert.match(io.err[0], /already has a final verdict/);
