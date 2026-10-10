@@ -93,6 +93,10 @@ export interface BrainAskResult {
    * reasonable person would fill in the same way every time. Empty or
    * omitted means the task is clear enough to proceed straight to work. */
   questions?: string[];
+  /** Rule 10: what this one call cost, in dollars. Null or omitted means
+   * unknown - never zero; under a cap, it blocks new work until recorded
+   * by hand, the same as an attempt whose cost is unknown. */
+  costUsd?: number | null;
 }
 
 /** The brain socket (contract rule 8). The ONLY place a real AI plugs in. */
@@ -196,6 +200,8 @@ export type FabricaEventName =
   | "cap-stopped"
   | "receipt-recorded"
   | "cost-recorded"
+  /** Rule 10: the clarifying step's own cost (details: { costUsd, startedAt }). */
+  | "ask-cost-recorded"
   | "unattributed-change"
   | "edit-attempt-blocked"
   | "heartbeat"

@@ -15,7 +15,7 @@
 // not this module's.
 
 import { appendEvent, registerTask, writeTaskFile } from "../record/index.ts";
-import type { Brain } from "../brain/index.ts";
+import type { Brain, BrainAskResult } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { requireRoomToStart } from "./caps.ts";
 import type { Caps } from "../../contract/surface.ts";
@@ -108,7 +108,8 @@ export async function registerAndAsk(
   // failed task must never look like a started one). Rethrown after
   // recording, unchanged - every direct caller of registerAndAsk/doTask
   // still sees the real error; only the record gains a trace of it.
-  let asked: { questions?: string[] };
+  let asked: BrainAskResult;
+  const askStartedAt = new Date().toISOString();
   try {
     asked = await brain.ask(taskText);
   } catch (err) {
@@ -116,6 +117,11 @@ export async function registerAndAsk(
     appendEvent(recordHome, { taskId, name: "ask-failed", details });
     throw err;
   }
+  // Rule 10: the clarifying step spends too. A cost the brain did not
+  // report (null or absent) is recorded as unknown - never as zero.
+  const costUsd =
+    typeof asked.costUsd === "number" && Number.isFinite(asked.costUsd) && asked.costUsd >= 0 ? asked.costUsd : null;
+  appendEvent(recordHome, { taskId, name: "ask-cost-recorded", details: { costUsd, startedAt: askStartedAt } });
   const questions = (asked.questions ?? []).filter((q) => q.trim().length > 0);
 
   if (questions.length > 0) {

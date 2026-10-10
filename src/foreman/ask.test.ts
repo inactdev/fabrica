@@ -48,9 +48,9 @@ test("registerAndAsk returns the questions and records them, when the brain has 
   const events = readEventsForTask(recordHome, result.taskId);
   assert.deepEqual(
     events.map((e) => e.name),
-    ["task-received", "questions-asked"]
+    ["task-received", "ask-cost-recorded", "questions-asked"]
   );
-  const details = events[1].details as {
+  const details = events.find((e) => e.name === "questions-asked")!.details as {
     questions: string[];
     project: string;
     totalAttempts: number;

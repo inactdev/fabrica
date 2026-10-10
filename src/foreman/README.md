@@ -793,8 +793,13 @@ amount of zero or more, and refuses a task with nothing unmeasured. That
 way a block only clears when a real cost is recorded, and the same spend
 is never counted twice.
 
-`ask()` returns no cost (`BrainAskResult` has no field for one), so the
-clarify step's own spend is not metered yet.
+**The clarifying step's cost counts too.** `ask()` reports what its one
+call cost (`BrainAskResult.costUsd`), and the Foreman records it as
+`"ask-cost-recorded"` (`{ costUsd, startedAt }`). The ledger counts it like
+an attempt's spend - in the day's total and the task's own - as attempt 0
+inside `spend.ts` only (it is never a Receipt). A null or missing cost is
+unknown, never zero: under a cap it blocks new work, named "the clarifying
+step", until `fabrica cost` records it.
 
 ## Files
 

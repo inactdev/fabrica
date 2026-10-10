@@ -105,14 +105,14 @@ test("fakeBrain: ask() has nothing to ask by default - proceed straight to work"
 
   const result = await brain.ask("do the thing");
 
-  assert.deepEqual(result, {});
+  assert.deepEqual(result, { costUsd: 0 });
 });
 
 test("fakeBrain: ask() returns the configured questions every time it's called", async () => {
   const brain = fakeBrain({ askQuestions: ["What database?", "Multi-tenant?"] });
 
-  assert.deepEqual(await brain.ask("first brief"), { questions: ["What database?", "Multi-tenant?"] });
-  assert.deepEqual(await brain.ask("second brief"), { questions: ["What database?", "Multi-tenant?"] });
+  assert.deepEqual(await brain.ask("first brief"), { questions: ["What database?", "Multi-tenant?"], costUsd: 0 });
+  assert.deepEqual(await brain.ask("second brief"), { questions: ["What database?", "Multi-tenant?"], costUsd: 0 });
 });
 
 test("fakeBrain: ask() calls are tracked separately from work() calls", async () => {

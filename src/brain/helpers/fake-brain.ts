@@ -45,6 +45,10 @@ export function fakeBrain(
      * is emitted at all - an unmeasured call, exactly like the null case
      * to whatever reads it. */
     costUsd?: number | null | ((call: number) => number | null);
+    /** Rule 10: what each ask() call reports spending. A fake spends
+     * nothing, so 0 unless told otherwise; null reports a cost it cannot
+     * say. */
+    askCostUsd?: number | null;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -75,7 +79,8 @@ export function fakeBrain(
     async ask(brief: string): Promise<BrainAskResult> {
       askCalls.push(brief);
       if (opts.askError) throw opts.askError;
-      return opts.askQuestions ? { questions: opts.askQuestions } : {};
+      const costUsd = opts.askCostUsd === undefined ? 0 : opts.askCostUsd;
+      return opts.askQuestions ? { questions: opts.askQuestions, costUsd } : { costUsd };
     },
     async work(brief, workdir, workOpts) {
       calls += 1;

@@ -57,6 +57,21 @@ interface HandCost extends CostRecordedDetails {
   taskId: string;
 }
 
+/** Inside this ledger the clarifying step (ask()) is attempt 0 - spend
+ * like any attempt's, but never a Receipt (receiptsOf never sees it). */
+export const CLARIFYING_STEP = 0;
+
+function askSpendIn(event: FabricaEvent): AttemptSpend | undefined {
+  if (event.name !== "ask-cost-recorded") return undefined;
+  const details = event.details as { costUsd?: number | null; startedAt?: string };
+  return {
+    taskId: event.taskId,
+    attempt: CLARIFYING_STEP,
+    startedAtMs: Date.parse(details.startedAt ?? event.occurredAt),
+    costUsd: typeof details.costUsd === "number" ? details.costUsd : null,
+  };
+}
+
 function receiptsIn(event: FabricaEvent): Receipt[] {
   const details = event.details as { receipt?: Receipt; receipts?: Receipt[] } | undefined;
   if (event.name === "receipt-recorded" && details?.receipt) return [details.receipt];
@@ -70,6 +85,11 @@ function ledger(events: FabricaEvent[]): { attempts: AttemptSpend[]; handCosts: 
     if (event.name === "cost-recorded") {
       const details = event.details as CostRecordedDetails;
       handCosts.push({ taskId: event.taskId, usd: details.usd, attempts: details.attempts });
+      continue;
+    }
+    const ask = askSpendIn(event);
+    if (ask) {
+      byAttempt.set(`${ask.taskId}\u0000${ask.attempt}`, ask);
       continue;
     }
     for (const receipt of receiptsIn(event)) {
@@ -135,7 +155,7 @@ export function taskSpend(events: FabricaEvent[], taskId: string): { knownUsd: n
 /** Whether `taskId` has run any attempt at all - "no attempts yet" is a
  * different fact from "spent $0.00". */
 export function hasAttempts(events: FabricaEvent[], taskId: string): boolean {
-  return events.some((e) => e.taskId === taskId && receiptsIn(e).length > 0);
+  return events.some((e) => e.taskId === taskId && (receiptsIn(e).length > 0 || askSpendIn(e) !== undefined));
 }
 
 /** Dollars for a person to read: cents when that is exact ("$6.50"),
@@ -160,9 +180,11 @@ export function describeTaskCost(spend: { knownUsd: number; unknownAttempts: num
 export const SPEND_UNKNOWN_LINE = "SPEND UNKNOWN - tasks blocked";
 
 export function describeUnmeasured(unmeasured: { taskId: string; attempts: number[] }[]): string[] {
-  return unmeasured.map(
-    ({ taskId, attempts }) =>
-      `task ${taskId}, attempt${attempts.length === 1 ? "" : "s"} ${attempts.join(", ")}: ` +
-      `record its real cost with \`fabrica cost ${taskId} <usd>\``
-  );
+  return unmeasured.map(({ taskId, attempts }) => {
+    const parts: string[] = [];
+    if (attempts.includes(CLARIFYING_STEP)) parts.push("the clarifying step");
+    const real = attempts.filter((a) => a !== CLARIFYING_STEP);
+    if (real.length > 0) parts.push(`attempt${real.length === 1 ? "" : "s"} ${real.join(", ")}`);
+    return `task ${taskId}, ${parts.join(" and ")}: record its real cost with \`fabrica cost ${taskId} <usd>\``;
+  });
 }

@@ -33,7 +33,7 @@ test("runLogCommand: prints the task's full event history, in order", async () =
   const names = io.out.map((line) => line.split(/\s+/)[1]);
   // With Inspector, each attempt is judged by Inspector's own run, never a
   // Fabrica "check-run" (issue #64).
-  assert.deepEqual(names, ["task-received", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "delivered"]);
+  assert.deepEqual(names, ["task-received", "ask-cost-recorded", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "delivered"]);
 });
 
 test("runLogCommand: --transcript appends the worker's raw transcript", async () => {
