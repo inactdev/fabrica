@@ -15,6 +15,7 @@ export const DEFAULT_PIDS_LIMIT = 512;
 // internal - callers name a host path, never this one, the same way
 // `/workdir` itself is never a caller's concern.
 const CONTAINER_HOME = "/home/worker";
+const CONTAINER_WORKDIR = "/workdir";
 
 export function buildDockerArgs(opts: {
   workdir: string;
@@ -30,7 +31,14 @@ export function buildDockerArgs(opts: {
 }): string[] {
   // The long `--mount` form, not `-v`: its key=value fields don't split
   // on a ':' appearing in the workdir path the way the short form does.
-  const args = ["run", "--rm", "--mount", `type=bind,source=${opts.workdir},target=/workdir`, "-w", "/workdir"];
+  const args = [
+    "run",
+    "--rm",
+    "--mount",
+    `type=bind,source=${opts.workdir},target=${CONTAINER_WORKDIR}`,
+    "-w",
+    CONTAINER_WORKDIR,
+  ];
 
   // Each extra path is mounted read-only at its own resolved path, not
   // remapped - a git worktree's .git pointer file names the project's
@@ -66,6 +74,9 @@ export function buildDockerArgs(opts: {
   // docker CLI itself consumes (DOCKER_HOST, DOCKER_CONFIG, PATH, ...).
   // runContained writes this file fresh per call and removes it after.
   if (opts.envFile !== undefined) args.push("--env-file", opts.envFile);
+
+  // Trusting /workdir for git is safe: the container is the trust boundary, and its git config is sanitized and read-only.
+  args.push("-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory", "-e", `GIT_CONFIG_VALUE_0=${CONTAINER_WORKDIR}`);
 
   // Persists whatever a tool writes under $HOME (e.g. session state for
   // a warm --resume) across calls that share this same homeDir, without
