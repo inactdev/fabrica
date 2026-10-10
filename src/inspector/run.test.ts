@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectorAdapter, inspectorIsConfigured, reportForRecord, MAX_INSPECTION_REPORT_BYTES } from "./run.ts";
 
+/** A fake token, so no test here ever asks the machine's real `gh`. */
+function testAdapter(command: string) {
+  return inspectorAdapter(command, { env: { ...process.env, GITHUB_TOKEN: "fake-test-token" } });
+}
+
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-inspector-"));
 }
@@ -34,7 +39,7 @@ test("inspectorAdapter maps Inspector's three verdict exit codes without the rea
     [1, "red"],
     [2, "refused"],
   ] as const) {
-    const inspection = await inspectorAdapter(command(workdir, exitCode, `${verdict} report`)).inspect({
+    const inspection = await testAdapter(command(workdir, exitCode, `${verdict} report`)).inspect({
       branch: "fabrica/task",
       workdir,
     });
@@ -44,7 +49,7 @@ test("inspectorAdapter maps Inspector's three verdict exit codes without the rea
 
 test("inspectorAdapter treats every other exit as refused rather than red", async () => {
   const workdir = tempDir();
-  const inspection = await inspectorAdapter(command(workdir, 64, "bad invocation")).inspect({
+  const inspection = await testAdapter(command(workdir, 64, "bad invocation")).inspect({
     branch: "fabrica/task",
     workdir,
   });
@@ -64,7 +69,7 @@ test("inspectorAdapter bounds streamed output and reports its true byte count", 
   const stdout = "x".repeat(MAX_INSPECTION_REPORT_BYTES * 4);
   const stderr = "reason at end";
   const total = Buffer.byteLength(stdout) + 1 + Buffer.byteLength(stderr);
-  const inspection = await inspectorAdapter(commandStreams(workdir, 2, stdout, stderr)).inspect({
+  const inspection = await testAdapter(commandStreams(workdir, 2, stdout, stderr)).inspect({
     branch: "fabrica/task",
     workdir,
   });
@@ -90,7 +95,7 @@ test("inspectorAdapter names the branch Inspector may publish: -branch fabrica/<
   writeFileSync(path, '#!/bin/sh\nprintf \'%s \' "$@"\nexit 0\n');
   chmodSync(path, 0o755);
 
-  const inspection = await inspectorAdapter(path).inspect({ branch: "fabrica/task-1", workdir });
+  const inspection = await testAdapter(path).inspect({ branch: "fabrica/task-1", workdir });
 
   assert.equal(inspection.report, `-repo ${workdir} -branch fabrica/task-1`);
 });
