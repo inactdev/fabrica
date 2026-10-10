@@ -26,6 +26,10 @@ export function fakeBrain(
      * reports a cost the brain cannot say; omitted, no usage entry is
      * emitted at all. */
     costUsd?: number | null;
+    /** Rule 10: what each ask() call reports spending (BrainAskResult's
+     * costUsd). A fake spends nothing, so it reports 0 unless told
+     * otherwise; null reports a cost it cannot say. */
+    askCostUsd?: number | null;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -44,7 +48,8 @@ export function fakeBrain(
       return briefs;
     },
     async ask(_brief: string): Promise<BrainAskResult> {
-      return opts.askQuestions ? { questions: opts.askQuestions } : {};
+      const costUsd = opts.askCostUsd === undefined ? 0 : opts.askCostUsd;
+      return opts.askQuestions ? { questions: opts.askQuestions, costUsd } : { costUsd };
     },
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions) {
       calls += 1;

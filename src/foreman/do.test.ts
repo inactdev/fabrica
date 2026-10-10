@@ -300,7 +300,7 @@ test("doTask stops and returns 'asking' when the brain finds the task materially
   const events = readEventsForTask(recordHome, task.id);
   assert.deepEqual(
     events.map((e) => e.name),
-    ["task-received", "questions-asked"]
+    ["task-received", "ask-cost-recorded", "questions-asked"]
   );
 
   // No ProductionLine was ever cut - rule 1 holds trivially since there
@@ -330,7 +330,7 @@ test("doTask on an unambiguous task is unaffected: ask() is consulted but the ta
   const events = readEventsForTask(recordHome, task.id);
   assert.deepEqual(
     events.map((e) => e.name),
-    ["task-received", "line-cut", "inspection-skipped", "work-started", "check-run", "check-run", "receipt-recorded", "delivered"],
+    ["task-received", "ask-cost-recorded", "line-cut", "inspection-skipped", "work-started", "check-run", "check-run", "receipt-recorded", "delivered"],
     "no questions-asked/answers-given events for a task nothing needed to ask about"
   );
 
