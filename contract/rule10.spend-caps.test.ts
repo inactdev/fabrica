@@ -171,3 +171,43 @@ test("rule 10: the day's total survives a restart", async () => {
     "a fresh Foreman forgot the day's spend - the total was only held in memory"
   );
 });
+
+// The clarifying step (ask()) spends money too, on a metered brain: its
+// cost is recorded and counted like any attempt's, and an unknown one is
+// unknown, never zero (Client ruling 2026-10-10).
+test("rule 10: the clarifying step's cost counts toward the day's total", async () => {
+  const recordHome = home();
+  const project = makeFixtureRepo("exit 0");
+  await createForeman({ recordHome, inspector: fakeInspector("green") }).do("asks expensively", {
+    project,
+    brain: fakeBrain({ askCostUsd: 6, costUsd: 0 }),
+  });
+
+  const foreman = createForeman({ recordHome, caps: { perDayUsd: 5 }, inspector: fakeInspector("green") });
+  await assert.rejects(
+    () => foreman.do("a further task", { project, brain: fakeBrain({ costUsd: 0 }) }),
+    /\$6\.00/,
+    "the clarifying step's $6 was not counted against the daily cap"
+  );
+});
+
+test("rule 10: an unknown clarifying-step cost is not zero - it blocks, until recorded by hand", async () => {
+  const recordHome = home();
+  const project = makeFixtureRepo("exit 0");
+  const foreman = createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fakeInspector("green") });
+  const unmeasured = await foreman.do("asks at an unknown cost", {
+    project,
+    brain: fakeBrain({ askCostUsd: null, costUsd: 0 }),
+  });
+
+  await assert.rejects(
+    () => foreman.do("a further task", { project, brain: fakeBrain({ costUsd: 0 }) }),
+    (err: Error) =>
+      err.message.includes("SPEND UNKNOWN - tasks blocked") &&
+      err.message.includes(unmeasured.id) &&
+      /clarifying step/.test(err.message)
+  );
+
+  await foreman.recordCost(unmeasured.id, 0.03);
+  assert.equal((await foreman.do("now it may start", { project, brain: fakeBrain({ costUsd: 0 }) })).state, "delivered");
+});

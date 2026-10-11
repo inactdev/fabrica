@@ -110,6 +110,19 @@ test("claudeCodeAdapter.ask() returns the questions a materially ambiguous task 
   assert.deepEqual(result.questions, ["What database?", "Multi-tenant?"]);
 });
 
+test("claudeCodeAdapter.ask() reports the call's cost from the result line", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    askScratchDir: makeFakeCliScratchDir(),
+  });
+
+  const asked = await brain.ask("ASK_SCENARIO_NONE a clear task");
+
+  assert.equal(asked.costUsd, 0.0421);
+});
+
 test("claudeCodeAdapter.ask() returns no questions for a clear task", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const brain = claudeCodeAdapter({
@@ -119,7 +132,7 @@ test("claudeCodeAdapter.ask() returns no questions for a clear task", async (t) 
   });
 
   const result = await brain.ask("ASK_SCENARIO_NONE");
-  assert.deepEqual(result, {});
+  assert.deepEqual(result, { costUsd: 0.0421 });
 });
 
 test("claudeCodeAdapter.ask() strips a fenced code block around the JSON", async (t) => {
@@ -155,7 +168,7 @@ test("claudeCodeAdapter.ask() treats an unparseable response as nothing to ask, 
   });
 
   const result = await brain.ask("ASK_SCENARIO_GARBLED");
-  assert.deepEqual(result, {});
+  assert.deepEqual(result, { costUsd: 0.0421 });
 });
 
 test("claudeCodeAdapter always passes bypassPermissions and forwards --resume, --model, --effort", async (t) => {

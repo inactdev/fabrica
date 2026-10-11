@@ -72,7 +72,7 @@ test("events() returns this task's events only, in order", async () => {
     eventsA.map((e) => e.name),
     // With Inspector, each attempt is judged by Inspector's own run, never a
     // Fabrica "check-run" (issue #64).
-    ["task-received", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "delivered"]
+    ["task-received", "ask-cost-recorded", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "delivered"]
   );
 
   const eventsB = await foreman.events(taskB.id);
