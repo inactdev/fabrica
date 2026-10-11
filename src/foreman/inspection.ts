@@ -2,7 +2,9 @@
 // Inspector's run is the only check (issue #64): Fabrica runs none. A refusal means no verdict,
 // so it is recorded without being changed into a red result.
 
-import { appendEvent } from "../record/index.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { appendEvent, copyTaskFile } from "../record/index.ts";
 import {
   defaultInspector,
   inspectorConfigMatches,
@@ -17,6 +19,35 @@ interface InspectionOptions {
   heartbeatIntervalMs?: number;
   receipts?: Receipt[];
   totalAttempts?: number;
+  prTitle?: string;
+  prBody?: string;
+}
+
+const INSPECTOR_DIR = ".inspector";
+const INSPECTOR_LATEST_FILE = "latest.json";
+const INSPECTOR_RUNS_DIR = "runs";
+
+/**
+ * Inspector's own on-disk report, if it wrote one: `.inspector/latest.json`
+ * names (field "run") the matching file under `.inspector/runs/`. Copied
+ * into the task's record folder before the worktree it lives in is torn
+ * down - best effort throughout: a self-tested round, or an Inspector that
+ * wrote nothing, simply leaves nothing to copy, which is not an error.
+ */
+function copyInspectorReportFiles(recordHome: string, taskId: string, workdir: string): void {
+  const latestPath = join(workdir, INSPECTOR_DIR, INSPECTOR_LATEST_FILE);
+  if (!existsSync(latestPath)) return;
+  copyTaskFile(recordHome, taskId, "inspector-latest.json", latestPath);
+
+  let run: unknown;
+  try {
+    run = JSON.parse(readFileSync(latestPath, "utf8")).run;
+  } catch {
+    return;
+  }
+  if (typeof run !== "string" || run.length === 0) return;
+  const runPath = join(workdir, INSPECTOR_DIR, INSPECTOR_RUNS_DIR, run);
+  if (existsSync(runPath)) copyTaskFile(recordHome, taskId, "inspector-run.json", runPath);
 }
 
 export async function handToInspector(
@@ -53,7 +84,13 @@ export async function handToInspector(
       inspection = await withHeartbeat(
         () => appendEvent(recordHome, { taskId, name: "heartbeat", details: { phase: "inspection" } }),
         options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
-        () => (inspector ?? defaultInspector()).inspect({ branch: line.branch, workdir: line.workdir })
+        () =>
+          (inspector ?? defaultInspector()).inspect({
+            branch: line.branch,
+            workdir: line.workdir,
+            prTitle: options.prTitle,
+            prBody: options.prBody,
+          })
       );
     } catch (err) {
       inspection = {
@@ -79,5 +116,14 @@ export async function handToInspector(
         : {}),
     },
   });
+
+  // Driven purely by whether Inspector's own stdout carried the line - no
+  // other condition appends this event.
+  if (inspection.prUrl) {
+    appendEvent(recordHome, { taskId, name: "pr-opened", details: { url: inspection.prUrl } });
+  }
+
+  copyInspectorReportFiles(recordHome, taskId, line.workdir);
+
   return inspection;
 }

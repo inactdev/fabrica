@@ -209,7 +209,11 @@ export type FabricaEventName =
   | "unattributed-change"
   | "edit-attempt-blocked"
   | "heartbeat"
-  | "concurrent-write";
+  | "concurrent-write"
+  /** Inspector opened a pull request (details: { url }) - only ever
+   * appended when Inspector's own stdout printed "pull request: <url>";
+   * nothing else triggers it. */
+  | "pr-opened";
 
 export interface FabricaEvent {
   occurredAt: string;

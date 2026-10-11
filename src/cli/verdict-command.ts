@@ -85,6 +85,11 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
         `fix round ${round} recorded: ${taskId} ran again with your note - outcome: ${delivery?.outcome ?? "unknown"}. ` +
           `Still open; run \`fabrica verdict ${taskId} accept|fix|wrong\` once you've reviewed it.`
       );
+    } else if (ruling === "accept") {
+      const events = await foreman.events(taskId);
+      const prEvent = events.filter((e) => e.name === "pr-opened").at(-1);
+      const url = (prEvent?.details as { url?: string } | undefined)?.url;
+      stdout(`${ruling} recorded: ${taskId} is closed.${url ? ` pull request: ${url}` : ""}`);
     } else {
       stdout(`${ruling} recorded: ${taskId} is closed.`);
     }

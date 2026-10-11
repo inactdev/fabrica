@@ -66,6 +66,19 @@ export function projectFromEvents(events: FabricaEvent[]): string | null {
   return null;
 }
 
+/** The URL of the pull request Inspector opened, from the last "pr-opened"
+ * event carrying one - null when none has landed yet. Mirrors
+ * projectFromEvents: a fix round can hand off to Inspector again, so the
+ * latest event wins rather than the first. */
+export function prUrlFromEvents(events: FabricaEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].name !== "pr-opened") continue;
+    const details = events[i].details as { url?: string } | undefined;
+    if (details?.url) return details.url;
+  }
+  return null;
+}
+
 /** The most recent moment anything was recorded for this task - any event
  * counts as activity, heartbeats included. Null for a task with no events
  * at all (never happens for a real task; only for defensive callers). */
@@ -158,6 +171,9 @@ export function formatStatusLine(
     /** Why a failed task with no delivery never started, when it was not
      * the brain's clarify step (e.g. a spending cap refused it). */
     failedBecause?: string;
+    /** The pull request Inspector opened, if any - shown once, on a
+     * delivered task's own line, never implied for any other state. */
+    prUrl?: string | null;
   }
 ): string {
   const project = opts.project ?? "unknown project";
@@ -165,7 +181,8 @@ export function formatStatusLine(
   const base = `${task.id}  ${project}  ${task.state}  ${age} old${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}`;
 
   if (task.state === "delivered") {
-    return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong`;
+    const pr = opts.prUrl ? `  pull request: ${opts.prUrl}` : "";
+    return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${pr}`;
   }
   if (isDeadEnd(task.state, opts.hasDelivery)) {
     if (task.state === "failed") {

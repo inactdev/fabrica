@@ -26,4 +26,9 @@ export type TaskFile =
   | "plan.md"
   | "delivery.md"
   | "verdict"
-  | "transcript.log";
+  | "transcript.log"
+  /** Inspector's own `.inspector/latest.json`, copied in before the
+   * worktree it lived in is destroyed - see src/foreman/inspection.ts. */
+  | "inspector-latest.json"
+  /** The run file latest.json's "run" field named, under `.inspector/runs/`. */
+  | "inspector-run.json";

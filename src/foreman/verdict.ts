@@ -22,6 +22,7 @@ import { prepareRound, roundOutcome } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { commitWorktreeChanges } from "./commit.ts";
+import { buildCommitMessage } from "./pr-body.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
@@ -192,6 +193,7 @@ async function runFixRound(
       inspector,
       checkBox,
       commitMessage: `fabrica: ${taskId} (fix)`,
+      taskText,
     });
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
@@ -244,7 +246,7 @@ async function runFixRound(
     let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
     if (commitError === undefined) {
       try {
-        commitWorktreeChanges(line.workdir, `fabrica: ${taskId} (fix)`);
+        commitWorktreeChanges(line.workdir, buildCommitMessage(`fabrica: ${taskId} (fix)`, declaredGateChanges));
       } catch (err) {
         if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
         commitError = err.message;

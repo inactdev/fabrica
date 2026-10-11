@@ -3,7 +3,8 @@
 // its process result into the three verdicts the Foreman records.
 
 import { execFileSync, spawn } from "node:child_process";
-import { accessSync, constants, existsSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { Inspection, Inspector } from "./types.ts";
 
@@ -54,14 +55,14 @@ export function inspectorAdapter(command: string = "inspector", opts: InspectorA
   let childEnv: NodeJS.ProcessEnv | undefined;
   const ensureEnv = (): NodeJS.ProcessEnv => (childEnv ??= { ...baseEnv, GITHUB_TOKEN: githubToken(baseEnv) });
   return {
-    async inspect({ branch, workdir }) {
+    async inspect({ branch, workdir, prTitle, prBody }) {
       let env: NodeJS.ProcessEnv;
       try {
         env = ensureEnv();
       } catch (err) {
         return { verdict: "refused", report: err instanceof Error ? err.message : String(err) };
       }
-      return runInspector(command, workdir, branch, env);
+      return runInspector(command, workdir, branch, env, prTitle, prBody);
     },
     installed() {
       return commandIsInstalled(command, baseEnv);
@@ -151,51 +152,81 @@ function outputReport(stdout: OutputTail, stderr: OutputTail, exitCode: number |
   return boundedReport(tail, total, true) || `Inspector exited ${exitCode ?? "after a signal"}.`;
 }
 
+/** The exact line Inspector prints on its own stdout once it has opened a
+ * pull request - the only signal "pr-opened" is ever appended from. Read
+ * from the bounded stdout tail already captured for the report, rather
+ * than a second, unbounded copy of stdout kept just to search it. */
+export function extractPrUrl(stdout: string): string | undefined {
+  const matches = [...stdout.matchAll(/^pull request:\s*(\S+)\s*$/gm)];
+  return matches.length > 0 ? matches[matches.length - 1][1] : undefined;
+}
+
 async function runInspector(
   command: string,
   workdir: string,
   branch: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  prTitle?: string,
+  prBody?: string
 ): Promise<Inspection> {
-  const result = await new Promise<{
-    stdout: OutputTail;
-    stderr: OutputTail;
-    exitCode: number | null;
-    error?: Error;
-  }>((resolve) => {
-    // -branch is required by Inspector: the one branch it may publish to
-    // after a green result. Without it, Inspector refuses every handoff.
-    const child = spawn(command, ["-repo", workdir, "-branch", branch], {
-      cwd: workdir,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout: OutputTail = { total: 0, tail: Buffer.alloc(0) };
-    const stderr: OutputTail = { total: 0, tail: Buffer.alloc(0) };
-    let settled = false;
-
-    child.stdout.on("data", (chunk: Buffer) => appendOutput(stdout, chunk));
-    child.stderr.on("data", (chunk: Buffer) => appendOutput(stderr, chunk));
-    child.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      resolve({ stdout, stderr, exitCode: null, error });
-    });
-    child.on("close", (exitCode) => {
-      if (settled) return;
-      settled = true;
-      resolve({ stdout, stderr, exitCode });
-    });
-  });
-
-  if (result.error) {
-    return { verdict: "refused", report: `Inspector could not start: ${result.error.message}` };
+  // -branch is required by Inspector: the one branch it may publish to
+  // after a green result. Without it, Inspector refuses every handoff.
+  const args = ["-repo", workdir, "-branch", branch];
+  if (prTitle !== undefined) args.push("-pr-title", prTitle);
+  // prBody travels as a file, not an argument: a pull request body is
+  // free-form, multi-line text, which an argv entry cannot carry safely
+  // across every shell/spawn implementation.
+  let prBodyDir: string | undefined;
+  if (prBody !== undefined) {
+    prBodyDir = mkdtempSync(join(tmpdir(), "fabrica-inspector-pr-"));
+    const prBodyFile = join(prBodyDir, "pr-body.md");
+    writeFileSync(prBodyFile, prBody);
+    args.push("-pr-body-file", prBodyFile);
   }
 
-  const report = outputReport(result.stdout, result.stderr, result.exitCode);
-  if (result.exitCode === 0) return { verdict: "green", report };
-  if (result.exitCode === 1) return { verdict: "red", report };
-  return { verdict: "refused", report };
+  try {
+    const result = await new Promise<{
+      stdout: OutputTail;
+      stderr: OutputTail;
+      exitCode: number | null;
+      error?: Error;
+    }>((resolve) => {
+      const child = spawn(command, args, {
+        cwd: workdir,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stdout: OutputTail = { total: 0, tail: Buffer.alloc(0) };
+      const stderr: OutputTail = { total: 0, tail: Buffer.alloc(0) };
+      let settled = false;
+
+      child.stdout.on("data", (chunk: Buffer) => appendOutput(stdout, chunk));
+      child.stderr.on("data", (chunk: Buffer) => appendOutput(stderr, chunk));
+      child.on("error", (error) => {
+        if (settled) return;
+        settled = true;
+        resolve({ stdout, stderr, exitCode: null, error });
+      });
+      child.on("close", (exitCode) => {
+        if (settled) return;
+        settled = true;
+        resolve({ stdout, stderr, exitCode });
+      });
+    });
+
+    if (result.error) {
+      return { verdict: "refused", report: `Inspector could not start: ${result.error.message}` };
+    }
+
+    const report = outputReport(result.stdout, result.stderr, result.exitCode);
+    const prUrl = extractPrUrl(result.stdout.tail.toString("utf8"));
+    const withPrUrl = (base: Inspection): Inspection => (prUrl !== undefined ? { ...base, prUrl } : base);
+    if (result.exitCode === 0) return withPrUrl({ verdict: "green", report });
+    if (result.exitCode === 1) return withPrUrl({ verdict: "red", report });
+    return withPrUrl({ verdict: "refused", report });
+  } finally {
+    if (prBodyDir) rmSync(prBodyDir, { recursive: true, force: true });
+  }
 }
 
 function boundedReport(tailBuffer: Buffer, total: number, trimComplete: boolean = false): string {

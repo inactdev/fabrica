@@ -12,6 +12,7 @@
 
 import {
   appendFileSync,
+  copyFileSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
@@ -39,6 +40,15 @@ export function writeTaskFile(recordHome: string, id: string, file: TaskFile, co
 export function appendTaskFile(recordHome: string, id: string, file: TaskFile, content: string): void {
   mkdirSync(taskDir(recordHome, id), { recursive: true });
   appendFileSync(taskFilePath(recordHome, id, file), content);
+}
+
+/** Copies an external file's bytes into a task file (Inspector's own
+ * report, read from the ProductionLine before it is destroyed). The
+ * caller decides whether sourcePath exists - this mirrors
+ * writeTaskFile/appendTaskFile in not being defensive about its input. */
+export function copyTaskFile(recordHome: string, id: string, file: TaskFile, sourcePath: string): void {
+  mkdirSync(taskDir(recordHome, id), { recursive: true });
+  copyFileSync(sourcePath, taskFilePath(recordHome, id, file));
 }
 
 /** Reads a task file, or null if it hasn't been written yet. */

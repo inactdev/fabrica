@@ -14,6 +14,7 @@ import { ForemanError } from "./errors.ts";
 import { gateWasTouched } from "./gate-changes.ts";
 import { prepareRound, roundOutcome } from "./judge.ts";
 import { commitWorktreeChanges } from "./commit.ts";
+import { buildCommitMessage } from "./pr-body.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, deliveredState, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
@@ -188,6 +189,7 @@ async function productionRound(
       inspector,
       checkBox,
       commitMessage: `fabrica: ${taskId}`,
+      taskText,
     });
 
     // `project` rides on work-started's details, not a dedicated event -
@@ -255,7 +257,7 @@ async function productionRound(
     let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
     if (commitError === undefined) {
       try {
-        commitWorktreeChanges(line.workdir, `fabrica: ${taskId}`);
+        commitWorktreeChanges(line.workdir, buildCommitMessage(`fabrica: ${taskId}`, declaredGateChanges));
       } catch (err) {
         if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
         commitError = err.message;
