@@ -8,6 +8,7 @@ export const COMMANDS = [
   "verdict",
   "answer",
   "cost",
+  "doctor",
   "status",
   "log",
   "watch",
@@ -32,6 +33,10 @@ Commands:
   cost <taskId> <usd>
       Owner-only. Record the real cost of a task whose spend was never
       measured - clears a SPEND UNKNOWN block on new work.
+  doctor [--live]
+      Check, spending nothing, that this machine can run tasks - one
+      line per check, OK or FAIL with the exact fix. --live also makes
+      one tiny real call with the worker token.
   status
       One line per open task: id, project, state, age, cost. Flags a
       delivered task as awaiting your verdict, and says when unmeasured
