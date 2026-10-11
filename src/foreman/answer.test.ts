@@ -205,6 +205,8 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     "answers-given",
     "line-cut",
     "work-started",
+    // The first resume threw: #73 records that, so it never reads as working.
+    "task-failed",
     "answers-given",
     "line-cut",
     "work-started",

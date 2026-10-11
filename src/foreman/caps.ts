@@ -8,6 +8,7 @@
 import { appendEvent, readEvents, readEventsForTask } from "../record/index.ts";
 import type { Caps, Receipt } from "../../contract/surface.ts";
 import { ForemanError } from "./errors.ts";
+import { markRecorded } from "./task-failure.ts";
 import type { AttemptSpendLimits, CapStop } from "./attempts.ts";
 import {
   daySpend,
@@ -38,7 +39,7 @@ export interface CapRefusedDetails {
 
 function refuse(recordHome: string, taskId: string, code: "spend-unknown" | "cap-refused", details: CapRefusedDetails): never {
   appendEvent(recordHome, { taskId, name: "cap-refused", details });
-  throw new ForemanError(code, details.message);
+  throw markRecorded(new ForemanError(code, details.message));
 }
 
 /** Throws (after recording why) when `taskId` may not start spending:

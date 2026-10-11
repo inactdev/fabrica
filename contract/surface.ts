@@ -186,6 +186,10 @@ export type FabricaEventName =
   | "task-received"
   | "questions-asked"
   | "ask-failed"
+  /** Any error after "task-received" and before a delivery or refusal
+   * (issue #73): details carry the message. A failed task is never left
+   * looking like one still working. */
+  | "task-failed"
   | "answers-given"
   | "line-cut"
   | "work-started"

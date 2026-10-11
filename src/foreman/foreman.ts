@@ -42,6 +42,9 @@ export interface ForemanOptions {
   /** Where a project with no Inspector is self-tested: the worker's own
    * box. Omitted uses the default adapter's box; tests supply a fake. */
   checkBox?: CheckBox;
+  /** Told each new task's id the moment it is registered - before any
+   * step that can fail - so a caller can label what it logs for it. */
+  onTaskRegistered?: (taskId: string) => void;
 }
 
 export function createForeman(opts: ForemanOptions): Foreman {
@@ -55,7 +58,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
 
   return {
     async do(taskText, callOpts) {
-      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, checkBox: opts.checkBox, caps });
+      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, checkBox: opts.checkBox, caps, onTaskRegistered: opts.onTaskRegistered });
       if (callOpts.brain) brainByTask.set(task.id, callOpts.brain);
       return task;
     },
@@ -65,7 +68,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       // remembered its brain by taskId; a fresh process (the real shape
       // of `fabrica do` then `fabrica answer` by hand) falls back the
       // same way verdict() does.
-      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter();
+      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome);
       return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector, checkBox: opts.checkBox, caps });
     },
     async deliveryOf(taskId) {
@@ -75,7 +78,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       return lookupReceipts(recordHome, taskId);
     },
     async verdict(taskId, ruling, note) {
-      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter();
+      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome);
       return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector, checkBox: opts.checkBox, caps });
     },
     async status() {

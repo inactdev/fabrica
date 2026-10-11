@@ -17,6 +17,9 @@ import { fakeBrain } from "../../brain/helpers/fake-brain.ts";
 import { fixtureInspector } from "../../../contract/helpers/fake-inspector.ts";
 import { fixtureCheckBox } from "../../../contract/helpers/fake-check-box.ts";
 import { runTask } from "../run-task.ts";
+import { prefixTaskLog } from "../task-log.ts";
+
+const setLogTaskId = prefixTaskLog();
 
 const [, , recordHome, projectPath, taskText] = process.argv;
 
@@ -32,6 +35,7 @@ try {
   await runTask(recordHome, projectPath, taskText, fakeBrain({ askQuestions, askError }), {
     inspector: fixtureInspector(),
     checkBox: fixtureCheckBox().box,
+    onTaskRegistered: setLogTaskId,
   });
 } catch (err) {
   console.error(`fake-run-task-entry: ${(err as Error).message}`);

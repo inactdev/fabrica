@@ -7,6 +7,7 @@ export type ForemanErrorCode =
   | "invalid-attempts"
   | "missing-check"
   | "inspector-not-ready"
+  | "project-not-a-repo"
   | "gate-baseline-unreadable"
   | "commit-failed"
   | "unknown-task"

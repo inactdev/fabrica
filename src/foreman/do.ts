@@ -18,6 +18,7 @@ import { runAttempts } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, deliveredState, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
+import { recordingFailure } from "./task-failure.ts";
 import { costLabelOf, recordCapStop, recordReceipt, spendLimitsFor, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { Delivery, FabricaTask } from "../inspector/types.ts";
@@ -29,7 +30,15 @@ export { DEFAULT_ATTEMPTS } from "./ask.ts";
 export async function doTask(
   recordHome: string,
   taskText: string,
-  opts: { project: string; attempts?: number; brain?: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+  opts: {
+    project: string;
+    attempts?: number;
+    brain?: Brain;
+    inspector?: Inspector;
+    checkBox?: CheckBox;
+    caps?: Caps;
+    onTaskRegistered?: (taskId: string) => void;
+  }
 ): Promise<FabricaTask> {
   // SPEC.md steps 1-2: register the task, then give the brain one pass
   // at the bare task text (issue #8) before any ProductionLine exists.
@@ -72,6 +81,25 @@ export async function doTask(
  * answer so far in answer.ts's.
  */
 export async function runProductionRound(
+  recordHome: string,
+  taskId: string,
+  brief: string,
+  ctx: {
+    project: string;
+    brain: Brain;
+    totalAttempts: number;
+    explicitAttempts: boolean;
+    isRetry: boolean;
+    inspector?: Inspector;
+    checkBox?: CheckBox;
+    caps?: Caps;
+  }
+): Promise<FabricaTask> {
+  // #73: whatever throws from here on lands on the record as task-failed.
+  return recordingFailure(recordHome, taskId, () => productionRound(recordHome, taskId, brief, ctx));
+}
+
+async function productionRound(
   recordHome: string,
   taskId: string,
   brief: string,

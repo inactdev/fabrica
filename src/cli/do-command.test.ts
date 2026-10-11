@@ -7,7 +7,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,12 +31,9 @@ function captureIo() {
   return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
 }
 
-// Every test below passes a short askTimeoutMs/askPollMs so a slow or
-// missing ask-outcome signal never makes this suite itself slow - the
-// fake brain's ask() resolves instantly, so a real signal always lands
-// well within these bounds; only the "no work" test below relies on the
-// timeout actually being hit.
-const FAST_ASK_WAIT = { askTimeoutMs: 5_000, askPollMs: 20 };
+// A short poll keeps this suite fast; there is no cutoff to tune any more
+// (Client ruling 2026-10-10, #73) - every test below reaches a real outcome.
+const FAST_ASK_WAIT = { askPollMs: 20 };
 
 test("runDoCommand: a literal project path registers a task and prints just its id", async () => {
   const recordHome = tempRecordHome();
@@ -308,4 +306,51 @@ test("runDoCommand: a daily-cap refusal exits non-zero with the numbers", async 
 
   assert.equal(code, 1);
   assert.match(io.err.join("\n"), /\$0\.00/);
+});
+
+// #73, Client ruling 2026-10-10: a start that fails after registration is
+// never silent - fabrica do waits for the real outcome and, on a failure,
+// prints the message and exits 1, instead of timing out into "proceeding".
+test("runDoCommand: a task that fails before any work starts prints why and exits 1", async () => {
+  const recordHome = tempRecordHome();
+  // Self-tested (no .inspector.json) with no check.sh: refused once the
+  // ProductionLine is cut, before work-started.
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  execFileSync("git", ["rm", "-q", "check.sh"], { cwd: project });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "no check"], { cwd: project });
+  const io = captureIo();
+
+  const code = await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1, "a task that never started was reported as a success");
+  assert.equal(io.out.length, 1, "stdout must still be exactly the task id");
+  assert.match(io.err.join("\n"), /check\.sh/);
+  assert.ok(readEventsForTask(recordHome, io.out[0]).some((e) => e.name === "task-failed"));
+});
+
+// Every cli.log line carries a timestamp and the task id, so a line can be
+// tied back to its task long after the terminal is gone.
+test("runDoCommand: every cli.log line carries a timestamp and the task id", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  execFileSync("git", ["rm", "-q", "check.sh"], { cwd: project });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "no check"], { cwd: project });
+  const io = captureIo();
+
+  await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...FAST_ASK_WAIT, ...io });
+  const taskId = io.out[0];
+  // The child writes its last line as it exits; give it a moment.
+  await new Promise((r) => setTimeout(r, 500));
+
+  const lines = readFileSync(join(recordHome, "cli.log"), "utf8").split("\n").filter((l) => l.length > 0);
+  assert.ok(lines.length > 0, "nothing was written to cli.log");
+  for (const line of lines) {
+    assert.match(line, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z /, `no timestamp: ${line}`);
+    assert.ok(line.includes(` ${taskId} `), `no task id: ${line}`);
+  }
 });
