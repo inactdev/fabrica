@@ -22,7 +22,7 @@ function freshHome(): string {
 test("the delivery commit's Deviations section says None when the worker declared no gate change", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
-  const brain = fakeBrain();
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n") });
 
   const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
 
@@ -34,7 +34,10 @@ test("the delivery commit's Deviations section says None when the worker declare
 test("the delivery commit's Deviations section carries the worker's own declared gate change", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
-  const brain = fakeBrain({ gateChanges: "widened check.sh's timeout because the suite grew" });
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
+    gateChanges: "widened check.sh's timeout because the suite grew",
+  });
 
   const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
 

@@ -115,9 +115,15 @@ test("inspectorAdapter reports no prUrl when Inspector's stdout never prints the
 
 test("inspectorAdapter reads the pull request url from Inspector's own stdout line", async () => {
   const workdir = tempDir();
-  const inspection = await testAdapter(
-    command(workdir, 0, "checks passed\npull request: https://example.test/pulls/9\n")
-  ).inspect({ branch: "fabrica/task", workdir });
+  // command()'s printf '%s' <json-string> never turns an embedded "\n"
+  // into a real newline (printf's %s never interprets its argument) - two
+  // separate printf calls, each with a real newline in its own format
+  // string, are used here instead.
+  const path = join(workdir, "inspector-pr-url.sh");
+  writeFileSync(path, "#!/bin/sh\nprintf 'checks passed\\n'\nprintf 'pull request: https://example.test/pulls/9\\n'\nexit 0\n");
+  chmodSync(path, 0o755);
+
+  const inspection = await testAdapter(path).inspect({ branch: "fabrica/task", workdir });
 
   assert.equal(inspection.verdict, "green");
   assert.equal(inspection.prUrl, "https://example.test/pulls/9");
