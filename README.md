@@ -102,6 +102,33 @@ has the exact rules).
 Set `FABRICA_HOME` to use a record home other than `~/.fabrica`. Run
 `fabrica --help` or `fabrica <command> --help` for the rest.
 
+## Money limits
+
+`~/.fabrica/projects.toml` can carry a `[caps]` table:
+
+    [caps]
+    perTaskUsd = 5
+    perDayUsd  = 25
+
+`perTaskUsd` caps what a single task may spend in total, counting every
+attempt, resume, and fix round on it. `perDayUsd` caps spend across all
+tasks. Either field may be omitted; an omitted field has no cap. With
+no `[caps]` table at all, nothing is capped.
+
+The daily cap is a **rolling 24 hours**, not a calendar day: spend ages
+out exactly 24 hours after the attempt that incurred it started, not at
+midnight, so there is no single moment a full day's budget returns at
+once.
+
+If any attempt's real cost could not be read, it is never treated as
+free - `fabrica status` opens with `SPEND UNKNOWN - tasks blocked`, and
+while a cap is set, that block refuses every new task, resume, and fix
+round, however old the unmeasured attempt is. Only the owner can clear
+it, by looking up the real figure and recording it by hand with
+`fabrica cost <taskId> <usd>`; it is the one way out, and it is denied
+to the AI you talk to for the same reason `fabrica verdict` and
+`fabrica answer` are.
+
 ## Stopping the AI you talk to from editing files or ruling for you
 
 Install the session config for your harness by hand to stop the AI you
