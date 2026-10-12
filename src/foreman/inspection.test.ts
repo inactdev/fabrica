@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
@@ -30,8 +30,10 @@ function inspectedProject(): string {
   return project;
 }
 
-function fakeInspector(...results: Inspection[]): Inspector & { calls: { branch: string; workdir: string }[] } {
-  const calls: { branch: string; workdir: string }[] = [];
+function fakeInspector(
+  ...results: Inspection[]
+): Inspector & { calls: { branch: string; workdir: string; prTitle?: string; prBody?: string }[] } {
+  const calls: { branch: string; workdir: string; prTitle?: string; prBody?: string }[] = [];
   return {
     calls,
     async inspect(request) {
@@ -289,4 +291,78 @@ test("a project without Inspector config is self-tested in the worker's box, nev
   assert.equal(delivery?.inspection, undefined);
   assert.equal(inspector.calls.length, 0);
   assert.ok((await foreman.events(task.id)).some((event) => event.name === "inspection-skipped"));
+});
+
+// Negative first: Inspector reporting green, with a report that never
+// mentions a pull request, must leave no "pr-opened" event behind - that
+// event is only ever allowed to key on Inspector's own stdout line.
+test("no pr-opened event is recorded when Inspector's result carries no pull request url", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "green", report: "independent check passed" });
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("small change", { project: inspectedProject(), brain: fakeBrain() });
+
+  const events = await foreman.events(task.id);
+  assert.ok(!events.some((event) => event.name === "pr-opened"));
+});
+
+test("a pr-opened event carries Inspector's reported url exactly once", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({
+    verdict: "green",
+    report: "independent check passed",
+    prUrl: "https://example.test/pulls/42",
+  });
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("small change", { project: inspectedProject(), brain: fakeBrain() });
+
+  const events = await foreman.events(task.id);
+  const prEvents = events.filter((event) => event.name === "pr-opened");
+  assert.equal(prEvents.length, 1);
+  assert.deepEqual(prEvents[0].details, { url: "https://example.test/pulls/42" });
+});
+
+test("Inspector is handed the task's first line as pr-title and a body carrying the summary and Deviations section", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "green", report: "ok" });
+  const foreman = createForeman({ recordHome, inspector });
+
+  await foreman.do("Fix the login bug\n\nIt happens on retry.", { project: inspectedProject(), brain: fakeBrain() });
+
+  assert.equal(inspector.calls.length, 1);
+  assert.equal(inspector.calls[0].prTitle, "Fix the login bug");
+  assert.match(inspector.calls[0].prBody ?? "", /^Completed: Fix the login bug\n\nIt happens on retry\.\n\nDeviations:\nNone\.\n$/);
+});
+
+// Negative first: an Inspector that writes no report files leaves nothing
+// in the task folder to read back.
+test("no report files are copied into the task folder when Inspector writes none", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "green", report: "independent check passed" });
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("small change", { project: inspectedProject(), brain: fakeBrain() });
+
+  assert.equal(readTaskFile(recordHome, task.id, "inspector-latest.json"), null);
+  assert.equal(readTaskFile(recordHome, task.id, "inspector-run.json"), null);
+});
+
+test("Inspector's report files are copied into the task folder before the worktree is torn down", async () => {
+  const recordHome = freshHome();
+  const inspector: Inspector = {
+    async inspect(request) {
+      mkdirSync(join(request.workdir, ".inspector", "runs"), { recursive: true });
+      writeFileSync(join(request.workdir, ".inspector", "runs", "run-1.json"), '{"ok":true}');
+      writeFileSync(join(request.workdir, ".inspector", "latest.json"), '{"run":"run-1.json"}');
+      return { verdict: "green", report: "done" };
+    },
+  };
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("small change", { project: inspectedProject(), brain: fakeBrain() });
+
+  assert.equal(readTaskFile(recordHome, task.id, "inspector-latest.json"), '{"run":"run-1.json"}');
+  assert.equal(readTaskFile(recordHome, task.id, "inspector-run.json"), '{"ok":true}');
 });

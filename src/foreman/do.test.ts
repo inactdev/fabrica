@@ -17,6 +17,35 @@ function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-foreman-home-"));
 }
 
+// Negative first: nothing was declared, so the commit's Deviations
+// section says so plainly rather than leaving it blank or omitting it.
+test("the delivery commit's Deviations section says None when the worker declared no gate change", async () => {
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const recordHome = freshHome();
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n") });
+
+  const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  const message = execSync(`git log -1 --format=%B ${delivery!.branch}`, { cwd: project, encoding: "utf8" });
+  assert.match(message, /Deviations:\nNone\./);
+});
+
+test("the delivery commit's Deviations section carries the worker's own declared gate change", async () => {
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
+    gateChanges: "widened check.sh's timeout because the suite grew",
+  });
+
+  const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
+
+  const delivery = deliveryOf(recordHome, task.id);
+  const message = execSync(`git log -1 --format=%B ${delivery!.branch}`, { cwd: project, encoding: "utf8" });
+  assert.match(message, /Deviations:\nwidened check\.sh's timeout because the suite grew/);
+});
+
 test("doTask on a green project delivers after exactly one attempt", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectorAdapter, inspectorIsConfigured, reportForRecord, MAX_INSPECTION_REPORT_BYTES } from "./run.ts";
+import { extractPrUrl, inspectorAdapter, inspectorIsConfigured, reportForRecord, MAX_INSPECTION_REPORT_BYTES } from "./run.ts";
 
 /** A fake token, so no test here ever asks the machine's real `gh`. */
 function testAdapter(command: string) {
@@ -98,6 +98,76 @@ test("inspectorAdapter names the branch Inspector may publish: -branch fabrica/<
   const inspection = await testAdapter(path).inspect({ branch: "fabrica/task-1", workdir });
 
   assert.equal(inspection.report, `-repo ${workdir} -branch fabrica/task-1`);
+});
+
+// Negative first: a green run that never printed the line gets no prUrl -
+// the only thing a "pr-opened" event is ever allowed to key on.
+test("inspectorAdapter reports no prUrl when Inspector's stdout never prints the pull request line", async () => {
+  const workdir = tempDir();
+  const inspection = await testAdapter(command(workdir, 0, "all good, nothing more to say")).inspect({
+    branch: "fabrica/task",
+    workdir,
+  });
+
+  assert.equal(inspection.verdict, "green");
+  assert.equal(inspection.prUrl, undefined);
+});
+
+test("inspectorAdapter reads the pull request url from Inspector's own stdout line", async () => {
+  const workdir = tempDir();
+  // command()'s printf '%s' <json-string> never turns an embedded "\n"
+  // into a real newline (printf's %s never interprets its argument) - two
+  // separate printf calls, each with a real newline in its own format
+  // string, are used here instead.
+  const path = join(workdir, "inspector-pr-url.sh");
+  writeFileSync(path, "#!/bin/sh\nprintf 'checks passed\\n'\nprintf 'pull request: https://example.test/pulls/9\\n'\nexit 0\n");
+  chmodSync(path, 0o755);
+
+  const inspection = await testAdapter(path).inspect({ branch: "fabrica/task", workdir });
+
+  assert.equal(inspection.verdict, "green");
+  assert.equal(inspection.prUrl, "https://example.test/pulls/9");
+});
+
+test("extractPrUrl takes the last pull request line when more than one appears", () => {
+  assert.equal(extractPrUrl("pull request: https://x/1\nnoise\npull request: https://x/2\n"), "https://x/2");
+  assert.equal(extractPrUrl("nothing relevant here"), undefined);
+});
+
+// $1=-repo $2=workdir $3=-branch $4=branch $5=-pr-title $6=<title>
+// $7=-pr-body-file $8=<path to the body file>
+test("inspectorAdapter passes -pr-title and -pr-body-file, and the body file holds the given text", async () => {
+  const workdir = tempDir();
+  const path = join(workdir, "inspector-pr-args.sh");
+  writeFileSync(path, '#!/bin/sh\nprintf \'%s|%s|%s|%s|%s|%s|%s|\' "$1" "$2" "$3" "$4" "$5" "$6" "$7"\ncat "$8"\nexit 0\n');
+  chmodSync(path, 0o755);
+
+  const inspection = await testAdapter(path).inspect({
+    branch: "fabrica/task-1",
+    workdir,
+    prTitle: "Fix the login bug",
+    prBody: "Completed: Fix the login bug\n\nDeviations:\nNone.\n",
+  });
+
+  assert.equal(
+    inspection.report,
+    `-repo|${workdir}|-branch|fabrica/task-1|-pr-title|Fix the login bug|-pr-body-file|` +
+      "Completed: Fix the login bug\n\nDeviations:\nNone."
+  );
+});
+
+test("inspectorAdapter cleans up the pr-body temp file after Inspector exits", async () => {
+  const workdir = tempDir();
+  const path = join(workdir, "inspector-echo-path.sh");
+  writeFileSync(path, '#!/bin/sh\necho "$6" > "' + join(workdir, "captured-path.txt") + '"\nexit 0\n');
+  chmodSync(path, 0o755);
+
+  await testAdapter(path).inspect({ branch: "fabrica/task", workdir, prBody: "body text" });
+
+  const { readFileSync, existsSync } = await import("node:fs");
+  const capturedPath = readFileSync(join(workdir, "captured-path.txt"), "utf8").trim();
+  assert.ok(capturedPath.length > 0);
+  assert.equal(existsSync(capturedPath), false, "the temp pr-body file must not survive the call");
 });
 
 test("inspectorAdapter reports whether its command is installed", () => {

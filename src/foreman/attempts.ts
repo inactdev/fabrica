@@ -135,7 +135,7 @@ export async function runAttempts(opts: {
     if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
 
     const durationMs = Date.now() - t0;
-    const judgement = await judge(attempt);
+    const judgement = await judge(attempt, workResult.gateChanges);
     lastJudgement = judgement;
     const gate = judgement.kind === "verdict" ? judgement.gate : undefined;
     if (gate) lastGate = gate;

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { registerTask, readTaskFile, taskDir, taskFilePath, writeTaskFile, appendTaskFile } from "./tasks.ts";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { registerTask, readTaskFile, taskDir, taskFilePath, writeTaskFile, appendTaskFile, copyTaskFile } from "./tasks.ts";
 import { readEvents, readEventsForTask } from "./read.ts";
 import { TASK_ID_PATTERN } from "./ids.ts";
 import { makeTestHome } from "./helpers/test-home.ts";
@@ -72,4 +73,15 @@ test("writeTaskFile: overwrites, it does not append (delivery.md/verdict are wri
   writeTaskFile(recordHome, id, "verdict", "fix: retry with staging config");
 
   assert.equal(readTaskFile(recordHome, id, "verdict"), "fix: retry with staging config");
+});
+
+test("copyTaskFile: copies an external file's bytes into the task folder", () => {
+  const recordHome = makeTestHome();
+  const { id } = registerTask(recordHome, "small change");
+  const source = join(recordHome, "inspector-report-source.json");
+  writeFileSync(source, '{"run":"run-1.json"}');
+
+  copyTaskFile(recordHome, id, "inspector-latest.json", source);
+
+  assert.equal(readTaskFile(recordHome, id, "inspector-latest.json"), '{"run":"run-1.json"}');
 });

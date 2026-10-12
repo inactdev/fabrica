@@ -354,6 +354,40 @@ test("runStatusCommand: a measured task shows its cost in dollars", async () => 
   assert.match(io.out[0], /cost: \$0\.0421/);
 });
 
+// Negative first: fixtureInspector never reports a pull request url, so a
+// delivered task's line must carry none - the existing "awaiting verdict"
+// test already proves this implicitly (no "pull request:" substring),
+// here it's asserted explicitly before the positive case below.
+test("runStatusCommand: a delivered task with no reported pull request shows no url", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
+  const io = captureIo();
+
+  await runStatusCommand([], { recordHome, ...io });
+
+  assert.doesNotMatch(io.out[0], /pull request/);
+});
+
+test("runStatusCommand: a delivered task's line shows the reported pull request url exactly once", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const inspector = {
+    async inspect() {
+      return { verdict: "green" as const, report: "ok", prUrl: "https://example.test/pulls/7" };
+    },
+  };
+  await createForeman({ recordHome, inspector }).do("small change", { project, brain: fakeBrain() });
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 1);
+  const occurrences = io.out[0].split("https://example.test/pulls/7").length - 1;
+  assert.equal(occurrences, 1, `expected the url exactly once, got: ${io.out[0]}`);
+});
+
 test("runStatusCommand: a task-failed task shows FAILED with its reason, not working", async () => {
   const recordHome = tempRecordHome();
   appendEvent(recordHome, { taskId: "t1", name: "task-received" });

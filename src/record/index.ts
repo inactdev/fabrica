@@ -8,6 +8,7 @@ export {
   taskFilePath,
   writeTaskFile,
   appendTaskFile,
+  copyTaskFile,
   readTaskFile,
 } from "./tasks.ts";
 export { generateCandidateId, claimTaskId, TASK_ID_PATTERN } from "./ids.ts";

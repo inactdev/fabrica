@@ -19,7 +19,7 @@ import type { FabricaEvent } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { describeLiveness, formatStatusLine, isDeadEnd, projectFromEvents } from "./render.ts";
+import { describeLiveness, formatStatusLine, isDeadEnd, projectFromEvents, prUrlFromEvents } from "./render.ts";
 
 export const STATUS_USAGE = "fabrica status";
 
@@ -138,7 +138,7 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
       const failedBecause = refusedByCap(events)
         ? "a spending cap refused it before any work started"
         : taskFailedMessage(events);
-      stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery, cost, failedBecause }));
+      stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery, cost, failedBecause, prUrl: prUrlFromEvents(events) }));
     }
 
     return 0;

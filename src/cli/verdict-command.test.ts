@@ -51,6 +51,49 @@ test("runVerdictCommand: accept closes the task and reports so", async () => {
   assert.equal(mine?.state, "closed");
 });
 
+test("runVerdictCommand: accept prints the reported pull request url exactly once", async () => {
+  const recordHome = tempRecordHome();
+  const inspector = {
+    async inspect() {
+      return { verdict: "green" as const, report: "ok", prUrl: "https://example.test/pulls/3" };
+    },
+  };
+  const task = await createForeman({ recordHome, inspector }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "accept", "-m", "looks right"], { recordHome, inspector, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 1);
+  const occurrences = io.out[0].split("https://example.test/pulls/3").length - 1;
+  assert.equal(occurrences, 1, `expected the url exactly once, got: ${io.out[0]}`);
+});
+
+// Negative first (companion to the above): "wrong" never prints a pull
+// request url, even when Inspector reported one - the task scopes the
+// print to "after accept" specifically.
+test("runVerdictCommand: wrong never prints a pull request url even when Inspector reported one", async () => {
+  const recordHome = tempRecordHome();
+  const inspector = {
+    async inspect() {
+      return { verdict: "green" as const, report: "ok", prUrl: "https://example.test/pulls/3" };
+    },
+  };
+  const task = await createForeman({ recordHome, inspector }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "wrong", "-m", "not what I asked for"], { recordHome, inspector, ...io });
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(io.out[0], /pull request/);
+});
+
 test("runVerdictCommand: wrong closes the task and reports so", async () => {
   const recordHome = tempRecordHome();
   const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {

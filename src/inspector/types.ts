@@ -12,12 +12,25 @@ import type {
 export interface Inspection {
   verdict: "green" | "red" | "refused";
   report: string;
+  /** The URL from Inspector's own "pull request: <url>" stdout line, when
+   * it printed one - never inferred from the verdict alone, so a green
+   * result that opened nothing carries no url. */
+  prUrl?: string;
 }
 
 /** The socket for Inspector's local handoff. Inspector reads HEAD from the
  * checked-out ProductionLine and owns any later publishing itself. */
 export interface Inspector {
-  inspect(request: { branch: string; workdir: string }): Promise<Inspection>;
+  inspect(request: {
+    branch: string;
+    workdir: string;
+    /** The task's own first line, trimmed - handed to Inspector so a
+     * green result's pull request carries it as the title. */
+    prTitle?: string;
+    /** The pull request body Fabrica wants Inspector to use if it opens
+     * one - written to a temp file and passed as -pr-body-file. */
+    prBody?: string;
+  }): Promise<Inspection>;
   /** Whether this Inspector can run at all (its command is installed).
    * Omitted means it can - a test's fake always can. */
   installed?(): boolean;

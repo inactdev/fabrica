@@ -5,7 +5,8 @@
 export const STANDING_QUESTION =
   "Before you change anything: if your planned solution works, is it the best one, all things considered - " +
   "safest first, then most accurate, then fastest? Name one alternative you rejected and why. Write this down " +
-  "before you start.";
+  "before you start. You cannot and need not commit - leave your changes in the working tree; Fabrica commits " +
+  "them.";
 
 /** `brief`, beginning with the standing question exactly once - applied
  * by every brief builder and again where the brief is handed over, so a
