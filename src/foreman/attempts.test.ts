@@ -92,13 +92,24 @@ test("truncation never stores a half-character left by cutting mid-symbol", () =
 // `onHeartbeat` is the only signal `fabrica status`/`watch` get that a
 // silent stretch is still progress and not a stuck worker.
 
+// A well-formed final message (final-message.ts) - these heartbeat tests
+// aren't about the write-up at all, but runAttempts now forces a gate
+// red whenever one is missing, so an empty transcript would otherwise
+// make "lastGate?.green" false here for a reason unrelated to what this
+// test is actually checking.
+const WELL_FORMED_FINAL_MESSAGE =
+  "Slow brain update\n\nWhat:\nSlept.\n\nWhy:\nTesting heartbeats.\n\nHow:\nA timer.\n\nDeviations:\nNone.";
+
 function slowBrain(delayMs: number): Brain {
   return {
     name: "slow",
     model: "slow-1",
     async work() {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
-      return { transcript: [], session: "s1" };
+      return {
+        transcript: [{ occurredAt: new Date().toISOString(), kind: "text", text: WELL_FORMED_FINAL_MESSAGE }],
+        session: "s1",
+      };
     },
     async ask() {
       return {};

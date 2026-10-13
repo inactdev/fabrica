@@ -324,16 +324,28 @@ test("a pr-opened event carries Inspector's reported url exactly once", async ()
   assert.deepEqual(prEvents[0].details, { url: "https://example.test/pulls/42" });
 });
 
-test("Inspector is handed the task's first line as pr-title and a body carrying the summary and Deviations section", async () => {
+// Pull requests must read like a human wrote them: Inspector is handed
+// the worker's own title and sections (final-message.ts), never the raw
+// task text - "Fix the login bug..." here is deliberately not what either
+// field carries.
+test("Inspector is handed the worker's own final-message title as pr-title and its sections as pr-body", async () => {
   const recordHome = freshHome();
   const inspector = fakeInspector({ verdict: "green", report: "ok" });
   const foreman = createForeman({ recordHome, inspector });
+  const brain = fakeBrain({
+    finalMessage:
+      "Fix retry on login timeout\n\nWhat:\nRetries once.\n\nWhy:\nIt happens on retry.\n\n" +
+      "How:\nAdded a retry.\n\nDeviations:\nNone.",
+  });
 
-  await foreman.do("Fix the login bug\n\nIt happens on retry.", { project: inspectedProject(), brain: fakeBrain() });
+  await foreman.do("Fix the login bug\n\nIt happens on retry.", { project: inspectedProject(), brain });
 
   assert.equal(inspector.calls.length, 1);
-  assert.equal(inspector.calls[0].prTitle, "Fix the login bug");
-  assert.match(inspector.calls[0].prBody ?? "", /^Completed: Fix the login bug\n\nIt happens on retry\.\n\nDeviations:\nNone\.\n$/);
+  assert.equal(inspector.calls[0].prTitle, "Fix retry on login timeout");
+  assert.equal(
+    inspector.calls[0].prBody,
+    "What:\nRetries once.\n\nWhy:\nIt happens on retry.\n\nHow:\nAdded a retry.\n\nDeviations:\nNone."
+  );
 });
 
 // Negative first: an Inspector that writes no report files leaves nothing

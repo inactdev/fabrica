@@ -19,9 +19,11 @@ function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-foreman-home-"));
 }
 
-// Negative first: nothing was declared, so the commit's Deviations
-// section says so plainly rather than leaving it blank or omitting it.
-test("the delivery commit's Deviations section says None when the worker declared no gate change", async () => {
+// Negative first: nothing was declared in the worker's own final message,
+// so the commit's Deviations section says so plainly rather than leaving
+// it blank or omitting it. (fakeBrain's default final message, not rule
+// 9's gateChanges declaration - see the next test for that distinction.)
+test("the delivery commit's Deviations section says None when the worker's final message declared no deviation", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n") });
@@ -33,19 +35,99 @@ test("the delivery commit's Deviations section says None when the worker declare
   assert.match(message, /Deviations:\nNone\./);
 });
 
-test("the delivery commit's Deviations section carries the worker's own declared gate change", async () => {
+// rule 9's gateChanges declaration and the final message's own Deviations
+// section are two different things: gateChanges still lands on
+// delivery.gateChanges for CI's rule-9 enforcement, but it is never what
+// the commit's Deviations section shows any more - only the worker's own
+// write-up is.
+test("the delivery commit's Deviations section carries the worker's own write-up, not rule 9's gateChanges declaration", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
     gateChanges: "widened check.sh's timeout because the suite grew",
+    finalMessage:
+      "Widen the check timeout\n\nWhat:\nWidened check.sh's timeout.\n\nWhy:\nThe suite grew.\n\n" +
+      "How:\nBumped the sleep value.\n\nDeviations:\nWidened check.sh's timeout because the suite grew.",
   });
 
   const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
 
   const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.gateChanges, "widened check.sh's timeout because the suite grew");
   const message = execSync(`git log -1 --format=%B ${delivery!.branch}`, { cwd: project, encoding: "utf8" });
-  assert.match(message, /Deviations:\nwidened check\.sh's timeout because the suite grew/);
+  assert.match(message, /Deviations:\nWidened check\.sh's timeout because the suite grew\./);
+});
+
+// Negative first (pull requests must read like a human wrote them): a
+// worker that never writes a title line is refused a "done" delivery -
+// Fabrica names what's missing rather than falling back to the task text.
+test("a worker's final message with no title line is refused, not delivered as done", async () => {
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
+    finalMessage: "What:\nDid the work.\n\nWhy:\nAsked to.\n\nHow:\nDirectly.\n\nDeviations:\nNone.",
+  });
+
+  const task = await doTask(recordHome, "small change", {
+    project,
+    brain,
+    checkBox: fixtureCheckBox().box,
+    attempts: 1,
+  });
+
+  assert.equal(task.state, "failed");
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "failure-report");
+  assert.match(delivery!.evidence, /missing a title line/);
+});
+
+test("a worker's final message with no Deviations section is refused, not delivered as done", async () => {
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
+    finalMessage: "Add the feature\n\nWhat:\nDid the work.\n\nWhy:\nAsked to.\n\nHow:\nDirectly.",
+  });
+
+  const task = await doTask(recordHome, "small change", {
+    project,
+    brain,
+    checkBox: fixtureCheckBox().box,
+    attempts: 1,
+  });
+
+  assert.equal(task.state, "failed");
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "failure-report");
+  assert.match(delivery!.evidence, /missing a "Deviations" section/);
+});
+
+test("a well-formed final message becomes the delivery commit's exact subject and body", async () => {
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
+    finalMessage:
+      "Add the login retry fix\n\nWhat:\nRetries login on timeout.\n\n" +
+      "Why:\nUsers were seeing spurious failures.\n\nHow:\nWrapped the call in a retry loop.\n\n" +
+      "Deviations:\nNone.",
+  });
+
+  const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
+
+  assert.equal(task.state, "delivered");
+  const delivery = deliveryOf(recordHome, task.id);
+  const message = execSync(`git log -1 --format=%B ${delivery!.branch}`, { cwd: project, encoding: "utf8" });
+  assert.equal(
+    message.trim(),
+    "Add the login retry fix\n\n" +
+      "What:\nRetries login on timeout.\n\n" +
+      "Why:\nUsers were seeing spurious failures.\n\n" +
+      "How:\nWrapped the call in a retry loop.\n\n" +
+      "Deviations:\nNone."
+  );
 });
 
 test("doTask on a green project delivers after exactly one attempt", async () => {
@@ -80,6 +162,13 @@ function sleep(ms: number): Promise<void> {
  * behavior (issue #70): reports three entries with real pauses between
  * them via emitLiveTranscriptEntry, the same channel the reference
  * adapter uses, before resolving. */
+// The last "text" entry is read back as the worker's final message
+// (final-message.ts) - it must parse, or runAttempts forces a retry and
+// this brain's live entries land on disk twice over. "first"/"second"
+// stand in for ordinary mid-session output; only the last entry needs to
+// be well-formed.
+const THIRD_ENTRY_TEXT = "THIRD-MARKER\n\nWhat:\na\n\nWhy:\nb\n\nHow:\nc\n\nDeviations:\nNone.";
+
 function liveStreamingBrain(): Brain {
   return {
     name: "streaming-fake",
@@ -93,12 +182,12 @@ function liveStreamingBrain(): Brain {
       await sleep(150);
       emitLiveTranscriptEntry(workdir, { occurredAt: now(), kind: "text", text: "second" });
       await sleep(150);
-      emitLiveTranscriptEntry(workdir, { occurredAt: now(), kind: "text", text: "third" });
+      emitLiveTranscriptEntry(workdir, { occurredAt: now(), kind: "text", text: THIRD_ENTRY_TEXT });
       return {
         transcript: [
           { occurredAt: now(), kind: "text", text: "first" },
           { occurredAt: now(), kind: "text", text: "second" },
-          { occurredAt: now(), kind: "text", text: "third" },
+          { occurredAt: now(), kind: "text", text: THIRD_ENTRY_TEXT },
         ],
         session: "s1",
       };
@@ -137,7 +226,7 @@ test("doTask writes each transcript entry to disk as it arrives, not batched at 
   const whileRunning = readTaskFile(recordHome, taskId!, "transcript.log") ?? "";
   assert.ok(whileRunning.includes('"first"'), "the first entry should already be on disk");
   assert.ok(
-    !whileRunning.includes('"third"'),
+    !whileRunning.includes("THIRD-MARKER"),
     "the third entry is still 150ms+ away inside the brain - it must not be on disk yet"
   );
 
@@ -150,7 +239,7 @@ test("doTask writes each transcript entry to disk as it arrives, not batched at 
   // The last two entries are this adapter's own synthesized `first`,
   // `second`, `third` text entries, in order, with nothing duplicated or
   // dropped between the live writes and runAttempts' own catch-up pass.
-  assert.deepEqual(texts, ["first", "second", "third"]);
+  assert.deepEqual(texts, ["first", "second", THIRD_ENTRY_TEXT]);
 });
 
 test("doTask writes brief.md verbatim from the request, for every task", async () => {
