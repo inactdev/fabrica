@@ -24,7 +24,8 @@ import { requireGateBaseline } from "./gate-changes.ts";
 import { ForemanError } from "./errors.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { handToInspector } from "./inspection.ts";
-import { buildPrBody, firstLineTrimmed } from "./pr-body.ts";
+import { renderCommitMessage } from "./pr-body.ts";
+import type { FinalMessageForCommit } from "./pr-body.ts";
 
 /** One attempt's judgement. Only "verdict" is a red or green result; the
  * rest stop the loop with no verdict at all. */
@@ -37,7 +38,7 @@ export type Judgement =
   /** Committing the attempt for Inspector failed (a host problem). */
   | { kind: "commit-failed"; error: string };
 
-export type Judge = (attempt: number, gateChanges?: string) => Promise<Judgement>;
+export type Judge = (attempt: number, gateChanges: string | undefined, finalMessage: FinalMessageForCommit) => Promise<Judgement>;
 
 export type CheckMode = { mode: "inspector"; inspector: Inspector } | { mode: "self-test"; reason: string };
 
@@ -64,21 +65,22 @@ export function inspectorJudge(
   taskId: string,
   line: ProductionLine,
   baseCommit: string,
-  inspector: Inspector,
-  commitMessage: string,
-  taskText: string
+  inspector: Inspector
 ): Judge {
-  return async (_attempt, gateChanges) => {
-    // Inspector judges a commit, so the attempt is committed first.
+  return async (_attempt, _gateChanges, finalMessage) => {
+    // Inspector judges a commit, so the attempt is committed first - with
+    // the same title/body this attempt's own final message resolved to,
+    // so the commit Inspector diffs and the pull request it may open
+    // never disagree about what this attempt calls itself.
     try {
-      commitWorktreeChanges(line.workdir, commitMessage);
+      commitWorktreeChanges(line.workdir, renderCommitMessage(finalMessage));
     } catch (err) {
       if (err instanceof ForemanError && err.code === "commit-failed") return { kind: "commit-failed", error: err.message };
       throw err;
     }
     const inspection = (await handToInspector(recordHome, taskId, line, baseCommit, inspector, {
-      prTitle: firstLineTrimmed(taskText),
-      prBody: buildPrBody(taskText, gateChanges),
+      prTitle: finalMessage.title,
+      prBody: finalMessage.body,
     }))!;
     if (inspection.verdict === "refused") return { kind: "refused", inspection };
     const gate: GateResult = {
@@ -126,7 +128,7 @@ export function prepareRound(
   taskId: string,
   line: ProductionLine,
   baseCommit: string,
-  opts: { inspector?: Inspector; checkBox?: CheckBox; commitMessage: string; taskText: string }
+  opts: { inspector?: Inspector; checkBox?: CheckBox }
 ): { judge: Judge; mode: CheckMode; protectedPathApplies: boolean } {
   const check = resolveCheckCommand(recordHome, line.project);
   const mode = chooseCheckMode(line, baseCommit, opts.inspector);
@@ -148,7 +150,7 @@ export function prepareRound(
 
   const judge =
     mode.mode === "inspector"
-      ? inspectorJudge(recordHome, taskId, line, baseCommit, mode.inspector, opts.commitMessage, opts.taskText)
+      ? inspectorJudge(recordHome, taskId, line, baseCommit, mode.inspector)
       : selfTestJudge(recordHome, taskId, line, check, opts.checkBox ?? defaultCheckBox());
   return { judge, mode, protectedPathApplies };
 }

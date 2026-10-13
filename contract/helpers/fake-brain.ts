@@ -30,6 +30,11 @@ export function fakeBrain(
      * costUsd). A fake spends nothing, so it reports 0 unless told
      * otherwise; null reports a cost it cannot say. */
     askCostUsd?: number | null;
+    /** The worker's final message (final-message.ts): a title line plus
+     * What/Why/How/Deviations sections. Defaults to a well-formed one so
+     * ordinary tests still see a "done" delivery without having to
+     * construct this themselves; override it to test a malformed one. */
+    finalMessage?: string;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -56,8 +61,11 @@ export function fakeBrain(
       workOptions.push(workOpts);
       briefs.push(brief);
       opts.onWork?.(workdir);
+      const finalMessage =
+        opts.finalMessage ??
+        `Fake brain update\n\nWhat:\nfake brain saw: ${brief}\n\nWhy:\nTesting.\n\nHow:\nDirectly.\n\nDeviations:\nNone.`;
       const transcript: TranscriptEntry[] = [
-        { occurredAt: new Date().toISOString(), kind: "text", text: `fake brain saw: ${brief}` },
+        { occurredAt: new Date().toISOString(), kind: "text", text: finalMessage },
       ];
       if (opts.costUsd !== undefined) {
         transcript.push({

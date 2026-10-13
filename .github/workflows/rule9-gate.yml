@@ -247,3 +247,47 @@ jobs:
           done <<< "$TEST_PROTECTED_PATHS"
 
           echo "No protected path touched."
+
+  # "inspector stamp" - a required-status-check gate that relays
+  # Inspector's own verdict onto the pull request itself. Inspector posts
+  # a commit status named "inspector" on the branch it inspects (its own
+  # repository owns that; nothing here posts it) - this job only asks the
+  # API for that status on the pull request's head commit and reports it
+  # as its own check, so a merge Inspector never saw at all is exactly as
+  # visible in branch protection as one it marked red. Same `pull_request_
+  # target` trigger (declared once, above, for the whole file) as
+  # block-protected-path-change, and the same reason: the job's own
+  # definition must come from the base branch, or a pull request could
+  # edit this step to report success regardless of what Inspector said.
+  # No checkout, ever - only the GitHub API is asked, and only for the
+  # head commit's own recorded status.
+  inspector-stamp:
+    name: inspector stamp
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: read
+    steps:
+      - name: Relay Inspector's commit status onto this pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # The combined-status endpoint already resolves to the latest
+          # status per context, so there is no need to page through every
+          # status this commit has ever received looking for "inspector"'s
+          # most recent one.
+          state=$(gh api "repos/$REPO/commits/$HEAD_SHA/status" --jq '.statuses[]? | select(.context == "inspector") | .state')
+
+          if [ -z "$state" ]; then
+            echo "::error::no inspector stamp"
+            exit 1
+          fi
+
+          if [ "$state" = "success" ]; then
+            echo "Inspector reported success on $HEAD_SHA."
+            exit 0
+          fi
+
+          echo "::error::Inspector reported \"$state\" on $HEAD_SHA - this pull request is not green."
+          exit 1

@@ -49,6 +49,12 @@ export function fakeBrain(
      * nothing, so 0 unless told otherwise; null reports a cost it cannot
      * say. */
     askCostUsd?: number | null;
+    /** The worker's final message (src/foreman/final-message.ts): a
+     * title line plus What/Why/How/Deviations sections. Defaults to a
+     * well-formed one so ordinary tests still see a "done" delivery
+     * without having to construct this themselves; override it to test
+     * a malformed one. */
+    finalMessage?: string;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -93,10 +99,14 @@ export function fakeBrain(
       history.push(brief);
       historyBySession.set(session, history);
 
+      const finalMessage =
+        opts.finalMessage ??
+        `Fake brain update\n\nWhat:\nfake brain saw ${history.length} brief(s) on session ${session}: ` +
+          `${history.join(" | ")}\n\nWhy:\nTesting.\n\nHow:\nDirectly.\n\nDeviations:\nNone.`;
       const entry: TranscriptEntry = {
         occurredAt: new Date().toISOString(),
         kind: "text",
-        text: `fake brain saw ${history.length} brief(s) on session ${session}: ${history.join(" | ")}`,
+        text: finalMessage,
       };
       const transcript: TranscriptEntry[] = [entry];
       if (opts.costUsd !== undefined) {

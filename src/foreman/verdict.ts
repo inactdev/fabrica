@@ -22,7 +22,7 @@ import { prepareRound, roundOutcome } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { commitWorktreeChanges } from "./commit.ts";
-import { buildCommitMessage } from "./pr-body.ts";
+import { renderCommitMessage } from "./pr-body.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
@@ -192,13 +192,18 @@ async function runFixRound(
     const { judge, mode, protectedPathApplies } = prepareRound(recordHome, taskId, line, baseCommit, {
       inspector,
       checkBox,
-      commitMessage: `fabrica: ${taskId} (fix)`,
-      taskText,
     });
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
-    const { receipts: newReceipts, lastGate, lastJudgement, declaredGateChanges: roundGateChanges, capStop } = await runAttempts({
+    const {
+      receipts: newReceipts,
+      lastGate,
+      lastJudgement,
+      declaredGateChanges: roundGateChanges,
+      capStop,
+      finalMessage,
+    } = await runAttempts({
       brain,
       brief: buildFixBrief(originalBrief, note),
       workdir: line.workdir,
@@ -210,6 +215,7 @@ async function runFixRound(
       onReceipt: (receipt) => recordReceipt(recordHome, receipt),
       initialSession: lastSession,
       startAttempt: priorReceipts.length + 1,
+      commitLabel: "(fix)",
       onHeartbeat: (attempt) => {
         appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
       },
@@ -244,7 +250,7 @@ async function runFixRound(
     let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
     if (commitError === undefined) {
       try {
-        commitWorktreeChanges(line.workdir, buildCommitMessage(`fabrica: ${taskId} (fix)`, declaredGateChanges));
+        commitWorktreeChanges(line.workdir, renderCommitMessage(finalMessage));
       } catch (err) {
         if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
         commitError = err.message;

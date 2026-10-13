@@ -14,7 +14,7 @@ import { ForemanError } from "./errors.ts";
 import { gateWasTouched } from "./gate-changes.ts";
 import { prepareRound, roundOutcome } from "./judge.ts";
 import { commitWorktreeChanges } from "./commit.ts";
-import { buildCommitMessage } from "./pr-body.ts";
+import { renderCommitMessage } from "./pr-body.ts";
 import { runAttempts } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, deliveredState, renderDeliveryMarkdown } from "./delivery.ts";
 import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
@@ -188,8 +188,6 @@ async function productionRound(
     const { judge, mode, protectedPathApplies } = prepareRound(recordHome, taskId, line, baseCommit, {
       inspector,
       checkBox,
-      commitMessage: `fabrica: ${taskId}`,
-      taskText,
     });
 
     // `project` rides on work-started's details, not a dedicated event -
@@ -198,7 +196,7 @@ async function productionRound(
     // open task without waiting for delivery.
     appendEvent(recordHome, { taskId, name: "work-started", details: { project: line.project } });
 
-    const { receipts, lastGate, lastJudgement, declaredGateChanges, capStop } = await runAttempts({
+    const { receipts, lastGate, lastJudgement, declaredGateChanges, capStop, finalMessage } = await runAttempts({
       brain,
       brief,
       workdir: line.workdir,
@@ -255,7 +253,7 @@ async function productionRound(
     let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
     if (commitError === undefined) {
       try {
-        commitWorktreeChanges(line.workdir, buildCommitMessage(`fabrica: ${taskId}`, declaredGateChanges));
+        commitWorktreeChanges(line.workdir, renderCommitMessage(finalMessage));
       } catch (err) {
         if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
         commitError = err.message;

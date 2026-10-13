@@ -12,6 +12,9 @@ import type { GateResult, Receipt } from "../../contract/surface.ts";
 import type { Judge, Judgement } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { costFromTranscript } from "./spend.ts";
+import { describeMissingFinalMessage } from "./final-message.ts";
+import { finalMessageFor } from "./pr-body.ts";
+import type { FinalMessageForCommit } from "./pr-body.ts";
 
 /** How often a "heartbeat" event lands while a Worker's single `brain.work`
  * call is in flight (issue #12) - that call is one long, opaque await with
@@ -35,6 +38,11 @@ export interface AttemptLoopResult {
   /** Set when rule 10 stopped the loop before it would otherwise have
    * ended - the last receipt's outcome is then "cap-stopped". */
   capStop?: CapStop;
+  /** The last attempt's final message, resolved to something committable
+   * either way (final-message.ts's parse, or a fallback naming what was
+   * missing) - never the task's own words. What do.ts/verdict.ts commit
+   * onto the branch once the loop ends. */
+  finalMessage: FinalMessageForCommit;
 }
 
 /** Why rule 10 stopped a running task, and the numbers behind it. */
@@ -95,6 +103,11 @@ export async function runAttempts(opts: {
   /** Fires with each attempt's receipt the moment it exists, so its
    * spend is on the record even while the task is still running. */
   onReceipt?: (receipt: Receipt) => void;
+  /** A short label appended to the fallback commit title used when a
+   * worker's final message doesn't parse (e.g. "(fix)" for verdict.ts's
+   * fix round) - so even the fallback distinguishes an ordinary round
+   * from a fix round, the way the old static commit messages did. */
+  commitLabel?: string;
 }): Promise<AttemptLoopResult> {
   const {
     brain,
@@ -111,7 +124,10 @@ export async function runAttempts(opts: {
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
     spendLimits,
     onReceipt,
+    commitLabel,
   } = opts;
+
+  const fallbackTitle = commitLabel ? `fabrica: ${taskId} ${commitLabel}` : `fabrica: ${taskId}`;
 
   const receipts: Receipt[] = [];
   let session: string | undefined = initialSession;
@@ -120,6 +136,7 @@ export async function runAttempts(opts: {
   let declaredGateChanges: string | undefined;
   let spentUsd = spendLimits?.priorKnownUsd ?? 0;
   let capStop: CapStop | undefined;
+  let lastFinalMessage: FinalMessageForCommit | undefined;
 
   const firstAttempt = startAttempt ?? 1;
   const lastAttempt = firstAttempt + totalAttempts - 1;
@@ -168,9 +185,25 @@ export async function runAttempts(opts: {
     if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
 
     const durationMs = Date.now() - t0;
-    const judgement = await judge(attempt, workResult.gateChanges);
-    lastJudgement = judgement;
-    const gate = judgement.kind === "verdict" ? judgement.gate : undefined;
+    // Resolved once per attempt - the same {title, body} this attempt's
+    // own commit and (in Inspector mode) its pull request use, so a
+    // malformed final message is never judged as green: a gate that was
+    // otherwise green gets forced red here, naming what's missing, which
+    // is also what the next attempt's correction brief quotes back.
+    const finalMessage = finalMessageFor(workResult.transcript, fallbackTitle);
+    lastFinalMessage = finalMessage;
+    const judgement = await judge(attempt, workResult.gateChanges, finalMessage);
+    const rawGate = judgement.kind === "verdict" ? judgement.gate : undefined;
+    const gate =
+      rawGate && !finalMessage.ok
+        ? {
+            green: false,
+            output: rawGate.green
+              ? describeMissingFinalMessage(finalMessage.missing!)
+              : `${rawGate.output}\n\n${describeMissingFinalMessage(finalMessage.missing!)}`,
+          }
+        : rawGate;
+    lastJudgement = gate && judgement.kind === "verdict" ? { ...judgement, gate } : judgement;
     if (gate) lastGate = gate;
 
     const costUsd = costFromTranscript(workResult.transcript);
@@ -210,7 +243,14 @@ export async function runAttempts(opts: {
     if (capStop || !gate || (gate.green && stopEarlyOnGreen)) break;
   }
 
-  return { receipts, lastGate, lastJudgement: lastJudgement!, declaredGateChanges, ...(capStop ? { capStop } : {}) };
+  return {
+    receipts,
+    lastGate,
+    lastJudgement: lastJudgement!,
+    declaredGateChanges,
+    finalMessage: lastFinalMessage!,
+    ...(capStop ? { capStop } : {}),
+  };
 }
 
 /** How much of a check's output anything stored in the record keeps — a
