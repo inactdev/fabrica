@@ -11,6 +11,7 @@ export type { TaskFollower, TaskProgress } from "./follow.ts";
 export { fixRoundOf, eventsByTask, stateOf } from "./queries.ts";
 export { capsActive } from "./caps.ts";
 export {
+  daySpend,
   describeTaskCost,
   describeUnmeasured,
   formatUsd,

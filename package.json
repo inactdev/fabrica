@@ -7,8 +7,9 @@
     "fabrica": "./src/cli/bin.mjs"
   },
   "scripts": {
-    "test": "npm run typecheck && tsx --test $(find contract src -name '*.test.ts' | sort)",
-    "typecheck": "tsc --noEmit"
+    "test": "npm run typecheck && tsx --test $(find contract src integrations -name '*.test.ts' | sort)",
+    "typecheck": "tsc --noEmit",
+    "live": "tsx integrations/live-view/start.ts"
   },
   "dependencies": {
     "smol-toml": "^1.7.1",

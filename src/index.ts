@@ -18,6 +18,7 @@ export { followTask } from "./foreman/index.ts";
 // Rule 10's ledger, for `fabrica status` and `fabrica cost` (issue #11).
 export {
   capsActive,
+  daySpend,
   describeTaskCost,
   describeUnmeasured,
   formatUsd,
@@ -71,4 +72,5 @@ export type { BlockedEditAttempt } from "./offbooks/index.ts";
 // (`eventsByTask` above is grouped by task; this is the flat, whole-record
 // list `readEvents(...).length`/`.slice(...)` needs - a different shape,
 // not a duplicate. `FabricaEvent` itself is already exported above.)
-export { readEvents } from "./record/index.ts";
+export { readEvents, readTaskFile, TASK_ID_PATTERN } from "./record/index.ts";
+export type { TaskFile } from "./record/index.ts";
