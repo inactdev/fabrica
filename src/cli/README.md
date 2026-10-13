@@ -235,6 +235,47 @@ adapter- and Inspector-specific checks live beside those modules
 (`src/brain/adapters/doctor-checks.ts`, `src/inspector/doctor-checks.ts`);
 this command only prints them.
 
+## `fabrica up`
+
+Starts a working session from inside a registered project's folder, in
+three steps (`up-command.ts`): (1) runs `fabrica doctor`'s own checks in
+process and stops, printing the doctor output, on any FAIL - nothing
+below ever runs if the machine itself isn't ready; (2) starts the live
+view (`integrations/live-view`) the same detached way `fabrica do`
+backgrounds a task (`spawnDetachedLiveView`, reusing `spawn-detached.ts`'s
+mechanism), unless something is already listening on `127.0.0.1:7777` -
+checked with a real TCP probe, not a pid file, so a live view started by
+hand or a previous `fabrica up` is detected the same way - in which case
+its address is printed instead and no browser opens; a freshly started
+one gets its default browser opened once it's confirmed listening; (3)
+launches the chat harness in the foreground, in the current folder, with
+HANDBOOK.md's contents appended to its system prompt and this harness's
+own `settings.json` loaded, both through the harness's own documented
+command-line flags for an appended system prompt and a settings file
+(read from the installed harness's own `--help` output, never guessed) -
+nothing is ever written into the project folder's own session-config
+folder.
+
+Which harness, and how to invoke it, is deliberately not named in
+`up-command.ts` itself - CONTRACT rule 8's brain-word scan covers all of
+`src/` outside `src/brain/adapters/`, and a harness's name is as much a
+violation there as a brain's (see `verify-hook-command.ts`'s identical
+reasoning for its own per-harness script). `loadHarnessLauncher` scans
+`skill/` at runtime for a `skill/<harness>/launch.ts` exporting `launch`
+and `harnessAvailable`, the same shape and discovery mechanism
+`verify-hook-command.ts`'s `loadHarnessVerifier` uses for `verify.ts` -
+deliberately a second, separate loader rather than a shared one, since
+`loadHarnessVerifier` is a settled, heavily tested module this had no
+reason to touch. The harness's own `settings.json` is read from the same
+directory `launch.ts` was found in.
+
+`fabrica up` is denied to the chat agent itself in every shipped
+`skill/<harness>/settings.json` (`skill-settings.test.ts`'s
+`NEVER_FROM_CHAT_COMMANDS`) - not because it records the Client's own
+judgment like `verdict`/`answer`/`cost` do, but because it launches a
+second interactive session from inside the one already running; an AI
+driving the Bash tool must never be allowed to spawn a copy of itself.
+
 ## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
 
 Issue #12 - the Client's eyes on a detached task, without reading record
