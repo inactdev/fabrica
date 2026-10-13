@@ -53,6 +53,22 @@ export function deliveryOf(recordHome: string, taskId: string): Delivery | null 
   return (events[deliveredIndex]?.details as DeliveredDetails | undefined)?.delivery ?? null;
 }
 
+/** True exactly when Inspector refused before this task ever reached a
+ * delivery at all — nothing to accept or fix (no delivery details to
+ * reopen a line from, no brain memory of a verdict to repair toward), but
+ * a real terminal outcome the Client can still close with a "wrong"
+ * verdict (rule 6's one exception for this state) rather than being stuck
+ * refusing every ruling forever. Deliberately narrower than "the latest
+ * inspection-finished is a refusal" (deliveryOf's own check, above): a fix
+ * round's refusal that supersedes an EARLIER real delivery still has that
+ * delivery for the Client to rule on directly, so it is not this case. */
+export function refusedWithNoDelivery(events: FabricaEvent[]): boolean {
+  const deliveredIndex = events.map((event) => event.name).lastIndexOf("delivered");
+  if (deliveredIndex !== -1) return false;
+  const latestInspection = events.filter((event) => event.name === "inspection-finished").at(-1);
+  return (latestInspection?.details as { verdict?: string } | undefined)?.verdict === "refused";
+}
+
 export function receiptsOf(recordHome: string, taskId: string): Receipt[] {
   const events = readEventsForTask(recordHome, taskId);
   const receiptEvent = events

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
+import type { Brain } from "../brain/index.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
@@ -71,6 +72,53 @@ test("a green Fabrica check hands a configured branch to Inspector before delive
   assert.deepEqual(io.err, []);
   assert.ok(io.out.some((line) => line.includes(`Inspector called for ${delivery?.branch}`)));
   assert.ok(io.out.some((line) => line.includes("Inspector green: independent check passed")));
+});
+
+// Negative first (the write-up rule's own fix #1): a worker whose final
+// message doesn't parse is red on that alone - judge() never runs for
+// that attempt, so there is no commit, no Inspector call, and no pull
+// request for it. Only once a later attempt's write-up actually parses
+// does any of that happen - exactly once, for that attempt alone.
+test("a malformed final message is red with no commit, no Inspector call, and no PR - a later valid one produces exactly one of each", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
+  const inspector = fakeInspector({ verdict: "green", report: "ok", prUrl: "https://example.test/pulls/7" });
+  const messages = [
+    `${"x".repeat(145)}\n\nWhat:\na\n\nWhy:\nb\n\nHow:\nc\n\nDeviations:\nNone.`,
+    "Add the feature\n\nWhat:\na\n\nWhy:\nb\n\nHow:\nc\n\nDeviations:\nNone.",
+  ];
+  let calls = 0;
+  const brain: Brain = {
+    name: "fake",
+    model: "fake-1",
+    async ask() {
+      return {};
+    },
+    async work(_brief, workdir) {
+      writeFileSync(join(workdir, `feature-${calls}.txt`), "work\n");
+      const text = messages[calls++];
+      return { transcript: [{ occurredAt: new Date().toISOString(), kind: "text", text }], session: "s1" };
+    },
+  };
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("small change", { project, brain, attempts: 2 });
+
+  assert.equal(calls, 2, "both attempts ran - the malformed one is a correctable red, not a stop");
+  assert.equal(task.state, "delivered");
+  const delivery = await foreman.deliveryOf(task.id);
+  assert.equal(delivery?.outcome, "done");
+  assert.equal(inspector.calls.length, 1, "Inspector is never called for the malformed attempt");
+
+  const commitCount = execSync(`git rev-list --count ${baseCommit}..${delivery!.branch}`, {
+    cwd: project,
+    encoding: "utf8",
+  }).trim();
+  assert.equal(commitCount, "1", "exactly one commit - the malformed attempt is never committed");
+
+  const events = await foreman.events(task.id);
+  assert.equal(events.filter((event) => event.name === "pr-opened").length, 1);
 });
 
 test("an Inspector red report reaches the Client and a fix returns to the same warm worker and branch", async () => {

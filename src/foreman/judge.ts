@@ -68,10 +68,14 @@ export function inspectorJudge(
   inspector: Inspector
 ): Judge {
   return async (_attempt, _gateChanges, finalMessage) => {
-    // Inspector judges a commit, so the attempt is committed first - with
-    // the same title/body this attempt's own final message resolved to,
-    // so the commit Inspector diffs and the pull request it may open
-    // never disagree about what this attempt calls itself.
+    // attempts.ts only calls judge() at all once finalMessage.ok is true -
+    // a malformed write-up never reaches here, so this commit (and the
+    // pull request Inspector may open from it) is only ever made with a
+    // valid write-up as its message. Inspector judges a commit, so the
+    // attempt is committed first - with the same title/body this attempt's
+    // own final message resolved to, so the commit Inspector diffs and the
+    // pull request it may open never disagree about what this attempt
+    // calls itself.
     try {
       commitWorktreeChanges(line.workdir, renderCommitMessage(finalMessage));
     } catch (err) {

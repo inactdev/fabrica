@@ -16,7 +16,7 @@ import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTask
 import { destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
-import { latestDeliveredDetails } from "./queries.ts";
+import { latestDeliveredDetails, refusedWithNoDelivery } from "./queries.ts";
 import { gateWasTouched } from "./gate-changes.ts";
 import { prepareRound, roundOutcome } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
@@ -68,7 +68,18 @@ export async function recordVerdict(
   const deliveredIndex = events.map((event) => event.name).lastIndexOf("delivered");
   const latestInspection = events.filter((event) => event.name === "inspection-finished").at(-1);
   const inspectionVerdict = (latestInspection?.details as { verdict?: string } | undefined)?.verdict;
-  if (inspectionVerdict === "refused" && events.lastIndexOf(latestInspection!) > deliveredIndex) {
+  // A task Inspector refused before it ever reached a delivery has
+  // nothing for "accept" or "fix" to work with - no delivery details to
+  // reopen a line from, no verdict to repair toward - so those two stay
+  // refused exactly as below. "wrong" needs none of that (it only closes
+  // the task), so it is the one ruling the Client can still use to close
+  // this state instead of it refusing every ruling forever (Client ruling).
+  const closesRefusedWithNoDelivery = ruling === "wrong" && refusedWithNoDelivery(events);
+  if (
+    inspectionVerdict === "refused" &&
+    events.lastIndexOf(latestInspection!) > deliveredIndex &&
+    !closesRefusedWithNoDelivery
+  ) {
     throw new ForemanError(
       "inspection-refused",
       `fabrica verdict: Inspector reached no verdict for task "${taskId}". Read \`fabrica log ${taskId}\`, ` +
@@ -76,7 +87,7 @@ export async function recordVerdict(
     );
   }
 
-  if (deliveredIndex === -1) {
+  if (deliveredIndex === -1 && !closesRefusedWithNoDelivery) {
     throw new ForemanError(
       "not-delivered",
       `fabrica verdict: task "${taskId}" has not been delivered yet — there is nothing to rule on until ` +
