@@ -5,7 +5,7 @@ import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createForeman } from "../index.ts";
+import { createForeman, daySpend, formatUsd, readEvents, recordBlockedEditAttempt } from "../index.ts";
 import { appendEvent, recordPath } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
@@ -32,11 +32,63 @@ function captureIo() {
   return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
 }
 
+// Issues #81/#110: every successful run now opens with a "spent in the
+// last 24 hours" line and may close with a "blocked edit attempts on
+// record" one - neither is a task row. Tests written before those
+// existed assert on task rows by position; this strips both so those
+// assertions don't have to be reindexed by hand, while the lines
+// themselves get their own dedicated tests below.
+function taskRows(out: string[]): string[] {
+  return out.filter(
+    (line) => !line.startsWith("spent in the last 24 hours:") && !line.startsWith("blocked edit attempts on record:")
+  );
+}
+
 test("runStatusCommand: no tasks at all says so plainly", async () => {
   const io = captureIo();
   const code = await runStatusCommand([], { recordHome: tempRecordHome(), ...io });
   assert.equal(code, 0);
-  assert.deepEqual(io.out, ["No open tasks."]);
+  assert.deepEqual(taskRows(io.out), ["No open tasks."]);
+});
+
+// Issues #81/#110: recordBlockedEditAttempt keys an unattributed blocked
+// edit to "project:unregistered" (src/offbooks/blocked-edit.ts) - never a
+// real task, so a record holding only these must show no task rows at
+// all, just the quiet count at the bottom. Negative first, before the
+// positive "mixed with a real task" case below.
+test("runStatusCommand: a record with only project:unregistered events shows no task rows, just the blocked-edit count", async () => {
+  const recordHome = tempRecordHome();
+  recordBlockedEditAttempt(recordHome, { tool: "Write", cwd: "/some/other/place" });
+  recordBlockedEditAttempt(recordHome, { tool: "Edit", cwd: "/some/other/place" });
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.deepEqual(taskRows(io.out), ["No open tasks."]);
+  assert.ok(io.out.includes("blocked edit attempts on record: 2"), `missing the blocked-edit count line: ${JSON.stringify(io.out)}`);
+});
+
+// Same filtering, this time with a registered project's bucket alongside
+// a real open task - the phantom bucket must still never surface as a row.
+test("runStatusCommand: a project:<name> blocked-edit bucket never shows as a task row, even alongside a real one", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  writeFileSync(join(recordHome, "projects.toml"), `[projects.spending-app]\npath = "${project}"\n`);
+  recordBlockedEditAttempt(recordHome, { tool: "Edit", cwd: project });
+  const openTask = await createForeman({ recordHome, inspector: fixtureInspector() }).do("still open", {
+    project,
+    brain: fakeBrain({ askQuestions: ["what should this do?"] }),
+  });
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1);
+  assert.match(rows[0], new RegExp(`^${openTask.id}\\s`));
+  assert.ok(io.out.includes("blocked edit attempts on record: 1"), `missing the blocked-edit count line: ${JSON.stringify(io.out)}`);
 });
 
 test("runStatusCommand: a delivered task is flagged as awaiting the Client's verdict", async () => {
@@ -48,11 +100,12 @@ test("runStatusCommand: a delivered task is flagged as awaiting the Client's ver
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.equal(io.out.length, 1);
-  assert.match(io.out[0], new RegExp(`^${task.id}\\s`));
-  assert.match(io.out[0], /delivered/);
-  assert.match(io.out[0], /AWAITING YOUR VERDICT/);
-  assert.match(io.out[0], new RegExp(project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1);
+  assert.match(rows[0], new RegExp(`^${task.id}\\s`));
+  assert.match(rows[0], /delivered/);
+  assert.match(rows[0], /AWAITING YOUR VERDICT/);
+  assert.match(rows[0], new RegExp(project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("runStatusCommand: a closed task (verdict recorded) drops off the list", async () => {
@@ -65,7 +118,7 @@ test("runStatusCommand: a closed task (verdict recorded) drops off the list", as
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.deepEqual(io.out, ["No open tasks."]);
+  assert.deepEqual(taskRows(io.out), ["No open tasks."]);
 });
 
 test("runStatusCommand: an unknown flag is refused with exact instructions, not ignored", async () => {
@@ -114,7 +167,7 @@ test("runStatusCommand: a task mid-check says so plainly, with real elapsed time
   await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...doIo });
   const taskId = doIo.out[0];
 
-  const out = await statusUntil(recordHome, /checking/);
+  const out = taskRows(await statusUntil(recordHome, /checking/));
 
   assert.equal(out.length, 1);
   assert.match(out[0], new RegExp(`^${taskId}\\s`));
@@ -148,10 +201,11 @@ test("runStatusCommand: a check stuck past its own long ceiling is flagged quiet
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.match(io.out[0], /checking/, "state itself is still checking");
-  assert.match(io.out[0], /and still not finished/, "but past the ceiling it names the stuck check, not honest progress");
-  assert.doesNotMatch(io.out[0], /heartbeat/, "no heartbeat is ever emitted during a check");
-  assert.doesNotMatch(io.out[0], /checking, .* so far/, "the plain elapsed line steps aside for the alarm");
+  const rows = taskRows(io.out);
+  assert.match(rows[0], /checking/, "state itself is still checking");
+  assert.match(rows[0], /and still not finished/, "but past the ceiling it names the stuck check, not honest progress");
+  assert.doesNotMatch(rows[0], /heartbeat/, "no heartbeat is ever emitted during a check");
+  assert.doesNotMatch(rows[0], /checking, .* so far/, "the plain elapsed line steps aside for the alarm");
 });
 
 // Review finding: the checking alarm's elapsed time must be anchored to
@@ -182,7 +236,8 @@ test("runStatusCommand: the checking alarm's elapsed time tracks the check's own
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.match(io.out[0], /checking, 4h and still not finished/, `expected the check's real ~4h duration, got: ${io.out[0]}`);
+  const rows = taskRows(io.out);
+  assert.match(rows[0], /checking, 4h and still not finished/, `expected the check's real ~4h duration, got: ${rows[0]}`);
 });
 
 test("runStatusCommand: a red delivery shows failed, not delivered, and carries no verdict flag", async () => {
@@ -198,9 +253,10 @@ test("runStatusCommand: a red delivery shows failed, not delivered, and carries 
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.match(io.out[0], new RegExp(`^${task.id}\\s`));
-  assert.match(io.out[0], /failed/);
-  assert.doesNotMatch(io.out[0], /AWAITING YOUR VERDICT/);
+  const rows = taskRows(io.out);
+  assert.match(rows[0], new RegExp(`^${task.id}\\s`));
+  assert.match(rows[0], /failed/);
+  assert.doesNotMatch(rows[0], /AWAITING YOUR VERDICT/);
 });
 
 test("runStatusCommand: an Inspector refusal sorts after live work and says no verdict was reached", async () => {
@@ -220,11 +276,12 @@ test("runStatusCommand: an Inspector refusal sorts after live work and says no v
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.equal(io.out.length, 2);
-  assert.match(io.out[0], /^asking\s/);
-  assert.match(io.out[1], /^refusal\s/);
-  assert.match(io.out[1], /INSPECTOR REACHED NO VERDICT/);
-  assert.doesNotMatch(io.out[1], /failed|quiet/i);
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 2);
+  assert.match(rows[0], /^asking\s/);
+  assert.match(rows[1], /^refusal\s/);
+  assert.match(rows[1], /INSPECTOR REACHED NO VERDICT/);
+  assert.doesNotMatch(rows[1], /failed|quiet/i);
 });
 
 // Client ruling, issue #12 review finding (status-lists-ask-failed-tasks-
@@ -245,9 +302,10 @@ test("runStatusCommand: an ask-failed task stays listed, marked unresolvable, no
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.equal(io.out.length, 1);
-  assert.match(io.out[0], /failed/);
-  assert.match(io.out[0], /FAILED, UNRESOLVABLE/);
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1);
+  assert.match(rows[0], /failed/);
+  assert.match(rows[0], /FAILED, UNRESOLVABLE/);
 });
 
 // Same ruling, its sibling: a live task still worth the Client's
@@ -271,9 +329,10 @@ test("runStatusCommand: an ask-failed task sorts after a task that's still genui
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.equal(io.out.length, 2);
-  assert.match(io.out[0], new RegExp(`^${openTask.id}\\s`));
-  assert.match(io.out[1], /FAILED, UNRESOLVABLE/);
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 2);
+  assert.match(rows[0], new RegExp(`^${openTask.id}\\s`));
+  assert.match(rows[1], /FAILED, UNRESOLVABLE/);
 });
 
 // The pre-work window's own ceiling (PRE_WORK_QUIET_CEILING_MS): a task
@@ -295,10 +354,11 @@ test("runStatusCommand: a task stuck before work-started past its own ceiling is
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.equal(io.out.length, 1);
-  assert.match(io.out[0], /working/, "state itself is still working - only ask() is unaccounted for");
-  assert.match(io.out[0], /no signal since the task was received/, "task-received is the record's actual last event here");
-  assert.doesNotMatch(io.out[0], /heartbeat/, "attempts.ts's heartbeat interval never wraps brain.ask()");
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1);
+  assert.match(rows[0], /working/, "state itself is still working - only ask() is unaccounted for");
+  assert.match(rows[0], /no signal since the task was received/, "task-received is the record's actual last event here");
+  assert.doesNotMatch(rows[0], /heartbeat/, "attempts.ts's heartbeat interval never wraps brain.ask()");
 });
 
 // Issue #11, Client ruling 2026-10-08, part 2: the SPEND UNKNOWN line is
@@ -339,8 +399,9 @@ test("runStatusCommand: with no cap set, an unmeasured task still shows cost: un
 
   await runStatusCommand([], { recordHome, ...io });
 
-  assert.equal(io.out.length, 1, "no cap is set, so nothing is blocked and no SPEND UNKNOWN line belongs here");
-  assert.match(io.out[0], /cost: unknown/);
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1, "no cap is set, so nothing is blocked and no SPEND UNKNOWN line belongs here");
+  assert.match(rows[0], /cost: unknown/);
 });
 
 test("runStatusCommand: a measured task shows its cost in dollars", async () => {
@@ -351,7 +412,7 @@ test("runStatusCommand: a measured task shows its cost in dollars", async () => 
 
   await runStatusCommand([], { recordHome, ...io });
 
-  assert.match(io.out[0], /cost: \$0\.0421/);
+  assert.match(taskRows(io.out)[0], /cost: \$0\.0421/);
 });
 
 // Negative first: fixtureInspector never reports a pull request url, so a
@@ -366,7 +427,7 @@ test("runStatusCommand: a delivered task with no reported pull request shows no 
 
   await runStatusCommand([], { recordHome, ...io });
 
-  assert.doesNotMatch(io.out[0], /pull request/);
+  assert.doesNotMatch(taskRows(io.out)[0], /pull request/);
 });
 
 test("runStatusCommand: a delivered task's line shows the reported pull request url exactly once", async () => {
@@ -383,9 +444,10 @@ test("runStatusCommand: a delivered task's line shows the reported pull request 
   const code = await runStatusCommand([], { recordHome, ...io });
 
   assert.equal(code, 0);
-  assert.equal(io.out.length, 1);
-  const occurrences = io.out[0].split("https://example.test/pulls/7").length - 1;
-  assert.equal(occurrences, 1, `expected the url exactly once, got: ${io.out[0]}`);
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1);
+  const occurrences = rows[0].split("https://example.test/pulls/7").length - 1;
+  assert.equal(occurrences, 1, `expected the url exactly once, got: ${rows[0]}`);
 });
 
 test("runStatusCommand: a task-failed task shows FAILED with its reason, not working", async () => {
@@ -397,8 +459,41 @@ test("runStatusCommand: a task-failed task shows FAILED with its reason, not wor
 
   await runStatusCommand([], { recordHome, ...io });
 
-  assert.match(io.out[0], /^t1\s.*\sfailed\s/);
-  assert.match(io.out[0], /FAILED/);
-  assert.match(io.out[0], /no check\.sh in \/some\/project/);
-  assert.doesNotMatch(io.out[0], /working|quiet/);
+  const rows = taskRows(io.out);
+  assert.match(rows[0], /^t1\s.*\sfailed\s/);
+  assert.match(rows[0], /FAILED/);
+  assert.match(rows[0], /no check\.sh in \/some\/project/);
+  assert.doesNotMatch(rows[0], /working|quiet/);
+});
+
+// Issues #81/#110: the opening line, no cap set.
+test("runStatusCommand: opens with the spend line saying no daily cap, when none is set", async () => {
+  const recordHome = tempRecordHome();
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out[0], "spent in the last 24 hours: $0.00, no daily cap");
+});
+
+// Issues #81/#110: the opening line must use the exact same knownUsd the
+// daily cap check (caps.ts's requireRoomToStart) derives from daySpend -
+// computed independently here from the same record, to the cent.
+test("runStatusCommand: the spend line matches daySpend to the cent, with a cap set", async () => {
+  const recordHome = tempRecordHome();
+  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 100\n");
+  const project = makeFixtureRepo("exit 0");
+  await createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fixtureInspector() }).do("measured", {
+    project,
+    brain: fakeBrain({ costUsd: 0.0421 }),
+  });
+  const now = Date.now();
+  const expectedKnownUsd = daySpend(readEvents(recordHome), now).knownUsd;
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, now, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(io.out[0], `spent in the last 24 hours: ${formatUsd(expectedKnownUsd)} of $100.00`);
 });

@@ -18,6 +18,7 @@ export { followTask } from "./foreman/index.ts";
 // Rule 10's ledger, for `fabrica status` and `fabrica cost` (issue #11).
 export {
   capsActive,
+  daySpend,
   describeTaskCost,
   describeUnmeasured,
   formatUsd,
