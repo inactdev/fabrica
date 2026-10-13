@@ -10,7 +10,8 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
+import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
+import { WRITEUP_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
@@ -35,6 +36,23 @@ export class ClaudeCodeError extends Error {
 // file and claude-code.md's "Process containment" section for what it
 // installs and why a fresh build has nothing authenticated yet.
 export const DEFAULT_IMAGE = "fabrica-claude-code:latest";
+
+/** The write-up work() asks for, as a JSON Schema passed to
+ * `--json-schema`. The CLI holds the model's final answer to it and
+ * returns the object on the result line's `structured_output` (verified
+ * on 2.1.222), so no write-up is ever parsed out of prose. */
+export const WRITEUP_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [...WRITEUP_FIELDS],
+  properties: {
+    title: { type: "string", minLength: 1, maxLength: WRITEUP_TITLE_MAX_LENGTH },
+    what: { type: "string", minLength: 1 },
+    why: { type: "string", minLength: 1 },
+    how: { type: "string", minLength: 1 },
+    deviations: { type: "string", minLength: 1 },
+  },
+};
 
 export interface ClaudeCodeAdapterOptions {
   /** Value for `claude --model` (an alias like "sonnet" or a full model
@@ -93,6 +111,8 @@ interface ClaudeStreamLine {
   };
   api_error_status?: number;
   result?: string;
+  /** --json-schema's answer, already an object (verified on 2.1.222). */
+  structured_output?: unknown;
   /** "error_max_budget_usd" when --max-budget-usd ran out. */
   subtype?: string;
   errors?: string[];
@@ -114,6 +134,8 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
     // containment" section.
     "--permission-mode",
     "bypassPermissions",
+    "--json-schema",
+    JSON.stringify(WRITEUP_JSON_SCHEMA),
   ];
   if (workOpts?.session) args.push("--resume", workOpts.session);
   if (opts.model) args.push("--model", opts.model);
@@ -449,8 +471,12 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       // returns normally so the spend reaches the receipt and the Foreman
       // can stop the task honestly - a throw here would lose the money.
       const budgetExhausted = result?.subtype === "error_max_budget_usd";
+      // The CLI giving up on matching the write-up schema is a missing
+      // write-up, not a failed call: the work and its spend are real, and
+      // the Foreman turns the absent write-up into a red attempt.
+      const writeupGaveUp = result?.subtype === "error_max_structured_output_retries";
 
-      if (!budgetExhausted && (exitCode !== 0 || result?.is_error)) {
+      if (!budgetExhausted && !writeupGaveUp && (exitCode !== 0 || result?.is_error)) {
         const detail = result?.result ?? (stderr.trim() || `exit code ${exitCode}`);
         const status = result?.api_error_status ? ` (api_error_status ${result.api_error_status})` : "";
         throw new ClaudeCodeError("cli-error", `${detail}${status}`);
@@ -498,9 +524,11 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         }),
       });
 
+      const writeup = writeupFrom(result.structured_output);
       return {
         transcript,
         session: result.session_id,
+        ...(writeup ? { writeup } : {}),
       };
     },
   };
@@ -538,4 +566,16 @@ export function claudeCodeCheckBox(opts: { image?: string } = {}): CheckBox {
       rmSync(mounts.sanitizedConfigDir, { recursive: true, force: true });
     }
   };
+}
+
+/** The result line's structured_output as a write-up, when it has the
+ * shape asked for: an object whose five fields are all strings. Anything
+ * else is no write-up - the Foreman checks the contents (empty fields,
+ * title length) and names what is wrong. */
+function writeupFrom(value: unknown): WorkerWriteup | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  if (!WRITEUP_FIELDS.every((field) => typeof record[field] === "string")) return undefined;
+  const [title, what, why, how, deviations] = WRITEUP_FIELDS.map((field) => record[field] as string);
+  return { title, what, why, how, deviations };
 }

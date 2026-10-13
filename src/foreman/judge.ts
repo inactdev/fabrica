@@ -22,20 +22,25 @@ import type { Delivery } from "../inspector/types.ts";
 import { DEFAULT_CHECK_COMMAND, requireCheckCommand, resolveCheckCommand } from "./resolve-check.ts";
 import { requireGateBaseline } from "./gate-changes.ts";
 import { ForemanError } from "./errors.ts";
-import { commitWorktreeChanges } from "./commit.ts";
 import { handToInspector } from "./inspection.ts";
-import { renderCommitMessage } from "./pr-body.ts";
 import type { FinalMessageForCommit } from "./pr-body.ts";
 
 /** One attempt's judgement. Only "verdict" is a red or green result; the
  * rest stop the loop with no verdict at all. */
 export type Judgement =
-  | { kind: "verdict"; gate: GateResult; inspection?: Inspection }
+  | {
+      kind: "verdict";
+      gate: GateResult;
+      inspection?: Inspection;
+      /** Set when the attempt is red because its write-up was missing or
+       * invalid (attempts.ts) - never judged at all. */
+      writeupInvalid?: string;
+    }
   /** Inspector reached no verdict. */
   | { kind: "refused"; inspection: Inspection }
   /** The worker's box could not run the check - not verified, not red. */
   | { kind: "not-verified"; reason: string }
-  /** Committing the attempt for Inspector failed (a host problem). */
+  /** Committing the attempt failed (a host problem). */
   | { kind: "commit-failed"; error: string };
 
 export type Judge = (attempt: number, gateChanges: string | undefined, finalMessage: FinalMessageForCommit) => Promise<Judgement>;
@@ -68,20 +73,10 @@ export function inspectorJudge(
   inspector: Inspector
 ): Judge {
   return async (_attempt, _gateChanges, finalMessage) => {
-    // attempts.ts only calls judge() at all once finalMessage.ok is true -
-    // a malformed write-up never reaches here, so this commit (and the
-    // pull request Inspector may open from it) is only ever made with a
-    // valid write-up as its message. Inspector judges a commit, so the
-    // attempt is committed first - with the same title/body this attempt's
-    // own final message resolved to, so the commit Inspector diffs and the
-    // pull request it may open never disagree about what this attempt
-    // calls itself.
-    try {
-      commitWorktreeChanges(line.workdir, renderCommitMessage(finalMessage));
-    } catch (err) {
-      if (err instanceof ForemanError && err.code === "commit-failed") return { kind: "commit-failed", error: err.message };
-      throw err;
-    }
+    // attempts.ts has already committed this attempt with this same
+    // write-up as its message, and only calls judge() when the write-up is
+    // valid - so the commit Inspector diffs and the pull request it may
+    // open never disagree about what this attempt calls itself.
     const inspection = (await handToInspector(recordHome, taskId, line, baseCommit, inspector, {
       prTitle: finalMessage.title,
       prBody: finalMessage.body,
@@ -171,6 +166,9 @@ export function roundOutcome(ctx: {
 }): Delivery["outcome"] {
   if (ctx.undeclaredGateChange) return "discarded-protected-path";
   if (ctx.capStopped) return "cap-stopped";
+  // A write-up failure is the worker's own, found before any check ran -
+  // never an Inspector red, whichever mode the round is in.
+  if (ctx.lastJudgement.kind === "verdict" && ctx.lastJudgement.writeupInvalid !== undefined) return "failure-report";
   if (ctx.lastJudgement.kind === "not-verified") return "not-verified";
   if (ctx.lastJudgement.kind === "verdict" && ctx.lastJudgement.gate.green) return "done";
   return ctx.mode.mode === "inspector" ? "inspection-red" : "failure-report";

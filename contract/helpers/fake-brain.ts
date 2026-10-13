@@ -4,7 +4,7 @@
 // e.g. touching protected paths (rule 9) or doing nothing at all.
 
 import type { Brain, BrainAskResult, BrainWorkOptions } from "../surface.ts";
-import type { TranscriptEntry } from "../surface.ts";
+import type { TranscriptEntry, WorkerWriteup } from "../surface.ts";
 
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
@@ -30,11 +30,10 @@ export function fakeBrain(
      * costUsd). A fake spends nothing, so it reports 0 unless told
      * otherwise; null reports a cost it cannot say. */
     askCostUsd?: number | null;
-    /** The worker's final message (final-message.ts): a title line plus
-     * What/Why/How/Deviations sections. Defaults to a well-formed one so
-     * ordinary tests still see a "done" delivery without having to
-     * construct this themselves; override it to test a malformed one. */
-    finalMessage?: string;
+    /** The write-up work() returns (BrainWorkResult.writeup). Defaults to
+     * a valid one so ordinary tests still see a "done" delivery without
+     * constructing it themselves; null returns none at all. */
+    writeup?: WorkerWriteup | null;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -61,11 +60,12 @@ export function fakeBrain(
       workOptions.push(workOpts);
       briefs.push(brief);
       opts.onWork?.(workdir);
-      const finalMessage =
-        opts.finalMessage ??
-        `Fake brain update\n\nWhat:\nfake brain saw: ${brief}\n\nWhy:\nTesting.\n\nHow:\nDirectly.\n\nDeviations:\nNone.`;
+      const writeup =
+        opts.writeup === undefined
+          ? { title: "Fake brain update", what: `fake brain saw: ${brief}`, why: "Testing.", how: "Directly.", deviations: "None." }
+          : opts.writeup;
       const transcript: TranscriptEntry[] = [
-        { occurredAt: new Date().toISOString(), kind: "text", text: finalMessage },
+        { occurredAt: new Date().toISOString(), kind: "text", text: `fake brain saw: ${brief}` },
       ];
       if (opts.costUsd !== undefined) {
         transcript.push({
@@ -77,6 +77,7 @@ export function fakeBrain(
       return {
         transcript,
         session: "fake-session",
+        ...(writeup === null ? {} : { writeup }),
         ...(opts.gateChanges ? { gateChanges: opts.gateChanges } : {}),
       };
     },

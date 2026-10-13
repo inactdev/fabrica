@@ -81,6 +81,23 @@ export interface BrainWorkResult {
   /** The session id for this run, so follow-ups and corrections can
    * resume it. Lands on the receipt. */
   session?: string;
+  /** The worker's own write-up of this attempt, returned as structured
+   * data - never parsed from its prose (Client ruling 2026-10-13).
+   * Omitted when the brain returned none; an attempt without a valid one
+   * is red and never handed to Inspector. */
+  writeup?: WorkerWriteup;
+}
+
+/** A worker's write-up: the commit message, and the pull request's title
+ * and body when one is opened. The title is the worker's own words, at
+ * most 60 characters; every field is required and non-empty. */
+export interface WorkerWriteup {
+  title: string;
+  what: string;
+  why: string;
+  how: string;
+  /** What the worker deviated from the request and why, or "None." */
+  deviations: string;
 }
 
 /**

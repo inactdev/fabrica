@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,8 +22,11 @@ const noisyRedJudge: Judge = async () => ({
 
 const greenJudge: Judge = async () => ({ kind: "verdict", gate: { green: true, output: "ok" } });
 
+/** A git repository: every attempt is committed once work() returns. */
 function scratchWorkdir(): string {
-  return mkdtempSync(join(tmpdir(), "fabrica-attempts-"));
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-attempts-"));
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  return dir;
 }
 
 test("a receipt stores only the tail of a long check output, behind a truncation marker", async () => {
@@ -92,13 +96,11 @@ test("truncation never stores a half-character left by cutting mid-symbol", () =
 // `onHeartbeat` is the only signal `fabrica status`/`watch` get that a
 // silent stretch is still progress and not a stuck worker.
 
-// A well-formed final message (final-message.ts) - these heartbeat tests
-// aren't about the write-up at all, but runAttempts now forces a gate
-// red whenever one is missing, so an empty transcript would otherwise
-// make "lastGate?.green" false here for a reason unrelated to what this
-// test is actually checking.
-const WELL_FORMED_FINAL_MESSAGE =
-  "Slow brain update\n\nWhat:\nSlept.\n\nWhy:\nTesting heartbeats.\n\nHow:\nA timer.\n\nDeviations:\nNone.";
+// A valid write-up - these heartbeat tests aren't about the write-up at
+// all, but runAttempts makes an attempt red whenever one is missing, so
+// without it "lastGate?.green" would be false here for a reason
+// unrelated to what this test is actually checking.
+const SLOW_WRITEUP = { title: "Slow brain update", what: "Slept.", why: "Testing heartbeats.", how: "A timer.", deviations: "None." };
 
 function slowBrain(delayMs: number): Brain {
   return {
@@ -107,8 +109,9 @@ function slowBrain(delayMs: number): Brain {
     async work() {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       return {
-        transcript: [{ occurredAt: new Date().toISOString(), kind: "text", text: WELL_FORMED_FINAL_MESSAGE }],
+        transcript: [],
         session: "s1",
+        writeup: SLOW_WRITEUP,
       };
     },
     async ask() {

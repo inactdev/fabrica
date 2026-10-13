@@ -8,25 +8,26 @@ export const STANDING_QUESTION =
   "before you start. You cannot and need not commit - leave your changes in the working tree; Fabrica commits " +
   "them.";
 
-/** Pull requests must read like a human wrote them: Fabrica parses a
- * worker's own final message into the commit subject/body and, when
- * Inspector is configured, the pull request title/body too
- * (src/foreman/final-message.ts) - it never falls back to the task's own
- * words. A message missing the title line or any section is refused a
- * "done" outcome and named back to the worker on the next attempt (see
- * attempts.ts), so this is stated as a requirement, not a suggestion. */
+/** Pull requests must read like a human wrote them: a worker returns its
+ * write-up as a structured answer (BrainWorkResult.writeup) - title, what,
+ * why, how, deviations - which Fabrica uses as the commit message and,
+ * when Inspector is configured, the pull request title and body. It is
+ * never parsed out of the worker's prose and never falls back to the
+ * task's own words. A missing or invalid write-up makes the attempt red,
+ * named back to the worker on the next attempt (see attempts.ts), so this
+ * is stated as a requirement, not a suggestion. */
 export const FINAL_MESSAGE_FORMAT_NOTICE =
-  "End your final message in this session with the write-up Fabrica will use, verbatim, as the commit message " +
-  'and (when a pull request is opened) its title and body: first a title line of your own words, at most 60 ' +
-  "characters, summarizing the change - never the task text itself - then a blank line, then four sections, " +
-  'each starting on its own line with its name and a colon, in this order: "What:", "Why:", "How:", and ' +
-  '"Deviations:" (what you deviated from the request and why, or "None." if nothing). A message missing the ' +
-  "title or any section will not be accepted as done.";
+  "When you finish, give your write-up as the structured answer you are asked for - five fields, which Fabrica " +
+  "uses verbatim as the commit message and (when a pull request is opened) its title and body: title (your own " +
+  "words, at most 60 characters, summarizing the change - never the task text itself), what, why, how, and " +
+  'deviations (what you deviated from the request and why, or "None." if nothing). Every field is required and ' +
+  "must not be empty. Do not type the write-up out as text; an attempt without a valid structured write-up is " +
+  "not accepted as done.";
 
 const STANDING_PREFIX = `${STANDING_QUESTION}\n\n${FINAL_MESSAGE_FORMAT_NOTICE}`;
 
-/** `brief`, beginning with the standing question and the final-message
- * format notice exactly once - applied by every brief builder and again
+/** `brief`, beginning with the standing question and the write-up
+ * notice exactly once - applied by every brief builder and again
  * where the brief is handed over, so a builder nested inside another
  * never doubles it. */
 export function withStandingQuestion(brief: string): string {
