@@ -667,7 +667,16 @@ whether a task is `"closed"`.
   line from, no verdict to repair toward. `accept` and `fix` stay refused
   there exactly as before. A fix round's refusal that supersedes an
   *earlier real delivery* is a different, untouched case: that delivery
-  is still there for the Client to rule on directly.
+  is still there for the Client to rule on directly. The same exception
+  applies to a task that failed before it ever reached a delivery at all
+  — `brain.ask()` threw (`"ask-failed"`), a spending cap refused its very
+  first start (`"cap-refused"` before the task ever began), or some other
+  error killed it first (`"task-failed"`) — `queries.ts`'s
+  `failedWithNoDelivery` (issue #143). Same reasoning, same carve-out:
+  `accept` and `fix` stay refused (`not-delivered`), `wrong` alone closes
+  it, and a `"delivered"` event anywhere in the task's history (even one
+  later superseded by a failed fix round) takes it out of this case
+  entirely.
 - **`fix`** — right direction, wrong details. Does **not** close the
   task. `note` is required (there is nothing to correct without it) and
   becomes a correction handed back to the *same warm worker on the same
@@ -825,8 +834,8 @@ step", until `fabrica cost` records it.
 | `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
 | `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/inspect/result, shared with `answer.ts`'s resume path). |
 | `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. |
-| `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong (wrong alone also closes a task Inspector refused with no delivery, via `queries.ts`'s `refusedWithNoDelivery`), re-enters the same line and worker on fix. |
-| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf`, `refusedWithNoDelivery` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal, while `receiptsOf` reads the latest event carrying receipts. `refusedWithNoDelivery` is narrower than that: true only when there is no `"delivered"` event at all and the latest `"inspection-finished"` is a refusal - `verdict.ts`'s one carve-out letting `wrong` close such a task. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. |
+| `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong (wrong alone also closes a task Inspector refused with no delivery, via `queries.ts`'s `refusedWithNoDelivery`, or a task that failed before any delivery, via `failedWithNoDelivery`), re-enters the same line and worker on fix. |
+| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf`, `refusedWithNoDelivery`, `failedWithNoDelivery` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal, while `receiptsOf` reads the latest event carrying receipts. `refusedWithNoDelivery` is narrower than that: true only when there is no `"delivered"` event at all and the latest `"inspection-finished"` is a refusal - `verdict.ts`'s one carve-out letting `wrong` close such a task. `failedWithNoDelivery` (issue #143) is the sibling carve-out for a task that never reached a delivery because it failed first - `stateOf` reads `"failed"` and no `"delivered"` event exists anywhere in its history. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. |
 | `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
 | `spend.ts` | Rule 10's ledger, derived from the record: `costFromTranscript`, `daySpend` (rolling 24 hours), `taskSpend`, `unmeasuredSpend`, and the shared wording (`formatUsd`, `describeTaskCost`, `SPEND_UNKNOWN_LINE`). |

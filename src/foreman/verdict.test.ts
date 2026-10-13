@@ -178,6 +178,118 @@ test("wrong closes a task Inspector refused with no delivery; accept and fix sta
   );
 });
 
+// Issue #143: a task that failed before it ever reached a delivery
+// (brain.ask() threw, a spending cap refused its first start, or some
+// other error killed it) is just as stuck as the Inspector-refused case
+// above - "accept" and "fix" have nothing to work with, and used to
+// refuse every ruling forever. "wrong" needs none of that and can still
+// close it. Negative first: accept and fix stay refused for all three
+// causes, then wrong actually closes each one.
+test("wrong closes a task whose brain.ask() threw before any delivery; accept and fix stay refused", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+
+  await assert.rejects(() =>
+    foreman.do("small change", {
+      project: makeFixtureRepo("exit 0"),
+      brain: fakeBrain({ askError: new Error("brain unreachable") }),
+    })
+  );
+  const taskId = (await foreman.status())[0].id;
+
+  assert.equal((await foreman.status()).find((t) => t.id === taskId)?.state, "failed");
+  assert.equal(await foreman.deliveryOf(taskId), null);
+
+  await assert.rejects(
+    () => foreman.verdict(taskId, "accept"),
+    (err: unknown) => err instanceof ForemanError && err.code === "not-delivered"
+  );
+  await assert.rejects(
+    () => foreman.verdict(taskId, "fix", "try again"),
+    (err: unknown) => err instanceof ForemanError && err.code === "not-delivered"
+  );
+
+  await foreman.verdict(taskId, "wrong", "not worth chasing");
+
+  const mine = (await foreman.status()).find((t) => t.id === taskId);
+  assert.equal(mine?.state, "closed");
+  const events = (await foreman.events(taskId)).map((e) => e.name);
+  assert.deepEqual(events.filter((n) => n === "verdict-recorded"), ["verdict-recorded"]);
+
+  await assert.rejects(
+    () => foreman.verdict(taskId, "wrong", "again"),
+    (err: unknown) => err instanceof ForemanError && err.code === "already-closed"
+  );
+});
+
+test("wrong closes a task a spending cap refused before it ever began; accept and fix stay refused", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome, caps: { perDayUsd: 0 }, inspector: fixtureInspector() });
+
+  await assert.rejects(() =>
+    foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() })
+  );
+  const taskId = (await foreman.status())[0].id;
+
+  assert.equal((await foreman.status()).find((t) => t.id === taskId)?.state, "failed");
+  assert.equal(await foreman.deliveryOf(taskId), null);
+
+  await assert.rejects(
+    () => foreman.verdict(taskId, "accept"),
+    (err: unknown) => err instanceof ForemanError && err.code === "not-delivered"
+  );
+  await assert.rejects(
+    () => foreman.verdict(taskId, "fix", "try again"),
+    (err: unknown) => err instanceof ForemanError && err.code === "not-delivered"
+  );
+
+  await foreman.verdict(taskId, "wrong", "not worth chasing");
+
+  const mine = (await foreman.status()).find((t) => t.id === taskId);
+  assert.equal(mine?.state, "closed");
+});
+
+test("wrong closes a task that failed mid-round with no delivery; accept and fix stay refused", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  const throwingBrain = fakeBrain({ onWork: () => { throw new Error("the container died"); } });
+
+  await assert.rejects(() =>
+    foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: throwingBrain })
+  );
+  const taskId = (await foreman.status())[0].id;
+
+  assert.equal((await foreman.status()).find((t) => t.id === taskId)?.state, "failed");
+  assert.equal(await foreman.deliveryOf(taskId), null);
+
+  await assert.rejects(
+    () => foreman.verdict(taskId, "accept"),
+    (err: unknown) => err instanceof ForemanError && err.code === "not-delivered"
+  );
+  await assert.rejects(
+    () => foreman.verdict(taskId, "fix", "try again"),
+    (err: unknown) => err instanceof ForemanError && err.code === "not-delivered"
+  );
+
+  await foreman.verdict(taskId, "wrong", "not worth chasing");
+
+  const mine = (await foreman.status()).find((t) => t.id === taskId);
+  assert.equal(mine?.state, "closed");
+});
+
+test("an ordinary delivered task is unaffected by the failed-unresolvable carve-out", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
+
+  assert.equal((await foreman.status()).find((t) => t.id === task.id)?.state, "delivered");
+
+  await foreman.verdict(task.id, "wrong", "not what I asked for");
+
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "closed");
+});
+
 test("fix without a note refuses, naming the note as what's missing", async () => {
   const recordHome = freshHome();
   const foreman = createForeman({ recordHome, inspector: fixtureInspector() });

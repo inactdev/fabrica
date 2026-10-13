@@ -16,7 +16,7 @@ import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTask
 import { destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
-import { latestDeliveredDetails, refusedWithNoDelivery } from "./queries.ts";
+import { failedWithNoDelivery, latestDeliveredDetails, refusedWithNoDelivery } from "./queries.ts";
 import { gateWasTouched } from "./gate-changes.ts";
 import { prepareRound, roundOutcome } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
@@ -87,7 +87,21 @@ export async function recordVerdict(
     );
   }
 
-  if (deliveredIndex === -1 && !closesRefusedWithNoDelivery) {
+  // A task that failed before it ever reached a delivery (brain.ask()
+  // threw, a spending cap refused its first start, or some other error
+  // killed it) has no `fix` path and nothing for "accept" to work with
+  // either - same shape as the Inspector-refused case above, and the
+  // same exception: "wrong" alone can still close it (issue #143).
+  const closesFailedWithNoDelivery = ruling === "wrong" && failedWithNoDelivery(events);
+  if (failedWithNoDelivery(events) && !closesFailedWithNoDelivery) {
+    throw new ForemanError(
+      "not-delivered",
+      `fabrica verdict: task "${taskId}" failed before it ever reached a delivery and has no \`fix\` path - ` +
+        `only "wrong" can close it. Read \`fabrica log ${taskId}\` for why.`
+    );
+  }
+
+  if (deliveredIndex === -1 && !closesRefusedWithNoDelivery && !closesFailedWithNoDelivery) {
     throw new ForemanError(
       "not-delivered",
       `fabrica verdict: task "${taskId}" has not been delivered yet — there is nothing to rule on until ` +
