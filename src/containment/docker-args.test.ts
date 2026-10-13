@@ -110,3 +110,19 @@ test("buildDockerArgs mounts homeDir read-write and sets HOME to match, only whe
   assert.ok(!without.some((a) => a.startsWith("HOME=")));
   assert.ok(!without.includes("/home/worker"));
 });
+
+// A finished process stays in the process table until its parent
+// collects it, and each one counts against --pids-limit. Without --init
+// the container's process 1 is whatever command ran (npm, the CLI), which
+// collects nothing it did not start itself: measured, a full test suite
+// left 343 uncollected processes, hit the 512 limit 46 times and hung.
+test("buildDockerArgs always passes --init, before the image, whatever the options", () => {
+  for (const opts of [
+    { workdir: "/w", network: "denied" as const, image: "alpine" },
+    { workdir: "/w", network: "allowed" as const, image: "alpine", user: "501:20", homeDir: "/h", pidsLimit: 64 },
+  ]) {
+    const args = buildDockerArgs(opts);
+    assert.equal(args.filter((a) => a === "--init").length, 1);
+    assert.ok(args.indexOf("--init") < args.indexOf("alpine"), "--init must come before the image, or docker passes it to the command");
+  }
+});

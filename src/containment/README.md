@@ -113,6 +113,13 @@ Every call runs a fresh, throwaway container (`docker run --rm`):
   temporarily unavailable`), not merely a ceiling nobody enforces. A
   runaway or compromised Worker hits a wall - out-of-memory kill,
   refused fork - instead of the host machine.
+- **`--init` is always passed**, so process 1 is Docker's own small
+  init, which collects finished processes. Without it, process 1 is the
+  command itself (`npm`, the CLI), and every orphaned child it did not
+  start stays in the process table as a zombie, counted against
+  `--pids-limit`. Measured with `npm test` as process 1 at the default
+  512: 343 zombies, the limit hit 46 times, the suite hung; with
+  `--init`, a peak of 248 processes and 2 zombies.
 - **The Docker socket is never mounted.** Nothing in this module (or
   the reference adapter) passes `/var/run/docker.sock` or any
   equivalent into a container. A contained process has no way to talk

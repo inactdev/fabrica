@@ -96,6 +96,12 @@ export function buildDockerArgs(opts: {
   args.push("--cpus", opts.cpus ?? DEFAULT_CPUS);
   args.push("--pids-limit", String(opts.pidsLimit ?? DEFAULT_PIDS_LIMIT));
 
+  // A tiny process 1 that collects finished processes. Without it,
+  // process 1 is the command itself (npm, the CLI), which leaves every
+  // orphaned child it did not start as a zombie counted against
+  // --pids-limit - verified live: a full test suite hit the limit and hung.
+  args.push("--init");
+
   args.push(opts.image);
   return args;
 }
