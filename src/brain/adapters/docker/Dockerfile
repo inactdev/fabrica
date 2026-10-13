@@ -13,11 +13,14 @@
 #   docker build --build-arg DOCKERFILE_SHA256=$(shasum -a 256 src/brain/adapters/docker/Dockerfile | cut -d' ' -f1) \
 #     -t fabrica-claude-code:latest -f src/brain/adapters/docker/Dockerfile .
 #
-# Pinned to an exact digest, not the floating "20-alpine" tag: pulled
+# Pinned to an exact digest, not the floating "24-alpine" tag: pulled
 # once and cached, so container spin-up stays fast and reproducible
 # rather than silently fetching a new base image on some future run.
-# Resolves to Node v20.20.2 on Alpine 3.23.4, verified on the real
-# machine at the time this was pinned. The CLI below is pinned to an
+# Taken by manifest-list digest (node:24.18.0-alpine), so it stays
+# correct on both arm64 and amd64. Resolves to Node v24.18.0 on Alpine
+# 3.24.1, verified on the real machine at the time this was pinned - the
+# same Node the project pins (.inspector.json's cimg/node:24.18.0), so a
+# Worker's check runs on the Node the check was written for. The CLI below is pinned to an
 # exact version for the same reason: claude-code.md's behavior notes
 # (flag semantics, stream-json shape) were verified against 2.1.222, so
 # a rebuild must not silently install a different one.
@@ -36,7 +39,7 @@
 # later issue.
 FROM golang@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS go
 
-FROM node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+FROM node@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd
 # git so the Worker can actually use the read-only .git mount
 # worktree-git.ts provides (status/log/diff against the real history).
 # bash because the CLI's own Bash tool requires a real one (issue #89):
