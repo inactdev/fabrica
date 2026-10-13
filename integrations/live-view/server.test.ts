@@ -128,6 +128,58 @@ test("startLiveView: a task's live transcript tails as it grows", async () => {
   }
 });
 
+test("startLiveView: an event with a valid JSON shape but unexpected contents never kills the server - it answers with an error, and keeps answering after", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = registerTask(recordHome, "confuse the ledger").id;
+  // A real receipt, so this task "has attempts" and its cost is actually
+  // rendered (describeTaskCost only calls formatUsd down that path) -
+  // then a "cost-recorded" event whose "usd" is a string, not a number:
+  // valid JSON, wrong type. taskSpend's reduce has no type guard on it,
+  // so "knownUsd" silently becomes a string ("0" + the string, via "+"),
+  // and formatUsd's usd.toFixed(2) throws once something downstream
+  // actually tries to format it - deep inside reused library code this
+  // integration never parses itself.
+  appendEvent(recordHome, {
+    taskId,
+    name: "receipt-recorded",
+    details: {
+      receipt: {
+        task: taskId,
+        attempt: 1,
+        brain: "x",
+        model: "y",
+        startedAt: new Date().toISOString(),
+        durationMs: 1,
+        costUsd: 0.42,
+        costUnknown: false,
+        session: null,
+        reasoningEffort: null,
+        checks: null,
+        outcome: "delivered",
+      },
+    },
+  });
+  appendEvent(recordHome, { taskId, name: "cost-recorded", details: { usd: "oops", attempts: [1] } });
+
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const first = await fetch(`http://127.0.0.1:${view.port}/api/state`);
+    assert.equal(first.status, 200, "the server must still answer, not hang up or crash");
+    const firstBody = await first.json();
+    assert.match(firstBody.error, /^could not read the record: /);
+
+    // The crux of the ask: a second request right after must still get a
+    // real answer - the process is still alive and the server is still
+    // listening, not just that this one response object looked fine.
+    const second = await fetch(`http://127.0.0.1:${view.port}/api/state`);
+    assert.equal(second.status, 200);
+    const secondBody = await second.json();
+    assert.match(secondBody.error, /^could not read the record: /);
+  } finally {
+    await view.close();
+  }
+});
+
 test("startLiveView: an unknown task id's transcript is a 404, not a crash", async () => {
   const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
   try {

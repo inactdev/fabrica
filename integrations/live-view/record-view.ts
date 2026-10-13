@@ -25,13 +25,30 @@ import {
 } from "../../src/index.ts";
 import type { Caps, FabricaEvent, FabricaTask, TaskFollower, TranscriptEntry } from "../../src/index.ts";
 
-/** The five states the page shows, collapsing FabricaTask's own richer
- * union (which also distinguishes "checking" from "working", and a
- * closed verdict from an unresolved Inspector refusal - detail this
- * tiny dashboard deliberately doesn't surface). */
-export type DisplayState = "working" | "asked a question" | "delivered" | "failed" | "stopped";
+/** The states the page shows. Mostly a collapse of FabricaTask's own
+ * richer union ("checking" folds into "working" - detail this tiny
+ * dashboard deliberately doesn't surface), except "closed", which keeps
+ * the Client's actual ruling rather than folding into generic "stopped":
+ * a verdict is a resolved, known outcome, and reads as one. "stopped" is
+ * reserved for the one state that really has no ruling behind it -
+ * Inspector reaching no verdict at all (Client ruling, issue #26 review
+ * finding: "keep 'stopped' only for a task that was actually stopped"). */
+export type DisplayState =
+  | "working"
+  | "asked a question"
+  | "delivered"
+  | "failed"
+  | "stopped"
+  | "closed (accept)"
+  | "closed (wrong)"
+  /** Defensive only: `stateOf` sets the raw "closed" state exclusively
+   * from a verdict-recorded event whose own ruling is "accept" or
+   * "wrong" (queries.ts), so `closedRuling` below should always be one
+   * of those two whenever `state` is "closed". This exists so a caller
+   * that somehow saw otherwise still gets a real string, never a crash. */
+  | "closed";
 
-export function displayState(state: FabricaTask["state"]): DisplayState {
+export function displayState(state: FabricaTask["state"], closedRuling: "accept" | "wrong" | null = null): DisplayState {
   switch (state) {
     case "asking":
       return "asked a question";
@@ -43,15 +60,30 @@ export function displayState(state: FabricaTask["state"]): DisplayState {
     case "failed":
       return "failed";
     case "closed":
+      return closedRuling === "accept" ? "closed (accept)" : closedRuling === "wrong" ? "closed (wrong)" : "closed";
     case "refused":
       return "stopped";
   }
 }
 
-/** A task is history once nothing further is expected of it - the same
- * two display states a verdict or an unresolved failure ends on. */
+/** A task is history once nothing further is expected of it - every
+ * closed verdict, a genuine stop, or an unresolved failure. */
 export function isFinished(state: DisplayState): boolean {
-  return state === "failed" || state === "stopped";
+  return state === "failed" || state === "stopped" || state === "closed (accept)" || state === "closed (wrong)" || state === "closed";
+}
+
+/** The ruling behind this task's most recent `verdict-recorded` event -
+ * "fix" reopens the loop rather than closing it (rule 6), so only
+ * "accept"/"wrong" are ever what makes `stateOf` report "closed" in the
+ * first place; this reads the same event stateOf's own pass already
+ * found, rather than re-deciding what counts as closed. */
+function latestVerdictRuling(events: FabricaEvent[]): "accept" | "wrong" | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].name !== "verdict-recorded") continue;
+    const ruling = (events[i].details as { ruling?: string } | undefined)?.ruling;
+    if (ruling === "accept" || ruling === "wrong") return ruling;
+  }
+  return null;
 }
 
 export interface TaskView {
@@ -185,7 +217,8 @@ export function createRecordView(recordHome: string) {
 
     const tasks: TaskView[] = perTask.map(({ id, events }) => {
       const spend = taskSpend(events, id);
-      const state = displayState(stateOf(events));
+      const rawState = stateOf(events);
+      const state = displayState(rawState, rawState === "closed" ? latestVerdictRuling(events) : null);
       return {
         id,
         project: projectFromEvents(events),

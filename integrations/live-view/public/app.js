@@ -27,10 +27,23 @@ function renderSpend(spend) {
 }
 
 function taskLine(task) {
-  const bits = [task.id, task.project || "unknown project"];
+  // The task's id is already shown on the line above (next to its
+  // state), so it is deliberately not repeated here. "no attempts yet"
+  // is the one phrase that covers both "which attempt" and "cost so
+  // far" when there's genuinely nothing to report yet - gated on
+  // costLabel itself (the literal source of that phrase), not on
+  // task.attempt, since an attempt already in flight (a heartbeat, no
+  // receipt yet) can have a real attempt number while its cost is still
+  // "no attempts yet" - that case still belongs in this branch, not a
+  // mix of "attempt 1" and "no attempts yet" side by side.
+  const bits = [task.project || "unknown project"];
+  if (task.costLabel === "no attempts yet") {
+    bits.push("no attempts yet");
+    return bits.join("  ·  ");
+  }
+  bits.push(task.attempt === null ? "no attempts yet" : `attempt ${task.attempt}`);
   const costBits = [task.costLabel];
   if (task.perTaskCapUsd !== undefined) costBits.push(`of $${task.perTaskCapUsd.toFixed(2)} cap`);
-  bits.push(task.attempt === null ? "no attempts yet" : `attempt ${task.attempt}`);
   bits.push(costBits.join(" "));
   return bits.join("  ·  ");
 }
@@ -75,10 +88,32 @@ function renderTasks(state) {
   );
 }
 
+function showError(message) {
+  const errorEl = document.getElementById("error");
+  errorEl.textContent = message;
+  errorEl.hidden = false;
+}
+
+function clearError() {
+  const errorEl = document.getElementById("error");
+  errorEl.hidden = true;
+  errorEl.textContent = "";
+}
+
 async function loadState() {
   const res = await fetch("/api/state");
   if (!res.ok) return;
-  renderTasks(await res.json());
+  const state = await res.json();
+  if (state.error) {
+    // The server answered - it just could not build the page state this
+    // time (a corrupt or unexpectedly-shaped record). Say so and leave
+    // whatever was last successfully rendered in place, rather than
+    // wiping it for one bad poll.
+    showError(state.error);
+    return;
+  }
+  clearError();
+  renderTasks(state);
 }
 
 async function loadTranscript() {
@@ -90,7 +125,12 @@ async function loadTranscript() {
     container.replaceChildren(document.createTextNode("No transcript yet."));
     return;
   }
-  const { transcript } = await res.json();
+  const body = await res.json();
+  if (body.error) {
+    container.replaceChildren(document.createTextNode(body.error));
+    return;
+  }
+  const { transcript } = body;
   container.replaceChildren(
     ...(transcript.length
       ? transcript.map((entry) =>

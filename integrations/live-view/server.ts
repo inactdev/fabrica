@@ -74,18 +74,45 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, view: ReturnTy
   }
 
   if (url.pathname === "/api/state") {
-    send(res, 200, "application/json", JSON.stringify(view.getState()));
+    // Building this state calls straight into every reused query over
+    // whatever is actually on disk (taskSpend, formatUsd, ...), none of
+    // which validate an event's contents beyond its JSON shape - a line
+    // that parses fine but holds something unexpected (e.g. a
+    // "cost-recorded" event whose "usd" isn't really a number) can throw
+    // deep inside one of those. The record itself is still there and
+    // still readable next time; only this one read failed, so this
+    // answers rather than letting that throw reach the server's request
+    // listener and take the whole process down with it.
+    try {
+      send(res, 200, "application/json", JSON.stringify(view.getState()));
+    } catch (err) {
+      sendRecordError(res, err);
+    }
     return;
   }
 
   const transcriptMatch = TRANSCRIPT_PATH.exec(url.pathname);
   if (transcriptMatch) {
-    const taskId = decodeURIComponent(transcriptMatch[1]);
+    let taskId: string;
+    try {
+      taskId = decodeURIComponent(transcriptMatch[1]);
+    } catch {
+      // Malformed percent-encoding (e.g. a lone "%") - decodeURIComponent
+      // itself throws on this; not a task id either way.
+      send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
+      return;
+    }
     if (!TASK_ID_PATTERN.test(taskId)) {
       send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
       return;
     }
-    const transcript = view.getTranscript(taskId);
+    let transcript: ReturnType<typeof view.getTranscript>;
+    try {
+      transcript = view.getTranscript(taskId);
+    } catch (err) {
+      sendRecordError(res, err);
+      return;
+    }
     if (transcript === null) {
       send(res, 404, "text/plain; charset=utf-8", "No such task.");
       return;
@@ -95,6 +122,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, view: ReturnTy
   }
 
   send(res, 404, "text/plain; charset=utf-8", "Not found.");
+}
+
+/** The one shape both record-backed endpoints answer with when building
+ * their response throws: still 200 (the server did its job; the record
+ * read is what failed), carrying the exact sentence the Client asked for
+ * so the page can show it instead of going blank or hanging. */
+function sendRecordError(res: ServerResponse, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  send(res, 200, "application/json", JSON.stringify({ error: `could not read the record: ${message}` }));
 }
 
 function send(res: ServerResponse, status: number, contentType: string, body: string | Buffer): void {
