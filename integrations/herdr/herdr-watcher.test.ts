@@ -42,10 +42,16 @@ function withFakeHerdrLog(run: (readCalls: () => LoggedCall[]) => void): void {
   }
 }
 
-test("a task-received event opens exactly one Herdr pane, named after the task", () => {
+const BASE_PANE_ID = "w1:p0"; // the watcher's own pane, in every test - never seen directly, only split from
+
+function watcherOver(recordHome: string): ReturnType<typeof createHerdrWatcher> {
+  return createHerdrWatcher({ recordHome, herdrBin: [process.execPath, FAKE_HERDR], basePaneId: BASE_PANE_ID });
+}
+
+test("a task-received event opens exactly one Herdr pane, named and summarized after the task", () => {
   withFakeHerdrLog((readCalls) => {
     const recordHome = makeRecordHome();
-    const watcher = createHerdrWatcher({ recordHome, herdrBin: [process.execPath, FAKE_HERDR] });
+    const watcher = watcherOver(recordHome);
 
     const { id } = registerTask(recordHome, "Fix the login bug");
     watcher.pollOnce();
@@ -55,19 +61,25 @@ test("a task-received event opens exactly one Herdr pane, named after the task",
     const calls = readCalls();
     const splits = calls.filter((c) => c.args[0] === "pane" && c.args[1] === "split");
     assert.equal(splits.length, 1, `expected exactly one pane, got ${splits.length}`);
+    assert.deepEqual(splits[0].args.slice(2), [BASE_PANE_ID, "--direction", "right"]);
 
     const runs = calls.filter((c) => c.args[0] === "pane" && c.args[1] === "run");
-    assert.deepEqual(runs.map((c) => c.args.slice(2)), [["pane-1", `FABRICA_HOME=${recordHome} fabrica watch ${id}`]]);
+    assert.deepEqual(runs.map((c) => c.args.slice(2)), [["w1:p1", `FABRICA_HOME=${recordHome} fabrica watch ${id}`]]);
 
-    const names = calls.filter((c) => c.args[0] === "pane" && c.args[1] === "name");
-    assert.deepEqual(names.map((c) => c.args.slice(2)), [["pane-1", "Fix the login bug"]]);
+    const renames = calls.filter((c) => c.args[0] === "agent" && c.args[1] === "rename");
+    assert.deepEqual(renames.map((c) => c.args.slice(2)), [["w1:p1", "Fix the login bug"]]);
+
+    const summaries = calls.filter((c) => c.args[0] === "pane" && c.args[1] === "report-metadata");
+    assert.deepEqual(summaries.map((c) => c.args.slice(2)), [
+      ["w1:p1", "--source", "custom:fabrica-display", "--token", "summary=Fix the login bug"],
+    ]);
   });
 });
 
 test("a questions-asked event flips the task's pane to the blocked state", () => {
   withFakeHerdrLog((readCalls) => {
     const recordHome = makeRecordHome();
-    const watcher = createHerdrWatcher({ recordHome, herdrBin: [process.execPath, FAKE_HERDR] });
+    const watcher = watcherOver(recordHome);
 
     const { id } = registerTask(recordHome, "Fix the login bug");
     watcher.pollOnce();
@@ -75,8 +87,10 @@ test("a questions-asked event flips the task's pane to the blocked state", () =>
     appendEvent(recordHome, { taskId: id, name: "questions-asked", details: { questions: ["Which database?"] } });
     watcher.pollOnce();
 
-    const reports = readCalls().filter((c) => c.args[0] === "pane" && c.args[1] === "report_agent");
-    assert.deepEqual(reports.map((c) => c.args.slice(2)), [["pane-1", "blocked"]]);
+    const reports = readCalls().filter((c) => c.args[0] === "pane" && c.args[1] === "report-agent");
+    assert.deepEqual(reports.map((c) => c.args.slice(2)), [
+      ["w1:p1", "--source", "custom:fabrica", "--agent", `fabrica-${id}`, "--state", "blocked"],
+    ]);
   });
 });
 
@@ -89,9 +103,23 @@ test("a task this watcher never opened a pane for (received before it started) i
     const { id } = registerTask(recordHome, "Older task");
     appendEvent(recordHome, { taskId: id, name: "questions-asked", details: { questions: ["?"] } });
 
-    const watcher = createHerdrWatcher({ recordHome, herdrBin: [process.execPath, FAKE_HERDR] });
+    const watcher = watcherOver(recordHome);
     watcher.pollOnce();
 
     assert.deepEqual(readCalls(), []);
   });
+});
+
+test("createHerdrWatcher refuses to start with no pane to split from", () => {
+  const recordHome = makeRecordHome();
+  const previous = process.env.HERDR_PANE_ID;
+  delete process.env.HERDR_PANE_ID;
+  try {
+    assert.throws(
+      () => createHerdrWatcher({ recordHome, herdrBin: [process.execPath, FAKE_HERDR] }),
+      /no pane to split from/
+    );
+  } finally {
+    if (previous !== undefined) process.env.HERDR_PANE_ID = previous;
+  }
 });

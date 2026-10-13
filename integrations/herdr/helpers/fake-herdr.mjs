@@ -26,5 +26,8 @@ const priorSplits = readLoggedCalls().filter((call) => call.args[0] === "pane" &
 if (logPath) appendFileSync(logPath, JSON.stringify({ args }) + "\n");
 
 if (args[0] === "pane" && args[1] === "split") {
-  process.stdout.write(`pane-${priorSplits + 1}\n`);
+  // "w1:pN" mirrors the real pane-id shape (workspace:pane) documented
+  // at herdr.dev/docs/socket-api - not meaningful otherwise, just
+  // distinct and deterministic per call.
+  process.stdout.write(`w1:p${priorSplits + 1}\n`);
 }

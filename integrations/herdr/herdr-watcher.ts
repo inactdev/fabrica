@@ -7,12 +7,15 @@
 // createLineTail/recordPath/readTaskFile) - it never touches a running
 // task's process, the same way `fabrica watch` never does.
 //
-// The pane/row/report_agent calls below assume a minimal external CLI
-// shape (`<bin> pane split|run|name|report_agent ...`) - the real
-// product (https://herdr.dev) is a reserved package with no shipped API
-// yet, so this is the smallest shape the issue's own wording describes.
-// Only `callHerdr`'s four one-line wrappers would need to change if the
-// real CLI's shape differs; everything else here only depends on them.
+// The five wrappers below are Herdr's own documented CLI
+// (https://herdr.dev/docs/socket-api, /docs/agents) - not a guessed
+// shape. Pane ids look like "w1:p1" (workspace:pane); `pane split`
+// splits an EXISTING pane and hands back the new one, so this watcher
+// needs a pane to split FROM - the pane it itself is running in, which
+// Herdr injects into every process it starts as $HERDR_PANE_ID (see
+// README.md's "Starting it"). Only these five one-line functions would
+// need to change if Herdr's CLI shape changes; everything else here
+// only depends on them.
 
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -25,6 +28,13 @@ type AgentState = "working" | "blocked" | "done";
 
 const TITLE_MAX_LENGTH = 60;
 
+/** The `--source` every call below reports under, and the `--agent`
+ * every report-agent call reports as, scoped per task so two tasks'
+ * rows never collide in Herdr's own agent registry. */
+const REPORT_SOURCE = "custom:fabrica";
+const SUMMARY_SOURCE = "custom:fabrica-display";
+const agentIdFor = (taskId: string) => `fabrica-${taskId}`;
+
 function resolveHerdrBin(env: NodeJS.ProcessEnv = process.env): string[] {
   const override = env.HERDR_BIN;
   if (override !== undefined && override.trim().length > 0) return override.trim().split(/\s+/);
@@ -35,20 +45,45 @@ function callHerdr(bin: string[], args: string[]): string {
   return execFileSync(bin[0], [...bin.slice(1), ...args], { encoding: "utf8" });
 }
 
-function splitPane(bin: string[]): string {
-  return callHerdr(bin, ["pane", "split"]).trim();
+/** `herdr pane split <pane-id> --direction right` - splits `fromPaneId`
+ * and returns the id of the new pane it creates alongside it. */
+function splitPane(bin: string[], fromPaneId: string): string {
+  return callHerdr(bin, ["pane", "split", fromPaneId, "--direction", "right"]).trim();
 }
 
+/** `herdr pane run <pane-id> "<command>"` - one argv element, not a
+ * shell string: execFileSync never invokes a shell, so `command` reaches
+ * Herdr exactly as given with no quoting to get right or wrong. */
 function runInPane(bin: string[], paneId: string, command: string): void {
   callHerdr(bin, ["pane", "run", paneId, command]);
 }
 
-function namePane(bin: string[], paneId: string, name: string): void {
-  callHerdr(bin, ["pane", "name", paneId, name]);
+/** `herdr agent rename <pane-id> <name>` - names the pane's row. */
+function renameAgent(bin: string[], paneId: string, name: string): void {
+  callHerdr(bin, ["agent", "rename", paneId, name]);
 }
 
-function reportAgent(bin: string[], paneId: string, state: AgentState): void {
-  callHerdr(bin, ["pane", "report_agent", paneId, state]);
+/** `herdr pane report-agent <pane-id> --source custom:fabrica --agent
+ * fabrica-<task-id> --state working|blocked|done`. */
+function reportAgent(bin: string[], paneId: string, taskId: string, state: AgentState): void {
+  callHerdr(bin, [
+    "pane",
+    "report-agent",
+    paneId,
+    "--source",
+    REPORT_SOURCE,
+    "--agent",
+    agentIdFor(taskId),
+    "--state",
+    state,
+  ]);
+}
+
+/** `herdr pane report-metadata <pane-id> --source
+ * custom:fabrica-display --token summary=<title>` - the row's one-line
+ * summary, shown via the Agent sidebar's `$summary` token. */
+function reportSummary(bin: string[], paneId: string, title: string): void {
+  callHerdr(bin, ["pane", "report-metadata", paneId, "--source", SUMMARY_SOURCE, "--token", `summary=${title}`]);
 }
 
 /** The task's title, for naming its pane's row - request.md verbatim,
@@ -101,6 +136,12 @@ export interface HerdrWatcher {
 export interface CreateHerdrWatcherOptions {
   recordHome: string;
   herdrBin?: string[];
+  /** The pane every task's pane is split from - defaults to
+   * $HERDR_PANE_ID, the id Herdr injects into this watcher's own
+   * environment when it's started inside a pane (see README.md).
+   * Overridable for tests, which run with no real Herdr pane around
+   * them at all. */
+  basePaneId?: string;
   /** The command run in each newly opened pane. Defaults to `fabrica
    * watch <id>`, carrying this watcher's own FABRICA_HOME along so the
    * pane watches the same record regardless of Herdr's own environment. */
@@ -110,6 +151,13 @@ export interface CreateHerdrWatcherOptions {
 export function createHerdrWatcher(opts: CreateHerdrWatcherOptions): HerdrWatcher {
   const { recordHome } = opts;
   const bin = opts.herdrBin ?? resolveHerdrBin();
+  const basePaneId = opts.basePaneId ?? process.env.HERDR_PANE_ID;
+  if (basePaneId === undefined || basePaneId.trim().length === 0) {
+    throw new Error(
+      "herdr-watcher: no pane to split from. Run this inside a Herdr pane (it sets $HERDR_PANE_ID " +
+        "for every process it starts), or pass basePaneId explicitly."
+    );
+  }
   const watchCommandFor =
     opts.watchCommandFor ?? ((taskId: string) => `FABRICA_HOME=${recordHome} fabrica watch ${taskId}`);
   const tail = createLineTail(recordPath(recordHome));
@@ -128,9 +176,11 @@ export function createHerdrWatcher(opts: CreateHerdrWatcherOptions): HerdrWatche
         if (!event) continue;
 
         if (event.name === "task-received") {
-          const paneId = splitPane(bin);
+          const title = titleFor(recordHome, event.taskId);
+          const paneId = splitPane(bin, basePaneId);
           runInPane(bin, paneId, watchCommandFor(event.taskId));
-          namePane(bin, paneId, titleFor(recordHome, event.taskId));
+          renameAgent(bin, paneId, title);
+          reportSummary(bin, paneId, title);
           panes.set(event.taskId, paneId);
           continue;
         }
@@ -139,7 +189,7 @@ export function createHerdrWatcher(opts: CreateHerdrWatcherOptions): HerdrWatche
         if (state === null) continue;
         const paneId = panes.get(event.taskId);
         if (paneId === undefined) continue; // not a task this watcher opened a pane for
-        reportAgent(bin, paneId, state);
+        reportAgent(bin, paneId, event.taskId, state);
       }
     },
   };
