@@ -138,16 +138,17 @@ test("main: `watch --help` prints the watch command's own usage and exits 0, wit
   assert.match(io.out[0], /fabrica watch <taskId>/);
 });
 
-// Client ruling on issue #12's watch-help-overstates-streaming finding:
-// the first thing read must describe what the screen actually looks
-// like - heartbeats live, transcript in batches - not word-by-word
-// streaming that never happens.
-test("main: `watch --help` opens with an accurate description, not a word-by-word streaming promise", async () => {
+// Client ruling on issue #12's watch-help-overstates-streaming finding
+// (superseded by issue #70, which made the streaming promise true): the
+// first thing read must describe what the screen actually looks like -
+// heartbeats live, and now the transcript live too, entry by entry as
+// the worker produces it, since that overstatement is no longer one.
+test("main: `watch --help` opens with an accurate description of live, entry-by-entry transcript delivery", async () => {
   const io = captureIo();
   await main(["watch", "--help"], io);
   assert.match(io.out[0], /Heartbeats appear as they happen/);
-  assert.match(io.out[0], /transcript arrives in a batch/);
-  assert.doesNotMatch(io.out[0], /[Ss]treams? .*live/);
+  assert.match(io.out[0], /transcript arrives live too, entry\s*\n?by entry/);
+  assert.doesNotMatch(io.out[0], /transcript arrives in a batch/);
 });
 
 test("main: `watch -h` also short-circuits to help", async () => {

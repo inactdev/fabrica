@@ -73,6 +73,13 @@ export interface RunContainedOptions {
    * resolves `HOME` to `/`, which is not writable and not a home
    * directory at all. Omit for no persisted home - `HOME` stays `/`. */
   homeDir?: string;
+  /** Called with each raw chunk of the contained process's stdout as it
+   * arrives, in addition to it being buffered into the eventual
+   * `stdout` result - lets a caller that needs to react to output while
+   * the process is still running (e.g. an adapter mapping a streamed
+   * transcript live, issue #70) do so without waiting for `close`.
+   * Omitted, nothing extra happens; `stdout` is unaffected either way. */
+  onStdout?: (chunk: string) => void;
 }
 
 export interface ContainedRunResult {

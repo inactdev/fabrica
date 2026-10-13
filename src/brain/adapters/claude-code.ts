@@ -15,6 +15,7 @@ import { ContainmentError, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
+import { emitLiveTranscriptEntry } from "../live-transcript.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
 
@@ -207,40 +208,61 @@ function parseLines(stdout: string): ClaudeStreamLine[] {
   return lines;
 }
 
-function toTranscript(lines: ClaudeStreamLine[]): TranscriptEntry[] {
+// One stream-json line, mapped to zero or more transcript entries - the
+// unit work() maps live, the instant each line's newline lands, rather
+// than waiting for the whole call to finish (issue #70).
+//
+// "system" (hook chatter, session init) and "rate_limit_event" are about
+// the harness this binary happens to be running inside, not about the
+// work it did on the brief - left out of what a human reviewing the
+// worker's transcript needs to see. "assistant" carries what the worker
+// thought and did; "user" carries a tool's result fed back to it - both
+// are part of the real record of the work.
+function mapLineToEntries(line: ClaudeStreamLine): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const now = () => new Date().toISOString();
 
-  for (const line of lines) {
-    // "system" (hook chatter, session init) and "rate_limit_event" are
-    // about the harness this binary happens to be running inside, not
-    // about the work it did on the brief - left out of what a human
-    // reviewing the worker's transcript needs to see. "assistant" carries
-    // what the worker thought and did; "user" carries a tool's result
-    // fed back to it - both are part of the real record of the work.
-    if (line.type === "assistant") {
-      for (const block of line.message?.content ?? []) {
-        if (block.type === "thinking" && block.thinking) {
-          entries.push({ occurredAt: now(), kind: "reasoning", text: block.thinking });
-        } else if (block.type === "text" && block.text) {
-          entries.push({ occurredAt: now(), kind: "text", text: block.text });
-        } else if (block.type === "tool_use") {
-          entries.push({
-            occurredAt: now(),
-            kind: "tool-call",
-            text: `${block.name ?? "tool"}(${JSON.stringify(block.input ?? {})})`,
-          });
-        }
+  if (line.type === "assistant") {
+    for (const block of line.message?.content ?? []) {
+      if (block.type === "thinking" && block.thinking) {
+        entries.push({ occurredAt: now(), kind: "reasoning", text: block.thinking });
+      } else if (block.type === "text" && block.text) {
+        entries.push({ occurredAt: now(), kind: "text", text: block.text });
+      } else if (block.type === "tool_use") {
+        entries.push({
+          occurredAt: now(),
+          kind: "tool-call",
+          text: `${block.name ?? "tool"}(${JSON.stringify(block.input ?? {})})`,
+        });
       }
-    } else if (line.type === "user") {
-      for (const block of line.message?.content ?? []) {
-        if (block.type !== "tool_result") continue;
-        const text = typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? "");
-        entries.push({ occurredAt: now(), kind: block.is_error ? "tool-error" : "tool-result", text });
-      }
+    }
+  } else if (line.type === "user") {
+    for (const block of line.message?.content ?? []) {
+      if (block.type !== "tool_result") continue;
+      const text = typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? "");
+      entries.push({ occurredAt: now(), kind: block.is_error ? "tool-error" : "tool-result", text });
     }
   }
   return entries;
+}
+
+/** Turns a stream of raw stdout chunks into complete, trimmed lines,
+ * calling `onLine` the instant each one's trailing newline arrives - a
+ * line split across two chunks (any chunk boundary that isn't also a
+ * newline) is held until the rest of it lands, same as parseLines()
+ * sees it once the whole output has arrived. */
+function lineFeeder(onLine: (line: string) => void): (chunk: string) => void {
+  let buffered = "";
+  return (chunk: string) => {
+    buffered += chunk;
+    let newlineAt = buffered.indexOf("\n");
+    while (newlineAt !== -1) {
+      const line = buffered.slice(0, newlineAt).trim();
+      buffered = buffered.slice(newlineAt + 1);
+      if (line) onLine(line);
+      newlineAt = buffered.indexOf("\n");
+    }
+  };
 }
 
 // workdir is a ProductionLine worktree, so git needs its real project's
@@ -363,6 +385,32 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       const sessionDir = `${realWorkdir}.fabrica-session`;
       mkdirSync(sessionDir, { recursive: true });
 
+      // Mapped the moment each line's newline lands, not once the whole
+      // call resolves (issue #70): `entries` ends up holding exactly what
+      // the old toTranscript(parseLines(stdout)) post-hoc pass used to
+      // build, in the same order, since both walk the same stream of
+      // lines - this just does it as they arrive instead of afterward.
+      // emitLiveTranscriptEntry is this adapter's own choice to make;
+      // nothing about Brain.work's contract changes - a caller that
+      // never registered a listener for this workdir sees no difference.
+      const entries: TranscriptEntry[] = [];
+      const onStdout = lineFeeder((raw) => {
+        let parsed: ClaudeStreamLine;
+        try {
+          parsed = JSON.parse(raw) as ClaudeStreamLine;
+        } catch {
+          // A non-JSON line never happens in stream-json output; skip
+          // defensively, same as parseLines() below (which still
+          // re-parses the complete buffered output afterward to find the
+          // terminal "result" line - only knowable once the process exits).
+          return;
+        }
+        for (const entry of mapLineToEntries(parsed)) {
+          entries.push(entry);
+          emitLiveTranscriptEntry(workdir, entry);
+        }
+      });
+
       let stdout: string;
       let stderr: string;
       let exitCode: number | null;
@@ -378,6 +426,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
           env: opts.env,
           readOnlyMounts,
           homeDir: sessionDir,
+          onStdout,
         }));
       } catch (err) {
         if (err instanceof ContainmentError) {
@@ -414,7 +463,15 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         );
       }
 
-      const transcript = toTranscript(lines);
+      // budget-exhausted and usage (below) are synthesized from the
+      // terminal "result" line, not mapped from a stream-json block -
+      // the earliest either can be known is right here, once the
+      // process has actually exited, so there is no earlier "live"
+      // moment for them to arrive at. They reach the record through
+      // runAttempts' own catch-up pass for whatever a work() call
+      // didn't already deliver live (src/foreman/attempts.ts), not
+      // through emitLiveTranscriptEntry.
+      const transcript = entries;
       if (budgetExhausted) {
         transcript.push({
           occurredAt: new Date().toISOString(),

@@ -211,13 +211,11 @@ async function productionRound(
       onHeartbeat: (attempt) => {
         appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
       },
-      onTranscript: (transcript) => {
-        appendTaskFile(
-          recordHome,
-          taskId,
-          "transcript.log",
-          transcript.map((entry) => JSON.stringify(entry) + "\n").join("")
-        );
+      // Issue #70: fires as each entry is known, not once per attempt -
+      // see runAttempts' own onTranscriptEntry doc for why every entry
+      // lands here exactly once either way.
+      onTranscriptEntry: (entry) => {
+        appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
       },
     });
 

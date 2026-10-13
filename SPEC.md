@@ -22,12 +22,12 @@ the event log are for).
   (Long work runs detached; see `fabrica do`.)
 - Workers are invisible by default and watchable always. Every worker's
   transcript is a sequence of structured entries — each with its own
-  timestamp, a kind, and its text — appended to its transcript file in one
-  batch per attempt, when that attempt's work concludes, not word by word
-  as it happens. `fabrica watch` (or your own tail of that file) follows a
-  task while it runs: heartbeats appear live, so it's visibly alive
-  between batches, and each attempt's transcript arrives as soon as it
-  lands. Views never control: closing one touches nothing.
+  timestamp, a kind, and its text — appended to its transcript file the
+  moment each one is produced, not batched up and handed over once an
+  attempt concludes. `fabrica watch` (or your own tail of that file)
+  follows a task while it runs: heartbeats appear live alongside the
+  transcript itself, which arrives entry by entry as the worker produces
+  it. Views never control: closing one touches nothing.
 - The coding agent that performs work inside the box is a subprocess
   behind a small adapter interface: the `Brain` seam, whose ratified
   shape lives in `contract/surface.ts` and whose src-side home is
@@ -66,7 +66,7 @@ The whole tool in one command.
 4. **Works.** Runs the agent adapter in the worktree with the brief.
    Detached from the terminal: `fabrica do` prints the id and returns
    immediately; work continues in the background. Full agent output goes
-   to the task's transcript file, one batch per attempt (see "Workers are
+   to the task's transcript file as it's produced (see "Workers are
    invisible by default and watchable always" above).
 5. **Verifies.** Runs the project's check command (see Config below)
    inside the worktree. Red → one fix pass by the agent with the failure
@@ -109,11 +109,10 @@ agent output.
 
 ### `fabrica watch <id>`
 Follows one task while it runs, in any terminal, any window manager, or a
-herdr/tmux pane if that's where you run it: heartbeats appear live, so
-you can see it's alive, and the worker's own transcript arrives in one
-batch per attempt, not word by word. Stopping the watch (Ctrl-C) never
-stops the work. Watching is a window onto the worker, not the
-room the worker lives in.
+herdr/tmux pane if that's where you run it: heartbeats appear live, and
+the worker's own transcript arrives live too, entry by entry as it's
+produced. Stopping the watch (Ctrl-C) never stops the work. Watching is
+a window onto the worker, not the room the worker lives in.
 
 The moment a task reaches a state nothing further is expected from, watch
 says so plainly instead of letting the stream simply stop, which would
@@ -152,9 +151,9 @@ Plain files, human-readable, at `~/.fabrica/` (path configurable):
         delivery.md           # the delivery block, or failure report
         verdict               # accept|fix|wrong + note + occurredAt
         transcript.log        # the worker's structured transcript entries,
-                              # one JSON line each, appended one batch per
-                              # attempt; `fabrica watch` prints them as they
-                              # land
+                              # one JSON line each, appended the moment
+                              # each one is produced; `fabrica watch`
+                              # prints them as they land
         worktree/             # the ProductionLine while the task runs;
                               # removed when it is destroyed (the branch stays)
       projects.toml           # project registry + caps (below)
