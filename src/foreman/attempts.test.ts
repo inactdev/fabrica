@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAttempts, gateForRecord, MAX_RECEIPT_CHECK_OUTPUT_BYTES } from "./attempts.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
+import { emitLiveTranscriptEntry } from "../brain/live-transcript.ts";
 import type { Brain } from "../brain/index.ts";
 import type { Judge } from "./judge.ts";
 
@@ -186,6 +187,72 @@ test("runAttempts: no onHeartbeat given, no timer runs (no crash, no leak)", asy
   });
 
   assert.equal(result.receipts.length, 1);
+});
+
+// Issue #70: src/brain/live-transcript.ts is the one piece the reference
+// adapter's own docker-backed tests can't exercise without Docker - this
+// proves runAttempts' own half of the live-delivery contract directly: a
+// brain that calls emitLiveTranscriptEntry itself (standing in for an
+// adapter mapping its stream as it arrives) gets those entries forwarded
+// immediately, and anything its final transcript carries that was never
+// emitted that way (a brain's own synthetic trailing entries, or a brain
+// with no live signal at all) still reaches onTranscriptEntry exactly
+// once, right after brain.work() resolves - never duplicated, never
+// dropped.
+function streamingFakeBrain(liveTexts: string[], trailingTexts: string[]): Brain {
+  return {
+    name: "streaming-fake",
+    model: "fake-1",
+    async ask() {
+      return {};
+    },
+    async work(_brief, workdir) {
+      const now = () => new Date().toISOString();
+      const live = liveTexts.map((text) => ({ occurredAt: now(), kind: "text", text }));
+      for (const entry of live) emitLiveTranscriptEntry(workdir, entry);
+      const trailing = trailingTexts.map((text) => ({ occurredAt: now(), kind: "usage", text }));
+      return { transcript: [...live, ...trailing], session: "s1" };
+    },
+  };
+}
+
+test("runAttempts: onTranscriptEntry gets live entries immediately, then exactly the trailing ones once work() resolves", async () => {
+  const seen: string[] = [];
+
+  await runAttempts({
+    brain: streamingFakeBrain(["live-1", "live-2"], ["usage-at-the-end"]),
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    onTranscriptEntry: (entry) => seen.push(entry.text),
+  });
+
+  // live-1/live-2 arrive exactly once each (not duplicated by the
+  // catch-up pass), and the trailing entry - never emitted live - still
+  // arrives, in its place at the end.
+  assert.deepEqual(seen, ["live-1", "live-2", "usage-at-the-end"]);
+});
+
+test("runAttempts: onTranscriptEntry delivers every entry for a brain with no live signal at all", async () => {
+  const seen: string[] = [];
+
+  await runAttempts({
+    brain: fakeBrain(),
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    onTranscriptEntry: (entry) => seen.push(entry.kind),
+  });
+
+  // fakeBrain() never calls emitLiveTranscriptEntry - its one "text"
+  // entry must still reach onTranscriptEntry via the catch-up pass.
+  assert.deepEqual(seen, ["text"]);
 });
 
 test("runAttempts: a judgement with no verdict stops the loop, whatever the budget", async () => {

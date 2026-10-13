@@ -122,19 +122,24 @@ record shows what was asked for.
 
 A list of `TranscriptEntry` objects: the record of what the brain did
 during this call, in order. It's what a human watching the worker sees -
-`fabrica watch` prints these entries as they reach the record, which is
-one batch at the end of each attempt (the Foreman appends them once this
-call resolves), and `fabrica log --transcript` shows the same entries
-after the fact.
-Nothing downstream parses an entry's `text` to make decisions; it's for
-a person to read.
+`fabrica watch` prints these entries live, as they reach the record
+(issue #70): an adapter that can report entries as it produces them -
+today's reference adapter - does so through `src/brain/live-transcript.ts`'s
+`emitLiveTranscriptEntry`, keyed on `workdir`, and the Foreman
+(`src/foreman/attempts.ts`) forwards each one to the record the instant
+it arrives rather than waiting for `work()` to resolve. A brain with no
+finer-grained signal than "the whole call just finished" simply never
+calls it - the Foreman still delivers every one of its entries, from the
+return value, once that call resolves. Either way `work()`'s own return
+value stays the complete, ordered transcript (nothing about `Brain`'s
+contract changes), and `fabrica log --transcript` shows the same entries
+after the fact. Nothing downstream parses an entry's `text` to make
+decisions; it's for a person to read.
 
 Each entry holds three fields:
 
 - `occurredAt` - an ISO 8601 timestamp for when this piece of output
-  happened. The entries reach the record in one batch per attempt, so
-  this is what lets a view place each one at the moment it actually
-  happened rather than at the moment the batch landed.
+  happened.
 - `kind` - what sort of chunk this is, such as `"stdout"`, `"tool-call"`,
   or `"reasoning"`. Deliberately a plain string, not a closed set, for
   the same reason `reasoningEffort` is: different tools categorize their

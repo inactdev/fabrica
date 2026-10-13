@@ -9,6 +9,8 @@ import { claudeCodeAdapter, claudeCodeCheckBox, ClaudeCodeError, resolveGitMount
 import { createProductionLine, destroyProductionLine } from "../../line/index.ts";
 import { makeFixtureHome, makeFixtureProject } from "../../line/helpers/fixture.ts";
 import { LineError } from "../../line/index.ts";
+import { registerLiveTranscriptListener } from "../live-transcript.ts";
+import type { TranscriptEntry } from "../types.ts";
 
 const FAKE_CLI_SOURCE = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-claude-cli.mjs");
 // A container only ever sees `workdir` (mounted at /workdir) - the fake
@@ -235,6 +237,52 @@ test("claudeCodeAdapter maps structured stream-json into transcript entries and 
   assert.equal(result.transcript[3].text, "Done.");
   // "system" (init) never became a transcript entry.
   assert.ok(!result.transcript.some((e) => e.text.includes("init")));
+});
+
+// Negative first (issue #70): a batched "hand the whole transcript over
+// once the call resolves" implementation would make every entry arrive
+// at once, right at the very end. This proves the first entry reaches
+// the live listener - the same path work() uses to deliver to
+// transcript.log, see src/brain/live-transcript.ts - well before the
+// fake CLI has even emitted its third one, not just before the whole
+// call finishes.
+test("claudeCodeAdapter delivers each transcript entry live, as it arrives, not batched at the end", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const workdir = makeFakeCliWorkdir();
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
+
+  const arrived: TranscriptEntry[] = [];
+  const unregister = registerLiveTranscriptListener(workdir, (entry) => arrived.push(entry));
+  try {
+    const workPromise = brain.work("LIVE_STREAM_DELAYED", workdir);
+
+    // The fake CLI's LIVE_STREAM_DELAYED scenario emits "first", waits a
+    // real ~300ms, emits "second", waits another ~300ms, then emits
+    // "third" - independent of however long the container itself took
+    // to start. Polling (rather than a fixed delay from test start) for
+    // the first arrival and asserting it is STILL ALONE the moment it's
+    // seen proves delivery is live: a batched implementation would never
+    // show exactly one entry here - it would show zero until the whole
+    // call resolves, then all three at once.
+    const deadline = Date.now() + 20_000;
+    while (arrived.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.deepEqual(
+      arrived.map((e) => e.text),
+      ["first"],
+      "the first entry should already be here, alone - the second and third are still 300ms+ away inside the worker"
+    );
+
+    const result = await workPromise;
+    assert.deepEqual(arrived.map((e) => e.text), ["first", "second", "third"]);
+    // work()'s own return value is still the complete, ordered transcript
+    // once it resolves - the live channel is additive, not a replacement
+    // for it (nothing about Brain.work's contract changes).
+    assert.deepEqual(result.transcript.map((e) => e.text).slice(0, 3), ["first", "second", "third"]);
+  } finally {
+    unregister();
+  }
 });
 
 test("claudeCodeAdapter records session id from the terminal result line", async (t) => {

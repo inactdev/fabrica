@@ -18,6 +18,10 @@ function line(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const resultLine = (overrides) => ({
   type: "result",
   is_error: false,
@@ -141,6 +145,20 @@ switch (brief) {
     // otherwise make the very case with nothing to report disappear
     // from the transcript entirely instead of asserting on it.
     line({ type: "assistant", message: { content: [{ type: "text", text: `SEEN:${seenBefore}` }] } });
+    line(resultLine({}));
+    break;
+  }
+  case "LIVE_STREAM_DELAYED": {
+    // Three entries with real pauses between them (issue #70), so a test
+    // can prove a transcript entry reaches the live listener - and from
+    // there, disk - while this call is still running, well before this
+    // scenario's later entries are even emitted, rather than all landing
+    // together only once the whole call finishes.
+    line({ type: "assistant", message: { content: [{ type: "text", text: "first" }] } });
+    await sleep(300);
+    line({ type: "assistant", message: { content: [{ type: "text", text: "second" }] } });
+    await sleep(300);
+    line({ type: "assistant", message: { content: [{ type: "text", text: "third" }] } });
     line(resultLine({}));
     break;
   }

@@ -70,6 +70,39 @@ test("runContained: writes land inside workdir, and nowhere outside it", async (
   assert.equal(existsSync(join(outsideDir, "hack.txt")), false, "a write outside workdir must never land");
 });
 
+test("runContained: onStdout delivers the first chunk while the process is still running, not batched at close", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+
+  const chunks: string[] = [];
+  let firstChunkAt: number | undefined;
+  const started = Date.now();
+  const resultPromise = runContained("sh", ["-c", "echo first; sleep 1; echo second"], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    onStdout: (chunk) => {
+      if (chunks.length === 0) firstChunkAt = Date.now();
+      chunks.push(chunk);
+    },
+  });
+
+  const result = await resultPromise;
+  const totalMs = Date.now() - started;
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, "first\nsecond\n");
+  assert.equal(chunks.join(""), "first\nsecond\n", "onStdout must see exactly what ends up in stdout, nothing more");
+  assert.ok(firstChunkAt !== undefined, "onStdout must fire at least once");
+  // "first" is written well under the 1s sleep that separates it from
+  // "second" - if onStdout only fired once the whole call closed, its
+  // first call would land at totalMs, not well before it.
+  assert.ok(
+    firstChunkAt! - started < totalMs - 500,
+    `expected the first chunk to arrive well before the process closed (first chunk at +${firstChunkAt! - started}ms, total ${totalMs}ms)`
+  );
+});
+
 test("runContained: reads work inside workdir, but a file elsewhere on the host is invisible", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const { workdir, outsideDir } = makeFixture();

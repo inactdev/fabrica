@@ -294,8 +294,9 @@ useful for cost and session id, useless for `transcript`, which is
 supposed to be the structured record of what the worker actually did.
 `stream-json` prints one JSON object per line as the call runs - the
 same terminal summary object is still the last line, so nothing is
-lost, and every turn along the way becomes something `toTranscript()`
-can map into its own entry. `--verbose` is required alongside it:
+lost, and every turn along the way becomes something `mapLineToEntries()`
+can map into its own entry, live, as that line's newline lands (see
+"Mapped live, not batched at the end" below). `--verbose` is required alongside it:
 omitting it fails immediately with `Error: When using --print,
 --output-format=stream-json requires --verbose` (verified) before any
 work happens at all.
@@ -358,6 +359,33 @@ not of the worker's actual task) and `rate_limit_event` lines are
 dropped rather than mapped, because `transcript` is what a person
 reviewing the worker sees (`src/brain/README.md`), and neither is part
 of the work done on `brief`.
+
+**Mapped live, not batched at the end (issue #70).** `runContained`'s
+`onStdout` option delivers each raw chunk of the container's stdout as
+it arrives; `lineFeeder` (`claude-code.ts`) buffers that into complete
+lines (holding a line split across a chunk boundary until its newline
+lands, exactly as `parseLines` would see it from the whole buffered
+output), and each complete line is mapped through the same
+`mapLineToEntries` the table above describes - no separate "live"
+mapping logic to drift from the batch one, because there is no batch
+one any more: this is the only mapping pass now. Every entry produced
+this way is pushed onto the same array `work()` eventually returns as
+`transcript`, and also handed to `../live-transcript.ts`'s
+`emitLiveTranscriptEntry(workdir, entry)` the instant it's produced -
+`src/foreman/attempts.ts` registers a listener for that exact `workdir`
+before calling `brain.work()`, so entries reach `transcript.log` while
+the call is still running, not once it resolves. The `"usage"` and
+`"budget-exhausted"` entries below are the one exception: both are
+synthesized from the terminal `"result"` line, which by definition
+isn't known until the process has already exited, so there is no
+earlier "live" moment for them - they reach the record through
+`runAttempts`' own catch-up delivery of whatever `transcript` carries
+that wasn't already emitted live, not through
+`emitLiveTranscriptEntry`. Nothing about `Brain.work()`'s contract
+changes to make this work: `emitLiveTranscriptEntry` is this adapter's
+own choice, reached through `workdir` (a value both sides already have
+through the ordinary `Brain` interface), not a new parameter on
+`BrainWorkOptions`.
 
 ## Cost, duration, and token usage: the `"usage"` entry
 

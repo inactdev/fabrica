@@ -6,7 +6,8 @@
 // run in full regardless of how early a check goes green: a number given
 // is a number honored, not a ceiling the code is free to cut short.
 
-import type { Brain, TranscriptEntry } from "../brain/index.ts";
+import { registerLiveTranscriptListener } from "../brain/index.ts";
+import type { Brain, BrainWorkResult, TranscriptEntry } from "../brain/index.ts";
 import type { GateResult, Receipt } from "../../contract/surface.ts";
 import type { Judge, Judgement } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
@@ -73,7 +74,16 @@ export async function runAttempts(opts: {
    * from where the task's prior rounds left off, instead of restarting
    * at 1, so the record shows one running count across the whole task. */
   startAttempt?: number;
-  onTranscript?: (transcript: TranscriptEntry[]) => void;
+  /** Fires once per transcript entry, as soon as it's known (issue
+   * #70): live, the moment a streaming-capable brain reports it
+   * through src/brain/live-transcript.ts, for every entry that arrived
+   * that way; then, once brain.work() resolves, once more for any
+   * trailing entries its return value carries that never arrived live
+   * (a brain with no finer-grained signal than "the whole call just
+   * finished" - e.g. a fake in a test - delivers every entry this way).
+   * Either way, every entry reaches this exactly once, in order, and
+   * the full set always matches workResult.transcript. */
+  onTranscriptEntry?: (entry: TranscriptEntry) => void;
   /** Fires roughly every `heartbeatIntervalMs` while a `brain.work` call
    * for `attempt` is still in flight. Omitted, no heartbeat runs. */
   onHeartbeat?: (attempt: number) => void;
@@ -96,7 +106,7 @@ export async function runAttempts(opts: {
     stopEarlyOnGreen,
     initialSession,
     startAttempt,
-    onTranscript,
+    onTranscriptEntry,
     onHeartbeat,
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
     spendLimits,
@@ -127,11 +137,34 @@ export async function runAttempts(opts: {
       ...(session ? { session } : {}),
       ...(maxSpendUsd !== undefined ? { maxSpendUsd } : {}),
     };
-    const workResult = await withHeartbeat(onHeartbeat && (() => onHeartbeat(attempt)), heartbeatIntervalMs, () =>
-      brain.work(thisBrief, workdir, Object.keys(workOpts).length > 0 ? workOpts : undefined)
-    );
+    // Issue #70: a brain that can report entries as it produces them
+    // (today's reference adapter) does so through this listener, keyed
+    // on `workdir` - the one value both sides already have through the
+    // ordinary Brain interface, no new parameter needed (see
+    // src/brain/live-transcript.ts). `liveEntries` is also kept so
+    // that, once the call resolves, anything workResult.transcript
+    // carries that never arrived this way (every entry, for a brain
+    // that doesn't support live delivery at all) can still be
+    // delivered - exactly once each, in order, never duplicated.
+    const liveEntries: TranscriptEntry[] = [];
+    const unregisterLiveTranscript = registerLiveTranscriptListener(workdir, (entry) => {
+      liveEntries.push(entry);
+      onTranscriptEntry?.(entry);
+    });
+    let workResult: BrainWorkResult;
+    try {
+      workResult = await withHeartbeat(onHeartbeat && (() => onHeartbeat(attempt)), heartbeatIntervalMs, () =>
+        brain.work(thisBrief, workdir, Object.keys(workOpts).length > 0 ? workOpts : undefined)
+      );
+    } finally {
+      unregisterLiveTranscript();
+    }
     session = workResult.session ?? session;
-    if (workResult.transcript.length > 0) onTranscript?.(workResult.transcript);
+    // liveEntries is always a prefix of workResult.transcript, in the
+    // same order, by construction - a streaming adapter builds both
+    // from the same stream in the same loop - so the remainder is
+    // exactly what was never delivered live.
+    for (const entry of workResult.transcript.slice(liveEntries.length)) onTranscriptEntry?.(entry);
     if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
 
     const durationMs = Date.now() - t0;

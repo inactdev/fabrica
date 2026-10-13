@@ -9,6 +9,8 @@ import { ForemanError } from "./errors.ts";
 import { deliveryOf, receiptsOf } from "./queries.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
+import { emitLiveTranscriptEntry } from "../brain/live-transcript.ts";
+import type { Brain } from "../brain/index.ts";
 import { LineError } from "../line/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
@@ -68,6 +70,87 @@ test("doTask on a green project delivers after exactly one attempt", async () =>
   assert.equal(receipts[0].outcome, "delivered");
   assert.equal(receipts[0].checks?.green, true);
   assert.equal(Object.hasOwn(receipts[0], "costUsd"), true);
+});
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** A brain standing in for the reference adapter's own live-streaming
+ * behavior (issue #70): reports three entries with real pauses between
+ * them via emitLiveTranscriptEntry, the same channel the reference
+ * adapter uses, before resolving. */
+function liveStreamingBrain(): Brain {
+  return {
+    name: "streaming-fake",
+    model: "fake-1",
+    async ask() {
+      return {};
+    },
+    async work(_brief, workdir) {
+      const now = () => new Date().toISOString();
+      emitLiveTranscriptEntry(workdir, { occurredAt: now(), kind: "text", text: "first" });
+      await sleep(150);
+      emitLiveTranscriptEntry(workdir, { occurredAt: now(), kind: "text", text: "second" });
+      await sleep(150);
+      emitLiveTranscriptEntry(workdir, { occurredAt: now(), kind: "text", text: "third" });
+      return {
+        transcript: [
+          { occurredAt: now(), kind: "text", text: "first" },
+          { occurredAt: now(), kind: "text", text: "second" },
+          { occurredAt: now(), kind: "text", text: "third" },
+        ],
+        session: "s1",
+      };
+    },
+  };
+}
+
+// Negative first (issue #70): a batched "collect the transcript and hand
+// it over once the attempt concludes" implementation would write nothing
+// to transcript.log until doTask's whole promise resolves - the first
+// entry and the third would land on disk in the same instant. This
+// starts doTask without awaiting it, then polls the real file on disk
+// while the task is still running, proving the first entry is already
+// there well before the brain has even produced its third one.
+test("doTask writes each transcript entry to disk as it arrives, not batched at the end", async () => {
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const recordHome = freshHome();
+  let taskId: string | undefined;
+
+  const donePromise = doTask(recordHome, "small change", {
+    project,
+    brain: liveStreamingBrain(),
+    checkBox: fixtureCheckBox().box,
+    onTaskRegistered: (id) => {
+      taskId = id;
+    },
+  });
+
+  const deadline = Date.now() + 10_000;
+  while (taskId === undefined && Date.now() < deadline) await sleep(5);
+  assert.ok(taskId, "onTaskRegistered must fire before doTask resolves");
+
+  while (readTaskFile(recordHome, taskId!, "transcript.log") === null && Date.now() < deadline) {
+    await sleep(5);
+  }
+  const whileRunning = readTaskFile(recordHome, taskId!, "transcript.log") ?? "";
+  assert.ok(whileRunning.includes('"first"'), "the first entry should already be on disk");
+  assert.ok(
+    !whileRunning.includes('"third"'),
+    "the third entry is still 150ms+ away inside the brain - it must not be on disk yet"
+  );
+
+  await donePromise;
+  const final = readTaskFile(recordHome, taskId!, "transcript.log") ?? "";
+  const texts = final
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line).text);
+  // The last two entries are this adapter's own synthesized `first`,
+  // `second`, `third` text entries, in order, with nothing duplicated or
+  // dropped between the live writes and runAttempts' own catch-up pass.
+  assert.deepEqual(texts, ["first", "second", "third"]);
 });
 
 test("doTask writes brief.md verbatim from the request, for every task", async () => {
