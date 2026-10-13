@@ -11,9 +11,7 @@ import type { Brain } from "../brain/index.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
-import { runAnswerCommand } from "../cli/answer-command.ts";
 import { runLogCommand } from "../cli/log-command.ts";
-import { runVerdictCommand } from "../cli/verdict-command.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { handToInspector } from "./inspection.ts";
 
@@ -233,20 +231,13 @@ test("a fix round cannot disable inspection established by the task base commit"
   const task = await foreman.do("small change", { project: inspectedProject(), brain, attempts: 1 });
   assert.equal((await foreman.deliveryOf(task.id))?.outcome, "inspection-red");
 
-  const io = captureIo();
-  const code = await runVerdictCommand([task.id, "fix", "-m", "apply the requested fix"], {
-    recordHome,
-    brain,
-    inspector,
-    ...io,
-  });
+  // Exercises recordVerdict directly - handToInspector's own behavior is
+  // what this test is about, not the CLI's detached-process wiring
+  // (src/cli/verdict-command.test.ts covers that separately, and the two
+  // can't share this test's in-process `inspector`/`brain` fakes once a
+  // "fix" round is handed to a different process).
+  await foreman.verdict(task.id, "fix", "apply the requested fix");
 
-  assert.equal(code, 0);
-  assert.deepEqual(io.err, []);
-  assert.deepEqual(io.out, [
-    `fix round 1 recorded: ${task.id} ran again with your note - Inspector refused before reaching a verdict. ` +
-      `Read \`fabrica log ${task.id}\` for the reason; no Client verdict is available.`,
-  ]);
   assert.equal(inspector.calls.length, 1);
   assert.equal((await foreman.status()).find((candidate) => candidate.id === task.id)?.state, "refused");
   assert.equal(await foreman.deliveryOf(task.id), null);
@@ -268,33 +259,18 @@ test("an answered Inspector refusal completes the clarification round without re
     project: inspectedProject(),
     brain: fakeBrain({ askQuestions: ["Which database?"] }),
   });
-  const io = captureIo();
 
-  const code = await runAnswerCommand([task.id, "-m", "Use Postgres."], {
-    recordHome,
-    brain: fakeBrain(),
-    inspector,
-    ...io,
-  });
-
-  assert.equal(code, 0);
-  assert.deepEqual(io.err, []);
-  assert.deepEqual(io.out, [
-    `${task.id} resumed with your answer - Inspector refused before reaching a verdict. ` +
-      `Read \`fabrica log ${task.id}\` for the reason; no Client verdict is available.`,
-  ]);
+  // Exercises answerTask directly - same reasoning as the fix-round test
+  // above: this is about handToInspector's behavior, not the CLI's
+  // detached-process wiring.
+  const resumed = await foreman.answer(task.id, "Use Postgres.");
+  assert.equal(resumed.state, "refused");
   assert.equal(await foreman.deliveryOf(task.id), null);
-  const second = captureIo();
-  assert.equal(
-    await runAnswerCommand([task.id, "-m", "Use SQLite instead."], {
-      recordHome,
-      brain: fakeBrain(),
-      inspector,
-      ...second,
-    }),
-    1
+
+  await assert.rejects(
+    () => foreman.answer(task.id, "Use SQLite instead."),
+    /already got its one clarification round/
   );
-  assert.match(second.err[0], /already got its one clarification round/);
 });
 
 test("Inspector handoff records heartbeats while awaiting a verdict", async () => {

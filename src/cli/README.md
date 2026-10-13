@@ -111,11 +111,25 @@ detach from.
 ## `fabrica answer <taskId> -m "<text>"`
 
 Answers the clarifying questions `fabrica do` printed and stopped on
-(issue #8), and resumes the task. Like `fabrica verdict`, this never
-detaches: resuming runs the task's isolate/work/verify/inspect/result
-pipeline synchronously (`src/foreman/answer.ts`'s `answerTask`, the same
-`runProductionRound` `do()` itself uses once it decides to proceed), so
-the command can report the outcome directly.
+(issue #8), and resumes the task. Like `fabrica do` (issue #123), this
+returns immediately: `answer-command.ts` calls `recordAnswerDecision`
+(`src/foreman/answer.ts`) right here, synchronously - validates the
+answer against the record, writes it to `answers.md`, re-derives
+`brief.md` - so a bad answer (an unknown task, no question pending, an
+already-spent round, a cap refusal) still fails on the spot, before
+anything is handed off. Only the round itself (the same isolate/work/
+verify/inspect/result pipeline `do()` uses, `src/foreman/answer.ts`'s
+`runRecordedAnswer`) is handed to a detached process
+(`spawn-detached.ts`'s `spawnDetachedResume`, the same backgrounding
+mechanism `fabrica do` itself uses) - that process re-derives everything
+the round needs (project, brief, attempts, whether this is a retry)
+straight from the record, so there is nothing to serialize across the
+process boundary beyond `recordHome`/`taskId`. Progress from here on is
+followed through the record (`fabrica log`/`status`/`watch`), not this
+command's exit code; `answerTask` (the library-level function
+`createForeman(...).answer()` and the contract tests call) still
+composes both halves and runs to completion, since those callers need
+the finished round's own return value.
 
 `answer-args.ts` parses one positional (the taskId) plus a required
 `-m "<text>"`, mirroring `verdict-args.ts` - Client ruling: the two
@@ -123,20 +137,15 @@ commands where the Client types free prose should behave identically,
 in `git commit -m`'s already-familiar shape, and a flag (unlike a bare
 positional) takes an answer that starts with a dash, e.g. `-1 means
 unlimited`, without mistaking it for a flag of its own.
-`answer-command.ts` resolves the record
-home the same way `do-command.ts`/`verdict-command.ts` do and calls
-`createForeman({ recordHome }).answer(taskId, text)` - no brain override
-in real use, so this always uses `defaultBrainAdapter()` unless the same
-process already ran the `do()` call that asked (there is no such case for
-the real CLI, where `fabrica do` and `fabrica answer` are always separate
-invocations - see `src/foreman/README.md`'s "The ask-first seam" for the
-per-instance brain memory this falls back from). SPEC.md's "one
-clarification round by default" is enforced by the Foreman, not this
-file: once a round has completed with a delivery or an Inspector
-refusal, a second `fabrica answer` on the same task refuses with
-`ForemanError("already-answered")`. A refusal prints that Inspector
-reached no verdict and points to `fabrica log`; it never prints an
-unknown outcome or recommends a Client verdict. A round that threw
+`answer-command.ts` resolves the record home the same way
+`do-command.ts`/`verdict-command.ts` do. The detached round always uses
+`defaultBrainAdapter()` (`answer-entry.ts`, the real entry
+`spawnDetachedResume` spawns - mirroring `run-task-entry.ts`); there is
+no same-process `do()` call for a separate process to remember a brain
+from. SPEC.md's "one clarification round by default" is enforced by
+`recordAnswerDecision`, not this file: once a round has completed with a
+delivery or an Inspector refusal, a second `fabrica answer` on the same
+task refuses with `ForemanError("already-answered")`. A round that threw
 before either result does not spend the clarification round - the
 command can be run again, and reports whatever the retry does (see
 `src/foreman/README.md`'s "The ask-first seam" for why the guard keys on
@@ -152,29 +161,44 @@ scripting against a throwaway record home instead of the real one.
 ## `fabrica verdict <taskId> <accept|fix|wrong> [-m "<note>"]`
 
 CONTRACT rule 6 - the Client's ruling on a delivered task, described in
-full in `src/foreman/README.md`. Unlike `fabrica do`, this never
-detaches: `accept` and `wrong` are instant (they only append a record
-event), and a `fix` runs its one worker round synchronously so the
-command can print that round's number and outcome directly rather than
-making the Client separately poll for it. There is no limit on how many
-`fix` rounds a task can have; the number in the printed line comes from
-`fixRoundOf`.
+full in `src/foreman/README.md`. `accept` and `wrong` are instant (they
+only append a record event) and stay synchronous, printing the outcome
+directly. `fix` (issue #123) returns immediately instead, the same way
+`fabrica do`/`fabrica answer` do: `verdict-command.ts` calls
+`recordVerdictDecision` (`src/foreman/verdict.ts`) right here,
+synchronously - validates the ruling against the record and writes
+`verdict`/`"verdict-recorded"` - so a bad "fix" (an unknown task, an
+already-closed one, a missing note, a cap refusal) still fails on the
+spot. Only the round itself (the same warm worker re-entering the same
+line, `src/foreman/verdict.ts`'s `runRecordedFix`) is handed to a
+detached process (`spawn-detached.ts`'s `spawnDetachedResume`); that
+process re-derives everything the round needs - project, baseCommit,
+prior receipts, the note itself - straight from the record, so there is
+nothing to serialize across the process boundary beyond
+`recordHome`/`taskId`. There is no limit on how many `fix` rounds a task
+can have; the round number the command prints comes from `fixRoundOf`,
+read right after the ruling is recorded (it counts `"verdict-recorded"`
+events, so it's already correct before the round itself has run).
+`recordVerdict` (the library-level function `createForeman(...).verdict()`
+and the contract tests call) still composes both halves and runs a
+`fix` to completion, since those callers need the finished round's own
+outcome.
 
 `verdict-args.ts` parses the two positionals plus `-m "<note>"` (`fix`
 requires the note, since it is the correction itself). The note has
 exactly one spelling, the one SPEC.md documents and `git commit -m`
 already taught every Client - a bare positional note is refused with a
 message naming the flag, rather than quietly accepted as a second way to
-say the same thing (Client ruling). `verdict-command.ts`
-resolves the record home the same way `do-command.ts` does and calls
-`createForeman({ recordHome }).verdict(...)` - no brain override, so a
-`fix` here always uses `defaultBrainAdapter()` (there is no
-same-process `do()` call for this command to remember a brain from,
-unlike the contract tests - see `src/foreman/README.md`'s "What a fix
-costs" section). If Inspector refuses the fix round, the command reports
-that no verdict was reached and points to `fabrica log` instead of
-falling back to the prior red delivery or recommending another Client
-verdict.
+say the same thing (Client ruling). `verdict-command.ts` resolves the
+record home the same way `do-command.ts` does. The detached fix round
+always uses `defaultBrainAdapter()` (`verdict-fix-entry.ts`, the real
+entry `spawnDetachedResume` spawns - mirroring `run-task-entry.ts`);
+there is no same-process `do()` call for a separate process to remember
+a brain from. If Inspector refuses the fix round, that - like any other
+outcome of a backgrounded round - is discovered through the record
+(`fabrica log`/`status`/`watch`), not this command's own exit code or
+output, which only ever reports that the ruling was recorded and handed
+off.
 
 ## `fabrica cost <taskId> <usd>`
 
@@ -501,9 +525,11 @@ calls `runTask`.
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
 | `do-command.ts` | Ties config, project resolution, the detached spawn, and the ask-outcome wait together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
 | `answer-args.ts` | Parses `fabrica answer`'s arguments. |
-| `answer-command.ts` | Resolves the record home and calls `Foreman.answer` for `fabrica answer`; `ANSWER_HELP` is `answer --help`'s text. |
+| `answer-command.ts` | Resolves the record home, calls `recordAnswerDecision` synchronously, then hands the resumed round to a detached process (issue #123); `ANSWER_HELP` is `answer --help`'s text. |
+| `answer-entry.ts` | The detached answer round's real entry point: picks the default adapter, calls `runRecordedAnswer`. |
 | `verdict-args.ts` | Parses `fabrica verdict`'s arguments. |
-| `verdict-command.ts` | Resolves the record home and calls `Foreman.verdict` for `fabrica verdict`; `VERDICT_HELP` is `verdict --help`'s text. |
+| `verdict-command.ts` | Resolves the record home, calls `recordVerdictDecision` synchronously for every ruling, then - `fix` only (issue #123) - hands the round to a detached process; `VERDICT_HELP` is `verdict --help`'s text. |
+| `verdict-fix-entry.ts` | The detached fix round's real entry point: picks the default adapter, calls `runRecordedFix`. |
 | `cost-command.ts` | `fabrica cost <taskId> <usd>` (issue #11): parses the figure strictly and calls `Foreman.recordCost`; `COST_HELP` is `cost --help`'s text. |
 | `load-config.ts` | `loadConfigOrDefault` - `projects.toml`, or no projects and no caps when there is none yet. Shared by every command that needs caps. |
 | `doctor-command.ts` | `fabrica doctor`: runs the checks above as injectable `DoctorProbes` (tests never touch this machine's Docker, tokens or PATH) plus the per-project, caps and spend checks; `DOCTOR_HELP` is `doctor --help`'s text. |
@@ -518,10 +544,12 @@ calls `runTask`.
 | `verify-hook-command.ts` | `fabrica verify-hook`: proves a session config actually denies-and-logs by running a real attempt, instead of assuming it. Takes no arguments and refuses any it is given (`parseVerifyHookArgs`, the same convention as `parseStatusArgs`) rather than ignoring them. Loads its harness-specific spawn by scanning `skill/` at runtime (never a hardcoded import - see `AGENTS.md`'s rule 8 note), reporting a `verify.ts` that throws or exports only half a verifier by name instead of skipping it silently. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
-| `spawn-detached.ts` | The backgrounding mechanism and the id handshake. |
+| `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
 | `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`. |
 | `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `unknown-task`, `project-not-found`, `spawn-failed`, `registration-timeout`. |
 | `helpers/fake-run-task-entry.ts` | Test-only stand-in for `run-task-entry.ts`, using `fakeBrain()` instead of the real adapter - lets `spawn-detached.test.ts` and `do-command.test.ts` exercise the real spawn-and-discover mechanism as a real separate process, without ever invoking a real coding agent. A taskText containing `ASK_ME_SOMETHING` makes its fake brain ask a clarifying question (issue #8) instead of proceeding, and one containing `ASK_FAILS_SOMETHING` makes its `ask()` throw, since there's no other channel to configure a fake running in a separate process. |
+| `helpers/fake-answer-entry.ts` | Test-only stand-in for `answer-entry.ts`, same shape as `fake-run-task-entry.ts` - lets `answer-command.test.ts` exercise the real detached-resume mechanism against `fakeBrain()`/fixture Inspector/check box. |
+| `helpers/fake-verdict-fix-entry.ts` | Test-only stand-in for `verdict-fix-entry.ts`, same shape as `fake-run-task-entry.ts` - lets `verdict-command.test.ts` exercise a real detached fix round against `fakeBrain()`/fixture Inspector/check box. |
