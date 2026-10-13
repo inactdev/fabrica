@@ -1,0 +1,35 @@
+# At the repo root, npm uses this file INSTEAD of .gitignore when
+# packing/publishing (verified against npm's docs - .npmignore doesn't
+# merge with .gitignore, it replaces it) - so it has to repeat every
+# exclusion .gitignore lists, minus build-info.json, which must ship:
+# it's the one file `prepare` (scripts/write-build-info.mjs) writes
+# while `.git` still exists, specifically so a packed/installed copy
+# (whose .git npm's own packing always strips) still carries its commit
+# for `fabrica doctor` to read. See .gitignore for why that file is
+# gitignored but must not be npmignored.
+
+# dependencies
+node_modules/
+
+# secrets — API keys never enter the repo
+.env
+.env.*
+!.env.example
+
+# build & test output
+dist/
+coverage/
+*.tsbuildinfo
+
+# logs
+*.log
+npm-debug.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# editors
+.vscode/
+.idea/
+*.swp

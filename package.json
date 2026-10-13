@@ -9,7 +9,8 @@
   "scripts": {
     "test": "npm run typecheck && tsx --test $(find contract src integrations -name '*.test.ts' | sort)",
     "typecheck": "tsc --noEmit",
-    "live": "tsx integrations/live-view/start.ts"
+    "live": "tsx integrations/live-view/start.ts",
+    "prepare": "node scripts/write-build-info.mjs"
   },
   "dependencies": {
     "smol-toml": "^1.7.1",

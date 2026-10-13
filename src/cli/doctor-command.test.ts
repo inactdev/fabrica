@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "../index.ts";
@@ -162,12 +162,83 @@ test("node check: the version the check box runs (from .inspector.json's image) 
   assert.match(wrong.fix ?? "", /24\.18\.0/);
 });
 
-test("checkout check: names the checkout and branch; a branch other than master fails", async () => {
+test("checkout check: a dev checkout on master, up to date with origin/master", async () => {
   const { checkoutCheck } = await import("./doctor-command.ts");
-  const onMaster = checkoutCheck("/src/fabrica", "master");
-  assert.equal(onMaster.ok, true);
-  assert.match(onMaster.detail, /\/src\/fabrica on master/);
-  const onBranch = checkoutCheck("/src/fabrica", "fm/some-feature");
+  const copy = { kind: "dev-checkout" as const, root: "/src/fabrica", branch: "master", commit: "aaa111", version: "0.0.0" };
+  const check = checkoutCheck(copy, "aaa111");
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /\/src\/fabrica on master, commit aaa111/);
+  assert.match(check.detail, /up to date with origin\/master/);
+});
+
+test("checkout check: a dev checkout behind origin/master is reported but still OK", async () => {
+  const { checkoutCheck } = await import("./doctor-command.ts");
+  const copy = { kind: "dev-checkout" as const, root: "/src/fabrica", branch: "master", commit: "aaa111", version: "0.0.0" };
+  const check = checkoutCheck(copy, "zzz999");
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /behind origin\/master, latest is zzz999/);
+});
+
+test("checkout check: a branch other than master fails, naming the checkout and fix", async () => {
+  const { checkoutCheck } = await import("./doctor-command.ts");
+  const onBranch = checkoutCheck({ kind: "dev-checkout" as const, root: "/src/fabrica", branch: "fm/some-feature", commit: "aaa111", version: "0.0.0" }, "aaa111");
   assert.equal(onBranch.ok, false);
+  assert.match(onBranch.detail, /not master/);
   assert.match(onBranch.fix ?? "", /git -C \/src\/fabrica checkout master/);
+});
+
+test("checkout check: when origin/master can't be reached, that's reported but not fatal", async () => {
+  const { checkoutCheck } = await import("./doctor-command.ts");
+  const check = checkoutCheck({ kind: "dev-checkout" as const, root: "/src/fabrica", branch: "master", commit: "aaa111", version: "0.0.0" }, null);
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /can't check against origin\/master/);
+});
+
+test("checkout check: an installed copy reports its version and commit against origin/master", async () => {
+  const { checkoutCheck } = await import("./doctor-command.ts");
+  const copy = { kind: "installed" as const, root: "/usr/local/lib/node_modules/fabrica", branch: null, commit: "aaa111", version: "1.2.3" };
+  const upToDate = checkoutCheck(copy, "aaa111");
+  assert.equal(upToDate.ok, true);
+  assert.match(upToDate.detail, /installed copy v1\.2\.3, commit aaa111/);
+  assert.match(upToDate.detail, /up to date with origin\/master/);
+
+  const behind = checkoutCheck(copy, "zzz999");
+  assert.equal(behind.ok, true);
+  assert.match(behind.detail, /behind origin\/master, latest is zzz999/);
+});
+
+test("checkout check: an installed copy with no build-info.json fails, naming reinstall", async () => {
+  const { checkoutCheck } = await import("./doctor-command.ts");
+  const copy = { kind: "installed" as const, root: "/usr/local/lib/node_modules/fabrica", branch: null, commit: null, version: "1.2.3" };
+  const check = checkoutCheck(copy, "aaa111");
+  assert.equal(check.ok, false);
+  assert.match(check.fix ?? "", /npm install -g github:inactdev\/fabrica/);
+});
+
+test("detectCopy: a directory with .git is a dev checkout, read live through the injected git function", async () => {
+  const { detectCopy } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-devcheckout-"));
+  mkdirSync(join(dir, ".git"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "0.0.0" }));
+  const copy = detectCopy(dir, (args) => (args[0] === "branch" ? "master" : "deadbeef"));
+  assert.deepEqual(copy, { kind: "dev-checkout", root: dir, branch: "master", commit: "deadbeef", version: "0.0.0" });
+});
+
+test("detectCopy: a directory with no .git reads build-info.json as an installed copy", async () => {
+  const { detectCopy } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-installed-"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
+  writeFileSync(join(dir, "build-info.json"), JSON.stringify({ commit: "abc123" }));
+  const copy = detectCopy(dir, () => {
+    throw new Error("an installed copy must never shell out to git");
+  });
+  assert.deepEqual(copy, { kind: "installed", root: dir, branch: null, commit: "abc123", version: "1.2.3" });
+});
+
+test("detectCopy: a directory with neither .git nor build-info.json is installed with an unknown commit", async () => {
+  const { detectCopy } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-bare-"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
+  const copy = detectCopy(dir, () => null);
+  assert.deepEqual(copy, { kind: "installed", root: dir, branch: null, commit: null, version: "1.2.3" });
 });

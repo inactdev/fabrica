@@ -11,16 +11,34 @@ about how the loop itself works.
 
 ## Installing it
 
+The Client-facing install is `npm install -g github:inactdev/fabrica`
+(README.md's "Installing the command" has the full walkthrough) - a
+frozen, standalone copy, verified against a real install: npm clones
+the repo, runs `prepare` (`scripts/write-build-info.mjs`, while `.git`
+still exists) to record the exact commit being installed into
+`build-info.json`, then packs and installs that tree with `.git`
+stripped - confirmed empirically, npm sets no `gitHead` either for a
+global git install, so `build-info.json` is the only record of which
+commit an installed copy actually is. `doctor-command.ts`'s
+`detectCopy` reads that file when no `.git` is present; it reads live
+git state instead when one is (a `npm link`'d dev checkout, below).
+
+For developing Fabrica itself:
+
 ```
 npm install
 npm link
 ```
 
 `npm link` reads `package.json`'s `"bin": { "fabrica": "./src/cli/bin.mjs" }`
-and makes `fabrica` resolve on your `PATH` from any directory. There is
-no build step - `bin.mjs` loads `src/`'s TypeScript directly at runtime
-(see "Why `bin.mjs` isn't a shebang'd `.ts` file" below), the same way
-`npm test` already does via `tsx --test`.
+and makes `fabrica` resolve on your `PATH` from any directory, but
+pointed at *this checkout's* own files - there is no build step,
+`bin.mjs` loads `src/`'s TypeScript directly at runtime (see "Why
+`bin.mjs` isn't a shebang'd `.ts` file" below), the same way `npm test`
+already does via `tsx --test`. That liveness is exactly why this is a
+developer-only install: every command breaks the moment this checkout
+is mid-edit or mid-merge, which the global install above exists to
+avoid for anyone who isn't actively changing this repo's code.
 
 ## `fabrica do "<task text>" --project <path-or-name>`
 
@@ -223,17 +241,28 @@ counted (a rolling 24 hours, not a calendar day) and enforced.
 
 A preflight that spends nothing (Client ruling 2026-10-10): one line per
 check, `OK` or `FAIL ... - fix: <the exact fix>`, and exit 1 on any FAIL.
-It checks Node (against the version `.inspector.json`'s image runs), the
-checkout and branch `fabrica` runs from, Docker, the worker image (present,
-and stamped with the current Dockerfile's hash), the worker token (from
-the environment or `brain.env`, mode 600), the GitHub token Inspector
-needs, `inspector` on PATH taking `-branch`, every registered project
-(exists, git root, a check, an `origin` remote), the caps, and any SPEND
-UNKNOWN block. `--live` adds one minimal real call with the worker token
-(a few cents) and reports it alive or dead. No check prints a token. The
-adapter- and Inspector-specific checks live beside those modules
-(`src/brain/adapters/doctor-checks.ts`, `src/inspector/doctor-checks.ts`);
-this command only prints them.
+It checks Node (against the version `.inspector.json`'s image runs);
+**which copy of `fabrica` is actually running** - `detectCopy` (issue:
+installable from zero) tells a developer checkout (`.git` present:
+reports its branch and commit, and still fails if the branch isn't
+`master`) from an installed copy (`.git` stripped by npm's own packing:
+reports its `package.json` version and the commit `build-info.json`
+recorded at `prepare` time instead, and never fails just for being
+behind) - either way `checkoutCheck` also reports whether that commit
+is current via one side-effect-free `git ls-remote
+https://github.com/inactdev/fabrica.git master` (no local fetch, so no
+ref anywhere is mutated), never failing the check on its own, only
+`FAIL`ing outright when an installed copy has no `build-info.json` to
+read at all (naming reinstall as the fix); Docker, the worker image
+(present, and stamped with the current Dockerfile's hash), the worker
+token (from the environment or `brain.env`, mode 600), the GitHub token
+Inspector needs, `inspector` on PATH taking `-branch`, every registered
+project (exists, git root, a check, an `origin` remote), the caps, and
+any SPEND UNKNOWN block. `--live` adds one minimal real call with the
+worker token (a few cents) and reports it alive or dead. No check
+prints a token. The adapter- and Inspector-specific checks live beside
+those modules (`src/brain/adapters/doctor-checks.ts`,
+`src/inspector/doctor-checks.ts`); this command only prints them.
 
 ## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
 
