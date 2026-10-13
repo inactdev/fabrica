@@ -6,9 +6,11 @@
 
 import {
   capsActive,
+  daySpend,
   describeTaskCost,
   describeUnmeasured,
   eventsByTask,
+  formatUsd,
   hasAttempts,
   SPEND_UNKNOWN_LINE,
   stateOf,
@@ -39,12 +41,23 @@ answer from the brain arrives in well under a minute). A closed task
 (verdict recorded) drops off this list - see \`fabrica log <id>\` for its
 history.
 
+This listing opens with the same number the daily cap check itself
+uses - "spent in the last 24 hours: $X of $Y" when [caps].perDayUsd is
+set, "$X, no daily cap" when it isn't - so the Client never has to add
+up task lines by hand to see where that cap stands.
+
 Every line carries the task's cost so far - "cost: unknown" when an
 attempt's spend was never measured, never a silent $0. While a spending
 cap is set, any unmeasured spend blocks all new work, and this listing
 opens with "${SPEND_UNKNOWN_LINE}" and the \`fabrica cost\` command
 that clears each one. That line is read from the record on every run,
 so it stays until the real cost is recorded.
+
+A blocked file-edit attempt (issue #13's off-the-books net) is not a
+task and never appears as one here - the record's own
+"project:<name>"/"project:unregistered" buckets for it are counted and
+shown as one line at the bottom, "blocked edit attempts on record: N",
+instead.
 
 A task whose \`brain.ask()\` threw before any Worker ever ran has no \`fix\`
 path back and never will again; it stays listed - marked "FAILED,
@@ -96,56 +109,87 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     // Foreman for the task list and then for each task's events would
     // re-read and re-parse the entire log once per open task.
     const byTask = eventsByTask(recordHome);
+    const allEvents = [...byTask.values()].flat();
+
+    // Issues #81/#110: the same number the daily cap check itself derives
+    // (caps.ts's requireRoomToStart), so this never drifts from what
+    // actually gates new work.
+    stdout(formatDaySpendLine(daySpend(allEvents, now).knownUsd, caps.perDayUsd));
 
     // Rule 10 (issue #11, Client ruling 2026-10-08): derived from the
     // record on every run, closed tasks included, so the block survives
     // a restart and is shown until the real cost is recorded.
-    const unmeasured = capsActive(caps) ? unmeasuredSpend([...byTask.values()].flat()) : [];
+    const unmeasured = capsActive(caps) ? unmeasuredSpend(allEvents) : [];
     if (unmeasured.length > 0) {
       stdout(SPEND_UNKNOWN_LINE);
       for (const line of describeUnmeasured(unmeasured)) stdout(`  ${line}`);
     }
 
+    // Issues #81/#110: a blocked file-edit attempt is recorded against a
+    // "project:<name>"/"project:unregistered" bucket (offbooks/blocked-
+    // edit.ts) - never a real task, so it never belongs in this listing.
+    const blockedEditCount = [...byTask.entries()]
+      .filter(([id]) => id.startsWith(PHANTOM_TASK_PREFIX))
+      .reduce((sum, [, events]) => sum + events.filter((e) => e.name === "edit-attempt-blocked").length, 0);
+
     const openTasks = Array.from(byTask, ([id, events]) => ({
       task: { id, state: stateOf(events) },
       events,
       hasDelivery: events.some((e) => e.name === "delivered"),
-    })).filter(({ task }) => task.state !== "closed");
+    })).filter(({ task }) => !task.id.startsWith(PHANTOM_TASK_PREFIX) && task.state !== "closed");
 
     if (openTasks.length === 0) {
       stdout("No open tasks.");
-      return 0;
+    } else {
+      // Dead-end tasks sort after the entries still actually moving, so a
+      // reader scanning top-down sees real open work first. isDeadEnd is
+      // the one definition shared with render.ts's marker, so an ask
+      // failure and an Inspector refusal with no verdict cannot drift from
+      // this sort order.
+      const sorted = [...openTasks].sort((a, b) => {
+        const aDeadEnd = isDeadEnd(a.task.state, a.hasDelivery);
+        const bDeadEnd = isDeadEnd(b.task.state, b.hasDelivery);
+        return aDeadEnd === bDeadEnd ? 0 : aDeadEnd ? 1 : -1;
+      });
+
+      for (const { task, events, hasDelivery } of sorted) {
+        const project = projectFromEvents(events);
+        const firstEvent = events[0];
+        const ageMs = firstEvent ? now - new Date(firstEvent.occurredAt).getTime() : 0;
+        const liveness = describeLiveness(task.state, events, now);
+
+        const cost = describeTaskCost(taskSpend(events, task.id), hasAttempts(events, task.id));
+        const failedBecause = refusedByCap(events)
+          ? "a spending cap refused it before any work started"
+          : taskFailedMessage(events);
+        stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery, cost, failedBecause, prUrl: prUrlFromEvents(events) }));
+      }
     }
 
-    // Dead-end tasks sort after the entries still actually moving, so a
-    // reader scanning top-down sees real open work first. isDeadEnd is
-    // the one definition shared with render.ts's marker, so an ask
-    // failure and an Inspector refusal with no verdict cannot drift from
-    // this sort order.
-    const sorted = [...openTasks].sort((a, b) => {
-      const aDeadEnd = isDeadEnd(a.task.state, a.hasDelivery);
-      const bDeadEnd = isDeadEnd(b.task.state, b.hasDelivery);
-      return aDeadEnd === bDeadEnd ? 0 : aDeadEnd ? 1 : -1;
-    });
-
-    for (const { task, events, hasDelivery } of sorted) {
-      const project = projectFromEvents(events);
-      const firstEvent = events[0];
-      const ageMs = firstEvent ? now - new Date(firstEvent.occurredAt).getTime() : 0;
-      const liveness = describeLiveness(task.state, events, now);
-
-      const cost = describeTaskCost(taskSpend(events, task.id), hasAttempts(events, task.id));
-      const failedBecause = refusedByCap(events)
-        ? "a spending cap refused it before any work started"
-        : taskFailedMessage(events);
-      stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery, cost, failedBecause, prUrl: prUrlFromEvents(events) }));
-    }
+    if (blockedEditCount > 0) stdout(`blocked edit attempts on record: ${blockedEditCount}`);
 
     return 0;
   } catch (err) {
     stderr(err instanceof Error ? err.message : String(err));
     return 1;
   }
+}
+
+/** `src/offbooks/blocked-edit.ts`'s own taskId key for a blocked edit
+ * attempt - "project:<name>" or "project:unregistered". No real task is
+ * ever keyed this way, so it's the exact, documented way to tell a
+ * phantom bucket apart from an ordinary task id. */
+const PHANTOM_TASK_PREFIX = "project:";
+
+/** Issues #81/#110: the one line this listing opens with - the same
+ * `knownUsd` the daily cap check (`caps.ts`'s `requireRoomToStart`)
+ * derives from `daySpend`, so this can never say something different
+ * from what actually gates new work. */
+function formatDaySpendLine(knownUsd: number, perDayUsd: number | undefined): string {
+  const spent = formatUsd(knownUsd);
+  return perDayUsd === undefined
+    ? `spent in the last 24 hours: ${spent}, no daily cap`
+    : `spent in the last 24 hours: ${spent} of ${formatUsd(perDayUsd)}`;
 }
 
 function refusedByCap(events: FabricaEvent[]): boolean {
