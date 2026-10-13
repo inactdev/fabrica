@@ -28,6 +28,7 @@ const BOOTSTRAP = fileURLToPath(new URL("./tsx-bootstrap.mjs", import.meta.url))
 const DEFAULT_ENTRY_SCRIPT = fileURLToPath(new URL("./run-task-entry.ts", import.meta.url));
 const DEFAULT_ANSWER_ENTRY_SCRIPT = fileURLToPath(new URL("./answer-entry.ts", import.meta.url));
 const DEFAULT_VERDICT_FIX_ENTRY_SCRIPT = fileURLToPath(new URL("./verdict-fix-entry.ts", import.meta.url));
+const DEFAULT_LIVE_VIEW_ENTRY_SCRIPT = fileURLToPath(new URL("../../integrations/live-view/start.ts", import.meta.url));
 
 export interface SpawnDetachedTaskOptions {
   recordHome: string;
@@ -135,6 +136,45 @@ export function spawnDetachedResume(opts: SpawnDetachedResumeOptions): void {
   // promise left to reject into once this function has already returned.
   child.on("error", (err: NodeJS.ErrnoException) => {
     console.error(`fabrica: could not start the background process for "${taskId}" (${err.code ?? err.message}).`);
+  });
+  child.unref();
+}
+
+export interface SpawnDetachedLiveViewOptions {
+  recordHome: string;
+  /** Test-only: points at a fixture entry script instead of the real
+   * live view server, the same way spawnDetachedTask's callers override
+   * entryScript. */
+  entryScript?: string;
+}
+
+/**
+ * Starts the live view (`integrations/live-view`) the same detached way
+ * `spawnDetachedTask` backgrounds a task - `detached: true`, stdio
+ * redirected to the same `cli.log`, unref'd - so closing the terminal
+ * `fabrica up` ran in can't take it down either. Unlike a task, there is
+ * nothing on the record to watch for afterward: the live view's own
+ * server is the only signal that it's up, so the caller (`fabrica up`)
+ * polls the port itself rather than this function returning a promise
+ * that waits for anything.
+ */
+export function spawnDetachedLiveView(opts: SpawnDetachedLiveViewOptions): void {
+  const { recordHome, entryScript = DEFAULT_LIVE_VIEW_ENTRY_SCRIPT } = opts;
+
+  mkdirSync(recordHome, { recursive: true });
+  const logFd = openSync(join(recordHome, "cli.log"), "a");
+  const child = spawn(process.execPath, [BOOTSTRAP, entryScript], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: { ...process.env, FABRICA_HOME: recordHome },
+  });
+  closeSync(logFd);
+
+  // As rare as spawnDetachedTask's own spawn failure (same
+  // process.execPath already running this command) - just stops Node
+  // from treating an unlistened "error" event as an uncaught exception.
+  child.on("error", (err: NodeJS.ErrnoException) => {
+    console.error(`fabrica: could not start the live view (${err.code ?? err.message}).`);
   });
   child.unref();
 }

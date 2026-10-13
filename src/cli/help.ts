@@ -14,6 +14,7 @@ export const COMMANDS = [
   "watch",
   "deny-and-log-edit",
   "verify-hook",
+  "up",
 ] as const;
 
 export const TOP_LEVEL_HELP = `fabrica - hand in a task; get it done in isolation, verified, honestly.
@@ -53,6 +54,11 @@ Commands:
   deny-and-log-edit
       Not for typing by hand - what a harness's session config runs
       automatically to deny and log a blocked edit.
+  up
+      Start a working session from this project's folder: doctor's
+      checks, the live view (reused if already running), then your
+      chat harness itself, with the handbook appended to its system
+      prompt. Denied to the chat agent itself - only you can run it.
 
 Run "fabrica <command> --help" for a command's own usage.
 `;

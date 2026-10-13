@@ -14,6 +14,7 @@ import { DENY_AND_LOG_EDIT_HELP, runDenyAndLogEditCommand } from "./deny-and-log
 import { VERIFY_HOOK_HELP, runVerifyHookCommand } from "./verify-hook-command.ts";
 import { COST_HELP, runCostCommand } from "./cost-command.ts";
 import { DOCTOR_HELP, runDoctorCommand } from "./doctor-command.ts";
+import { UP_HELP, runUpCommand } from "./up-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
 
 export async function main(
@@ -96,6 +97,14 @@ export async function main(
       return 0;
     }
     return runWatchCommand(rest, io);
+  }
+
+  if (command === "up") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(UP_HELP);
+      return 0;
+    }
+    return runUpCommand(rest, io);
   }
 
   if (command === "deny-and-log-edit") {

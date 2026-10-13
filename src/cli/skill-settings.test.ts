@@ -63,6 +63,16 @@ const DECIDING_COMMANDS = ["verdict", "answer", "cost"];
 // entry, do not re-add it as a "missing" one.
 const HOOK_ONLY_COMMANDS = ["deny-and-log-edit"];
 
+// "up" is denied for a different reason than DECIDING_COMMANDS: it
+// records no judgment of the Client's. It launches a brand new
+// interactive harness session from inside this project's folder
+// (issue: "add one command, fabrica up") - an AI driving the Bash tool
+// must never be able to spawn a second copy of the very session it's
+// running in. Requires the same deny coverage as a deciding command
+// (an explicit permissions.deny match, not just omission from allow),
+// so it's checked the same way in the loop below.
+const NEVER_FROM_CHAT_COMMANDS = ["up"];
+
 function commandsInMainDispatch(): string[] {
   const mainSource = readFileSync(join(repoRoot, "src", "cli", "main.ts"), "utf8");
   // Matches every `command === "X"` fragment, not just a line shaped
@@ -183,15 +193,21 @@ test("main.ts's real dispatch is fully covered: deciding and hook-only commands 
       `commandsInMainDispatch() found no "${hookOnly}" branch - the same silent-drop risk as DECIDING_COMMANDS above`
     );
   }
+  for (const neverFromChat of NEVER_FROM_CHAT_COMMANDS) {
+    assert.ok(
+      commands.includes(neverFromChat),
+      `commandsInMainDispatch() found no "${neverFromChat}" branch - the same silent-drop risk as DECIDING_COMMANDS above`
+    );
+  }
 
   for (const settings of templates) {
     for (const command of commands) {
       const verdict = evaluate(settings, `fabrica ${command}`);
-      if (DECIDING_COMMANDS.includes(command)) {
+      if (DECIDING_COMMANDS.includes(command) || NEVER_FROM_CHAT_COMMANDS.includes(command)) {
         assert.notEqual(
           verdict,
           "allow",
-          `${settings.harness}: "fabrica ${command}" records the Client's own judgment but is auto-approved`
+          `${settings.harness}: "fabrica ${command}" must never be auto-approved but is`
         );
         // notEqual(verdict, "allow") alone is also satisfied by "ask",
         // which a later edit that simply removes the deny entries
@@ -249,6 +265,30 @@ test("fabrica verdict, answer, and cost are never auto-approved, including throu
         evaluate(settings, attempt),
         "allow",
         `${settings.harness}: "${attempt}" auto-approves - a verdict/answer/cost command must never run unprompted`
+      );
+    }
+  }
+});
+
+test("fabrica up is never auto-approved, including through a chained command", () => {
+  const templates = harnessSettings();
+  assert.ok(templates.length > 0, "no harness ships a settings.json to check");
+
+  const attempts = [
+    "fabrica up",
+    "fabrica status && fabrica up",
+    "fabrica status; fabrica up",
+    "fabrica do 'x' | fabrica up",
+    "fabrica log task-1 && fabrica up",
+    "fabrica status --json\nfabrica up",
+  ];
+
+  for (const settings of templates) {
+    for (const attempt of attempts) {
+      assert.notEqual(
+        evaluate(settings, attempt),
+        "allow",
+        `${settings.harness}: "${attempt}" auto-approves - fabrica up must never launch unprompted`
       );
     }
   }
