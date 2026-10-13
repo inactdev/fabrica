@@ -12,6 +12,11 @@ export type { ForemanErrorCode } from "./foreman/index.ts";
 export { DEFAULT_ATTEMPTS } from "./foreman/index.ts";
 export { DEFAULT_CHECK_COMMAND } from "./foreman/index.ts";
 export { fixRoundOf } from "./foreman/index.ts";
+// Issue #123: the CLI's seam for detaching `fabrica answer`/`fabrica
+// verdict fix` - see those two modules' own comments for why the round
+// itself is re-derived from the record rather than threaded through.
+export { recordAnswerDecision, runRecordedAnswer } from "./foreman/index.ts";
+export { recordVerdictDecision, runRecordedFix } from "./foreman/index.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
 export { readTranscript, eventsByTask, stateOf } from "./foreman/index.ts";
 export { followTask } from "./foreman/index.ts";

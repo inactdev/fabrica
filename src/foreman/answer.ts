@@ -37,12 +37,25 @@ import type { Caps } from "../../contract/surface.ts";
 import type { CheckBox } from "../brain/index.ts";
 import type { FabricaTask, Inspector } from "../inspector/types.ts";
 
-export async function answerTask(
+/**
+ * The fast, synchronous half of answering: validates that this task is
+ * actually waiting on an answer, writes the round to `answers.md`, and
+ * re-derives `brief.md` - everything `runRecordedAnswer` below needs to
+ * actually run the round is then derivable straight from the record, so
+ * this returns nothing. Split out so the CLI (issue #123) can run this
+ * part in the foreground - a bad answer fails immediately, before
+ * anything is handed to a detached process - while only the round's
+ * worker call, the slow part, is deferred. `answerTask` (below) composes
+ * this with actually running that round, which is what every library
+ * caller (the contract tests included) still gets: an answer call that
+ * doesn't resolve until the resumed round is done.
+ */
+export function recordAnswerDecision(
   recordHome: string,
   taskId: string,
   answerText: string,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
-): Promise<FabricaTask> {
+  opts: { caps?: Caps }
+): void {
   const events = readEventsForTask(recordHome, taskId);
   if (events.length === 0) {
     throw new ForemanError(
@@ -130,6 +143,32 @@ export async function answerTask(
   writeTaskFile(recordHome, taskId, "brief.md", brief);
 
   appendEvent(recordHome, { taskId, name: "answers-given", details: { answer: answerText } });
+}
+
+/**
+ * Runs the round a prior `recordAnswerDecision` call already validated
+ * and recorded - `project`/`totalAttempts`/`explicitAttempts` come back
+ * off the task's own `"questions-asked"` event (same as before the
+ * split), `isRetry` off whether `"line-cut"` is on the record, and the
+ * brief itself off `request.md` + `answers.md`, all re-derived here
+ * rather than threaded through a parameter - the same reason
+ * `verdict.ts`'s `runRecordedFix` re-derives its own round's inputs:
+ * it's what lets the CLI (issue #123) hand this off to a detached
+ * process with nothing to serialize beyond `recordHome`/`taskId`.
+ */
+export async function runRecordedAnswer(
+  recordHome: string,
+  taskId: string,
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+): Promise<FabricaTask> {
+  const events = readEventsForTask(recordHome, taskId);
+  const askedIndex = events.map((e) => e.name).lastIndexOf("questions-asked");
+  const details = events[askedIndex].details as AskedDetails;
+  const isRetry = events.some((e) => e.name === "line-cut");
+
+  const requestText = readTaskFile(recordHome, taskId, "request.md") ?? "";
+  const answersText = readTaskFile(recordHome, taskId, "answers.md") ?? "";
+  const brief = deriveBrief(requestText, answersText);
 
   // brief.md keeps the task's own words; the worker's copy gets the
   // standing question (rule 11) in front.
@@ -143,6 +182,20 @@ export async function answerTask(
     checkBox: opts.checkBox,
     caps: opts.caps,
   });
+}
+
+/** Every library caller's shape (contract tests included): an answer
+ * call that doesn't resolve until the resumed round is done.
+ * `src/cli/answer-command.ts` is the one caller that wants the two
+ * halves apart - see `recordAnswerDecision`/`runRecordedAnswer` above. */
+export async function answerTask(
+  recordHome: string,
+  taskId: string,
+  answerText: string,
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+): Promise<FabricaTask> {
+  recordAnswerDecision(recordHome, taskId, answerText, { caps: opts.caps });
+  return runRecordedAnswer(recordHome, taskId, opts);
 }
 
 function renderAnswerRound(questions: string[], answer: string): string {

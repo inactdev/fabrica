@@ -33,13 +33,26 @@ import type { CheckBox } from "../brain/index.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
 
-export async function recordVerdict(
+/**
+ * The fast, synchronous half of a verdict: validates the ruling against
+ * the record and writes `verdict`/`"verdict-recorded"` - everything a
+ * "fix" needs to actually run (project, baseCommit, prior receipts, the
+ * note) is already derivable from the record afterwards (see
+ * `runRecordedFix` below), so this returns nothing. Split out so the CLI
+ * (issue #123) can run this part in the foreground - a bad ruling fails
+ * immediately, before anything is handed to a detached process - while
+ * only the "fix" round's worker call, the slow part, is deferred.
+ * `recordVerdict` (below) composes this with actually running that round,
+ * which is what every library caller (the contract tests included) still
+ * gets: a verdict call that doesn't resolve until a "fix" round is done.
+ */
+export function recordVerdictDecision(
   recordHome: string,
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
-): Promise<void> {
+  opts: { caps?: Caps }
+): void {
   if (!RULINGS.has(ruling)) {
     throw new ForemanError(
       "invalid-verdict",
@@ -129,11 +142,37 @@ export async function recordVerdict(
   // showing as ruled on with no record of what the Client actually said.
   appendTaskFile(recordHome, taskId, "verdict", `${new Date().toISOString()} ${ruling}${note ? `: ${note}` : ""}\n`);
   appendEvent(recordHome, { taskId, name: "verdict-recorded", details: { ruling, note: note ?? "" } });
+}
 
-  if (ruling !== "fix") return;
+/**
+ * Runs the "fix" round a prior `recordVerdictDecision(..., "fix", note,
+ * ...)` call already validated and recorded - everything the round needs
+ * (project, baseCommit, prior receipts, the declared gate changes so
+ * far, and the note itself) is re-derived from the record rather than
+ * threaded through a parameter, since that's exactly what lets the CLI
+ * (issue #123) hand this off to a detached process with nothing to
+ * serialize beyond `recordHome`/`taskId` - the same reason `fabrica do`'s
+ * own detached runner re-derives everything `doTask` needs from its own
+ * arguments rather than smuggling state across the process boundary.
+ */
+export async function runRecordedFix(
+  recordHome: string,
+  taskId: string,
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+): Promise<void> {
+  const details = latestDeliveredDetails(recordHome, taskId);
+  const totalAttempts = details?.totalAttempts;
+  const priorReceipts = details?.receipts ?? [];
+  const project = details?.project;
+  const baseCommit = details?.baseCommit;
+
+  const lastVerdict = readEventsForTask(recordHome, taskId)
+    .filter((e) => e.name === "verdict-recorded")
+    .at(-1);
+  const note = (lastVerdict?.details as { note?: string } | undefined)?.note ?? "";
 
   // #73: whatever throws in the fix round lands on the record as task-failed.
-  await recordingFailure(recordHome, taskId, () => runFixRound(recordHome, taskId, note!, {
+  await recordingFailure(recordHome, taskId, () => runFixRound(recordHome, taskId, note, {
     brain: opts.brain,
     project: project!,
     totalAttempts,
@@ -144,6 +183,22 @@ export async function recordVerdict(
     checkBox: opts.checkBox,
     caps: opts.caps,
   }));
+}
+
+/** Every library caller's shape (contract tests included): a verdict
+ * call that doesn't resolve until a "fix" round it started is done.
+ * `src/cli/verdict-command.ts` is the one caller that wants the two
+ * halves apart - see `recordVerdictDecision`/`runRecordedFix` above. */
+export async function recordVerdict(
+  recordHome: string,
+  taskId: string,
+  ruling: "accept" | "fix" | "wrong",
+  note: string | undefined,
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+): Promise<void> {
+  recordVerdictDecision(recordHome, taskId, ruling, note, { caps: opts.caps });
+  if (ruling !== "fix") return;
+  await runRecordedFix(recordHome, taskId, opts);
 }
 
 /** Told exactly what the Client asked for, on top of the original ask -
