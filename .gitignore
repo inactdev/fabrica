@@ -11,6 +11,10 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# generated at install time (scripts/write-build-info.mjs) - the commit
+# an installed copy was built from; never hand-edited or committed
+build-info.json
+
 # logs
 *.log
 npm-debug.log*

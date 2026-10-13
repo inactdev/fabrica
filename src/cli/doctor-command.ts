@@ -29,10 +29,12 @@ export const DOCTOR_USAGE = "fabrica doctor [--live]";
 export const DOCTOR_HELP = `Usage: ${DOCTOR_USAGE}
 
 Checks, without spending anything, that this machine can run tasks: Node,
-the checkout the fabrica command runs from, Docker, the worker image, the
-worker token, the GitHub token Inspector needs, Inspector itself, every
-registered project, the caps, and any SPEND UNKNOWN block. One line per
-check - OK, or FAIL with the exact fix. Exits non-zero if anything fails.
+the copy of fabrica actually running - a developer checkout (branch,
+commit) or an installed copy (version, commit), either way compared
+against origin/master - Docker, the worker image, the worker token, the
+GitHub token Inspector needs, Inspector itself, every registered project,
+the caps, and any SPEND UNKNOWN block. One line per check - OK, or FAIL
+with the exact fix. Exits non-zero if anything fails.
 
   --live  Also make one minimal real call with the worker token (a few
           cents) and report whether it is alive or dead.
@@ -63,6 +65,25 @@ export interface DoctorProbes {
 
 const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+/** `fabrica` can run from two different kinds of copy (issue: installable
+ * from zero): a developer's own checkout, linked in with `npm link` (has
+ * a real `.git`, lives on a branch, moves every time the checkout does),
+ * or a frozen copy `npm install -g github:inactdev/fabrica` extracted
+ * (no `.git` at all - npm's packing strips it, and sets no `gitHead`
+ * either, verified against a real global install - so its commit comes
+ * from `build-info.json` instead, written at `prepare` time by
+ * `scripts/write-build-info.mjs` while `.git` still existed, before that
+ * strip). */
+export interface CopyInfo {
+  kind: "dev-checkout" | "installed";
+  root: string;
+  branch: string | null;
+  commit: string | null;
+  version: string;
+}
+
+const UPSTREAM_REPO = "https://github.com/inactdev/fabrica.git";
+
 /** The Node version the check box runs - .inspector.json's image tag - is
  * the one this suite is known to pass on. */
 export function nodeCheck(actual: string, expected: string | null): DoctorCheck {
@@ -74,12 +95,40 @@ export function nodeCheck(actual: string, expected: string | null): DoctorCheck 
     : { ok: false, label, detail: `v${have}, but the check box runs ${expected}`, fix: `install Node ${expected}` };
 }
 
-export function checkoutCheck(root: string, branch: string): DoctorCheck {
+function short(sha: string | null): string {
+  return sha ? sha.slice(0, 12) : "unknown";
+}
+
+/** Pure wording/pass-fail, so every case is testable without touching
+ * real git or the network - `remoteMasterCommit` is `null` when that
+ * lookup itself failed (no network, no git), which is reported but
+ * never fails the check: an older commit still runs correctly, it is
+ * only ever information here, not a fix-required state. */
+export function checkoutCheck(copy: CopyInfo, remoteMasterCommit: string | null): DoctorCheck {
   const label = "checkout";
-  const detail = `fabrica runs from ${root} on ${branch || "a detached HEAD"}`;
-  return branch === "master"
+  const behindNote =
+    remoteMasterCommit === null
+      ? "can't check against origin/master (no network, or git unavailable)"
+      : copy.commit === remoteMasterCommit
+        ? "up to date with origin/master"
+        : `behind origin/master, latest is ${short(remoteMasterCommit)}`;
+
+  if (copy.kind === "installed") {
+    if (copy.commit === null) {
+      return {
+        ok: false,
+        label,
+        detail: `installed copy at ${copy.root} has no build-info.json, so its commit is unknown`,
+        fix: "reinstall with: npm install -g github:inactdev/fabrica",
+      };
+    }
+    return { ok: true, label, detail: `installed copy v${copy.version}, commit ${short(copy.commit)} (${behindNote})` };
+  }
+
+  const detail = `fabrica runs from ${copy.root} on ${copy.branch || "a detached HEAD"}, commit ${short(copy.commit)} (${behindNote})`;
+  return copy.branch === "master"
     ? { ok: true, label, detail }
-    : { ok: false, label, detail: `${detail}, not master`, fix: `git -C ${root} checkout master && git -C ${root} pull` };
+    : { ok: false, label, detail: `${detail}, not master`, fix: `git -C ${copy.root} checkout master && git -C ${copy.root} pull` };
 }
 
 function pinnedNodeVersion(): string | null {
@@ -99,9 +148,62 @@ function git(cwd: string, args: string[]): string | null {
   }
 }
 
+function readPackageVersion(root: string): string {
+  try {
+    return (JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: string }).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+function readBuildInfoCommit(root: string): string | null {
+  try {
+    return (JSON.parse(readFileSync(join(root, "build-info.json"), "utf8")) as { commit?: string | null }).commit ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** `.git` (directory, or a worktree's gitdir-pointer file - either way
+ * `existsSync` alone is enough to tell a real checkout from a packed
+ * copy) decides which kind of copy this is - the ground truth npm's own
+ * install behavior already establishes, not a flag anything has to keep
+ * in sync by hand. */
+export function detectCopy(root: string, gitIn: (args: string[]) => string | null): CopyInfo {
+  const version = readPackageVersion(root);
+  if (existsSync(join(root, ".git"))) {
+    return {
+      kind: "dev-checkout",
+      root,
+      branch: gitIn(["branch", "--show-current"]) ?? "",
+      commit: gitIn(["rev-parse", "HEAD"]),
+      version,
+    };
+  }
+  return { kind: "installed", root, branch: null, commit: readBuildInfoCommit(root), version };
+}
+
+/** One lightweight network call, no local repo required either side
+ * (works identically for a dev checkout or an installed copy) and no
+ * mutation of any local ref - a `git fetch` would learn the exact
+ * ahead/behind count but updates `.git/refs/remotes/origin/master`,
+ * which doctor (claims to, and should) never touch. */
+function fetchRemoteMasterCommit(): string | null {
+  try {
+    const out = execFileSync("git", ["ls-remote", UPSTREAM_REPO, "master"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out.split(/\s+/)[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 export const realProbes: DoctorProbes = {
   node: () => nodeCheck(process.version, pinnedNodeVersion()),
-  checkout: () => checkoutCheck(CHECKOUT, git(CHECKOUT, ["branch", "--show-current"]) ?? ""),
+  checkout: () => checkoutCheck(detectCopy(CHECKOUT, (args) => git(CHECKOUT, args)), fetchRemoteMasterCommit()),
   docker() {
     try {
       execFileSync("docker", ["info"], { stdio: "ignore", timeout: 20_000 });
