@@ -217,3 +217,21 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
 
   return state;
 }
+
+/** True exactly when a task failed before it ever reached a delivery -
+ * `brain.ask()` threw ("ask-failed"), a spending cap refused its very
+ * first start ("cap-refused" before the task ever began), or some other
+ * error killed it first ("task-failed") - and nothing since has moved it
+ * anywhere else. Mirrors `refusedWithNoDelivery`'s reasoning for
+ * Inspector's own refusal: there is no delivery for "accept" or "fix" to
+ * work with, and no warm worker or line left to reopen, but "wrong" needs
+ * none of that and can still close it (issue #143) instead of leaving it
+ * stuck refusing every ruling forever. Checks for no "delivered" event
+ * anywhere in the task's history, not just since the latest failure, for
+ * the same reason `refusedWithNoDelivery` does: a fix round's own failure
+ * that comes AFTER an earlier real delivery is a different case - that
+ * delivery is still there for the Client to rule on. */
+export function failedWithNoDelivery(events: FabricaEvent[]): boolean {
+  if (events.some((event) => event.name === "delivered")) return false;
+  return stateOf(events) === "failed";
+}
