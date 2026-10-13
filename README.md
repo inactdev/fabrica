@@ -28,20 +28,111 @@ is not quoted here.
 
 Phase 1 has exactly one definition of done: every contract test turns green.
 
-## Installing the command
+## Developing Fabrica itself
+
+If you're changing Fabrica's own code rather than just using it, link
+this checkout instead of installing a frozen copy:
 
     npm install
     npm link
 
-`npm link` puts `fabrica` on your `PATH`, working from any directory.
-There is no separate build step - it runs `src/`'s TypeScript directly.
+`npm link` puts `fabrica` on your `PATH`, pointed at *this checkout's*
+source files - there is no build step, it runs `src/`'s TypeScript
+directly, so every edit, and every mid-merge conflict marker, is live
+immediately. That's exactly backwards for anyone who isn't actively
+editing this repo, which is why the global install below exists
+instead: a frozen copy that can't break just because some checkout
+somewhere is mid-edit. `npm unlink -g fabrica` undoes it.
 
-Running a task also needs Docker: every Worker call runs inside a
-throwaway container, built once from
-`src/brain/adapters/docker/Dockerfile` (that file carries the exact
-build command). See `src/containment/README.md` for what the container
-confines, and `src/brain/adapters/claude-code.md` for the one step still
-open inside it - the coding agent's credential.
+## Installing the command
+
+Prerequisites: **Node 24**, **git**, and **Docker** (Docker is only
+needed to actually run a task - not for this install step itself).
+
+    npm install -g github:inactdev/fabrica
+
+That's the whole install. It puts a fixed, standalone copy of `fabrica`
+on your `PATH`, working from any directory - verified against a real
+install: npm clones the repo, runs its own build step (recording the
+exact commit it was built from, see `fabrica doctor` below), and copies
+the result into place. Nothing under this command's control touches
+your shell profile or any other file on the machine.
+
+That installed copy is frozen: it does not change when some other
+checkout of this repository changes, including one you are actively
+editing, mid-merge, or on a branch - the problem that motivated this
+install method. To upgrade later, run the same command again. There is
+no uninstall step beyond the ordinary `npm uninstall -g fabrica`.
+
+**`npm link` is a separate, developer-only install**, documented above
+under "Developing Fabrica itself" - it points the `fabrica` command at
+a checkout's live source files, so every command breaks the moment that
+checkout is mid-edit or mid-merge. Reach for the global install above
+unless you are changing Fabrica's own code.
+
+### Building the worker image
+
+Running a task needs Docker: every Worker call runs inside a throwaway
+container, built once from `src/brain/adapters/docker/Dockerfile`. Run
+
+    fabrica doctor
+
+and, if the image is missing or out of date, it prints the exact
+`docker build` command to run (the command embeds a hash of the
+Dockerfile itself, which changes over time - `doctor` is the one place
+that command is kept current, rather than copied here where it would go
+stale). See `src/containment/README.md` for what the container confines,
+and `src/brain/adapters/claude-code.md` for the one step still open
+inside it - the coding agent's credential, which is the next section.
+
+### The worker token
+
+The coding agent that does the work needs its own credential, kept out
+of your shell environment by default:
+
+    claude setup-token
+
+then put the printed token in `~/.fabrica/brain.env` as a single line:
+
+    CLAUDE_CODE_OAUTH_TOKEN=<token>
+
+and lock it down:
+
+    chmod 600 ~/.fabrica/brain.env
+
+`fabrica doctor` (below) checks for exactly this file and mode, and
+never prints the token itself.
+
+### `fabrica doctor`
+
+    fabrica doctor
+
+Run this after installing, and any time something seems wrong. It is a
+preflight that spends nothing: one line per check - `OK`, or `FAIL` with
+the exact fix - covering Node, which copy of `fabrica` you're actually
+running (a developer checkout's branch and commit, or an installed
+copy's version and commit, either way compared against the project's
+`origin/master`), Docker, the worker image, the worker token above, the
+GitHub token Inspector needs, Inspector itself, every project you've
+registered, your spending caps, and any unmeasured spend blocking new
+work. `fabrica doctor --live` additionally spends a few cents to confirm
+the worker token actually authenticates.
+
+### Installing Inspector (optional)
+
+Inspector independently checks and can publish a Worker's green work
+(see "If the task's base commit contains `.inspector.json`" below). It
+is a separate Go tool, not an npm package:
+
+    go install github.com/inactdev/inspector/cmd/inspector@latest
+
+This needs **Go 1.22+**, and puts `inspector` wherever `go install`
+puts binaries on your machine (make sure that's on `PATH`). Skip this
+step entirely if none of your registered projects carry an
+`.inspector.json` - Fabrica self-tests those in the Worker's own box
+instead. See `src/inspector/README.md` for the publishing boundary.
+
+## Running a task
 
     fabrica do "<task text>" --project <path-or-name>
 
