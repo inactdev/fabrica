@@ -26,6 +26,8 @@ import { watchForTaskId } from "./watch-for-task-id.ts";
 
 const BOOTSTRAP = fileURLToPath(new URL("./tsx-bootstrap.mjs", import.meta.url));
 const DEFAULT_ENTRY_SCRIPT = fileURLToPath(new URL("./run-task-entry.ts", import.meta.url));
+const DEFAULT_ANSWER_ENTRY_SCRIPT = fileURLToPath(new URL("./answer-entry.ts", import.meta.url));
+const DEFAULT_VERDICT_FIX_ENTRY_SCRIPT = fileURLToPath(new URL("./verdict-fix-entry.ts", import.meta.url));
 
 export interface SpawnDetachedTaskOptions {
   recordHome: string;
@@ -88,4 +90,51 @@ export async function spawnDetachedTask(
     child.removeAllListeners("error");
     child.unref();
   }
+}
+
+export interface SpawnDetachedResumeOptions {
+  recordHome: string;
+  taskId: string;
+  /** "answer" resumes a clarified task; "fix" re-enters a delivered
+   * task's warm worker with the Client's note (verdict.ts's
+   * runRecordedFix). Picks the real default entry script; tests
+   * override with `entryScript` the same way spawnDetachedTask's
+   * callers do. */
+  kind: "answer" | "fix";
+  entryScript?: string;
+}
+
+/**
+ * Hands an already-validated-and-recorded round (issue #123:
+ * `recordAnswerDecision`/`recordVerdictDecision` already ran in the
+ * foreground, synchronously, before this is called) to a detached
+ * process and returns without waiting for it - unlike
+ * `spawnDetachedTask`, there is nothing to watch for: the taskId is
+ * already known (the Client passed it in), and there is no ask-first
+ * decision point that needs to reach this terminal before it can print
+ * anything meaningful. Progress from here on is followed through the
+ * record (`fabrica log`/`status`/`watch`), the same as any task
+ * `fabrica do` already backgrounds past `"work-started"`.
+ */
+export function spawnDetachedResume(opts: SpawnDetachedResumeOptions): void {
+  const { recordHome, taskId, kind } = opts;
+  const entryScript = opts.entryScript ?? (kind === "answer" ? DEFAULT_ANSWER_ENTRY_SCRIPT : DEFAULT_VERDICT_FIX_ENTRY_SCRIPT);
+
+  mkdirSync(recordHome, { recursive: true });
+  const logFd = openSync(join(recordHome, "cli.log"), "a");
+  const child = spawn(process.execPath, [BOOTSTRAP, entryScript, recordHome, taskId], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+  });
+  closeSync(logFd);
+
+  // A spawn failure here is as rare as `spawnDetachedTask`'s own (the
+  // same `process.execPath` that is already running this command) - this
+  // is purely to stop Node from treating an unlistened "error" event on
+  // the child as an uncaught exception in this process; there is no
+  // promise left to reject into once this function has already returned.
+  child.on("error", (err: NodeJS.ErrnoException) => {
+    console.error(`fabrica: could not start the background process for "${taskId}" (${err.code ?? err.message}).`);
+  });
+  child.unref();
 }

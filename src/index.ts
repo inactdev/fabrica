@@ -12,6 +12,11 @@ export type { ForemanErrorCode } from "./foreman/index.ts";
 export { DEFAULT_ATTEMPTS } from "./foreman/index.ts";
 export { DEFAULT_CHECK_COMMAND } from "./foreman/index.ts";
 export { fixRoundOf } from "./foreman/index.ts";
+// Issue #123: the CLI's seam for detaching `fabrica answer`/`fabrica
+// verdict fix` - see those two modules' own comments for why the round
+// itself is re-derived from the record rather than threaded through.
+export { recordAnswerDecision, runRecordedAnswer } from "./foreman/index.ts";
+export { recordVerdictDecision, runRecordedFix } from "./foreman/index.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
 export { readTranscript, eventsByTask, stateOf } from "./foreman/index.ts";
 export { followTask } from "./foreman/index.ts";
@@ -72,5 +77,11 @@ export type { BlockedEditAttempt } from "./offbooks/index.ts";
 // (`eventsByTask` above is grouped by task; this is the flat, whole-record
 // list `readEvents(...).length`/`.slice(...)` needs - a different shape,
 // not a duplicate. `FabricaEvent` itself is already exported above.)
-export { readEvents, readTaskFile, TASK_ID_PATTERN } from "./record/index.ts";
-export type { TaskFile } from "./record/index.ts";
+export { readEvents } from "./record/index.ts";
+// The raw tail reader and task-file reader, for an external follower that
+// needs the whole record rather than one task's slice of it (followTask,
+// above, is scoped to a single taskId) - e.g. a tool that opens something
+// per task as task-received events arrive, reusing the same byte-offset
+// tail `fabrica watch` reads through rather than re-reading the file.
+export { createLineTail, recordPath, readTaskFile, TASK_ID_PATTERN } from "./record/index.ts";
+export type { LineTail, TaskFile } from "./record/index.ts";
