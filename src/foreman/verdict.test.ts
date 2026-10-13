@@ -10,7 +10,7 @@ import { recordVerdict } from "./verdict.ts";
 import { readTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
-import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
+import { fakeInspector, fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 
 function freshHome(): string {
@@ -139,6 +139,42 @@ test("a verdict before delivery refuses", async () => {
   await assert.rejects(
     () => foreman.verdict("no-such-task", "accept"),
     (err: unknown) => err instanceof ForemanError && err.code === "unknown-task"
+  );
+});
+
+// Negative first: a task Inspector refused before it ever reached a
+// delivery used to be stuck refusing every ruling forever
+// ("not-delivered" - there is nothing to accept, fix, or reopen a line
+// for). "wrong" needs none of that, so it is the one ruling that can
+// still close this task.
+test("wrong closes a task Inspector refused with no delivery; accept and fix stay refused", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector("refused", () => "GITHUB_TOKEN is missing");
+  const foreman = createForeman({ recordHome, inspector });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
+
+  assert.equal((await foreman.status()).find((t) => t.id === task.id)?.state, "refused");
+  assert.equal(await foreman.deliveryOf(task.id), null);
+
+  await assert.rejects(
+    () => foreman.verdict(task.id, "accept"),
+    (err: unknown) => err instanceof ForemanError && err.code === "inspection-refused"
+  );
+  await assert.rejects(
+    () => foreman.verdict(task.id, "fix", "try again"),
+    (err: unknown) => err instanceof ForemanError && err.code === "inspection-refused"
+  );
+
+  await foreman.verdict(task.id, "wrong", "not worth correcting");
+
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "closed");
+  const events = (await foreman.events(task.id)).map((e) => e.name);
+  assert.deepEqual(events.filter((n) => n === "verdict-recorded"), ["verdict-recorded"]);
+
+  await assert.rejects(
+    () => foreman.verdict(task.id, "wrong", "again"),
+    (err: unknown) => err instanceof ForemanError && err.code === "already-closed"
   );
 });
 

@@ -186,24 +186,21 @@ export async function runAttempts(opts: {
 
     const durationMs = Date.now() - t0;
     // Resolved once per attempt - the same {title, body} this attempt's
-    // own commit and (in Inspector mode) its pull request use, so a
-    // malformed final message is never judged as green: a gate that was
-    // otherwise green gets forced red here, naming what's missing, which
-    // is also what the next attempt's correction brief quotes back.
+    // own commit and (in Inspector mode) its pull request would use. A
+    // malformed final message is validated BEFORE judge() ever runs: judge
+    // is what commits the attempt and (in Inspector mode) hands it off, so
+    // a write-up that doesn't parse never reaches either - this attempt is
+    // red on that alone, naming what's missing, which is also what the
+    // next attempt's correction brief quotes back. Only a well-formed
+    // write-up ever reaches judge(), so its own commit is only ever made
+    // with a valid write-up as its message.
     const finalMessage = finalMessageFor(workResult.transcript, fallbackTitle);
     lastFinalMessage = finalMessage;
-    const judgement = await judge(attempt, workResult.gateChanges, finalMessage);
-    const rawGate = judgement.kind === "verdict" ? judgement.gate : undefined;
-    const gate =
-      rawGate && !finalMessage.ok
-        ? {
-            green: false,
-            output: rawGate.green
-              ? describeMissingFinalMessage(finalMessage.missing!)
-              : `${rawGate.output}\n\n${describeMissingFinalMessage(finalMessage.missing!)}`,
-          }
-        : rawGate;
-    lastJudgement = gate && judgement.kind === "verdict" ? { ...judgement, gate } : judgement;
+    const judgement: Judgement = finalMessage.ok
+      ? await judge(attempt, workResult.gateChanges, finalMessage)
+      : { kind: "verdict", gate: { green: false, output: describeMissingFinalMessage(finalMessage.missing!) } };
+    const gate = judgement.kind === "verdict" ? judgement.gate : undefined;
+    lastJudgement = judgement;
     if (gate) lastGate = gate;
 
     const costUsd = costFromTranscript(workResult.transcript);
