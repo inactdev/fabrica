@@ -83,5 +83,5 @@ export { readEvents } from "./record/index.ts";
 // above, is scoped to a single taskId) - e.g. a tool that opens something
 // per task as task-received events arrive, reusing the same byte-offset
 // tail `fabrica watch` reads through rather than re-reading the file.
-export { createLineTail, recordPath, readTaskFile } from "./record/index.ts";
+export { createLineTail, recordPath, readTaskFile, TASK_ID_PATTERN } from "./record/index.ts";
 export type { LineTail, TaskFile } from "./record/index.ts";

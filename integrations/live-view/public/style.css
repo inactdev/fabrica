@@ -1,0 +1,93 @@
+/* Completely flat on purpose: no shadows, no gradients, no rounded
+   corners, no borders other than a single thin hairline divider. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+  background: #ffffff;
+  color: #000000;
+  font-family: system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  font-weight: normal;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+header {
+  margin-bottom: 2rem;
+}
+
+h1 {
+  font-size: 1.25rem;
+  font-weight: normal;
+  margin: 0 0 0.5rem 0;
+}
+
+h2 {
+  font-size: 1rem;
+  font-weight: normal;
+  margin: 0 0 1rem 0;
+}
+
+main {
+  max-width: 48rem;
+}
+
+section {
+  margin-bottom: 3rem;
+}
+
+#spend {
+  margin: 0;
+  color: #000000;
+}
+
+.task {
+  padding: 1rem 0;
+  border-top: 1px solid #dddddd;
+  cursor: pointer;
+}
+
+.task:first-child {
+  border-top: none;
+}
+
+.task-line {
+  margin: 0.25rem 0;
+}
+
+.task-id {
+  font-weight: normal;
+}
+
+/* The one accent color on the page, used only to mark a task's state. */
+.state {
+  color: #2b6cb0;
+}
+
+.task-text {
+  white-space: pre-wrap;
+  margin: 0.5rem 0;
+}
+
+.empty {
+  color: #666666;
+}
+
+.transcript {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #dddddd;
+  white-space: pre-wrap;
+}
+
+.transcript-entry {
+  margin: 0 0 0.5rem 0;
+}
+
+.transcript-kind {
+  color: #666666;
+}
