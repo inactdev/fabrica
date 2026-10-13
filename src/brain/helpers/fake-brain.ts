@@ -5,7 +5,7 @@
 // prove the warm-session guarantee from SPEC.md: a retry into the same
 // session id continues that session's history rather than restarting it.
 
-import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry } from "../types.ts";
+import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
 
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
@@ -49,12 +49,10 @@ export function fakeBrain(
      * nothing, so 0 unless told otherwise; null reports a cost it cannot
      * say. */
     askCostUsd?: number | null;
-    /** The worker's final message (src/foreman/final-message.ts): a
-     * title line plus What/Why/How/Deviations sections. Defaults to a
-     * well-formed one so ordinary tests still see a "done" delivery
-     * without having to construct this themselves; override it to test
-     * a malformed one. */
-    finalMessage?: string;
+    /** The write-up work() returns (BrainWorkResult.writeup). Defaults to
+     * a valid one so ordinary tests still see a "done" delivery without
+     * constructing it themselves; null returns none at all. */
+    writeup?: WorkerWriteup | null;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -99,14 +97,15 @@ export function fakeBrain(
       history.push(brief);
       historyBySession.set(session, history);
 
-      const finalMessage =
-        opts.finalMessage ??
-        `Fake brain update\n\nWhat:\nfake brain saw ${history.length} brief(s) on session ${session}: ` +
-          `${history.join(" | ")}\n\nWhy:\nTesting.\n\nHow:\nDirectly.\n\nDeviations:\nNone.`;
+      const saw = `fake brain saw ${history.length} brief(s) on session ${session}: ${history.join(" | ")}`;
+      const writeup =
+        opts.writeup === undefined
+          ? { title: "Fake brain update", what: saw, why: "Testing.", how: "Directly.", deviations: "None." }
+          : opts.writeup;
       const entry: TranscriptEntry = {
         occurredAt: new Date().toISOString(),
         kind: "text",
-        text: finalMessage,
+        text: saw,
       };
       const transcript: TranscriptEntry[] = [entry];
       if (opts.costUsd !== undefined) {
@@ -120,6 +119,7 @@ export function fakeBrain(
       const result: BrainWorkResult = {
         transcript,
         session,
+        ...(writeup === null ? {} : { writeup }),
       };
       if (opts.gateChanges !== undefined) result.gateChanges = opts.gateChanges;
       return result;

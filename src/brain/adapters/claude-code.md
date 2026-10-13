@@ -118,7 +118,7 @@ never the marker alone.
 For a cold call with no options:
 
 ```
-claude -p "<brief>" --output-format stream-json --verbose --permission-mode bypassPermissions
+claude -p "<brief>" --output-format stream-json --verbose --permission-mode bypassPermissions --json-schema '<WRITEUP_JSON_SCHEMA>'
 ```
 
 run with `cwd` set to `workdir`. `--resume <opts.session>` is appended
@@ -428,6 +428,25 @@ real to compute, but it doesn't move a bill the way a metered API call
 would (see issue #6's design comments). It's recorded anyway, faithfully,
 in whatever unit the tool itself reports it in; the caps treat it as real
 dollars, which is the safe direction to be wrong in.
+
+## `writeup` and `--json-schema`
+
+Every `work()` call passes `--json-schema` with `WRITEUP_JSON_SCHEMA`: an
+object of five required, non-empty strings (`title` at most 60
+characters, `what`, `why`, `how`, `deviations`), no other keys. Verified
+on 2.1.222 with a real call: the result line then carries the answer as
+an object on `structured_output` (with `subtype: "success"`), and `work()`
+returns it as `writeup`. Nothing is ever parsed out of the worker's text;
+a result line without a well-shaped `structured_output` returns no
+`writeup`, and the Foreman makes that attempt red. A result line with
+`subtype: "error_max_structured_output_retries"` (the CLI giving up on
+the schema) is treated the same way rather than thrown, so the attempt's
+work and spend are kept - that subtype's exact shape is taken from the
+binary's own strings, not from a recorded run.
+
+`structured_output` is not on `stream-json-shape.ts`'s parity allowlist
+yet: the recorded fixture predates `--json-schema` and would need a
+real re-recording to cover it.
 
 ## `gateChanges`
 

@@ -9,6 +9,7 @@ import { gateForRecord } from "./attempts.ts";
 import type { CapStop } from "./attempts.ts";
 import { formatUsd, SPEND_UNKNOWN_LINE } from "./spend.ts";
 import { SELF_TESTED } from "./judge.ts";
+import { describeInvalidWriteup } from "./pr-body.ts";
 
 /** Where a task stands once this outcome is delivered: anything handed to
  * the Client for a ruling is "delivered"; the rest are honest failures. */
@@ -37,10 +38,14 @@ export function buildDelivery(
     /** Rule 10: true when a cap is set and some attempt of this task has
      * an unknown cost - the report then says new work is blocked. */
     spendUnknownUnderCap?: boolean;
+    /** Set when the last attempt's write-up was missing or invalid: the
+     * failure report says so, and that no check judged it. */
+    writeupInvalid?: string;
   }
 ): Delivery {
   if (outcome === "cap-stopped") return buildCapStoppedDelivery(ctx);
   if (outcome === "not-verified") return buildNotVerifiedDelivery(ctx);
+  if (outcome === "failure-report" && ctx.writeupInvalid !== undefined) return buildWriteupInvalidDelivery(ctx);
 
   const summary =
     outcome === "done"
@@ -96,6 +101,32 @@ export function buildDelivery(
     files: ctx.files,
     gateChanges: ctx.declaredGateChanges ?? "",
     ...(ctx.inspection === undefined ? {} : { inspection: ctx.inspection }),
+  };
+}
+
+/** A round that ended on a missing or invalid write-up: the worker's own
+ * failure, found before any check ran - never an Inspector red, and never
+ * "the check did not pass". */
+function buildWriteupInvalidDelivery(ctx: {
+  attempts: number;
+  branch: string;
+  files: string[];
+  declaredGateChanges: string | undefined;
+  writeupInvalid?: string;
+}): Delivery {
+  const summary = describeInvalidWriteup(ctx.writeupInvalid!);
+  return {
+    outcome: "failure-report",
+    confidence: 0,
+    summary,
+    evidence: `${summary} (attempt ${ctx.attempts}).`,
+    assumptions: "",
+    gaps:
+      "The last attempt returned no valid write-up, so it was never checked. Its work is committed on " +
+      `\`${ctx.branch}\`; give a fix verdict to have the worker write it up.`,
+    branch: ctx.branch,
+    files: ctx.files,
+    gateChanges: ctx.declaredGateChanges ?? "",
   };
 }
 

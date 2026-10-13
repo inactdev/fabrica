@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { claudeCodeAdapter, claudeCodeCheckBox, ClaudeCodeError, resolveGitMounts } from "./claude-code.ts";
+import { claudeCodeAdapter, claudeCodeCheckBox, ClaudeCodeError, resolveGitMounts, WRITEUP_JSON_SCHEMA } from "./claude-code.ts";
 import { createProductionLine, destroyProductionLine } from "../../line/index.ts";
 import { makeFixtureHome, makeFixtureProject } from "../../line/helpers/fixture.ts";
 import { LineError } from "../../line/index.ts";
@@ -195,6 +195,8 @@ test("claudeCodeAdapter always passes bypassPermissions and forwards --resume, -
     "--verbose",
     "--permission-mode",
     "bypassPermissions",
+    "--json-schema",
+    JSON.stringify(WRITEUP_JSON_SCHEMA),
     "--resume",
     "prior-session-id",
     "--model",
@@ -219,7 +221,64 @@ test("claudeCodeAdapter omits --resume, --model, --effort when not given", async
     "--verbose",
     "--permission-mode",
     "bypassPermissions",
+    "--json-schema",
+    JSON.stringify(WRITEUP_JSON_SCHEMA),
   ]);
+});
+
+// The write-up is structured output the CLI validates against this
+// schema, never prose Fabrica parses (Client ruling 2026-10-13).
+test("claudeCodeAdapter passes --json-schema for the write-up: five required strings, title at most 60", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
+
+  const result = await brain.work("ECHO_ARGS", makeFakeCliWorkdir());
+
+  const argsSeen: string[] = JSON.parse(result.transcript[0].text);
+  const at = argsSeen.indexOf("--json-schema");
+  assert.ok(at >= 0, "--json-schema was not passed");
+  const schema = JSON.parse(argsSeen[at + 1]);
+  assert.equal(schema.type, "object");
+  assert.deepEqual([...schema.required].sort(), ["deviations", "how", "title", "what", "why"]);
+  for (const field of ["title", "what", "why", "how", "deviations"]) {
+    assert.equal(schema.properties[field].type, "string", `${field} is not a string field`);
+  }
+  assert.equal(schema.properties.title.maxLength, 60);
+  assert.equal(schema.additionalProperties, false);
+});
+
+test("claudeCodeAdapter fills writeup from the result line's structured_output", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
+
+  const result = await brain.work("WRITEUP_STRUCTURED", makeFakeCliWorkdir());
+
+  assert.deepEqual(result.writeup, {
+    title: "Fake structured write-up",
+    what: "What it did.",
+    why: "Why it did it.",
+    how: "How it did it.",
+    deviations: "None.",
+  });
+});
+
+test("claudeCodeAdapter returns no writeup when the result line has no structured_output, never one parsed from text", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
+
+  const result = await brain.work("WRITEUP_AS_PROSE_ONLY", makeFakeCliWorkdir());
+
+  assert.equal(result.writeup, undefined);
+});
+
+test("claudeCodeAdapter returns no writeup, without throwing, when the CLI gave up producing the structured output", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
+
+  const result = await brain.work("WRITEUP_RETRIES_EXHAUSTED", makeFakeCliWorkdir());
+
+  assert.equal(result.writeup, undefined);
+  assert.equal(result.session, "fake-session-123");
 });
 
 test("claudeCodeAdapter maps structured stream-json into transcript entries and skips harness noise", async (t) => {

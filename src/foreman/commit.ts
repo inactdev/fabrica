@@ -32,10 +32,15 @@ function hasStagedChanges(workdir: string): boolean {
   }
 }
 
-export function commitWorktreeChanges(workdir: string, message: string): void {
+/** Commits everything in the worktree, and says whether a commit was
+ * made. With `amend`, the branch's last commit is rewritten instead -
+ * with whatever is now staged, or with only the new message when nothing
+ * is - so an unpublished commit gets a corrected message rather than an
+ * empty commit on top of it (attempts.ts). */
+export function commitWorktreeChanges(workdir: string, message: string, opts: { amend?: boolean } = {}): boolean {
   try {
     execFileSync("git", ["add", "-A"], { cwd: workdir, stdio: ["ignore", "pipe", "pipe"] });
-    if (!hasStagedChanges(workdir)) return;
+    if (!opts.amend && !hasStagedChanges(workdir)) return false;
     // -c user.*: a throwaway worktree has no reason to inherit (or require)
     // the Client's own git identity — every commit here is machine-made.
     // -c commit.gpgsign=false and the two hook settings: same reasoning,
@@ -61,12 +66,14 @@ export function commitWorktreeChanges(workdir: string, message: string): void {
         "-c",
         "core.hooksPath=/dev/null",
         "commit",
+        ...(opts.amend ? ["--amend"] : []),
         "--no-verify",
         "-qm",
         message,
       ],
       { cwd: workdir, stdio: ["ignore", "pipe", "pipe"] }
     );
+    return true;
   } catch (err) {
     throw new ForemanError(
       "commit-failed",

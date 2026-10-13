@@ -126,6 +126,36 @@ switch (brief) {
     line(resultLine({}));
     break;
   }
+  case "WRITEUP_STRUCTURED": {
+    // --json-schema's answer arrives as an object on the result line
+    // (verified on 2.1.222: "structured_output", subtype "success"), with
+    // the same object JSON-encoded in "result".
+    const writeup = {
+      title: "Fake structured write-up",
+      what: "What it did.",
+      why: "Why it did it.",
+      how: "How it did it.",
+      deviations: "None.",
+    };
+    line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
+    line(resultLine({ result: JSON.stringify(writeup), structured_output: writeup }));
+    break;
+  }
+  case "WRITEUP_AS_PROSE_ONLY": {
+    // A write-up typed out as text, with no structured_output: nothing
+    // may be parsed out of it.
+    const prose = "Fake write-up\n\nWhat:\na\n\nWhy:\nb\n\nHow:\nc\n\nDeviations:\nNone.";
+    line({ type: "assistant", message: { content: [{ type: "text", text: prose } ] } });
+    line(resultLine({ result: prose }));
+    break;
+  }
+  case "WRITEUP_RETRIES_EXHAUSTED": {
+    // The CLI gave up making its answer match the schema.
+    line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
+    process.exitCode = 1;
+    line(resultLine({ is_error: true, subtype: "error_max_structured_output_retries", result: undefined }));
+    break;
+  }
   case "SESSION_MARKER": {
     // Reports whatever a previous call already left under $HOME, then
     // adds its own mark - so claude-code.test.ts's session-persistence

@@ -12,9 +12,10 @@ import type { GateResult, Receipt } from "../../contract/surface.ts";
 import type { Judge, Judgement } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { costFromTranscript } from "./spend.ts";
-import { describeMissingFinalMessage } from "./final-message.ts";
-import { finalMessageFor } from "./pr-body.ts";
+import { describeInvalidWriteup, finalMessageFor, renderCommitMessage } from "./pr-body.ts";
 import type { FinalMessageForCommit } from "./pr-body.ts";
+import { commitWorktreeChanges } from "./commit.ts";
+import { ForemanError } from "./errors.ts";
 
 /** How often a "heartbeat" event lands while a Worker's single `brain.work`
  * call is in flight (issue #12) - that call is one long, opaque await with
@@ -38,10 +39,10 @@ export interface AttemptLoopResult {
   /** Set when rule 10 stopped the loop before it would otherwise have
    * ended - the last receipt's outcome is then "cap-stopped". */
   capStop?: CapStop;
-  /** The last attempt's final message, resolved to something committable
-   * either way (final-message.ts's parse, or a fallback naming what was
-   * missing) - never the task's own words. What do.ts/verdict.ts commit
-   * onto the branch once the loop ends. */
+  /** The last attempt's write-up, resolved to something committable
+   * either way (the worker's own, or a fallback naming what was wrong) -
+   * never the task's own words. What do.ts/verdict.ts commit onto the
+   * branch with, should anything be left uncommitted once the loop ends. */
   finalMessage: FinalMessageForCommit;
 }
 
@@ -104,7 +105,7 @@ export async function runAttempts(opts: {
    * spend is on the record even while the task is still running. */
   onReceipt?: (receipt: Receipt) => void;
   /** A short label appended to the fallback commit title used when a
-   * worker's final message doesn't parse (e.g. "(fix)" for verdict.ts's
+   * worker's write-up is missing or invalid (e.g. "(fix)" for verdict.ts's
    * fix round) - so even the fallback distinguishes an ordinary round
    * from a fix round, the way the old static commit messages did. */
   commitLabel?: string;
@@ -137,6 +138,10 @@ export async function runAttempts(opts: {
   let spentUsd = spendLimits?.priorKnownUsd ?? 0;
   let capStop: CapStop | undefined;
   let lastFinalMessage: FinalMessageForCommit | undefined;
+  // True while the branch's last commit is this loop's own, carrying a
+  // fallback message: it was never handed to Inspector, so never pushed,
+  // and the next attempt amends it rather than stacking on top of it.
+  let unpublishedFallbackCommit = false;
 
   const firstAttempt = startAttempt ?? 1;
   const lastAttempt = firstAttempt + totalAttempts - 1;
@@ -144,7 +149,9 @@ export async function runAttempts(opts: {
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
 
-    const thisBrief = withStandingQuestion(lastGate && !lastGate.green ? correctionBrief(brief, lastGate) : brief);
+    const thisBrief = withStandingQuestion(
+      lastGate && !lastGate.green ? correctionBrief(brief, lastGate, lastJudgement) : brief
+    );
     // What is left of the task's own cap, as a hint an adapter that can
     // stop mid-call honors - the check after this attempt is the
     // guaranteed stop either way.
@@ -185,20 +192,37 @@ export async function runAttempts(opts: {
     if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
 
     const durationMs = Date.now() - t0;
-    // Resolved once per attempt - the same {title, body} this attempt's
-    // own commit and (in Inspector mode) its pull request would use. A
-    // malformed final message is validated BEFORE judge() ever runs: judge
-    // is what commits the attempt and (in Inspector mode) hands it off, so
-    // a write-up that doesn't parse never reaches either - this attempt is
-    // red on that alone, naming what's missing, which is also what the
-    // next attempt's correction brief quotes back. Only a well-formed
-    // write-up ever reaches judge(), so its own commit is only ever made
-    // with a valid write-up as its message.
-    const finalMessage = finalMessageFor(workResult.transcript, fallbackTitle);
+    // Every attempt is committed the moment work() returns (Client ruling
+    // 2026-10-13), with the worker's own write-up as the message, or a
+    // fallback naming what is wrong with it. A fallback commit is never
+    // handed to Inspector, so it is still unpublished when the next
+    // attempt comes: that attempt amends it - new changes and message
+    // together, or only the message when a retry supplies nothing but the
+    // write-up - instead of an empty commit or re-handing the same one.
+    // An attempt whose write-up is missing or invalid is red on that
+    // alone, never judged, and its reason is what the next brief quotes.
+    const finalMessage = finalMessageFor(workResult.writeup, fallbackTitle);
     lastFinalMessage = finalMessage;
-    const judgement: Judgement = finalMessage.ok
-      ? await judge(attempt, workResult.gateChanges, finalMessage)
-      : { kind: "verdict", gate: { green: false, output: describeMissingFinalMessage(finalMessage.missing!) } };
+    let commitError: string | undefined;
+    try {
+      const committed = commitWorktreeChanges(workdir, renderCommitMessage(finalMessage), {
+        amend: unpublishedFallbackCommit,
+      });
+      if (committed) unpublishedFallbackCommit = !finalMessage.ok;
+    } catch (err) {
+      if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
+      commitError = err.message;
+    }
+    const judgement: Judgement =
+      commitError !== undefined
+        ? { kind: "commit-failed", error: commitError }
+        : finalMessage.ok
+          ? await judge(attempt, workResult.gateChanges, finalMessage)
+          : {
+              kind: "verdict",
+              gate: { green: false, output: describeInvalidWriteup(finalMessage.reason!) },
+              writeupInvalid: finalMessage.reason!,
+            };
     const gate = judgement.kind === "verdict" ? judgement.gate : undefined;
     lastJudgement = judgement;
     if (gate) lastGate = gate;
@@ -315,9 +339,12 @@ export async function withHeartbeat<T>(
 }
 
 /** Told exactly what failed (SPEC.md step 5), never a bare "try again." */
-function correctionBrief(originalBrief: string, failedGate: GateResult): string {
+function correctionBrief(originalBrief: string, failedGate: GateResult, last: Judgement | undefined): string {
+  const what =
+    last?.kind === "verdict" && last.writeupInvalid !== undefined
+      ? "Your previous attempt's write-up was missing or invalid; your changes are kept."
+      : "Your previous attempt did not pass the project's check.";
   return withStandingQuestion(
-    `${originalBrief}\n\n---\n\nYour previous attempt did not pass the project's check. ` +
-      `Fix exactly this and nothing else:\n\n${failedGate.output}`
+    `${originalBrief}\n\n---\n\n${what} Fix exactly this and nothing else:\n\n${failedGate.output}`
   );
 }

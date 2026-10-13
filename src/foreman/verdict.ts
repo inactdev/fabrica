@@ -296,6 +296,7 @@ async function runFixRound(
       inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
       selfTested: mode.mode === "self-test",
       notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
+      writeupInvalid: lastJudgement.kind === "verdict" ? lastJudgement.writeupInvalid : undefined,
       capStop,
       taskId,
       spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, caps),

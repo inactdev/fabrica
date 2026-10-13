@@ -74,20 +74,19 @@ test("a green Fabrica check hands a configured branch to Inspector before delive
   assert.ok(io.out.some((line) => line.includes("Inspector green: independent check passed")));
 });
 
-// Negative first (the write-up rule's own fix #1): a worker whose final
-// message doesn't parse is red on that alone - judge() never runs for
-// that attempt, so there is no commit, no Inspector call, and no pull
-// request for it. Only once a later attempt's write-up actually parses
-// does any of that happen - exactly once, for that attempt alone.
-test("a malformed final message is red with no commit, no Inspector call, and no PR - a later valid one produces exactly one of each", async () => {
+// Negative first (the write-up rule's own fix #1, revised by the
+// structured write-up ruling 2026-10-13): a worker whose write-up is
+// invalid is red on that alone - judge() never runs for that attempt, so
+// there is no Inspector call and no pull request for it. Its work is
+// committed with a fallback message, and the later valid attempt amends
+// that unpublished commit: exactly one commit, one Inspector call, one
+// pull request.
+test("an invalid write-up is red with no Inspector call and no PR - a later valid one leaves exactly one of each, and one commit", async () => {
   const recordHome = freshHome();
   const project = inspectedProject();
   const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
   const inspector = fakeInspector({ verdict: "green", report: "ok", prUrl: "https://example.test/pulls/7" });
-  const messages = [
-    `${"x".repeat(145)}\n\nWhat:\na\n\nWhy:\nb\n\nHow:\nc\n\nDeviations:\nNone.`,
-    "Add the feature\n\nWhat:\na\n\nWhy:\nb\n\nHow:\nc\n\nDeviations:\nNone.",
-  ];
+  const titles = ["x".repeat(145), "Add the feature"];
   let calls = 0;
   const brain: Brain = {
     name: "fake",
@@ -97,25 +96,25 @@ test("a malformed final message is red with no commit, no Inspector call, and no
     },
     async work(_brief, workdir) {
       writeFileSync(join(workdir, `feature-${calls}.txt`), "work\n");
-      const text = messages[calls++];
-      return { transcript: [{ occurredAt: new Date().toISOString(), kind: "text", text }], session: "s1" };
+      const title = titles[calls++];
+      return { transcript: [], session: "s1", writeup: { title, what: "a", why: "b", how: "c", deviations: "None." } };
     },
   };
   const foreman = createForeman({ recordHome, inspector });
 
   const task = await foreman.do("small change", { project, brain, attempts: 2 });
 
-  assert.equal(calls, 2, "both attempts ran - the malformed one is a correctable red, not a stop");
+  assert.equal(calls, 2, "both attempts ran - the invalid one is a correctable red, not a stop");
   assert.equal(task.state, "delivered");
   const delivery = await foreman.deliveryOf(task.id);
   assert.equal(delivery?.outcome, "done");
-  assert.equal(inspector.calls.length, 1, "Inspector is never called for the malformed attempt");
+  assert.equal(inspector.calls.length, 1, "Inspector is never called for the invalid attempt");
 
   const commitCount = execSync(`git rev-list --count ${baseCommit}..${delivery!.branch}`, {
     cwd: project,
     encoding: "utf8",
   }).trim();
-  assert.equal(commitCount, "1", "exactly one commit - the malformed attempt is never committed");
+  assert.equal(commitCount, "1", "exactly one commit - the invalid attempt's commit is amended, never stacked on");
 
   const events = await foreman.events(task.id);
   assert.equal(events.filter((event) => event.name === "pr-opened").length, 1);
@@ -373,17 +372,21 @@ test("a pr-opened event carries Inspector's reported url exactly once", async ()
 });
 
 // Pull requests must read like a human wrote them: Inspector is handed
-// the worker's own title and sections (final-message.ts), never the raw
-// task text - "Fix the login bug..." here is deliberately not what either
-// field carries.
-test("Inspector is handed the worker's own final-message title as pr-title and its sections as pr-body", async () => {
+// the worker's own write-up title and sections, never the raw task text -
+// "Fix the login bug..." here is deliberately not what either field
+// carries.
+test("Inspector is handed the worker's own write-up title as pr-title and its sections as pr-body", async () => {
   const recordHome = freshHome();
   const inspector = fakeInspector({ verdict: "green", report: "ok" });
   const foreman = createForeman({ recordHome, inspector });
   const brain = fakeBrain({
-    finalMessage:
-      "Fix retry on login timeout\n\nWhat:\nRetries once.\n\nWhy:\nIt happens on retry.\n\n" +
-      "How:\nAdded a retry.\n\nDeviations:\nNone.",
+    writeup: {
+      title: "Fix retry on login timeout",
+      what: "Retries once.",
+      why: "It happens on retry.",
+      how: "Added a retry.",
+      deviations: "None.",
+    },
   });
 
   await foreman.do("Fix the login bug\n\nIt happens on retry.", { project: inspectedProject(), brain });
