@@ -91,9 +91,18 @@ test("answer round, Inspector not installed: the resumed round is self-tested in
 
 // --- 3. Fix round ---
 
+// Each call below writes a new version of the same file, so the fix
+// round lands a real new commit and is genuinely judged again, rather
+// than being skipped as a no-op round (see verdict.test.ts's dedicated
+// coverage for the no-op case itself).
+function changingBrain() {
+  let version = 0;
+  return fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), `v${++version}\n`) });
+}
+
 test("fix round, Inspector installed: the fix is judged by Inspector on the same branch", async () => {
   const { foreman, inspector, box, project } = setup(true);
-  const task = await foreman.do("small change", { project, brain: fakeBrain() });
+  const task = await foreman.do("small change", { project, brain: changingBrain() });
   await foreman.verdict(task.id, "fix", "one more thing");
   assert.equal(inspector.calls.length, 2);
   assert.equal(inspector.calls[1].branch, `fabrica/${task.id}`);
@@ -102,7 +111,7 @@ test("fix round, Inspector installed: the fix is judged by Inspector on the same
 
 test("fix round, Inspector not installed: the fix is self-tested in the worker's box, never refused", async () => {
   const { foreman, inspector, box, project } = setup(false);
-  const task = await foreman.do("small change", { project, brain: fakeBrain() });
+  const task = await foreman.do("small change", { project, brain: changingBrain() });
   await foreman.verdict(task.id, "fix", "one more thing");
   assert.equal(inspector.calls.length, 0);
   assert.equal(box.calls.length, 2);

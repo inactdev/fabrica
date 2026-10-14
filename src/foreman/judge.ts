@@ -24,6 +24,7 @@ import { requireGateBaseline } from "./gate-changes.ts";
 import { ForemanError } from "./errors.ts";
 import { handToInspector } from "./inspection.ts";
 import type { FinalMessageForCommit } from "./pr-body.ts";
+import { baseCommitOf } from "../delivery/index.ts";
 
 /** One attempt's judgement. Only "verdict" is a red or green result; the
  * rest stop the loop with no verdict at all. */
@@ -41,7 +42,11 @@ export type Judgement =
   /** The worker's box could not run the check - not verified, not red. */
   | { kind: "not-verified"; reason: string }
   /** Committing the attempt failed (a host problem). */
-  | { kind: "commit-failed"; error: string };
+  | { kind: "commit-failed"; error: string }
+  /** The branch has no new commit versus where this round started - never
+   * judged at all (`skipIfUnchanged` below), so there is nothing for a
+   * check or Inspector to say. */
+  | { kind: "unchanged" };
 
 export type Judge = (attempt: number, gateChanges: string | undefined, finalMessage: FinalMessageForCommit) => Promise<Judgement>;
 
@@ -152,6 +157,25 @@ export function prepareRound(
       ? inspectorJudge(recordHome, taskId, line, baseCommit, mode.inspector)
       : selfTestJudge(recordHome, taskId, line, check, opts.checkBox ?? defaultCheckBox());
   return { judge, mode, protectedPathApplies };
+}
+
+/**
+ * Wraps a round's judge so an attempt that lands no new commit on the
+ * branch - identical to `priorHead`, the branch's HEAD the moment this
+ * round's line was reopened, captured before any attempt ran - is never
+ * handed to the real judge at all. Scoped to the fix-round path
+ * (`verdict.ts`): re-handing an already-reviewed commit to Inspector only
+ * draws a refusal, since Inspector has already judged it; a self-test
+ * re-run of the same workdir could only repeat its own last answer.
+ * `attempts.ts` already committed the attempt (a no-op when nothing
+ * changed) by the time this runs, so comparing HEAD now against
+ * `priorHead` is exactly "did this round's worker change anything."
+ */
+export function skipIfUnchanged(judge: Judge, workdir: string, priorHead: string): Judge {
+  return async (attempt, gateChanges, finalMessage) => {
+    if (baseCommitOf(workdir) === priorHead) return { kind: "unchanged" };
+    return judge(attempt, gateChanges, finalMessage);
+  };
 }
 
 /** A round's delivery outcome from how its last attempt was judged.

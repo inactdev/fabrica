@@ -124,7 +124,11 @@ test("an Inspector red report reaches the Client and a fix returns to the same w
     { verdict: "red", report: "lint still fails in app.ts" },
     { verdict: "green", report: "lint repaired" }
   );
-  const brain = fakeBrain();
+  // Each call writes a new version of the same file, so the fix round
+  // lands a real new commit and is genuinely handed to Inspector again,
+  // rather than being skipped as a no-op round.
+  let version = 0;
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "lint-fix.txt"), `v${++version}\n`) });
   const foreman = createForeman({ recordHome, inspector });
 
   // One attempt, so Inspector's red goes to the Client rather than into a

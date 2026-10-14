@@ -42,8 +42,11 @@ export interface Inspector {
 
 export type Delivery = Omit<ContractDelivery, "outcome"> & {
   /** "not-verified": self-tested, but the worker's box could not run the
-   * check at all - nothing judged the work, which is not the same as red. */
-  outcome: ContractDelivery["outcome"] | "inspection-red" | "not-verified";
+   * check at all - nothing judged the work, which is not the same as red.
+   * "nothing-changed": a fix round's worker left the branch exactly where
+   * it already was - no new commit, so nothing was handed to a check or
+   * Inspector at all (two fixes in the fix-round path). */
+  outcome: ContractDelivery["outcome"] | "inspection-red" | "not-verified" | "nothing-changed";
   /** Present only when this branch was handed to Inspector. */
   inspection?: Inspection;
 };

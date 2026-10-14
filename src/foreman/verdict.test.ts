@@ -58,7 +58,12 @@ test("wrong closes the task plainly, as a real outcome, not a hidden failure", a
 
 test("fix re-enters the same warm worker session on the same line", async () => {
   const recordHome = freshHome();
-  const brain = fakeBrain();
+  // Each call writes a new version of the same file, so the fix round
+  // lands a real new commit - this test is about session continuity, not
+  // about the no-new-commit "nothing changed" path (see the dedicated
+  // test for that below).
+  let version = 0;
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), `v${++version}\n`) });
   const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
 
@@ -176,6 +181,84 @@ test("wrong closes a task Inspector refused with no delivery; accept and fix sta
     () => foreman.verdict(task.id, "wrong", "again"),
     (err: unknown) => err instanceof ForemanError && err.code === "already-closed"
   );
+});
+
+// A refusal that comes AFTER a real delivery is a different case from the
+// one above: that earlier delivery is still there for the Client to rule
+// on, so it must not be stuck behind a later, unrelated refusal.
+test("accept rules on the earlier delivery when a later Inspector refusal superseded it", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector(["green", "refused"]);
+  const foreman = createForeman({ recordHome, inspector });
+  let version = 0;
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), `v${++version}\n`) });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "done");
+
+  // The fix round's own re-inspection refuses - this must not retroactively
+  // block a ruling on the real delivery the first round already produced.
+  await recordVerdict(recordHome, task.id, "fix", "one more pass", { brain, inspector });
+  assert.equal((await foreman.status()).find((t) => t.id === task.id)?.state, "refused");
+
+  await foreman.verdict(task.id, "accept", "good enough as delivered");
+
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "closed");
+  const lastVerdict = (await foreman.events(task.id)).filter((e) => e.name === "verdict-recorded").at(-1);
+  assert.equal((lastVerdict?.details as { supersedesRefusal?: boolean }).supersedesRefusal, true);
+});
+
+test("wrong also rules on the earlier delivery when a later Inspector refusal superseded it", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector(["green", "refused"]);
+  const foreman = createForeman({ recordHome, inspector });
+  let version = 0;
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), `v${++version}\n`) });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
+
+  await recordVerdict(recordHome, task.id, "fix", "one more pass", { brain, inspector });
+  assert.equal((await foreman.status()).find((t) => t.id === task.id)?.state, "refused");
+
+  await foreman.verdict(task.id, "wrong", "not what I asked for after all");
+
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "closed");
+});
+
+// Fix 1 (issue: two fixes in the fix-round path): a fix round whose
+// worker leaves the branch exactly where it was must never hand that
+// same, already-reviewed commit back to Inspector - which otherwise only
+// draws a refusal.
+test("a fix round with no new commit skips Inspector and delivers 'nothing changed'", async () => {
+  const recordHome = freshHome();
+  const inspector = fixtureInspector();
+  const foreman = createForeman({ recordHome, inspector });
+  const round1 = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "v1\n") });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: round1 });
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "done");
+  assert.deepEqual(deliveryOf(recordHome, task.id)?.files, ["feature.txt"]);
+
+  const callsBefore = inspector.calls.length;
+  const inspectorCalledBefore = (await foreman.events(task.id)).filter((e) => e.name === "inspector-called").length;
+  const noopBrain = fakeBrain(); // no onWork at all: makes no changes
+  await recordVerdict(recordHome, task.id, "fix", "please double-check this", { brain: noopBrain, inspector });
+
+  assert.equal(inspector.calls.length, callsBefore, "Inspector was never called for a round with no new commit");
+
+  const events = (await foreman.events(task.id)).map((e) => e.name);
+  assert.equal(
+    events.filter((n) => n === "inspector-called").length,
+    inspectorCalledBefore,
+    "no new inspector-called event for a no-op fix round"
+  );
+  assert.equal(events.filter((n) => n === "delivered").length, 2, "the round still delivers, plainly");
+
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "nothing-changed");
+  assert.deepEqual(delivery?.files, ["feature.txt"], "the branch's prior real work still reports in files");
+
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "delivered", "still open for a verdict, same as any other delivered outcome");
 });
 
 // Issue #143: a task that failed before it ever reached a delivery
