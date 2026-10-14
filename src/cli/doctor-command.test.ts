@@ -242,3 +242,23 @@ test("detectCopy: a directory with neither .git nor build-info.json is installed
   const copy = detectCopy(dir, () => null);
   assert.deepEqual(copy, { kind: "installed", root: dir, branch: null, commit: null, version: "1.2.3" });
 });
+
+test("runningCopyCommit: exactly the commit detectCopy would compute for this root - the same question /api/version and fabrica up's stale-live-view check both ask", async () => {
+  const { runningCopyCommit } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-running-commit-"));
+  execFileSync("git", ["init"], { cwd: dir });
+  execFileSync("git", ["commit", "--allow-empty", "-m", "x", "--no-gpg-sign"], {
+    cwd: dir,
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  });
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+
+  assert.equal(runningCopyCommit(dir), head);
+});
+
+test("runningCopyCommit: null for an installed copy with no build-info.json, same as detectCopy", async () => {
+  const { runningCopyCommit } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-running-commit-bare-"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
+  assert.equal(runningCopyCommit(dir), null);
+});

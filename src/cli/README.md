@@ -274,10 +274,28 @@ view (`integrations/live-view`) the same detached way `fabrica do`
 backgrounds a task (`spawnDetachedLiveView`, reusing `spawn-detached.ts`'s
 mechanism), unless something is already listening on `127.0.0.1:7777` -
 checked with a real TCP probe, not a pid file, so a live view started by
-hand or a previous `fabrica up` is detected the same way - in which case
-its address is printed instead and no browser opens; a freshly started
-one gets its default browser opened once it's confirmed listening; (3)
-launches the chat harness in the foreground, in the current folder, with
+hand or a previous `fabrica up` is detected the same way. Listening isn't
+enough on its own to reuse it, though (a merge can leave a live view
+running yesterday's code behind, serving a blank page against today's
+record shape): the already-listening one is asked for its own commit via
+its `/api/version` (the same value `detectCopy`/`runningCopyCommit` give
+`fabrica doctor`'s "checkout" line) and compared against this copy's own.
+The same commit → reused, its address printed, no browser opens. A
+different commit, or no answer from that endpoint at all (a non-HTTP
+listener, a timeout) → it's stopped and replaced with a fresh one, exactly
+as if nothing had been listening. Stopping is never "kill whatever holds
+the port": `live-view-process.ts`'s `findLiveViewProcess` only trusts a
+pid a *live view itself* wrote to `<recordHome>/live-view.pid` (checked
+for both liveness and a matching real command line, via `ps`, before
+anything is signaled - a stale pid can be reused by an unrelated process),
+falling back to scanning every process's command line for the one
+instance that matches (the live view binds a port shared across record
+homes, so a different `FABRICA_HOME`'s own copy is still found this way).
+If neither identifies a real live view, `fabrica up` reports an error and
+touches nothing - never guesses by killing whatever is bound to the port.
+A freshly started live view gets its default browser opened once it's
+confirmed listening; (3) launches the chat harness in the foreground, in
+the current folder, with
 HANDBOOK.md's contents appended to its system prompt and this harness's
 own `settings.json` loaded, both through the harness's own documented
 command-line flags for an appended system prompt and a settings file
@@ -630,6 +648,7 @@ calls `runTask`.
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
+| `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |

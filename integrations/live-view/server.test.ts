@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +36,44 @@ function snapshotTree(dir: string): Record<string, { size: number; mtimeMs: numb
   walk(dir);
   return out;
 }
+
+test("startLiveView: /api/version reports this running copy's own commit - the real detectCopy-based computation by default", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/version`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    // This test runs inside this project's own git checkout, so the
+    // real commit is whatever HEAD currently is - the same ground
+    // truth src/cli/doctor-command.ts's own "checkout" line reports.
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    assert.equal(body.commit, head);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /api/version reports exactly whatever the commit override returns, overriding the real git lookup", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0, commit: () => "fixed-test-commit" });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/version`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { commit: "fixed-test-commit" });
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /api/version reports null, not a crash, when the commit override itself returns null", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0, commit: () => null });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/version`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { commit: null });
+  } finally {
+    await view.close();
+  }
+});
 
 test("startLiveView: binds only to 127.0.0.1, never to every interface", async () => {
   const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
@@ -257,6 +296,7 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
       fetch(`${base}/task.js`),
       fetch(`${base}/tasks/${taskId}`),
       fetch(`${base}/api/state`),
+      fetch(`${base}/api/version`),
       fetch(`${base}/api/tasks/${taskId}`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),
