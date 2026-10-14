@@ -285,6 +285,21 @@ command-line flags for an appended system prompt and a settings file
 nothing is ever written into the project folder's own session-config
 folder.
 
+Between steps (2) and (3), every `integrations/<name>/up-hook.ts` that
+exports a `maybeStart({ recordHome, env })` function is discovered the
+same way (`loadUpIntegrationHooks`, scanning `integrations/` instead of
+`skill/`) and called unconditionally - each hook decides for itself,
+silently, whether its own conditions are met (e.g. some outside tool's
+own environment sentinel) and does nothing at all otherwise. Unlike the
+harness launcher's "first usable one" (only one harness launches at a
+time), every hook found runs, since any number of optional integrations
+could each want to react to a session starting; a hook that fails to
+load or throws is reported to stderr but never stops `fabrica up` from
+reaching the harness. Deliberately not named here, or anywhere else
+under `src/`, for the same brain-word-scan reason the harness launcher
+isn't - see each shipped integration's own directory under
+`integrations/` for which ones exist and what each does.
+
 Which harness, and how to invoke it, is deliberately not named in
 `up-command.ts` itself - CONTRACT rule 8's brain-word scan covers all of
 `src/` outside `src/brain/adapters/`, and a harness's name is as much a

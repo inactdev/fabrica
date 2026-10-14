@@ -62,6 +62,7 @@ export function parseUpArgs(argv: string[]): void {
 const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HANDBOOK_PATH = join(CHECKOUT, "HANDBOOK.md");
 const SKILL_DIR = join(CHECKOUT, "skill");
+const INTEGRATIONS_DIR = join(CHECKOUT, "integrations");
 
 /** The one address the live view is ever documented to listen on
  * (integrations/live-view/server.ts's own DEFAULT_PORT) - duplicated as
@@ -127,6 +128,69 @@ export async function loadHarnessLauncher(skillDir: string = SKILL_DIR): Promise
     });
   }
   return { launcher: null, harnessDir: null, loadFailures };
+}
+
+/** An optional integration's own reaction to `fabrica up` starting a
+ * session - e.g. mirroring this record home into some other tool,
+ * started detached the same way the live view is, only when that other
+ * tool's own environment sentinel says it's present and nothing of its
+ * own is already running for this record home. Discovered the same way
+ * loadHarnessLauncher discovers skill/<harness>/launch.ts - by scanning
+ * a directory at runtime for a file exporting this shape - so that
+ * which integrations exist, and what they each need to decide whether
+ * to start, is never named here (CONTRACT rule 8's scan already governs
+ * src/ this way for a harness's name; the same reasoning applies to
+ * anything else under src/ that would otherwise have to name a
+ * particular outside tool). Must do nothing, silently, unless its own
+ * conditions are met - this is called unconditionally for every
+ * discovered hook. */
+export interface UpIntegrationHook {
+  maybeStart(opts: { recordHome: string; env: NodeJS.ProcessEnv }): void | Promise<void>;
+}
+
+function missingUpIntegrationHookExports(module: unknown): string[] {
+  const candidate = module as Partial<UpIntegrationHook> | null;
+  return typeof candidate?.maybeStart !== "function" ? ["maybeStart"] : [];
+}
+
+export interface UpIntegrationHookLookup {
+  hooks: UpIntegrationHook[];
+  loadFailures: { path: string; problem: string }[];
+}
+
+/** Every integrations/<name>/up-hook.ts that actually exports
+ * maybeStart - unlike loadHarnessLauncher's "first usable one" (only
+ * one harness can be launched at a time), every usable hook here runs,
+ * since any number of optional integrations could each want to react
+ * to a session starting. */
+export async function loadUpIntegrationHooks(integrationsDir: string = INTEGRATIONS_DIR): Promise<UpIntegrationHookLookup> {
+  const loadFailures: { path: string; problem: string }[] = [];
+  const hooks: UpIntegrationHook[] = [];
+  if (!existsSync(integrationsDir)) return { hooks, loadFailures };
+  for (const name of readdirSync(integrationsDir)) {
+    const dir = join(integrationsDir, name);
+    const hookPath = join(dir, "up-hook.ts");
+    if (!existsSync(hookPath)) continue;
+    let module: unknown = null;
+    try {
+      // pathToFileURL, not a plain path string - same reasoning as
+      // loadHarnessLauncher: import() parses its argument as a URL.
+      module = await import(pathToFileURL(hookPath).href);
+    } catch (err) {
+      loadFailures.push({ path: hookPath, problem: `could not be loaded: ${err instanceof Error ? err.message : String(err)}` });
+      continue;
+    }
+    const missing = missingUpIntegrationHookExports(module);
+    if (missing.length === 0) {
+      hooks.push(module as UpIntegrationHook);
+      continue;
+    }
+    loadFailures.push({
+      path: hookPath,
+      problem: `loaded, but exports no ${missing.join(" and no ")} - an up-hook script needs maybeStart`,
+    });
+  }
+  return { hooks, loadFailures };
 }
 
 function probePortListening(host: string, port: number, timeoutMs = 500): Promise<boolean> {
@@ -204,6 +268,18 @@ export interface RunUpCommandOptions {
   launcher?: HarnessLauncher;
   /** Test-only: the HANDBOOK.md read for the appended system prompt. */
   handbookPath?: string;
+  /** Test-only: the integrations/ directory scanned for a <name>/
+   * up-hook.ts, the same seam skillDir provides for the harness
+   * launcher. */
+  integrationsDir?: string;
+  /** Test-only: bypasses real up-hook discovery entirely, the same way
+   * the launcher option does for the harness launcher. */
+  upHooks?: UpIntegrationHook[];
+  /** The environment every discovered up-hook is handed, for deciding
+   * whether its own conditions are met. Defaults to this process's own
+   * - overridable so a test can simulate running inside some other
+   * tool's environment without actually needing to be run inside it. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Returns the process exit code - never throws. */
@@ -253,6 +329,25 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
     } else {
       stderr(`fabrica up: the live view did not start listening on 127.0.0.1:${port} in time - continuing anyway.`);
       stdout(`Live view may still be starting - ${liveViewUrl(port)}`);
+    }
+  }
+
+  // Step 2.5: any optional integration that wants to react to this
+  // session starting - e.g. mirroring it into some other tool - the
+  // same discovered-at-runtime, src/-never-names-it shape as the
+  // harness launcher below. A hook that fails to load, or throws, never
+  // stops the session from reaching the harness: it's best-effort,
+  // same posture as the browser-open step above.
+  const hookEnv = opts.env ?? process.env;
+  const foundHooks = opts.upHooks
+    ? { hooks: opts.upHooks, loadFailures: [] as { path: string; problem: string }[] }
+    : await loadUpIntegrationHooks(opts.integrationsDir ?? INTEGRATIONS_DIR);
+  for (const failure of foundHooks.loadFailures) stderr(`${failure.path} ${failure.problem}`);
+  for (const hook of foundHooks.hooks) {
+    try {
+      await hook.maybeStart({ recordHome, env: hookEnv });
+    } catch (err) {
+      stderr(`fabrica up: an integration hook failed to start: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

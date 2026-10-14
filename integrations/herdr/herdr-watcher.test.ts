@@ -5,12 +5,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { appendEvent, registerTask } from "../../src/record/index.ts";
-import { createHerdrWatcher } from "./herdr-watcher.ts";
+import { createHerdrWatcher, isHerdrWatcherRunning } from "./herdr-watcher.ts";
 
 const FAKE_HERDR = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-herdr.mjs");
 
@@ -108,6 +109,33 @@ test("a task this watcher never opened a pane for (received before it started) i
 
     assert.deepEqual(readCalls(), []);
   });
+});
+
+test("isHerdrWatcherRunning: false with no pid file at all", () => {
+  const recordHome = makeRecordHome();
+  assert.equal(isHerdrWatcherRunning(recordHome), false);
+});
+
+test("isHerdrWatcherRunning: true when the pid file names a real, live process", () => {
+  const recordHome = makeRecordHome();
+  writeFileSync(join(recordHome, "herdr-watcher.pid"), String(process.pid), "utf8");
+
+  assert.equal(isHerdrWatcherRunning(recordHome), true);
+});
+
+test("isHerdrWatcherRunning: false, and the stale file is removed, when the pid names a process that's gone", () => {
+  const recordHome = makeRecordHome();
+  // A real pid, guaranteed dead by the time this runs: spawn a trivial
+  // child and wait for it to exit.
+  const dead = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
+  const deadPid = dead.pid;
+  assert.ok(typeof deadPid === "number" && deadPid > 0);
+
+  const pidFile = join(recordHome, "herdr-watcher.pid");
+  writeFileSync(pidFile, String(deadPid), "utf8");
+
+  assert.equal(isHerdrWatcherRunning(recordHome), false);
+  assert.equal(existsSync(pidFile), false, "a stale pid file should be cleaned up");
 });
 
 test("createHerdrWatcher refuses to start with no pane to split from", () => {

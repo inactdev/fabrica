@@ -18,6 +18,7 @@
 // only depends on them.
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -206,9 +207,55 @@ function parseLine(line: string): FabricaEvent | null {
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
+const PID_FILE_NAME = "herdr-watcher.pid";
+
+function pidFilePath(recordHome: string): string {
+  return join(recordHome, PID_FILE_NAME);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    // Signal 0 sends nothing - it only reports whether a process with
+    // this pid exists (ESRCH if not), the standard liveness check this
+    // has no safer alternative to (see up-hook.ts's own reasoning).
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means a process with this pid exists but isn't ours to
+    // signal - still alive, just not killable by us.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** Whether a herdr watcher is already running for this record home,
+ * read from the pid file `main()` writes on startup and checked for
+ * real liveness rather than trusted at face value - a watcher that was
+ * killed outright (not through its own exit) would otherwise leave a
+ * stale file claiming forever that one is already running. A stale
+ * file is removed so the next start writes a fresh one. */
+export function isHerdrWatcherRunning(recordHome: string): boolean {
+  const path = pidFilePath(recordHome);
+  if (!existsSync(path)) return false;
+  const pid = Number(readFileSync(path, "utf8").trim());
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (isProcessAlive(pid)) return true;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Best-effort cleanup only - a failed unlink just means the next
+    // check re-does this same work, not a problem.
+  }
+  return false;
+}
+
+function writePidFile(recordHome: string): void {
+  writeFileSync(pidFilePath(recordHome), String(process.pid), "utf8");
+}
+
 function main(): void {
   const recordHome = process.env.FABRICA_HOME?.trim() || join(homedir(), ".fabrica");
   const watcher = createHerdrWatcher({ recordHome });
+  writePidFile(recordHome);
   setInterval(() => watcher.pollOnce(), DEFAULT_POLL_INTERVAL_MS);
 }
 

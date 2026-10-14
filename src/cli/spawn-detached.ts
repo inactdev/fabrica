@@ -178,3 +178,43 @@ export function spawnDetachedLiveView(opts: SpawnDetachedLiveViewOptions): void 
   });
   child.unref();
 }
+
+export interface SpawnDetachedScriptOptions {
+  recordHome: string;
+  entryScript: string;
+  /** Extra environment for the detached child, merged over this
+   * process's own env - the same inheritance spawnDetachedLiveView
+   * already relies on to carry FABRICA_HOME through to its own child
+   * (and, for a caller spawned from inside some other environment,
+   * whatever that environment already set on this process). */
+  env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * The same detached-and-forgotten mechanism as spawnDetachedLiveView
+ * (`detached: true` + stdio redirected to <recordHome>/cli.log +
+ * unref'd, so closing the terminal that started it can't take it down
+ * either), generalized to any entry script. This is the seam an
+ * integrations/ module reaches for when it needs to background its own
+ * long-running process the same way `fabrica up` backgrounds the live
+ * view - kept as its own function, rather than folding
+ * spawnDetachedLiveView's existing body into it, so that function's own
+ * already-tested behavior and error wording are untouched by this.
+ */
+export function spawnDetachedScript(opts: SpawnDetachedScriptOptions): void {
+  const { recordHome, entryScript, env } = opts;
+
+  mkdirSync(recordHome, { recursive: true });
+  const logFd = openSync(join(recordHome, "cli.log"), "a");
+  const child = spawn(process.execPath, [BOOTSTRAP, entryScript], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: { ...process.env, ...env },
+  });
+  closeSync(logFd);
+
+  child.on("error", (err: NodeJS.ErrnoException) => {
+    console.error(`fabrica: could not start the background process for "${entryScript}" (${err.code ?? err.message}).`);
+  });
+  child.unref();
+}
