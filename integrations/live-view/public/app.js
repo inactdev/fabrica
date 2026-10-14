@@ -1,10 +1,10 @@
 // Plain JavaScript, no framework, no build step. Polls the server every
-// 2 seconds. The only thing this page ever sends the server is which task
-// id (if any) is currently expanded, and only to read that one task back -
-// there are no forms and no other requests, to this server or anyone else.
+// 2 seconds. The only thing this page ever sends the server is an
+// ordinary GET for /api/state - the active filter and "now" used for the
+// age column are purely local UI state, never sent anywhere.
 
 const POLL_MS = 2000;
-let expandedTaskId = null;
+let activeFilter = "all";
 
 function el(tag, props, children) {
   const node = document.createElement(tag);
@@ -19,6 +19,35 @@ function el(tag, props, children) {
   return node;
 }
 
+// Mirrors src/cli/render.ts's formatAge - a compact, human age like "3s",
+// "12m", "4h15m" - duplicated here (a plain script with no build step
+// can't import across the src/ boundary) rather than invented fresh.
+function formatAge(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  const remMinutes = totalMinutes % 60;
+  if (totalHours < 24) return remMinutes > 0 ? `${totalHours}h${remMinutes}m` : `${totalHours}h`;
+  const days = Math.floor(totalHours / 24);
+  const remHours = totalHours % 24;
+  return remHours > 0 ? `${days}d${remHours}h` : `${days}d`;
+}
+
+// The DisplayState string (record-view.ts) to a flat, CSS-safe state
+// class - the one color each row's state word gets.
+const STATE_CLASS = {
+  working: "state-working",
+  "asked a question": "state-asking",
+  delivered: "state-delivered",
+  failed: "state-failed",
+  stopped: "state-stopped",
+  "closed (accept)": "state-accept",
+  "closed (wrong)": "state-wrong",
+  closed: "state-closed",
+};
+
 function renderSpend(spend) {
   const bits = [`Today: ${spend.dailyLabel}`];
   bits.push(spend.perDayCapUsd === undefined ? "(no daily cap set)" : `of $${spend.perDayCapUsd.toFixed(2)} daily cap`);
@@ -26,72 +55,45 @@ function renderSpend(spend) {
   document.getElementById("spend").textContent = bits.join(" ");
 }
 
-// The one phrase that covers both "which attempt" and "cost so far" when
-// there's genuinely nothing to report yet - gated on costLabel itself
-// (the literal source of that phrase), not on task.attempt, since an
-// attempt already in flight (a heartbeat, no receipt yet) can have a real
-// attempt number while its cost is still "no attempts yet".
-function taskMetaLine(task) {
-  const bits = [task.project || "unknown project"];
-  if (task.costLabel === "no attempts yet") {
-    bits.push("no attempts yet");
-    return bits.join("  ·  ");
-  }
-  bits.push(task.attempt === null ? "no attempts yet" : `attempt ${task.attempt}`);
-  const costBits = [task.costLabel];
-  if (task.perTaskCapUsd !== undefined) costBits.push(`of $${task.perTaskCapUsd.toFixed(2)} cap`);
-  bits.push(costBits.join(" "));
-  return bits.join("  ·  ");
+function renderTaskRow(task, now) {
+  const age = el("span", { className: "col-dim" }, [formatAge(now - task.lastActivityMs)]);
+  const state = el("span", { className: `col-kind ${STATE_CLASS[task.state] || ""}` }, [task.state]);
+  const title = el("span", { className: "col-title" }, [task.title]);
+  const line = el("div", { className: "row-line" }, [age, state, title]);
+  return el("div", { className: "row", onclick: () => { location.href = `/tasks/${task.id}`; } }, [line]);
 }
 
-function renderWriteup(writeup) {
-  const section = (label, text) =>
-    el("p", { className: "writeup-section" }, [el("span", { className: "writeup-label" }, [`${label}: `]), text]);
-  return el("div", { className: "writeup" }, [section("What", writeup.what), section("Why", writeup.why), section("How", writeup.how)]);
-}
-
-function renderExpanded(task) {
-  const children = [
-    el("p", { className: "task-text" }, [task.taskText || "(no task text)"]),
-    el("p", { className: "task-meta" }, [taskMetaLine(task)]),
-  ];
-  if (task.prUrl) children.push(el("p", { className: "task-meta" }, [el("a", { href: task.prUrl }, [task.prUrl])]));
-  if (task.writeup) children.push(renderWriteup(task.writeup));
-  children.push(el("p", { className: "task-meta" }, [el("a", { href: `/tasks/${task.id}` }, ["Full details and transcript →"])]));
-  return el("div", { className: "task-expanded" }, children);
-}
-
-// Each row shows only the title and the state word - nothing else, so
-// rows stay short and the state actually stands out. Everything else is
-// one click away, either inline (renderExpanded) or on the task's own
-// page (/tasks/<id>, for the transcript).
-function renderTask(task) {
-  const row = el("p", { className: "task-row" }, [el("span", { className: "task-title" }, [task.title]), el("span", { className: "state" }, [task.state])]);
-  const children = [row];
-  if (task.id === expandedTaskId) children.push(renderExpanded(task));
-  return el("div", { className: "task", onclick: () => toggleTask(task.id) }, children);
-}
-
-function toggleTask(taskId) {
-  expandedTaskId = expandedTaskId === taskId ? null : taskId;
-  if (window.__lastState) renderTasks(window.__lastState);
+function matchesFilter(task) {
+  if (activeFilter === "open") return !task.finished;
+  if (activeFilter === "history") return task.finished;
+  return true;
 }
 
 function renderTasks(state) {
   window.__lastState = state;
   renderSpend(state.spend);
 
-  const open = state.tasks.filter((t) => !t.finished);
-  const history = state.tasks.filter((t) => t.finished);
+  const shown = state.tasks.filter(matchesFilter);
+  document.getElementById("count").textContent = String(shown.length);
 
-  const openContainer = document.getElementById("open-tasks");
-  openContainer.replaceChildren(...(open.length ? open.map(renderTask) : [el("p", { className: "empty" }, ["No open tasks."])]));
-
-  const historyContainer = document.getElementById("history-tasks");
-  historyContainer.replaceChildren(
-    ...(history.length ? history.map(renderTask) : [el("p", { className: "empty" }, ["No finished tasks yet."])])
+  const container = document.getElementById("tasks");
+  container.replaceChildren(
+    ...(shown.length ? shown.map((task) => renderTaskRow(task, state.now)) : [el("p", { className: "empty" }, ["No tasks to show."])])
   );
 }
+
+function setActiveFilter(filter) {
+  activeFilter = filter;
+  for (const btn of document.querySelectorAll(".filter-btn")) {
+    btn.classList.toggle("active", btn.dataset.filter === filter);
+  }
+  if (window.__lastState) renderTasks(window.__lastState);
+}
+
+for (const btn of document.querySelectorAll(".filter-btn")) {
+  btn.addEventListener("click", () => setActiveFilter(btn.dataset.filter));
+}
+setActiveFilter("all");
 
 function showError(message) {
   const errorEl = document.getElementById("error");

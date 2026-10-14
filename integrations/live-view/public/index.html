@@ -6,22 +6,23 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-  <h1>Fabrica — live view</h1>
-  <p id="spend">Loading…</p>
-  <p id="error" hidden></p>
+<header class="toolbar">
+  <div class="toolbar-row">
+    <span class="toolbar-title">Tasks · <span id="count">0</span></span>
+    <div class="filters">
+      <button class="filter-btn" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="open">Open</button>
+      <button class="filter-btn" data-filter="history">History</button>
+    </div>
+  </div>
+  <div class="toolbar-row toolbar-sub">
+    <span id="spend">Loading…</span>
+    <span id="error" hidden></span>
+  </div>
 </header>
 
 <main>
-  <section>
-    <h2>Open</h2>
-    <div id="open-tasks"></div>
-  </section>
-
-  <section>
-    <h2>History</h2>
-    <div id="history-tasks"></div>
-  </section>
+  <div id="tasks"></div>
 </main>
 
 <script src="/app.js"></script>
