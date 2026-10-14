@@ -7,9 +7,10 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
 import { TASK_ID_PATTERN } from "../../src/index.ts";
+import { runningCopyCommit } from "../../src/cli/doctor-command.ts";
 import { createRecordView } from "./record-view.ts";
 
 export const DEFAULT_PORT = 7777;
@@ -18,6 +19,10 @@ export const DEFAULT_PORT = 7777;
 const HOST = "127.0.0.1";
 
 const PUBLIC_DIR = fileURLToPath(new URL("./public", import.meta.url));
+/** Two levels up from this file to the repo root - the same relative
+ * depth src/cli/doctor-command.ts's own CHECKOUT is computed at, so
+ * both land on the same path for the same checkout. */
+const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/": { file: "index.html", contentType: "text/html; charset=utf-8" },
@@ -47,10 +52,15 @@ export interface LiveView {
  * parameter anywhere in this function's signature, so there is no way
  * for a caller to ask for anything else. `port` defaults to 7777 (the
  * documented address) but tests pass 0 for an OS-assigned one so many
- * can run at once without colliding. */
-export function startLiveView(opts: { recordHome: string; port?: number }): Promise<LiveView> {
+ * can run at once without colliding. `commit` defaults to this running
+ * copy's real commit (src/cli/doctor-command.ts's `runningCopyCommit`,
+ * the exact value `fabrica doctor`'s own "checkout" line reports) -
+ * overridable so a test can make /api/version answer a fixed value
+ * without depending on this checkout's real git state. */
+export function startLiveView(opts: { recordHome: string; port?: number; commit?: () => string | null }): Promise<LiveView> {
   const view = createRecordView(opts.recordHome);
-  const server = createServer((req, res) => handleRequest(req, res, view));
+  const commit = opts.commit ?? (() => runningCopyCommit(CHECKOUT));
+  const server = createServer((req, res) => handleRequest(req, res, view, commit));
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -66,11 +76,25 @@ export function startLiveView(opts: { recordHome: string; port?: number }): Prom
   });
 }
 
-function handleRequest(req: IncomingMessage, res: ServerResponse, view: ReturnType<typeof createRecordView>): void {
+function handleRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  view: ReturnType<typeof createRecordView>,
+  commit: () => string | null
+): void {
   const url = new URL(req.url ?? "/", `http://${HOST}`);
 
   if (req.method !== "GET") {
     send(res, 405, "text/plain; charset=utf-8", "This server only ever reads - only GET is supported.");
+    return;
+  }
+
+  if (url.pathname === "/api/version") {
+    // What `fabrica up` compares its own running commit against, to
+    // tell a live view running the current code from a stale one left
+    // over from before a merge (issue: "fabrica up must never reuse a
+    // live view running older code").
+    send(res, 200, "application/json", JSON.stringify({ commit: commit() }));
     return;
   }
 
