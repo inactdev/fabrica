@@ -1,9 +1,13 @@
 // `fabrica await <id>`: waits until the task needs the Client - delivered,
-// asked a question, or failed - then exits, printing exactly one line
-// naming which and what to do about it. Never exits for a heartbeat or
-// any other event along the way (HANDBOOK.md's case 1 runs this as a
-// background command precisely so the assistant learns the moment one of
-// those three happens, without polling `fabrica status` itself).
+// asked a question, failed, already closed, or refused by Inspector -
+// then exits, printing exactly one line naming which and what to do
+// about it. Never exits for a heartbeat or any other event along the way
+// (HANDBOOK.md's case 1 runs this as a background command precisely so
+// the assistant learns the moment one of those happens, without polling
+// `fabrica status` itself). "closed" and "refused" are included
+// specifically so awaiting a task that already reached one of those two
+// terminal states - nothing the three original lines named - exits at
+// once instead of polling forever (Client ruling, follow-up review).
 //
 // Same read-only polling discipline as `fabrica watch`: this process only
 // ever reads the record (events.jsonl, via the same followTask a poll
@@ -20,12 +24,14 @@ import type { FabricaTask } from "../index.ts";
 export const AWAIT_HELP = `Usage: ${AWAIT_USAGE}
 
 Waits until the task needs you - delivered, asking a clarifying
-question, or failed - then exits, printing exactly one line naming
-which and what to do about it:
+question, failed, already closed, or refused by Inspector - then
+exits, printing exactly one line naming which and what to do about it:
 
   <id> delivered - awaiting your verdict
   <id> asked a question - answer with fabrica answer <id>
   <id> failed - see fabrica log <id>
+  <id> is already closed
+  <id> was refused by Inspector - see fabrica log <id>
 
 Never exits for a heartbeat or any other event along the way, and exits
 immediately if the task is already in one of those states when it
@@ -50,7 +56,7 @@ export interface RunAwaitCommandOptions {
   stderr?: (line: string) => void;
 }
 
-type AwaitableState = "delivered" | "asking" | "failed";
+type AwaitableState = "delivered" | "asking" | "failed" | "closed" | "refused";
 
 function noticeFor(taskId: string, state: AwaitableState): string {
   switch (state) {
@@ -60,11 +66,17 @@ function noticeFor(taskId: string, state: AwaitableState): string {
       return `${taskId} asked a question - answer with fabrica answer ${taskId}`;
     case "failed":
       return `${taskId} failed - see fabrica log ${taskId}`;
+    case "closed":
+      return `${taskId} is already closed`;
+    case "refused":
+      return `${taskId} was refused by Inspector - see fabrica log ${taskId}`;
   }
 }
 
+const AWAITABLE_STATES: readonly AwaitableState[] = ["delivered", "asking", "failed", "closed", "refused"];
+
 function awaitableStateOf(state: FabricaTask["state"]): AwaitableState | null {
-  return state === "delivered" || state === "asking" || state === "failed" ? state : null;
+  return (AWAITABLE_STATES as readonly string[]).includes(state) ? (state as AwaitableState) : null;
 }
 
 /** Returns the process exit code - never throws. */

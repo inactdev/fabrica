@@ -1,6 +1,7 @@
 // runAwaitCommand end to end. The command's whole job: stay silent
-// through anything that isn't one of the three states the Client needs
-// to act on, and print exactly one line, then exit, the moment one of
+// through anything that isn't one of the five states the Client needs
+// to act on or already knows about (delivered, asking, failed, closed,
+// refused), and print exactly one line, then exit, the moment one of
 // them lands - immediately if the task already started there.
 
 import { test } from "node:test";
@@ -86,6 +87,45 @@ test("runAwaitCommand: a task with a real failed delivery also exits with the fa
 
   assert.equal(code, 0);
   assert.deepEqual(io.out, ["t1 failed - see fabrica log t1"]);
+});
+
+// Client ruling, follow-up review: before this, `fabrica await` named no
+// line at all for "closed" or "refused" - either one meant polling
+// forever even though neither can ever move again.
+test("runAwaitCommand: a task already closed (verdict recorded) when it starts exits at once", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { outcome: "done", delivery: { confidence: 100, summary: "done", branch: "fabrica/t1", files: [] } },
+  });
+  appendEvent(recordHome, { taskId: "t1", name: "verdict-recorded", details: { ruling: "accept", note: "good" } });
+
+  const io = captureIo();
+  const code = await runAwaitCommand(["t1"], { recordHome, pollIntervalMs: 10, ...io });
+
+  assert.equal(code, 0);
+  assert.deepEqual(io.out, ["t1 is already closed"]);
+});
+
+test("runAwaitCommand: a task already refused by Inspector when it starts exits at once", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, { taskId: "t1", name: "inspector-called", details: { branch: "fabrica/t1" } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "inspection-finished",
+    details: { verdict: "refused", report: "GITHUB_TOKEN is missing" },
+  });
+
+  const io = captureIo();
+  const code = await runAwaitCommand(["t1"], { recordHome, pollIntervalMs: 10, ...io });
+
+  assert.equal(code, 0);
+  assert.deepEqual(io.out, ["t1 was refused by Inspector - see fabrica log t1"]);
 });
 
 test("runAwaitCommand: heartbeats alone never trigger an exit", async () => {
