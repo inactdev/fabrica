@@ -1,10 +1,23 @@
-// Plain JavaScript, no framework, no build step. Polls the server every
-// 2 seconds. The only thing this page ever sends the server is an
-// ordinary GET for /api/state - the active filter and "now" used for the
-// age column are purely local UI state, never sent anywhere.
+// Plain JavaScript, no framework, no build step. Shared by both list pages
+// (index.html = the live, open-tasks page; history.html = finished tasks)
+// - which one decides the fetch endpoint and the empty-state wording, read
+// straight off location.pathname; the server itself is what actually keeps
+// an open task off /history and a finished one off /, not this script (see
+// server.ts's /api/state vs /api/history). Polls every 2 seconds. The only
+// thing this page ever sends the server is an ordinary GET - "now" (for
+// the age column) comes back from the server's own response, never sent.
+//
+// Every poll re-fetches the full list, but a task's existing row is never
+// torn down and rebuilt - only the specific text/class that actually
+// changed gets written, and a write is skipped entirely when the new value
+// equals the old one. That's what stops a steady 2-second poll from
+// jumping the page while someone's reading it: an unchanged row is never
+// touched at all.
 
 const POLL_MS = 2000;
-let activeFilter = "all";
+const IS_HISTORY = location.pathname === "/history";
+const STATE_ENDPOINT = IS_HISTORY ? "/api/history" : "/api/state";
+const EMPTY_MESSAGE = IS_HISTORY ? "No finished tasks yet." : "No open tasks.";
 
 function el(tag, props, children) {
   const node = document.createElement(tag);
@@ -48,52 +61,125 @@ const STATE_CLASS = {
   closed: "state-closed",
 };
 
+// Mirrors integrations/live-view/display.ts's stateSymbol/rowEmphasis -
+// duplicated here for the same reason formatAge above is: a plain script
+// with no build step can't import the tested .ts copy. "working" has no
+// text glyph - its indicator is the CSS-drawn spinner (symbol-spin) below.
+const STATE_SYMBOL = {
+  working: { text: "", cls: "symbol-spin" },
+  "asked a question": { text: "?", cls: "symbol-question" },
+  delivered: { text: "✓", cls: "symbol-check" },
+  failed: { text: "✗", cls: "symbol-failed" },
+  stopped: { text: "●", cls: "symbol-dot" },
+  "closed (accept)": { text: "●", cls: "symbol-dot" },
+  "closed (wrong)": { text: "●", cls: "symbol-dot" },
+  closed: { text: "●", cls: "symbol-dot" },
+};
+
+function rowEmphasisClass(state) {
+  if (state === "failed" || state === "asked a question") return "row-emphasis";
+  if (state === "closed (accept)" || state === "closed (wrong)" || state === "closed") return "row-fade";
+  return "";
+}
+
 function renderSpend(spend) {
+  const spendEl = document.getElementById("spend");
+  if (!spendEl) return; // history.html has no spend line
   const bits = [`Today: ${spend.dailyLabel}`];
   bits.push(spend.perDayCapUsd === undefined ? "(no daily cap set)" : `of $${spend.perDayCapUsd.toFixed(2)} daily cap`);
   if (spend.perTaskCapUsd !== undefined) bits.push(`— per-task cap $${spend.perTaskCapUsd.toFixed(2)}`);
-  document.getElementById("spend").textContent = bits.join(" ");
+  const text = bits.join(" ");
+  if (spendEl.textContent !== text) spendEl.textContent = text;
 }
 
-function renderTaskRow(task, now) {
-  const age = el("span", { className: "col-dim" }, [formatAge(now - task.lastActivityMs)]);
-  const state = el("span", { className: `col-kind ${STATE_CLASS[task.state] || ""}` }, [task.state]);
-  const title = el("span", { className: "col-title" }, [task.title]);
-  const line = el("div", { className: "row-line" }, [age, state, title]);
-  return el("div", { className: "row", onclick: () => { location.href = `/tasks/${task.id}`; } }, [line]);
+// One entry per task currently rendered as a row - kept across polls so an
+// unchanged task's DOM node is reused rather than recreated, and so each
+// displayed field can be compared against what's already on screen before
+// writing to it.
+const rows = new Map();
+
+function buildRow(taskId) {
+  const ageEl = el("span", { className: "col-dim" }, [""]);
+  const symbolEl = el("span", { className: "state-symbol" }, [""]);
+  const stateEl = el("span", { className: "col-kind" }, [""]);
+  const stateWrap = el("span", { className: "state-wrap" }, [symbolEl, stateEl]);
+  const titleEl = el("span", { className: "col-title" }, [""]);
+  const line = el("div", { className: "row-line" }, [ageEl, stateWrap, titleEl]);
+  const rowEl = el("div", { className: "row", onclick: () => { location.href = `/tasks/${taskId}`; } }, [line]);
+  return { el: rowEl, ageEl, symbolEl, stateEl, titleEl, last: {} };
 }
 
-function matchesFilter(task) {
-  if (activeFilter === "open") return !task.finished;
-  if (activeFilter === "history") return task.finished;
-  return true;
+function setText(node, lastKey, refs, value) {
+  if (refs.last[lastKey] === value) return;
+  node.textContent = value;
+  refs.last[lastKey] = value;
+}
+
+function setClass(node, lastKey, refs, value) {
+  if (refs.last[lastKey] === value) return;
+  node.className = value;
+  refs.last[lastKey] = value;
+}
+
+function updateRow(refs, task, now) {
+  setText(refs.ageEl, "age", refs, formatAge(now - task.lastActivityMs));
+
+  const symbol = STATE_SYMBOL[task.state] || { text: "", cls: "" };
+  setText(refs.symbolEl, "symbolText", refs, symbol.text);
+  setClass(refs.symbolEl, "symbolCls", refs, `state-symbol ${symbol.cls}`);
+
+  setText(refs.stateEl, "stateText", refs, task.state);
+  setClass(refs.stateEl, "stateCls", refs, `col-kind ${STATE_CLASS[task.state] || ""}`);
+
+  setText(refs.titleEl, "title", refs, task.title);
+
+  setClass(refs.el, "rowCls", refs, `row ${rowEmphasisClass(task.state)}`.trim());
 }
 
 function renderTasks(state) {
-  window.__lastState = state;
   renderSpend(state.spend);
 
-  const shown = state.tasks.filter(matchesFilter);
-  document.getElementById("count").textContent = String(shown.length);
+  const countEl = document.getElementById("count");
+  const countText = String(state.tasks.length);
+  if (countEl.textContent !== countText) countEl.textContent = countText;
 
   const container = document.getElementById("tasks");
-  container.replaceChildren(
-    ...(shown.length ? shown.map((task) => renderTaskRow(task, state.now)) : [el("p", { className: "empty" }, ["No tasks to show."])])
-  );
-}
 
-function setActiveFilter(filter) {
-  activeFilter = filter;
-  for (const btn of document.querySelectorAll(".filter-btn")) {
-    btn.classList.toggle("active", btn.dataset.filter === filter);
+  if (state.tasks.length === 0) {
+    for (const refs of rows.values()) refs.el.remove();
+    rows.clear();
+    if (!container.querySelector(".empty")) {
+      container.replaceChildren(el("p", { className: "empty" }, [EMPTY_MESSAGE]));
+    }
+    return;
   }
-  if (window.__lastState) renderTasks(window.__lastState);
-}
 
-for (const btn of document.querySelectorAll(".filter-btn")) {
-  btn.addEventListener("click", () => setActiveFilter(btn.dataset.filter));
+  const existingEmpty = container.querySelector(".empty");
+  if (existingEmpty) existingEmpty.remove();
+
+  const seen = new Set();
+  let prevEl = null;
+  for (const task of state.tasks) {
+    seen.add(task.id);
+    let refs = rows.get(task.id);
+    if (!refs) {
+      refs = buildRow(task.id);
+      rows.set(task.id, refs);
+    }
+    updateRow(refs, task, state.now);
+
+    const expectedNext = prevEl ? prevEl.nextSibling : container.firstChild;
+    if (expectedNext !== refs.el) container.insertBefore(refs.el, expectedNext);
+    prevEl = refs.el;
+  }
+
+  for (const [id, refs] of rows) {
+    if (!seen.has(id)) {
+      refs.el.remove();
+      rows.delete(id);
+    }
+  }
 }
-setActiveFilter("all");
 
 function showError(message) {
   const errorEl = document.getElementById("error");
@@ -108,7 +194,7 @@ function clearError() {
 }
 
 async function loadState() {
-  const res = await fetch("/api/state");
+  const res = await fetch(STATE_ENDPOINT);
   if (!res.ok) return;
   const state = await res.json();
   if (state.error) {

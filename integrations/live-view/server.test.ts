@@ -190,6 +190,52 @@ test("startLiveView: an unknown task id's transcript is a 404, not a crash", asy
   }
 });
 
+test("startLiveView: /api/state only ever lists open tasks, /api/history only ever lists finished ones", async () => {
+  const recordHome = tempRecordHome();
+
+  const working = registerTask(recordHome, "still working").id;
+  appendEvent(recordHome, { taskId: working, name: "work-started", details: { project: "/p" } });
+
+  const asking = registerTask(recordHome, "asked something").id;
+  appendEvent(recordHome, { taskId: asking, name: "questions-asked", details: { questions: ["q?"] } });
+
+  const delivered = registerTask(recordHome, "delivered something").id;
+  appendEvent(recordHome, { taskId: delivered, name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, { taskId: delivered, name: "delivered", details: { outcome: "done" } });
+
+  const failed = registerTask(recordHome, "failed to ask").id;
+  appendEvent(recordHome, { taskId: failed, name: "ask-failed", details: { error: "no credentials" } });
+
+  const closed = registerTask(recordHome, "closed out").id;
+  appendEvent(recordHome, { taskId: closed, name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, { taskId: closed, name: "delivered", details: { outcome: "done" } });
+  appendEvent(recordHome, { taskId: closed, name: "verdict-recorded", details: { ruling: "accept" } });
+
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const openBody = await (await fetch(`http://127.0.0.1:${view.port}/api/state`)).json();
+    const openIds = openBody.tasks.map((t: { id: string }) => t.id).sort();
+    assert.deepEqual(openIds, [asking, delivered, working].sort());
+
+    const historyBody = await (await fetch(`http://127.0.0.1:${view.port}/api/history`)).json();
+    const historyIds = historyBody.tasks.map((t: { id: string }) => t.id).sort();
+    assert.deepEqual(historyIds, [closed, failed].sort());
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /history serves the history page", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
+  try {
+    const page = await fetch(`http://127.0.0.1:${view.port}/history`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /<html/);
+  } finally {
+    await view.close();
+  }
+});
+
 test("startLiveView: /api/tasks/<id> answers a known task's full view, and 404s an unknown one", async () => {
   const recordHome = tempRecordHome();
   const taskId = registerTask(recordHome, "look at me directly").id;
@@ -252,11 +298,13 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
 
     await Promise.all([
       fetch(`${base}/`),
+      fetch(`${base}/history`),
       fetch(`${base}/app.js`),
       fetch(`${base}/style.css`),
       fetch(`${base}/task.js`),
       fetch(`${base}/tasks/${taskId}`),
       fetch(`${base}/api/state`),
+      fetch(`${base}/api/history`),
       fetch(`${base}/api/tasks/${taskId}`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),
