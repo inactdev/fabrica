@@ -1,7 +1,7 @@
 /* Dense event-log styling, colors and layout only - no new data is read
    or requested anywhere in this file or its scripts. Completely flat: no
    borders but the one hairline row divider, no rounded corners, no
-   shadows, no gradients. One monospace font, small text, dark background
+   shadows, no gradients. One base font, small text, dark background
    throughout. Color is reserved for state/kind words. */
 
 :root {
@@ -27,9 +27,9 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: ui-sans-serif, system-ui, ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-weight: normal;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.4;
 }
 
