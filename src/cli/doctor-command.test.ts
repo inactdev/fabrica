@@ -39,7 +39,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
 }
 
 function healthyProject(): string {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { origin: false });
   execFileSync("git", ["remote", "add", "origin", "https://example.invalid/demo.git"], { cwd: project });
   return project;
 }
@@ -88,11 +88,11 @@ for (const name of ["node", "checkout", "docker", "workerImage", "workerToken", 
 test("fabrica doctor: each registered project is checked - path, git root, a check, and an origin remote", async () => {
   const missing = join(mkdtempSync(join(tmpdir(), "fabrica-doctor-gone-")), "nowhere");
   const notGit = mkdtempSync(join(tmpdir(), "fabrica-doctor-notgit-"));
-  const noCheck = makeFixtureRepo("exit 0", { inspector: false });
+  const noCheck = makeFixtureRepo("exit 0", { inspector: false, origin: false });
   rmSync(join(noCheck, "check.sh"));
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "drop check"], { cwd: noCheck });
   execFileSync("git", ["remote", "add", "origin", "https://example.invalid/x.git"], { cwd: noCheck });
-  const noOrigin = makeFixtureRepo("exit 0");
+  const noOrigin = makeFixtureRepo("exit 0", { origin: false });
   const home = recordHome(
     `[caps]\nperDayUsd = 25\n\n` +
       `[projects.missing]\npath = "${missing}"\ncheck = "./check.sh"\n\n` +

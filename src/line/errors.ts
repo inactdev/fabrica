@@ -7,6 +7,7 @@ export type LineErrorCode =
   | "home-not-found"
   | "not-a-repo"
   | "workdir-exists"
+  | "fetch-failed"
   | "cut-failed"
   | "no-such-branch"
   | "unsafe-teardown"

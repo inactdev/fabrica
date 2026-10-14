@@ -306,12 +306,18 @@ test("a sanitized config shadow-mount keeps git working but hides remote URLs an
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
 
   const project = makeFixtureProject();
-  const fakeCredential = "FAKE_EMBEDDED_CREDENTIAL";
-  execFileSync("git", ["remote", "add", "origin", `https://x-token:${fakeCredential}@example.invalid/repo.git`], {
-    cwd: project,
-  });
   const recordHome = makeFixtureHome();
   const line = createProductionLine({ project, taskId: "worktree-git-sanitized", recordHome });
+  // Swapped in only now, after the line is cut - createProductionLine
+  // itself needs a real, fetchable origin (see src/line/cut.ts), while
+  // this test needs the project's config to carry a credential-bearing
+  // URL for the sanitization check below. resolveCommonGitDir/
+  // writeSanitizedGitConfig read the shared .git/config fresh at call
+  // time, so swapping the URL after the cut is just as good a proof.
+  const fakeCredential = "FAKE_EMBEDDED_CREDENTIAL";
+  execFileSync("git", ["remote", "set-url", "origin", `https://x-token:${fakeCredential}@example.invalid/repo.git`], {
+    cwd: project,
+  });
 
   try {
     const commonGitDir = resolveCommonGitDir(line.workdir);

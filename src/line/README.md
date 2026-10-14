@@ -11,8 +11,25 @@ damages your actual work instead of a copy.
 Creates the throwaway copy: a git *worktree* linked to `project`,
 checked out on a fresh branch named `fabrica/<taskId>`. A worktree is
 git's own mechanism for a second working directory that shares one
-repository's history with the first - no clone time, and it starts from
-exactly whatever commit `project` currently has checked out.
+repository's history with the first - no clone time.
+
+A new task's branch is cut from `origin`'s default branch, never from
+whatever `project`'s local checkout happens to have checked out:
+`createProductionLine` first runs `git fetch origin`, then reads the
+remote's own default branch via `git ls-remote --symref origin HEAD`
+(never assumed to be "master" - a project's default branch may be
+"main", or anything else). The worktree is created from
+`origin/<that branch>` with `--no-track` (a one-off task branch has no
+business tracking origin's default branch for push/pull, and skipping it
+avoids a config-file write/lock two concurrent creates from the same
+project could otherwise collide over). Either step failing - no "origin"
+remote, an unreachable one, a remote with no readable HEAD symref -
+throws `LineError("fetch-failed")` *before* the task's working folder is
+created at all; it never falls back to the local checkout. This matters
+because the Client's own checkout can be on any branch, or any number of
+commits behind origin, at the moment a task starts - two tasks started
+from the same clone must still get the same base, not whichever commit
+happened to be checked out when each one ran.
 
 The workdir always lands at `<recordHome>/tasks/<taskId>/worktree`. The
 branch is named `fabrica/<taskId>` rather than something free-form for
@@ -204,6 +221,13 @@ what triggers each one and what to do about it.
   For that crashed-run case, `src/foreman/README.md`'s crash-window
   paragraph gives the concrete recovery: `git worktree remove`/`prune`
   the leftover worktree *and* `git branch -D fabrica/<taskId>`.
+- **`fetch-failed`** - `createProductionLine` could not fetch `origin`,
+  or could not read its default branch from the remote's own HEAD symref.
+  Causes include: no `origin` remote configured on `project`, the remote
+  being unreachable, or the remote never set its own HEAD (true of some
+  hand-built bare repos - a real hosted remote, e.g. on GitHub, always
+  has one). Read the wrapped git error in the message; nothing is created
+  - no task folder, no worktree - when this fires.
 - **`cut-failed`** - `git worktree add` itself failed, most often
   because the branch `fabrica/<taskId>` already exists from an earlier
   run that used this same id. Read the wrapped git error in the message;

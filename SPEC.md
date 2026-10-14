@@ -61,8 +61,12 @@ The whole tool in one command.
      clarification round by default; `--just-go` skips this step.
    - Otherwise → proceed. The plan goes in the record, not to the screen.
 3. **Isolates.** Creates a disposable git worktree of the project on a
-   fresh branch `fabrica/<id>`. The Client's checkout is never touched
-   (Contract 1).
+   fresh branch `fabrica/<id>`, cut from `origin`'s default branch - never
+   the Client's local checkout, which may be on any branch or any number
+   of commits behind. Fetches `origin` and reads its default branch from
+   the remote itself first; a failed fetch refuses the task outright
+   rather than falling back to the local HEAD. The Client's checkout is
+   never touched (Contract 1).
 4. **Works.** Runs the agent adapter in the worktree with the brief.
    Detached from the terminal: `fabrica do` prints the id and returns
    immediately; work continues in the background. Full agent output goes

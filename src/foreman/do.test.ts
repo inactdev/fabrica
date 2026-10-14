@@ -12,7 +12,7 @@ import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { emitLiveTranscriptEntry } from "../brain/live-transcript.ts";
 import type { Brain } from "../brain/index.ts";
 import { LineError } from "../line/index.ts";
-import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { addOrigin, makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
 
 function freshHome(): string {
@@ -324,6 +324,7 @@ test("doTask refuses when the project has no check command at all", async () => 
     cwd: project,
     shell: "/bin/bash",
   });
+  addOrigin(project);
   const recordHome = freshHome();
   const brain = fakeBrain();
 
@@ -367,6 +368,7 @@ test("doTask destroys the ProductionLine's worktree even when the check command 
     cwd: project,
     shell: "/bin/bash",
   });
+  addOrigin(project);
   const recordHome = freshHome();
 
   await assert.rejects(() => doTask(recordHome, "do something", { project, brain: fakeBrain(), checkBox: fixtureCheckBox().box }));
