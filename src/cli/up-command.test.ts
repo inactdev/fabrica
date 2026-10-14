@@ -84,6 +84,29 @@ function fixtureHandbookPath(content = "HANDBOOK CONTENT XYZ\n"): string {
   return path;
 }
 
+/** A throwaway integrations/<name>/up-hook.ts fixture - deliberately
+ * named nothing real, the same way fixtureSkillDir's harness is called
+ * "working-harness" rather than any real one - that records its own
+ * invocation (opts included) by writing to a file under the record
+ * home, since the test has no other way to observe a module dynamically
+ * imported inside runUpCommand. */
+function fixtureIntegrationsDir(): string {
+  const integrationsDir = mkdtempSync(join(tmpdir(), "fabrica-up-integrations-"));
+  mkdirSync(join(integrationsDir, "demo-integration"));
+  writeFileSync(
+    join(integrationsDir, "demo-integration", "up-hook.ts"),
+    [
+      "import { writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "export async function maybeStart(opts) {",
+      "  writeFileSync(join(opts.recordHome, 'up-hook-called.json'), JSON.stringify({ sawFlag: opts.env.DEMO_FLAG === '1' }));",
+      "}",
+      "",
+    ].join("\n")
+  );
+  return integrationsDir;
+}
+
 function neverStarted() {
   return () => {
     throw new Error("must not start a second live view when one is already listening");
@@ -355,6 +378,61 @@ test("runUpCommand: an unavailable harness refuses without ever launching", asyn
 
   assert.equal(code, 1);
   assert.match(io.err.join("\n"), /could not find or run your chat agent/i);
+});
+
+test("runUpCommand: discovers and calls every integrations/<name>/up-hook.ts, passing recordHome and env", async () => {
+  const io = captureIo();
+  const recordHome = healthyRecordHome();
+
+  const code = await runUpCommand([], {
+    recordHome,
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    integrationsDir: fixtureIntegrationsDir(),
+    env: { DEMO_FLAG: "1" },
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  const marker = JSON.parse(readFileSync(join(recordHome, "up-hook-called.json"), "utf8"));
+  assert.equal(marker.sawFlag, true, "the hook should have been handed the env this call passed in");
+});
+
+test("runUpCommand: an up-hook that throws is reported but never stops the harness from launching", async () => {
+  const io = captureIo();
+  let launched = false;
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    upHooks: [
+      {
+        maybeStart: async () => {
+          throw new Error("boom");
+        },
+      },
+    ],
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async () => {
+        launched = true;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.ok(launched, "the harness must still launch even when an up-hook fails");
+  assert.match(io.err.join("\n"), /integration hook failed to start/i);
 });
 
 test("runUpCommand: propagates the harness session's own exit code", async () => {

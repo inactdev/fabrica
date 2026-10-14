@@ -61,6 +61,30 @@ process it starts:
 npx tsx integrations/herdr/herdr-watcher.ts
 ```
 
+### `fabrica up` starts it for you
+
+`fabrica up` starts this watcher automatically, detached the same way it
+starts the live view, the moment it detects `$HERDR_ENV=1` and
+`$HERDR_PANE_ID` in its own environment - i.e. the moment it's itself
+running inside a Herdr pane - and skips it when either is missing,
+saying nothing about Herdr either way. It never starts a second one for
+the same record home: `herdr-watcher.ts`'s `main()` writes its own pid
+to `<recordHome>/herdr-watcher.pid` on startup, and `isHerdrWatcherRunning`
+checks that file's pid for real liveness (a signal-0 `kill`, not just
+"the file exists") before `fabrica up` decides whether to start another -
+a stale file (the watcher was killed outright, not through its own exit)
+is removed rather than trusted.
+
+This is wired through `up-hook.ts`, which `src/cli/up-command.ts`
+discovers generically by scanning `integrations/` for a `<name>/
+up-hook.ts` exporting `maybeStart({ recordHome, env })` - the same
+shape, and the same reason (CONTRACT rule 8's brain-word scan - see
+`no-herdr-in-core.test.ts`), that `skill/<harness>/launch.ts` is
+discovered by scanning `skill/` instead of being named directly. Its
+own tests (`up-hook.test.ts`) use injected fakes for the liveness check
+and the spawn itself; `herdr-watcher.test.ts` covers the real pid-file
+liveness check separately.
+
 Environment:
 
 - `FABRICA_HOME` - the record home to follow (default `~/.fabrica`, same
