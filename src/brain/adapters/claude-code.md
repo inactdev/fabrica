@@ -71,12 +71,19 @@ under `$HOME` before it does anything else. `work()` keeps its home
 across calls so `--resume` can find the last session; `ask()` never
 resumes, so its home is minted and deleted per call.
 
-`buildAskPrompt` (`claude-code.ts`) states the same "materially
-ambiguous" line this codebase draws everywhere else - an ambiguity that
-would change what gets built, not something a reasonable person would
-fill in the same way every time - and instructs the model to answer with
-nothing but a JSON object: `{"questions": [...]}`, empty array meaning
-proceed. `parseAskResult` reads the terminal `result` line's `result`
+`buildAskPrompt` (`claude-code.ts`, exported for its own direct test) states
+the same "materially ambiguous" line this codebase draws everywhere else -
+an ambiguity that would change what gets built, not something a reasonable
+person would fill in the same way every time - and instructs the model to
+answer with nothing but a JSON object: `{"questions": [...]}`, empty array
+meaning proceed. It also states plainly that the empty scratch dir is
+deliberate - the project's files are not present at this step on purpose
+and will be there once work starts - so a worker asks only about what the
+Client wants, never "where is the code?" (that question kept coming back
+before this sentence was added); this is specific to the clarify step and
+must never leak into the work brief (`src/foreman/standing-question.ts`'s
+`withStandingQuestion`), where the project genuinely is present and the
+sentence would mislead. `parseAskResult` reads the terminal `result` line's `result`
 field (the same field `work()`'s error path already reads), stripping a
 fenced code block if the model wrapped its JSON in one despite the
 instruction. Entries that aren't non-blank strings are dropped from the
