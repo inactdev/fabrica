@@ -46,19 +46,69 @@ before ever stopping it (`src/cli/live-view-process.ts`).
 
 ## What the task list page shows, and what's one click away
 
-A row on `/` shows three things: the age of the task's last recorded
-activity, the state word, and a short title - the worker's write-up title
-(`WorkerWriteup.title`, carried as a sibling of `delivery` on the
-"delivered" event's own `details` - never on the ratified `Delivery`
-shape itself, which the contract doesn't promise it) once there is one,
-else the task text's first line cut to about 60 characters
-(`record-view.ts`'s `taskTitle`). Clicking a row goes straight to that
-task's own page, `/tasks/<id>` (`public/task.html`/`task.js`, served for
-any path matching `TASK_ID_PATTERN`): the task text, project, attempt,
-cost, pull request link, and write-up - everything `record-view.ts`'s
-`TaskView` carries except the transcript - in a column on the right, and
-the full live transcript as the page's own dense event stream on the
-left.
+A row shows four things: a small symbol for the task's state, the age of
+its last recorded activity, the state word, and a short title - the
+worker's write-up title (`WorkerWriteup.title`, carried as a sibling of
+`delivery` on the "delivered" event's own `details` - never on the
+ratified `Delivery` shape itself, which the contract doesn't promise it)
+once there is one, else the task text's first line cut to about 60
+characters (`record-view.ts`'s `taskTitle`). Clicking a row goes straight
+to that task's own page, `/tasks/<id>` (`public/task.html`/`task.js`,
+served for any path matching `TASK_ID_PATTERN`): the task text, project,
+attempt, cost, pull request link, and write-up - everything
+`record-view.ts`'s `TaskView` carries except the transcript - in a column
+on the right, and the full live transcript as the page's own dense event
+stream on the left.
+
+## Two pages, split by whether a task is still open
+
+`/` (the default) lists only open tasks - working, asked a question,
+delivered - newest activity first, with a plain "History" link in the
+header. `/history` lists only finished tasks - failed, stopped, closed
+(either ruling) - newest first, with a "Live" link back. The split is
+enforced server-side (`server.ts`'s `/api/state` vs `/api/history`, both
+reading the same `view.getState()` and keeping only the half of `tasks`
+each endpoint is allowed to show), not left to the page's own JS to get
+right - `server.test.ts` proves it by hitting both endpoints directly.
+Both pages share one script (`public/app.js`, reading `location.pathname`
+to pick its endpoint and empty-state wording) since the row format is
+identical on both.
+
+## The state symbol, and why "working" has no glyph
+
+Every state gets a small symbol before its word - a check for delivered,
+a question mark for asked a question, a red X for failed, a gray dot for
+stopped and for either closed ruling - plain text/inline shapes, no icon
+font, no outside file. "working" is the one exception: its indicator is a
+small CSS-drawn ring with an animated spin (`style.css`'s `symbol-spin`,
+the page's one allowed animation), not a text character, since nothing in
+this monospace-only palette reads as motion. Failed and asked-a-question
+rows get a brighter background and bolder title (`row-emphasis`); a
+closed row (either ruling) fades back (`row-fade`, lower opacity) - the
+mapping from state to symbol/emphasis is `display.ts`'s `stateSymbol`/
+`rowEmphasis`, unit tested there since a plain script with no build step
+can't import it - `app.js`/`task.js` each keep a hand-duplicated copy, the
+same pattern `app.js`'s own `formatAge` comment already explains.
+
+## Why a steady poll no longer jumps the page
+
+Both list pages and the task page used to rebuild every row on every
+2-second poll, even when nothing had changed - worst on a finished task's
+page with a long transcript, where the view would reset every poll. Now a
+row's DOM node is created once per task (or per transcript entry) and
+kept for as long as that task/entry is shown; each poll only writes the
+specific text or class that actually differs from what's already on
+screen (guarded by a plain `!==` check), and never touches a row whose
+displayed fields haven't changed at all. The transcript additionally
+relies on the record being append-only: a poll only ever appends the
+entries past what was already rendered, never re-walks the ones already
+on screen. With "Tail: on", a poll only scrolls to the bottom if the view
+was already there when the poll started (`display.ts`'s
+`isScrolledToBottom`, duplicated in `task.js` against the one window-level
+scroll position this page reads) - scrolling up to read is no longer
+undone by the next poll. Turning tail on with the toggle button is the
+one deliberate exception: that always jumps to the bottom immediately,
+regardless of where the view currently is.
 
 ## Why a corrupt line in events.jsonl can't take it down
 

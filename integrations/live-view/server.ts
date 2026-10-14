@@ -26,6 +26,7 @@ const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/": { file: "index.html", contentType: "text/html; charset=utf-8" },
+  "/history": { file: "history.html", contentType: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", contentType: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", contentType: "text/css; charset=utf-8" },
   "/task.js": { file: "task.js", contentType: "text/javascript; charset=utf-8" },
@@ -113,7 +114,15 @@ function handleRequest(
     return;
   }
 
-  if (url.pathname === "/api/state") {
+  if (url.pathname === "/api/state" || url.pathname === "/api/history") {
+    // The main page (/) shows only open tasks - working, asked a
+    // question, delivered - and is the default; /history shows only
+    // finished ones (failed, stopped, closed). Both read the exact same
+    // state (so spend and sort order never disagree between the two) and
+    // just keep the half of `tasks` their own page is allowed to show -
+    // the split is enforced here, server-side, not left to the page's own
+    // JS to get right.
+    //
     // Building this state calls straight into every reused query over
     // whatever is actually on disk (taskSpend, formatUsd, ...), none of
     // which validate an event's contents beyond its JSON shape - a line
@@ -123,8 +132,10 @@ function handleRequest(
     // still readable next time; only this one read failed, so this
     // answers rather than letting that throw reach the server's request
     // listener and take the whole process down with it.
+    const wantFinished = url.pathname === "/api/history";
     try {
-      send(res, 200, "application/json", JSON.stringify(view.getState()));
+      const state = view.getState();
+      send(res, 200, "application/json", JSON.stringify({ ...state, tasks: state.tasks.filter((t) => t.finished === wantFinished) }));
     } catch (err) {
       sendRecordError(res, err);
     }

@@ -1,7 +1,7 @@
 /* Dense event-log styling, colors and layout only - no new data is read
    or requested anywhere in this file or its scripts. Completely flat: no
    borders but the one hairline row divider, no rounded corners, no
-   shadows, no gradients. One monospace font, small text, dark background
+   shadows, no gradients. One base font, small text, dark background
    throughout. Color is reserved for state/kind words. */
 
 :root {
@@ -27,9 +27,9 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: ui-sans-serif, system-ui, ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-weight: normal;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.4;
 }
 
@@ -228,3 +228,53 @@ main {
 .kind-error { color: var(--red); }
 .kind-system { color: var(--green); }
 .kind-text { color: var(--text); }
+
+/* The symbol shown before every state word - plain text/inline shapes
+   only, no icon font, no outside file. */
+.state-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.state-symbol {
+  display: inline-block;
+  width: 0.9em;
+  text-align: center;
+  flex: 0 0 auto;
+}
+
+.symbol-check { color: var(--green); }
+.symbol-question { color: var(--amber); }
+.symbol-failed { color: var(--red); font-weight: bold; }
+.symbol-dot { color: var(--gray); }
+
+/* "working" has no text glyph - a small CSS-drawn ring, spinning. The one
+   animation this page allows itself. */
+.symbol-spin {
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 50%;
+  border: 2px solid var(--blue);
+  border-top-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Failed and asked-a-question rows stand out more than the others; a
+   closed row (any ruling) fades back. Stopped/working/delivered stay
+   plain - only their symbol's own color marks them. */
+.row-emphasis {
+  background: var(--accent-bg);
+}
+
+.row-emphasis .col-title {
+  font-weight: 600;
+}
+
+.row-fade {
+  opacity: 0.55;
+}
