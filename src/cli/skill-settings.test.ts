@@ -70,8 +70,12 @@ const HOOK_ONLY_COMMANDS = ["deny-and-log-edit"];
 // must never be able to spawn a second copy of the very session it's
 // running in. Requires the same deny coverage as a deciding command
 // (an explicit permissions.deny match, not just omission from allow),
-// so it's checked the same way in the loop below.
-const NEVER_FROM_CHAT_COMMANDS = ["up"];
+// so it's checked the same way in the loop below. "update" is denied
+// for the same shape of reason: it records no judgment either, but an
+// AI driving the Bash tool must never be able to update Fabrica's own
+// code - and potentially restart the live view - out from under the
+// very session it's running in.
+const NEVER_FROM_CHAT_COMMANDS = ["up", "update"];
 
 function commandsInMainDispatch(): string[] {
   const mainSource = readFileSync(join(repoRoot, "src", "cli", "main.ts"), "utf8");
@@ -276,6 +280,8 @@ test("fabrica up is never auto-approved, including through a chained command", (
 
   const attempts = [
     "fabrica up",
+    "fabrica up --continue",
+    "fabrica up -c",
     "fabrica status && fabrica up",
     "fabrica status; fabrica up",
     "fabrica do 'x' | fabrica up",
@@ -289,6 +295,30 @@ test("fabrica up is never auto-approved, including through a chained command", (
         evaluate(settings, attempt),
         "allow",
         `${settings.harness}: "${attempt}" auto-approves - fabrica up must never launch unprompted`
+      );
+    }
+  }
+});
+
+test("fabrica update is never auto-approved, including through a chained command", () => {
+  const templates = harnessSettings();
+  assert.ok(templates.length > 0, "no harness ships a settings.json to check");
+
+  const attempts = [
+    "fabrica update",
+    "fabrica status && fabrica update",
+    "fabrica status; fabrica update",
+    "fabrica do 'x' | fabrica update",
+    "fabrica log task-1 && fabrica update",
+    "fabrica status --json\nfabrica update",
+  ];
+
+  for (const settings of templates) {
+    for (const attempt of attempts) {
+      assert.notEqual(
+        evaluate(settings, attempt),
+        "allow",
+        `${settings.harness}: "${attempt}" auto-approves - fabrica update must never run unprompted`
       );
     }
   }

@@ -135,7 +135,82 @@ test("runUpCommand: a stray positional is refused, not silently ignored", async 
 
   assert.equal(code, 1);
   assert.match(io.err[0], /unexpected argument "oops"/);
-  assert.match(io.err[0], /up takes none/);
+  assert.match(io.err[0], /up takes only --continue\/-c/);
+});
+
+test("runUpCommand: --continue is passed through to the harness launcher as continueSession", async () => {
+  const io = captureIo();
+  let captured: { continueSession?: boolean } | undefined;
+
+  const code = await runUpCommand(["--continue"], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async (opts) => {
+        captured = opts;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(captured?.continueSession, true);
+});
+
+test("runUpCommand: -c is accepted as the short form of --continue", async () => {
+  const io = captureIo();
+  let captured: { continueSession?: boolean } | undefined;
+
+  const code = await runUpCommand(["-c"], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async (opts) => {
+        captured = opts;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(captured?.continueSession, true);
+});
+
+test("runUpCommand: without --continue, continueSession is false", async () => {
+  const io = captureIo();
+  let captured: { continueSession?: boolean } | undefined;
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async (opts) => {
+        captured = opts;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(captured?.continueSession, false);
 });
 
 test("runUpCommand: refuses when a doctor check fails, printing the doctor output, before touching the live view or the harness", async () => {

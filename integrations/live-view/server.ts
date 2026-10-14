@@ -6,9 +6,10 @@
 
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { TASK_ID_PATTERN } from "../../src/index.ts";
 import { createRecordView } from "./record-view.ts";
 
@@ -18,6 +19,36 @@ export const DEFAULT_PORT = 7777;
 const HOST = "127.0.0.1";
 
 const PUBLIC_DIR = fileURLToPath(new URL("./public", import.meta.url));
+
+/** The repo root, computed independently rather than imported from
+ * src/cli/doctor-command.ts's own CHECKOUT - this integration reaches
+ * Fabrica only through src/index.ts, never a src/cli/ internal path,
+ * the same layering rule the module header already states for
+ * TASK_ID_PATTERN. */
+const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** The commit this running copy is actually serving from - the same
+ * two-cases-by-.git-presence logic doctor-command.ts's detectCopy uses
+ * (a developer checkout reports its real HEAD; an installed copy reads
+ * the commit build-info.json recorded at `prepare` time), duplicated
+ * here deliberately small rather than imported, for the same layering
+ * reason as CHECKOUT above. Read fresh on every request - a `fabrica
+ * update` in a developer checkout changes HEAD out from under an
+ * already-running live view, and this must reflect that. */
+function currentCommit(): string | null {
+  if (existsSync(join(CHECKOUT, ".git"))) {
+    try {
+      return execFileSync("git", ["rev-parse", "HEAD"], { cwd: CHECKOUT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return (JSON.parse(readFileSync(join(CHECKOUT, "build-info.json"), "utf8")) as { commit?: string | null }).commit ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/": { file: "index.html", contentType: "text/html; charset=utf-8" },
@@ -86,6 +117,14 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, view: ReturnTy
   // `location.pathname` and asks the API routes below for its data.
   if (TASK_PAGE_PATH.test(url.pathname)) {
     send(res, 200, "text/html; charset=utf-8", readFileSync(join(PUBLIC_DIR, "task.html")));
+    return;
+  }
+
+  if (url.pathname === "/api/version") {
+    // Read-only, like everything else here - just reports the commit
+    // this process is actually running, so `fabrica update` can tell a
+    // live view it just made stale from one that's already current.
+    send(res, 200, "application/json", JSON.stringify({ commit: currentCommit() }));
     return;
   }
 

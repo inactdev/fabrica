@@ -320,6 +320,45 @@ judgment like `verdict`/`answer`/`cost` do, but because it launches a
 second interactive session from inside the one already running; an AI
 driving the Bash tool must never be allowed to spawn a copy of itself.
 
+`--continue`/`-c` passes the harness's own flag for continuing the most
+recent conversation in the current folder straight through
+(`parseUpArgs`'s `continueSession`, threaded through `HarnessLauncher`
+and into the per-harness `launch.ts`'s own spawn args) - read directly
+from the installed harness's own `--help` output, never guessed. This is
+how a session survives `fabrica update`: see below.
+
+## `fabrica update`
+
+Takes new Fabrica code without losing a running chat session
+(`update-command.ts`). (1) Works out which copy is running the same way
+`fabrica doctor` does (`detectCopy`): a developer checkout runs `git
+pull --ff-only origin master` - refused up front with a clear message if
+it isn't on `master`, or has uncommitted changes (`git status
+--porcelain` is non-empty); an installed copy re-runs the documented
+install command, `npm install -g github:inactdev/fabrica`. Both run with
+`stdio: "inherit"` so real progress/errors are visible, the same
+convention `launch.ts` already uses for the one other slow, interactive
+external command this project runs. (2) If the live view is listening on
+`127.0.0.1:7777`, its own `/api/version` (`integrations/live-view/server.ts`,
+computed independently of `src/cli/doctor-command.ts`'s `detectCopy` -
+this integration reaches Fabrica only through `src/index.ts`, never a
+`src/cli/` internal path) is compared against the commit just updated
+to. A match leaves it running untouched; a mismatch restarts it - stopped
+with the exact `pkill -f "live-view/start.ts"` command `fabrica up`
+already prints as the documented way to stop it (deliberately not a new
+pidfile-based kill: that would mean two different, divergent answers to
+"how do I stop the live view" instead of the one already shipped), then
+started again the same way `fabrica up` does
+(`spawnDetachedLiveView`). (3) Prints one summary line: the commit
+before and after, whether the live view was restarted, and the exact
+next step - `resume your session with: fabrica up --continue`.
+
+`fabrica update` is denied to the chat agent itself, the same way and
+for the same reason `fabrica up` is (`skill-settings.test.ts`'s
+`NEVER_FROM_CHAT_COMMANDS`): an AI driving the Bash tool must never be
+able to update Fabrica's own code, or restart the live view, out from
+under the very session it's running in.
+
 ## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
 
 Issue #12 - the Client's eyes on a detached task, without reading record

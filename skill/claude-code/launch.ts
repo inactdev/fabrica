@@ -12,7 +12,12 @@
 // from `claude --help`'s own documented `--append-system-prompt
 // <prompt>` and `--settings <file-or-json>` entries, never guessed.
 // Nothing is written into `cwd`: both are passed as flags, not files
-// dropped into a `.claude` folder there.
+// dropped into a `.claude` folder there. `continueSession` (`fabrica up
+// --continue`) adds `--continue`, read the same way straight from a real
+// `claude --help`'s own entry: `-c, --continue  Continue the most
+// recent conversation in the current directory` - the long form is used
+// here, consistent with every other flag in this file already being
+// spelled out long rather than abbreviated.
 
 import { spawnSync } from "node:child_process";
 import { execFileSync } from "node:child_process";
@@ -21,6 +26,7 @@ export interface LaunchOptions {
   cwd: string;
   settingsPath: string;
   appendSystemPrompt: string;
+  continueSession?: boolean;
 }
 
 export interface LaunchResult {
@@ -30,7 +36,9 @@ export interface LaunchResult {
 /** Blocks until the interactive session exits, inheriting this
  * process's stdio so the Client's terminal is the session itself. */
 export function launch(opts: LaunchOptions): LaunchResult {
-  const result = spawnSync("claude", ["--settings", opts.settingsPath, "--append-system-prompt", opts.appendSystemPrompt], {
+  const args = ["--settings", opts.settingsPath, "--append-system-prompt", opts.appendSystemPrompt];
+  if (opts.continueSession) args.push("--continue");
+  const result = spawnSync("claude", args, {
     cwd: opts.cwd,
     stdio: "inherit",
   });

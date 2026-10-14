@@ -22,7 +22,7 @@ import { resolveRecordHome } from "./record-home.ts";
 import { runDoctorCommand, type DoctorProbes } from "./doctor-command.ts";
 import { spawnDetachedLiveView } from "./spawn-detached.ts";
 
-export const UP_USAGE = "fabrica up";
+export const UP_USAGE = "fabrica up [--continue|-c]";
 
 export const UP_HELP = `Usage: ${UP_USAGE}
 
@@ -40,6 +40,11 @@ order:
      loaded through its own command-line flags - nothing is ever
      written into this folder.
 
+  --continue, -c  Pass the harness's own flag for continuing the most
+                   recent conversation in this folder, instead of
+                   starting a new one - use this after \`fabrica update\`
+                   to pick back up where you left off.
+
 When the harness exits, the live view keeps running - this prints one
 line saying how to stop it.
 
@@ -47,16 +52,22 @@ Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
 `;
 
-/** `fabrica up` takes no flags or positionals - anything given is
- * refused with the exact usage line, the same way verify-hook refuses
+/** `fabrica up` takes only `--continue`/`-c` - anything else is refused
+ * with the exact usage line, the same way verify-hook refuses
  * (src/cli/verify-hook-command.ts's parseVerifyHookArgs). */
-export function parseUpArgs(argv: string[]): void {
-  const [first] = argv;
-  if (first === undefined) return;
-  if (first.startsWith("-")) {
-    throw new CliError("bad-usage", `fabrica up: unknown flag "${first}". Usage: ${UP_USAGE}`);
+export function parseUpArgs(argv: string[]): { continueSession: boolean } {
+  let continueSession = false;
+  for (const arg of argv) {
+    if (arg === "--continue" || arg === "-c") {
+      continueSession = true;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      throw new CliError("bad-usage", `fabrica up: unknown flag "${arg}". Usage: ${UP_USAGE}`);
+    }
+    throw new CliError("bad-usage", `fabrica up: unexpected argument "${arg}" - up takes only --continue/-c. Usage: ${UP_USAGE}`);
   }
-  throw new CliError("bad-usage", `fabrica up: unexpected argument "${first}" - up takes none. Usage: ${UP_USAGE}`);
+  return { continueSession };
 }
 
 const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -76,7 +87,12 @@ function liveViewUrl(port: number): string {
 }
 
 export interface HarnessLauncher {
-  launch(opts: { cwd: string; settingsPath: string; appendSystemPrompt: string }): { exitCode: number } | Promise<{ exitCode: number }>;
+  launch(opts: {
+    cwd: string;
+    settingsPath: string;
+    appendSystemPrompt: string;
+    continueSession?: boolean;
+  }): { exitCode: number } | Promise<{ exitCode: number }>;
   harnessAvailable(): boolean;
 }
 
@@ -287,8 +303,9 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   const stdout = opts.stdout ?? ((line: string) => console.log(line));
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
+  let continueSession: boolean;
   try {
-    parseUpArgs(argv);
+    ({ continueSession } = parseUpArgs(argv));
   } catch (err) {
     stderr(err instanceof Error ? err.message : String(err));
     return 1;
@@ -378,7 +395,7 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   }
 
   const appendSystemPrompt = readFileSync(opts.handbookPath ?? HANDBOOK_PATH, "utf8");
-  const { exitCode } = await launcher.launch({ cwd, settingsPath, appendSystemPrompt });
+  const { exitCode } = await launcher.launch({ cwd, settingsPath, appendSystemPrompt, continueSession });
 
   stdout(`Live view is still running at ${liveViewUrl(port)} - stop it with: pkill -f "live-view/start.ts"`);
   return exitCode;

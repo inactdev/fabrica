@@ -1,10 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendEvent, appendTaskFile, registerTask } from "../../src/record/index.ts";
 import { startLiveView } from "./server.ts";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-live-view-server-test-"));
@@ -42,6 +46,29 @@ test("startLiveView: binds only to 127.0.0.1, never to every interface", async (
     const address = view.server.address();
     assert.ok(address && typeof address === "object", "expected a bound TCP address");
     assert.equal((address as { address: string }).address, "127.0.0.1");
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /api/version reports this running copy's own commit", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/version`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const expected = execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+    assert.equal(body.commit, expected);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /api/version rejects everything but GET", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
+  try {
+    const posted = await fetch(`http://127.0.0.1:${view.port}/api/version`, { method: "POST" });
+    assert.equal(posted.status, 405);
   } finally {
     await view.close();
   }
