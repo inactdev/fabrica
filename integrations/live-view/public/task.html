@@ -6,20 +6,32 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-  <p class="back"><a href="/">← Back to live view</a></p>
-  <h1 id="task-title">Loading…</h1>
-  <p id="task-state" class="state"></p>
-  <p id="error" hidden></p>
+<header class="toolbar">
+  <div class="toolbar-row">
+    <span class="toolbar-title">Event stream · <span id="count">0</span> events</span>
+    <div class="filters">
+      <button class="filter-btn" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="worker">Worker</button>
+      <button class="filter-btn" data-filter="system">System</button>
+      <button class="filter-btn" data-filter="errors">Errors</button>
+      <button class="filter-btn" id="tail-toggle">Tail: on</button>
+    </div>
+  </div>
+  <div class="toolbar-row toolbar-sub">
+    <span class="toolbar-left-group">
+      <a class="back-link" href="/">← Tasks</a>
+      <span id="task-title"></span>
+      <span id="task-state"></span>
+    </span>
+    <span id="error" hidden></span>
+  </div>
 </header>
 
 <main>
-  <section id="task-detail"></section>
-
-  <section>
-    <h2>Transcript</h2>
+  <div class="page-body">
     <div id="transcript"></div>
-  </section>
+  </div>
+  <aside class="sidebar" id="task-detail"></aside>
 </main>
 
 <script src="/task.js"></script>

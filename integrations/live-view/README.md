@@ -34,19 +34,19 @@ generates) before it ever reaches a file path.
 
 ## What the task list page shows, and what's one click away
 
-A row on `/` shows only two things: a short title and the state word -
-the worker's write-up title (`WorkerWriteup.title`, carried as a sibling
-of `delivery` on the "delivered" event's own `details` - never on the
-ratified `Delivery` shape itself, which the contract doesn't promise it)
-once there is one, else the task text's first line cut to about 60
-characters (`record-view.ts`'s `taskTitle`). Clicking a row expands it in
-place with the task text, project, attempt, cost, the pull request link,
-and the write-up's what/why/how once it exists - everything `record-view.ts`'s
-`TaskView` carries except the transcript. The transcript is the one thing
-too long to expand in place: each task gets its own page at `/tasks/<id>`
-(`public/task.html`/`task.js`, served for any path matching
-`TASK_ID_PATTERN`) with the full write-up and the live transcript, and the
-expanded row links there.
+A row on `/` shows three things: the age of the task's last recorded
+activity, the state word, and a short title - the worker's write-up title
+(`WorkerWriteup.title`, carried as a sibling of `delivery` on the
+"delivered" event's own `details` - never on the ratified `Delivery`
+shape itself, which the contract doesn't promise it) once there is one,
+else the task text's first line cut to about 60 characters
+(`record-view.ts`'s `taskTitle`). Clicking a row goes straight to that
+task's own page, `/tasks/<id>` (`public/task.html`/`task.js`, served for
+any path matching `TASK_ID_PATTERN`): the task text, project, attempt,
+cost, pull request link, and write-up - everything `record-view.ts`'s
+`TaskView` carries except the transcript - in a column on the right, and
+the full live transcript as the page's own dense event stream on the
+left.
 
 ## Why a corrupt line in events.jsonl can't take it down
 
