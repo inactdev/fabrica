@@ -14,9 +14,15 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { writeLiveViewPidFile } from "../../src/cli/live-view-process.ts";
 import { startLiveView } from "./server.ts";
 
 const recordHome = process.env.FABRICA_HOME?.trim() || join(homedir(), ".fabrica");
 
 const view = await startLiveView({ recordHome });
+// Written only once the server is actually bound - never before - so a
+// pid file never claims a live view is running when the bind itself
+// failed. `fabrica up` reads this (src/cli/live-view-process.ts) to
+// find and stop a stale live view before starting a fresh one.
+writeLiveViewPidFile(recordHome);
 console.log(`fabrica live: watching ${recordHome} at http://127.0.0.1:${view.port} (read-only, loopback only)`);

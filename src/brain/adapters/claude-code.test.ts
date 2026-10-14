@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { claudeCodeAdapter, claudeCodeCheckBox, ClaudeCodeError, resolveGitMounts, WRITEUP_JSON_SCHEMA } from "./claude-code.ts";
+import { buildAskPrompt, claudeCodeAdapter, claudeCodeCheckBox, ClaudeCodeError, resolveGitMounts, WRITEUP_JSON_SCHEMA } from "./claude-code.ts";
 import { createProductionLine, destroyProductionLine } from "../../line/index.ts";
 import { makeFixtureHome, makeFixtureProject } from "../../line/helpers/fixture.ts";
 import { LineError } from "../../line/index.ts";
 import { registerLiveTranscriptListener } from "../live-transcript.ts";
 import type { TranscriptEntry } from "../types.ts";
+import { withStandingQuestion } from "../../foreman/standing-question.ts";
 
 const FAKE_CLI_SOURCE = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-claude-cli.mjs");
 // A container only ever sees `workdir` (mounted at /workdir) - the fake
@@ -98,6 +99,23 @@ test("claudeCodeAdapter.ask() sends the task text and no --resume/--permission-m
   // Nothing to assert on the args directly (ASK_SCENARIO_NONE isn't
   // ECHO_ARGS) - covered instead by the questions-parsing tests below,
   // which prove the whole round trip end to end.
+});
+
+// The clarify step runs before any ProductionLine exists - no project
+// files are mounted anywhere - so without this sentence a worker's
+// clarifying question kept being "where is the code?" instead of
+// something about what the Client actually wants. The work brief (what
+// work() actually sends, after the foreman's withStandingQuestion()) must
+// never carry it: there, the project really is present, and the sentence
+// would be actively misleading.
+test("buildAskPrompt's clarify brief explains the empty folder; the work brief never does", () => {
+  const askPrompt = buildAskPrompt("build me an app");
+  assert.match(askPrompt, /project's files are not present at this step on purpose/);
+  assert.match(askPrompt, /ask only about what the Client wants, never about where the code is/);
+
+  const workBrief = withStandingQuestion("build me an app");
+  assert.doesNotMatch(workBrief, /project's files are not present at this step on purpose/);
+  assert.doesNotMatch(workBrief, /never about where the code is/);
 });
 
 test("claudeCodeAdapter.ask() returns the questions a materially ambiguous task gets back", async (t) => {

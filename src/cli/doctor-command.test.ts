@@ -39,7 +39,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
 }
 
 function healthyProject(): string {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { origin: false });
   execFileSync("git", ["remote", "add", "origin", "https://example.invalid/demo.git"], { cwd: project });
   return project;
 }
@@ -88,11 +88,11 @@ for (const name of ["node", "checkout", "docker", "workerImage", "workerToken", 
 test("fabrica doctor: each registered project is checked - path, git root, a check, and an origin remote", async () => {
   const missing = join(mkdtempSync(join(tmpdir(), "fabrica-doctor-gone-")), "nowhere");
   const notGit = mkdtempSync(join(tmpdir(), "fabrica-doctor-notgit-"));
-  const noCheck = makeFixtureRepo("exit 0", { inspector: false });
+  const noCheck = makeFixtureRepo("exit 0", { inspector: false, origin: false });
   rmSync(join(noCheck, "check.sh"));
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "drop check"], { cwd: noCheck });
   execFileSync("git", ["remote", "add", "origin", "https://example.invalid/x.git"], { cwd: noCheck });
-  const noOrigin = makeFixtureRepo("exit 0");
+  const noOrigin = makeFixtureRepo("exit 0", { origin: false });
   const home = recordHome(
     `[caps]\nperDayUsd = 25\n\n` +
       `[projects.missing]\npath = "${missing}"\ncheck = "./check.sh"\n\n` +
@@ -241,4 +241,24 @@ test("detectCopy: a directory with neither .git nor build-info.json is installed
   writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
   const copy = detectCopy(dir, () => null);
   assert.deepEqual(copy, { kind: "installed", root: dir, branch: null, commit: null, version: "1.2.3" });
+});
+
+test("runningCopyCommit: exactly the commit detectCopy would compute for this root - the same question /api/version and fabrica up's stale-live-view check both ask", async () => {
+  const { runningCopyCommit } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-running-commit-"));
+  execFileSync("git", ["init"], { cwd: dir });
+  execFileSync("git", ["commit", "--allow-empty", "-m", "x", "--no-gpg-sign"], {
+    cwd: dir,
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  });
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+
+  assert.equal(runningCopyCommit(dir), head);
+});
+
+test("runningCopyCommit: null for an installed copy with no build-info.json, same as detectCopy", async () => {
+  const { runningCopyCommit } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-running-commit-bare-"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
+  assert.equal(runningCopyCommit(dir), null);
 });

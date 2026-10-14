@@ -172,6 +172,27 @@ test("main: `up -h` also short-circuits to help", async () => {
   assert.match(io.out[0], /Usage: fabrica up/);
 });
 
+test("main: `await --help` prints the await command's own usage and exits 0, without running anything", async () => {
+  const io = captureIo();
+  const code = await main(["await", "--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica await <taskId>/);
+});
+
+test("main: `await -h` also short-circuits to help", async () => {
+  const io = captureIo();
+  const code = await main(["await", "some-task", "-h"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /fabrica await <taskId>/);
+});
+
+test("main: top-level help mentions the await command", async () => {
+  const io = captureIo();
+  const code = await main(["--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /await <taskId>/);
+});
+
 test("main: top-level help mentions the up command", async () => {
   const io = captureIo();
   const code = await main(["--help"], io);

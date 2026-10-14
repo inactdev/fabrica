@@ -159,14 +159,17 @@ function buildArgs(brief: string, opts: ClaudeCodeAdapterOptions, workOpts?: Bra
 // change what gets built, not one a reasonable person would resolve the
 // same way every time - and to answer in a fixed, parseable shape rather
 // than free prose.
-function buildAskPrompt(brief: string): string {
+export function buildAskPrompt(brief: string): string {
   return (
     "You are deciding whether a task description is materially ambiguous " +
     "before any work starts on it - ambiguous in a way that would change " +
     "what actually gets built, not something a reasonable person would " +
     "fill in the same way every time. If it is materially ambiguous, " +
     "write the numbered questions whose answers would change what gets " +
-    "built. If it is already clear enough to proceed, ask nothing.\n\n" +
+    "built. If it is already clear enough to proceed, ask nothing. " +
+    "The project's files are not present at this step on purpose - they " +
+    "will be there when work starts - so ask only about what the Client " +
+    "wants, never about where the code is.\n\n" +
     "Respond with ONLY a JSON object, no other text before or after it, " +
     "in exactly this shape:\n" +
     '{"questions": ["question one", "question two"]}\n' +

@@ -16,7 +16,7 @@ import { stateOf } from "./queries.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { fakeInspector } from "../../contract/helpers/fake-inspector.ts";
 import { fakeCheckBox } from "../../contract/helpers/fake-check-box.ts";
-import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { makeFixtureRepo, pushToOrigin } from "../../contract/helpers/fixture.ts";
 import { readEvents } from "../record/index.ts";
 import type { Brain } from "../brain/index.ts";
 
@@ -38,6 +38,7 @@ test("an error after task-received, before delivery, appends task-failed with th
   const project = makeFixtureRepo("exit 0", { inspector: false });
   rmSync(join(project, "check.sh"));
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "no check"], { cwd: project });
+  pushToOrigin(project);
   const foreman = createForeman({ recordHome, checkBox: fakeCheckBox().box });
 
   await assert.rejects(() => foreman.do("small change", { project, brain: fakeBrain() }), /check\.sh/);

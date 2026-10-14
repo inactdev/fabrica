@@ -183,6 +183,17 @@ export function detectCopy(root: string, gitIn: (args: string[]) => string | nul
   return { kind: "installed", root, branch: null, commit: readBuildInfoCommit(root), version };
 }
 
+/** The one value `fabrica doctor`'s own "checkout" line reports as this
+ * copy's commit (dev checkout: live `git rev-parse HEAD`; installed:
+ * `build-info.json`'s recorded commit, or null if that file is
+ * missing) - exported so anything else that needs to know "what commit
+ * is this running copy" (the live view's own `/api/version`, `fabrica
+ * up`'s stale-live-view check) asks this exact question rather than
+ * reimplementing detectCopy's dev-checkout-vs-installed branch itself. */
+export function runningCopyCommit(root: string): string | null {
+  return detectCopy(root, (args) => git(root, args)).commit;
+}
+
 /** One lightweight network call, no local repo required either side
  * (works identically for a dev checkout or an installed copy) and no
  * mutation of any local ref - a `git fetch` would learn the exact

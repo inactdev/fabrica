@@ -25,12 +25,24 @@ It serves on `http://127.0.0.1:7777` and binds to `127.0.0.1` only -
 `server.ts`'s `HOST` constant is not a parameter anywhere, so there is no
 way to ask it for anything else. It reads only `events.jsonl` and the
 `tasks/<id>/` folders under the given record home, and never writes
-anything: every filesystem call in this directory is a `readFileSync`/
+anything: every filesystem call in `server.ts` is a `readFileSync`/
 `readdirSync`, directly or through `src/index.ts`. The only thing a
 request can send it is which task id it wants (its own `/tasks/<id>`
 page, `/api/tasks/<id>`, or `/api/tasks/<id>/transcript`), and that is
 checked against `TASK_ID_PATTERN` (the same shape `src/record/ids.ts`
 generates) before it ever reaches a file path.
+
+`/api/version` answers `{ "commit": "<sha-or-null>" }` - exactly the
+commit `src/cli/doctor-command.ts`'s `runningCopyCommit` (the same
+function behind `fabrica doctor`'s "checkout" line) computes for this
+running copy. It exists so `fabrica up` can tell a live view running
+today's code from one left running from before a merge (a stale one
+otherwise silently serves a blank page against today's record shape) -
+see that command's own README section. The one write in this directory
+isn't in `server.ts` either: `start.ts` (the real process entry point,
+not the server module itself) writes `<recordHome>/live-view.pid` once
+it's actually bound to its port, for `fabrica up` to find and verify
+before ever stopping it (`src/cli/live-view-process.ts`).
 
 ## What the task list page shows, and what's one click away
 

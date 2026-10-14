@@ -19,8 +19,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { runDoctorCommand, type DoctorProbes } from "./doctor-command.ts";
+import { runDoctorCommand, runningCopyCommit, type DoctorProbes } from "./doctor-command.ts";
 import { spawnDetachedLiveView } from "./spawn-detached.ts";
+import { findLiveViewProcess as locateLiveViewProcess, stopLiveViewProcess as terminateLiveViewProcess } from "./live-view-process.ts";
 
 export const UP_USAGE = "fabrica up";
 
@@ -31,10 +32,13 @@ order:
 
   1. Runs the same checks as \`fabrica doctor\` - stops here, with the
      doctor output, if any check fails.
-  2. Starts the live view in the background (http://localhost:7777),
-     unless one is already listening there - never a second copy - and
-     opens it in your default browser. If one is already running, its
-     address is printed instead of opening a browser.
+  2. Starts the live view in the background (http://localhost:7777)
+     and opens it in your default browser - unless one is already
+     listening there and running this exact copy's code (checked via
+     its own /api/version), in which case its address is printed
+     instead of opening a browser. One running older code (e.g. left
+     over from before a merge) is stopped first and replaced with a
+     fresh one - never reused, and never a second copy either way.
   3. Launches your chat harness in this folder, with HANDBOOK.md
      appended to its system prompt and this harness's own settings
      loaded through its own command-line flags - nothing is ever
@@ -145,7 +149,7 @@ export async function loadHarnessLauncher(skillDir: string = SKILL_DIR): Promise
  * conditions are met - this is called unconditionally for every
  * discovered hook. */
 export interface UpIntegrationHook {
-  maybeStart(opts: { recordHome: string; env: NodeJS.ProcessEnv }): void | Promise<void>;
+  maybeStart(opts: { recordHome: string; env: NodeJS.ProcessEnv; notify: (line: string) => void }): void | Promise<void>;
 }
 
 function missingUpIntegrationHookExports(module: unknown): string[] {
@@ -220,6 +224,44 @@ async function waitUntilListening(
   }
 }
 
+/** The inverse wait, used after stopping a stale live view: gives the
+ * OS a moment to actually free the port before a fresh one tries to
+ * bind it. If this times out, startFresh is still attempted - the
+ * fresh process's own bind failure (if the old one truly never let go)
+ * surfaces the same way any other "never started listening" case
+ * already does, rather than this function inventing a second way to
+ * report it. */
+async function waitUntilNotListening(
+  isListening: (host: string, port: number) => Promise<boolean>,
+  port: number,
+  timeoutMs: number
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!(await isListening("127.0.0.1", port))) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+/** Asks an already-listening live view what commit it's running, via
+ * its own `/api/version` (integrations/live-view/server.ts). Null
+ * means "didn't answer that endpoint" - a connection error, a non-200,
+ * a body with no usable `commit` string - and is treated identically
+ * to "answered with a different commit": either way the live view
+ * can't be trusted to be running today's code. A short timeout keeps a
+ * hung, non-live-view listener from blocking `fabrica up` indefinitely. */
+async function defaultFetchLiveViewVersion(port: number): Promise<string | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/version`, { signal: AbortSignal.timeout(2_000) });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { commit?: unknown };
+    return typeof body.commit === "string" ? body.commit : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Best-effort only: a failure to find an opener on this machine (no
  * `xdg-open`, no GUI at all) must never stop the session from
  * launching - the printed address is the real fallback either way. */
@@ -257,6 +299,20 @@ export interface RunUpCommandOptions {
   startLiveView?: (opts: { recordHome: string; port: number }) => void;
   /** Test-only seam replacing the real OS browser opener. */
   openBrowser?: (url: string) => void;
+  /** Test-only seam replacing the real call to an already-listening
+   * live view's own /api/version. */
+  fetchLiveViewVersion?: (port: number) => Promise<string | null>;
+  /** Test-only seam replacing the real "what commit is this copy of
+   * fabrica running as" lookup (doctor-command.ts's runningCopyCommit
+   * over this checkout). */
+  getRunningCommit?: () => string | null;
+  /** Test-only seam replacing the real pid-file-or-command-line lookup
+   * (live-view-process.ts's findLiveViewProcess) used before ever
+   * stopping an already-listening live view. */
+  findLiveViewProcess?: (recordHome: string) => { pid: number } | null;
+  /** Test-only seam replacing the real SIGTERM
+   * (live-view-process.ts's stopLiveViewProcess). */
+  stopLiveViewProcess?: (pid: number) => void;
   /** How long to wait for the live view to actually start listening
    * before giving up and launching the harness anyway. */
   liveViewStartTimeoutMs?: number;
@@ -312,17 +368,21 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   }
 
   // Step 2: the live view - started detached, the same way fabrica do
-  // backgrounds a task, unless one is already listening.
+  // backgrounds a task, unless one is already listening AND running
+  // the same commit this copy of fabrica is. A live view running
+  // older code (e.g. left over from before a merge) is stopped and
+  // replaced rather than reused, exactly like a fresh start - see
+  // src/cli/live-view-process.ts for why stopping it is never as
+  // simple as "kill whatever holds the port."
   const port = opts.liveViewPort ?? LIVE_VIEW_PORT;
   const isListening = opts.isLiveViewListening ?? probePortListening;
+  const startTimeoutMs = opts.liveViewStartTimeoutMs ?? 10_000;
 
-  if (await isListening("127.0.0.1", port)) {
-    stdout(`Live view already running - ${liveViewUrl(port)}`);
-  } else {
+  const startFreshLiveView = async () => {
     const startLiveView = opts.startLiveView ?? (() => spawnDetachedLiveView({ recordHome }));
     startLiveView({ recordHome, port });
 
-    const started = await waitUntilListening(isListening, port, opts.liveViewStartTimeoutMs ?? 10_000);
+    const started = await waitUntilListening(isListening, port, startTimeoutMs);
     if (started) {
       (opts.openBrowser ?? defaultOpenBrowser)(liveViewUrl(port));
       stdout(`Live view started - ${liveViewUrl(port)}`);
@@ -330,6 +390,34 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
       stderr(`fabrica up: the live view did not start listening on 127.0.0.1:${port} in time - continuing anyway.`);
       stdout(`Live view may still be starting - ${liveViewUrl(port)}`);
     }
+  };
+
+  if (await isListening("127.0.0.1", port)) {
+    const fetchVersion = opts.fetchLiveViewVersion ?? defaultFetchLiveViewVersion;
+    const getRunningCommit = opts.getRunningCommit ?? (() => runningCopyCommit(CHECKOUT));
+    const remoteCommit = await fetchVersion(port);
+    const ourCommit = getRunningCommit();
+    const sameCommit = remoteCommit !== null && ourCommit !== null && remoteCommit === ourCommit;
+
+    if (sameCommit) {
+      stdout(`Live view already running - ${liveViewUrl(port)}`);
+    } else {
+      const findProcess = opts.findLiveViewProcess ?? locateLiveViewProcess;
+      const found = findProcess(recordHome);
+      if (!found) {
+        stderr(
+          `fabrica up: something is already listening on 127.0.0.1:${port}, but it doesn't look like the live view ` +
+            `(no matching pid file or process found) - stop whatever that is yourself, then try again.`
+        );
+        return 1;
+      }
+      const stopProcess = opts.stopLiveViewProcess ?? terminateLiveViewProcess;
+      stopProcess(found.pid);
+      await waitUntilNotListening(isListening, port, startTimeoutMs);
+      await startFreshLiveView();
+    }
+  } else {
+    await startFreshLiveView();
   }
 
   // Step 2.5: any optional integration that wants to react to this
@@ -345,7 +433,7 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   for (const failure of foundHooks.loadFailures) stderr(`${failure.path} ${failure.problem}`);
   for (const hook of foundHooks.hooks) {
     try {
-      await hook.maybeStart({ recordHome, env: hookEnv });
+      await hook.maybeStart({ recordHome, env: hookEnv, notify: stderr });
     } catch (err) {
       stderr(`fabrica up: an integration hook failed to start: ${err instanceof Error ? err.message : String(err)}`);
     }

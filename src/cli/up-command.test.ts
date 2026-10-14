@@ -51,7 +51,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
  * config-derived checks (project, caps, spend) pass too - the same
  * shape doctor-command.test.ts's healthyHome() builds. */
 function healthyRecordHome(): string {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { origin: false });
   execFileSync("git", ["remote", "add", "origin", "https://example.invalid/demo.git"], { cwd: project });
   const home = tempRecordHome();
   writeFileSync(
@@ -119,6 +119,15 @@ function neverOpened() {
   };
 }
 
+/** fetchLiveViewVersion + getRunningCommit overrides that make Step 2
+ * treat an already-listening live view as running this exact commit,
+ * for tests that aren't themselves about the version check but still
+ * need to get past it to reach the harness - without depending on this
+ * machine's real git state or a real /api/version response. */
+function sameCommitSeams(commit = "same-commit") {
+  return { fetchLiveViewVersion: async () => commit, getRunningCommit: () => commit };
+}
+
 test("runUpCommand: an unknown flag is refused with exact instructions, not ignored", async () => {
   const io = captureIo();
   const code = await runUpCommand(["--json"], { recordHome: tempRecordHome(), ...io });
@@ -175,15 +184,23 @@ test("runUpCommand: refuses when a doctor check fails, printing the doctor outpu
   assert.equal(launchTouched, false, "must never reach the harness launch step");
 });
 
-test("runUpCommand: a live view already listening is reused, not started twice, and no browser is opened", async () => {
+test("runUpCommand: a live view already listening and running this exact commit is reused, not stopped or started twice, and no browser is opened", async () => {
   const io = captureIo();
   let captured: unknown;
+  let stopped = false;
 
   const code = await runUpCommand([], {
     recordHome: healthyRecordHome(),
     cwd: tempCwd(),
     doctorProbes: okProbes(),
     isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    findLiveViewProcess: () => {
+      throw new Error("must never even look for the process - the commits already matched");
+    },
+    stopLiveViewProcess: () => {
+      stopped = true;
+    },
     startLiveView: neverStarted(),
     openBrowser: neverOpened(),
     skillDir: fixtureSkillDir(),
@@ -201,6 +218,75 @@ test("runUpCommand: a live view already listening is reused, not started twice, 
   assert.equal(code, 0, io.err.join("\n"));
   assert.match(io.out.join("\n"), /already running - http:\/\/localhost:7777/);
   assert.ok(captured, "launch was never called");
+  assert.equal(stopped, false, "must never stop a live view running the same commit");
+});
+
+test("runUpCommand: a live view already listening but running a different commit is stopped and replaced with a fresh one", async () => {
+  const io = captureIo();
+  let listening = true;
+  let stoppedPid: number | null = null;
+  let startCalls = 0;
+  const opened: string[] = [];
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => listening,
+    fetchLiveViewVersion: async () => "old-commit",
+    getRunningCommit: () => "new-commit",
+    findLiveViewProcess: () => ({ pid: 99_999 }),
+    stopLiveViewProcess: (pid) => {
+      stoppedPid = pid;
+      listening = false; // the stopped process actually goes away
+    },
+    startLiveView: () => {
+      startCalls += 1;
+      listening = true; // the fresh one binds
+    },
+    openBrowser: (url) => opened.push(url),
+    liveViewStartTimeoutMs: 3_000,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(stoppedPid, 99_999, "must stop exactly the process findLiveViewProcess identified");
+  assert.equal(startCalls, 1, "must start exactly one fresh live view after stopping the stale one");
+  assert.deepEqual(opened, ["http://localhost:7777"]);
+  assert.match(io.out.join("\n"), /Live view started - http:\/\/localhost:7777/);
+});
+
+test("runUpCommand: a live view that doesn't answer /api/version at all is treated the same as a different commit", async () => {
+  const io = captureIo();
+  let listening = true;
+  let stoppedPid: number | null = null;
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => listening,
+    fetchLiveViewVersion: async () => null,
+    getRunningCommit: () => "whatever-this-copy-is",
+    findLiveViewProcess: () => ({ pid: 12_345 }),
+    stopLiveViewProcess: (pid) => {
+      stoppedPid = pid;
+      listening = false; // the stopped process goes away; this fixture never rebinds
+    },
+    startLiveView: () => {},
+    openBrowser: () => {},
+    liveViewStartTimeoutMs: 500,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(stoppedPid, 12_345);
 });
 
 test("runUpCommand: starts the live view and opens the browser when nothing is listening yet", async () => {
@@ -258,8 +344,22 @@ test("runUpCommand: a live view that never starts listening in time still lets t
   assert.match(io.out.join("\n"), /may still be starting/i);
 });
 
-test("runUpCommand: a real listener on the probed port is detected without starting a second one", async () => {
+test("runUpCommand: a real listener on the probed port that isn't the live view (no /api/version, no matching process) is reported as an error, never killed", async () => {
+  // A bare TCP server, not an HTTP one - real /api/version calls
+  // against it never get a real answer, the same "didn't answer that
+  // endpoint" case an unrelated process on 7777 would be. Every
+  // connection is dropped the instant it's accepted (rather than left
+  // open with no response, which would make the real fetch wait out
+  // its own timeout, and would then make this server's own close()
+  // hang forever afterward waiting for that still-open connection to
+  // end - net.Server.close() only resolves once every connection it
+  // ever accepted has ended). Nothing here overrides findLiveViewProcess
+  // either, so this also exercises the real pid-file-or-command-line
+  // lookup (live-view-process.ts) against this very test process's own
+  // process table - it must find nothing to blame for holding this
+  // port, since nothing resembling the live view is running.
   const server = createServer();
+  server.on("connection", (socket) => socket.destroy());
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
 
@@ -272,14 +372,29 @@ test("runUpCommand: a real listener on the probed port is detected without start
       liveViewPort: port,
       startLiveView: neverStarted(),
       openBrowser: neverOpened(),
+      stopLiveViewProcess: () => {
+        throw new Error("must never stop a process that was never identified as the live view");
+      },
       skillDir: fixtureSkillDir(),
       handbookPath: fixtureHandbookPath(),
-      launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+      launcher: {
+        harnessAvailable: () => {
+          throw new Error("must never reach the harness once the live view step errors out");
+        },
+        launch: async () => {
+          throw new Error("must never reach the harness once the live view step errors out");
+        },
+      },
       ...io,
     });
 
-    assert.equal(code, 0, io.err.join("\n"));
-    assert.match(io.out.join("\n"), new RegExp(`already running - http://localhost:${port}`));
+    assert.equal(code, 1);
+    assert.match(io.err.join("\n"), /doesn't look like the live view/i);
+    assert.match(io.err.join("\n"), new RegExp(`127\\.0\\.0\\.1:${port}`));
+
+    // The bare TCP server is still exactly as it was - nothing here
+    // ever touched it.
+    assert.equal(server.listening, true);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -296,6 +411,7 @@ test("runUpCommand: launch is called with the handbook text and this harness's s
     cwd: tempCwd(),
     doctorProbes: okProbes(),
     isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
     skillDir,
     handbookPath,
     launcher: {
@@ -326,6 +442,7 @@ test("runUpCommand: the project folder is never created in, written to, or other
     cwd: projectDir,
     doctorProbes: okProbes(),
     isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
     skillDir: fixtureSkillDir(),
     handbookPath: fixtureHandbookPath(),
     launcher: {
@@ -350,6 +467,7 @@ test("runUpCommand: no usable per-harness launch script under skill/ refuses", a
     cwd: tempCwd(),
     doctorProbes: okProbes(),
     isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
     skillDir: mkdtempSync(join(tmpdir(), "fabrica-up-empty-skill-")),
     ...io,
   });
@@ -365,6 +483,7 @@ test("runUpCommand: an unavailable harness refuses without ever launching", asyn
     cwd: tempCwd(),
     doctorProbes: okProbes(),
     isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
     skillDir: fixtureSkillDir(),
     handbookPath: fixtureHandbookPath(),
     launcher: {
@@ -389,6 +508,7 @@ test("runUpCommand: discovers and calls every integrations/<name>/up-hook.ts, pa
     cwd: tempCwd(),
     doctorProbes: okProbes(),
     isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
     skillDir: fixtureSkillDir(),
     handbookPath: fixtureHandbookPath(),
     integrationsDir: fixtureIntegrationsDir(),
@@ -411,6 +531,7 @@ test("runUpCommand: an up-hook that throws is reported but never stops the harne
     cwd: tempCwd(),
     doctorProbes: okProbes(),
     isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
     skillDir: fixtureSkillDir(),
     handbookPath: fixtureHandbookPath(),
     upHooks: [
@@ -442,6 +563,7 @@ test("runUpCommand: propagates the harness session's own exit code", async () =>
     cwd: tempCwd(),
     doctorProbes: okProbes(),
     isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
     skillDir: fixtureSkillDir(),
     handbookPath: fixtureHandbookPath(),
     launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 7 }) },
