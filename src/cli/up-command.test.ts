@@ -51,7 +51,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
  * config-derived checks (project, caps, spend) pass too - the same
  * shape doctor-command.test.ts's healthyHome() builds. */
 function healthyRecordHome(): string {
-  const project = makeFixtureRepo("exit 0");
+  const project = makeFixtureRepo("exit 0", { origin: false });
   execFileSync("git", ["remote", "add", "origin", "https://example.invalid/demo.git"], { cwd: project });
   const home = tempRecordHome();
   writeFileSync(

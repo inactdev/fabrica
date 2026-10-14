@@ -12,7 +12,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { makeFixtureRepo, pushToOrigin } from "../../contract/helpers/fixture.ts";
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
@@ -318,6 +318,7 @@ test("runDoCommand: a task that fails before any work starts prints why and exit
   const project = makeFixtureRepo("exit 0", { inspector: false });
   execFileSync("git", ["rm", "-q", "check.sh"], { cwd: project });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "no check"], { cwd: project });
+  pushToOrigin(project);
   const io = captureIo();
 
   const code = await runDoCommand(["small change", "--project", project], {
@@ -340,6 +341,7 @@ test("runDoCommand: every cli.log line carries a timestamp and the task id", asy
   const project = makeFixtureRepo("exit 0", { inspector: false });
   execFileSync("git", ["rm", "-q", "check.sh"], { cwd: project });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "no check"], { cwd: project });
+  pushToOrigin(project);
   const io = captureIo();
 
   await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...FAST_ASK_WAIT, ...io });

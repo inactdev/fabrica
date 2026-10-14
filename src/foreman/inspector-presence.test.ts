@@ -25,7 +25,7 @@ import { SELF_TESTED } from "./judge.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { fakeInspector } from "../../contract/helpers/fake-inspector.ts";
 import { fakeCheckBox } from "../../contract/helpers/fake-check-box.ts";
-import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { makeFixtureRepo, pushToOrigin } from "../../contract/helpers/fixture.ts";
 import { runLogCommand } from "../cli/log-command.ts";
 import { runStatusCommand } from "../cli/status-command.ts";
 
@@ -182,6 +182,7 @@ function projectWithoutCheckSh(): string {
   const project = makeFixtureRepo("exit 0");
   rmSync(join(project, "check.sh"));
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "no check.sh"], { cwd: project });
+  pushToOrigin(project);
   return project;
 }
 

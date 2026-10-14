@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -73,6 +73,52 @@ test("createProductionLine refuses a path that is a subdirectory of a repo, not 
   assert.throws(
     () => createProductionLine({ project: subdir, taskId: "task-x", recordHome }),
     (err: unknown) => err instanceof LineError && err.code === "not-a-repo"
+  );
+});
+
+test("createProductionLine cuts a new task's branch from origin's default branch, never the local checkout's HEAD", () => {
+  const project = makeFixtureProject();
+  const recordHome = makeFixtureHome();
+
+  // "The local master is behind origin": advance origin two commits ahead
+  // through a second clone, so nothing in `project` itself ever changes.
+  const originUrl = execFileSync("git", ["remote", "get-url", "origin"], { cwd: project, encoding: "utf8" }).trim();
+  const branch = execFileSync("git", ["branch", "--show-current"], { cwd: project, encoding: "utf8" }).trim();
+  const mirror = mkdtempSync(join(tmpdir(), "fabrica-line-mirror-"));
+  execFileSync("git", ["clone", "-q", originUrl, mirror]);
+  for (const message of ["upstream 1", "upstream 2"]) {
+    writeFileSync(join(mirror, "upstream.txt"), `${message}\n`);
+    execFileSync("git", ["add", "-A"], { cwd: mirror });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", message], { cwd: mirror });
+  }
+  execFileSync("git", ["push", "-q", "origin", branch], { cwd: mirror });
+
+  const before = fingerprint(project);
+  const line = createProductionLine({ project, taskId: "task-origin", recordHome });
+
+  assert.equal(
+    readFileSync(join(line.workdir, "upstream.txt"), "utf8"),
+    "upstream 2\n",
+    "the line should be cut from origin's latest commit, not the local checkout's HEAD"
+  );
+  assert.equal(fingerprint(project), before, "the local checkout, two commits behind origin, must stay untouched");
+});
+
+test("createProductionLine refuses rather than falling back to the local checkout when origin can't be fetched", () => {
+  const project = makeFixtureProject();
+  const recordHome = makeFixtureHome();
+
+  // Point "origin" at a path that doesn't exist - the fetch itself fails.
+  execFileSync("git", ["remote", "set-url", "origin", join(recordHome, "no-such-remote")], { cwd: project });
+
+  assert.throws(
+    () => createProductionLine({ project, taskId: "task-fetch-fails", recordHome }),
+    (err: unknown) => err instanceof LineError && err.code === "fetch-failed"
+  );
+
+  assert.ok(
+    !existsSync(join(recordHome, "tasks", "task-fetch-fails")),
+    "a failed fetch must refuse before starting anything - no task folder either"
   );
 });
 

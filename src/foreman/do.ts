@@ -169,19 +169,26 @@ async function productionRound(
     : createProductionLine({ project, taskId, recordHome });
 
   try {
+    // Pin the diff's fork point to the exact commit the ProductionLine was
+    // cut from, before any worker attempt runs — so the delivery's `files`
+    // list can't drift if the Client's own checkout moves to a different
+    // branch while the task is still running. Computed before "line-cut"
+    // is appended so that event's own record of the base commit (for a
+    // fresh cut, origin's default branch — see src/line/cut.ts) is never
+    // missing.
+    const baseCommit = baseCommitOf(line.workdir);
+
     // The line demonstrably exists now - recorded here, inside the try,
     // so teardown still runs if this append itself fails, and before
     // anything that can throw between the cut and "work-started"
     // (prepareRound's own refusals). A later resume reads
     // this event and nothing else to know it must reopen this branch
     // rather than cut a new one.
-    appendEvent(recordHome, { taskId, name: "line-cut", details: { branch: line.branch, reopened: isRetry } });
-
-    // Pin the diff's fork point to the exact commit the ProductionLine was
-    // cut from, before any worker attempt runs — so the delivery's `files`
-    // list can't drift if the Client's own checkout moves to a different
-    // branch while the task is still running.
-    const baseCommit = baseCommitOf(line.workdir);
+    appendEvent(recordHome, {
+      taskId,
+      name: "line-cut",
+      details: { branch: line.branch, reopened: isRetry, baseCommit },
+    });
 
     // Who judges each attempt: Inspector, or the worker's own box (issue
     // #64) - never a check run on the host.
