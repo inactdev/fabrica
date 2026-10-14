@@ -59,6 +59,26 @@ work is done — say which of the three real outcomes happened (started,
 asked a question, or failed before starting), never "it's done," and
 never "it's finished" because the command returned.
 
+Right after reporting the id, run this as a backgrounded command — set
+`run_in_background: true` on the Bash call, the way you would for a dev
+server or any other long-running process:
+
+    fabrica await <taskId>
+
+It blocks silently until the task delivers, asks a question, or fails,
+then prints exactly one line naming which and exits — never for a
+heartbeat or anything else along the way. A command backgrounded this
+way keeps running after your response and Claude Code brings its outcome
+back into the conversation on its own once it exits (see Claude Code's
+own tools reference, "Background commands"); don't poll `fabrica status`
+to find out and don't block the conversation waiting on it in the
+foreground. When that outcome lands, tell the Client, in plain English,
+that the task needs him now and exactly what to do about it — relay
+`fabrica await`'s own line rather than restating it. That is reporting,
+not deciding: never run `fabrica answer` or `fabrica verdict` yourself
+just because `fabrica await` said one is now needed (cases 3 and 5 still
+apply in full).
+
 If one sentence contains several asks ("add a health endpoint and fix the
 delete bug"), that's several tasks, not one. Run `fabrica do` once per
 ask, each in the Client's own words for that ask, and report every id.
