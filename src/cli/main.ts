@@ -10,6 +10,7 @@ import { ANSWER_HELP, runAnswerCommand } from "./answer-command.ts";
 import { STATUS_HELP, runStatusCommand } from "./status-command.ts";
 import { LOG_HELP, runLogCommand } from "./log-command.ts";
 import { WATCH_HELP, runWatchCommand } from "./watch-command.ts";
+import { AWAIT_HELP, runAwaitCommand } from "./await-command.ts";
 import { DENY_AND_LOG_EDIT_HELP, runDenyAndLogEditCommand } from "./deny-and-log-edit-command.ts";
 import { VERIFY_HOOK_HELP, runVerifyHookCommand } from "./verify-hook-command.ts";
 import { COST_HELP, runCostCommand } from "./cost-command.ts";
@@ -97,6 +98,14 @@ export async function main(
       return 0;
     }
     return runWatchCommand(rest, io);
+  }
+
+  if (command === "await") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(AWAIT_HELP);
+      return 0;
+    }
+    return runAwaitCommand(rest, io);
   }
 
   if (command === "up") {

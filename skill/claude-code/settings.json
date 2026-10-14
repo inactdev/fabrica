@@ -27,6 +27,7 @@
       "Bash(fabrica status *)",
       "Bash(fabrica log *)",
       "Bash(fabrica watch *)",
+      "Bash(fabrica await *)",
       "Bash(fabrica verify-hook *)",
       "Bash(fabrica doctor)",
       "Bash(fabrica)",

@@ -12,6 +12,7 @@ export const COMMANDS = [
   "status",
   "log",
   "watch",
+  "await",
   "deny-and-log-edit",
   "verify-hook",
   "up",
@@ -48,6 +49,9 @@ Commands:
   watch <taskId>
       Follow a task while it runs: heartbeats live, transcript in
       batches. Stopping this (Ctrl-C) never stops the work.
+  await <taskId>
+      Wait until the task needs you - delivered, asking a question, or
+      failed - then exit with exactly one line naming which.
   verify-hook
       Prove whether this directory's session config actually blocks and
       logs an edit, instead of assuming it does.
