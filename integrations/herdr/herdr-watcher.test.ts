@@ -164,6 +164,96 @@ test("a verdict-recorded event with ruling accept or wrong releases the agent in
   });
 });
 
+for (const ruling of ["accept", "wrong"]) {
+  test(`a verdict-recorded event with ruling ${ruling} releases the agent, then sends ctrl+c, then closes the tab, in that order`, () => {
+    withFakeHerdrLog((readCalls) => {
+      const recordHome = makeRecordHome();
+      const watcher = watcherOver(recordHome);
+
+      const { id } = registerTask(recordHome, "Fix the login bug");
+      watcher.pollOnce(); // seq 1 - tab create / pane run / report-agent
+
+      appendEvent(recordHome, { taskId: id, name: "verdict-recorded", details: { ruling, note: "" } });
+      watcher.pollOnce();
+
+      const calls = readCalls().slice(3); // after task-received's three calls
+      assert.equal(calls.length, 3, `expected exactly release-agent, send-keys, and tab close, got ${JSON.stringify(calls)}`);
+
+      assert.deepEqual(calls[0].args, [
+        "pane",
+        "release-agent",
+        "w1:p1",
+        "--source",
+        "custom:fabrica",
+        "--agent",
+        "Fix the login bug",
+        "--seq",
+        "2",
+      ]);
+      assert.deepEqual(calls[1].args, ["pane", "send-keys", "w1:p1", "ctrl+c"]);
+      assert.deepEqual(calls[2].args, ["tab", "close", "w1:t1"]);
+    });
+  });
+}
+
+test("no event other than a closing verdict (accept or wrong) ever closes a tab", () => {
+  withFakeHerdrLog((readCalls) => {
+    const recordHome = makeRecordHome();
+    const watcher = watcherOver(recordHome);
+
+    const { id } = registerTask(recordHome, "Fix the login bug");
+    watcher.pollOnce();
+    appendEvent(recordHome, { taskId: id, name: "heartbeat", details: {} });
+    appendEvent(recordHome, { taskId: id, name: "questions-asked", details: { questions: ["?"] } });
+    appendEvent(recordHome, { taskId: id, name: "delivered", details: {} });
+    appendEvent(recordHome, { taskId: id, name: "task-failed", details: { message: "boom" } });
+    appendEvent(recordHome, { taskId: id, name: "verdict-recorded", details: { ruling: "fix", note: "try again" } });
+    watcher.pollOnce();
+
+    assert.deepEqual(
+      readCalls().filter((c) => c.args[0] === "tab" && c.args[1] === "close"),
+      []
+    );
+
+    appendEvent(recordHome, { taskId: id, name: "verdict-recorded", details: { ruling: "accept", note: "" } });
+    watcher.pollOnce();
+
+    const closes = readCalls().filter((c) => c.args[0] === "tab" && c.args[1] === "close");
+    assert.equal(closes.length, 1, "only the closing verdict should ever close the tab");
+  });
+});
+
+test("a failing tab close is logged with its exact arguments, and the watcher keeps running afterward", () => {
+  withFakeHerdr({ FAKE_HERDR_FAIL_SUBCOMMAND: "tab close", FAKE_HERDR_FAIL_TIMES: "1" }, (readCalls) => {
+    const recordHome = makeRecordHome();
+    const watcher = watcherOver(recordHome);
+
+    const a = registerTask(recordHome, "Task A");
+    watcher.pollOnce();
+    appendEvent(recordHome, { taskId: a.id, name: "verdict-recorded", details: { ruling: "accept", note: "" } });
+    watcher.pollOnce();
+
+    const logPath = herdrWatcherLogPath(recordHome);
+    assert.ok(existsSync(logPath), "a failing tab close should be logged");
+    const logged = readFileSync(logPath, "utf8");
+    assert.match(logged, /tab close w1:t1 failed: .*simulated failure for/s);
+
+    // release-agent and send-keys still ran before the failing close.
+    assert.ok(readCalls().some((c) => c.args[0] === "pane" && c.args[1] === "release-agent"));
+    assert.ok(readCalls().some((c) => c.args[0] === "pane" && c.args[1] === "send-keys"));
+
+    // The watcher must still be usable afterward - a second task goes
+    // through tab create/run/report-agent and its own close normally.
+    const b = registerTask(recordHome, "Task B");
+    watcher.pollOnce();
+    appendEvent(recordHome, { taskId: b.id, name: "verdict-recorded", details: { ruling: "wrong", note: "" } });
+    watcher.pollOnce();
+
+    const closesForB = readCalls().filter((c) => c.args[0] === "tab" && c.args[1] === "close" && c.args[2] === "w1:t2");
+    assert.equal(closesForB.length, 1, "a later task's tab close should still succeed");
+  });
+});
+
 test("a verdict-recorded event with ruling fix neither reports a new state nor releases - the task stays open", () => {
   withFakeHerdrLog((readCalls) => {
     const recordHome = makeRecordHome();
