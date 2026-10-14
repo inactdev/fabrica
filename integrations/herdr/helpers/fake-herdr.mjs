@@ -10,8 +10,9 @@
 //   deterministic, incrementing pane/tab id pair counted from the log
 //   itself (so two fake processes sharing one log still hand out
 //   distinct, increasing ids).
-// - `pane run`, `pane report-agent`, `pane release-agent` print a small
-//   JSON ack - the watcher never reads their output, only tab create's.
+// - `pane run`, `pane report-agent`, `pane release-agent`, `pane
+//   send-keys`, `tab close` print a small JSON ack - the watcher never
+//   reads their output, only tab create's.
 //
 // FAKE_HERDR_FAIL_SUBCOMMAND (e.g. "pane report-agent"), optionally with
 // FAKE_HERDR_FAIL_TIMES (default 1), makes the first N calls matching
@@ -63,6 +64,11 @@ if (args[0] === "tab" && args[1] === "create") {
       },
     }) + "\n"
   );
-} else if (args[0] === "pane" && (args[1] === "run" || args[1] === "report-agent" || args[1] === "release-agent")) {
+} else if (
+  args[0] === "pane" &&
+  (args[1] === "run" || args[1] === "report-agent" || args[1] === "release-agent" || args[1] === "send-keys")
+) {
   process.stdout.write(JSON.stringify({ id: `cli:pane:${args[1]}`, result: {} }) + "\n");
+} else if (args[0] === "tab" && args[1] === "close") {
+  process.stdout.write(JSON.stringify({ id: "cli:tab:close", result: {} }) + "\n");
 }

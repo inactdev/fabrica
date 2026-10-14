@@ -9,11 +9,12 @@
 // touches a running task's process, the same way `fabrica watch` itself
 // never does.
 //
-// Exactly four Herdr commands are ever called - no `pane split`, no
-// `agent rename`, no `pane report-metadata`:
+// Six Herdr commands are ever called - no `pane split`, no `agent
+// rename`, no `pane report-metadata`:
 //   1. `herdr tab create --no-focus --label "<title>"` - opens the tab,
-//      pane id taken from the JSON response's `result.root_pane.pane_id`
-//      (never from raw stdout otherwise).
+//      pane id and tab id taken from the JSON response's
+//      `result.root_pane.pane_id` and `result.tab.tab_id` (never from
+//      raw stdout otherwise).
 //   2. `herdr pane run <pane_id> "<command>"` - one argv element, not a
 //      shell string: execFileSync never invokes a shell, so `command`
 //      reaches Herdr exactly as given with no quoting to get right or
@@ -23,7 +24,11 @@
 //      [--message "..."]`.
 //   4. `herdr pane release-agent <pane_id> --source custom:fabrica
 //      --agent "<title>" --seq N`.
-// Only these four wrapper functions (callHerdr's four callers below)
+//   5. `herdr pane send-keys <pane_id> ctrl+c` - sent right after
+//      release, on a closing verdict only, so the `fabrica watch`
+//      running in that pane stops cleanly before the tab goes away.
+//   6. `herdr tab close <tab_id>` - closes the tab itself, last of all.
+// Only these six wrapper functions (callHerdr's six callers below)
 // should need to change if Herdr's CLI shape ever changes.
 
 import { execFileSync } from "node:child_process";
@@ -107,18 +112,23 @@ function tryHerdr(bin: string[], recordHome: string, args: string[]): string | n
 }
 
 /** `herdr tab create --no-focus --label "<title>"` - returns the new
- * tab's root pane id, taken from the JSON response's
- * `result.root_pane.pane_id` (never from raw stdout), or null if the
- * call failed or that field wasn't there. */
-function createTab(bin: string[], recordHome: string, title: string): string | null {
+ * tab's root pane id and tab id, taken from the JSON response's
+ * `result.root_pane.pane_id` and `result.tab.tab_id` (never from raw
+ * stdout), or null if the call failed or either field wasn't there. */
+function createTab(bin: string[], recordHome: string, title: string): { paneId: string; tabId: string } | null {
   const args = ["tab", "create", "--no-focus", "--label", title];
   const output = tryHerdr(bin, recordHome, args);
   if (output === null) return null;
   try {
-    const parsed = JSON.parse(output) as { result?: { root_pane?: { pane_id?: string } } };
+    const parsed = JSON.parse(output) as {
+      result?: { root_pane?: { pane_id?: string }; tab?: { tab_id?: string } };
+    };
     const paneId = parsed.result?.root_pane?.pane_id;
-    if (typeof paneId === "string" && paneId.length > 0) return paneId;
-    logHerdrFailure(recordHome, args, `no result.root_pane.pane_id in output: ${output}`);
+    const tabId = parsed.result?.tab?.tab_id;
+    if (typeof paneId === "string" && paneId.length > 0 && typeof tabId === "string" && tabId.length > 0) {
+      return { paneId, tabId };
+    }
+    logHerdrFailure(recordHome, args, `no result.root_pane.pane_id/result.tab.tab_id in output: ${output}`);
     return null;
   } catch (err) {
     logHerdrFailure(recordHome, args, err);
@@ -151,6 +161,19 @@ function reportAgent(
  * "<title>" --seq N`. */
 function releaseAgent(bin: string[], recordHome: string, paneId: string, title: string, seq: number): void {
   tryHerdr(bin, recordHome, ["pane", "release-agent", paneId, "--source", REPORT_SOURCE, "--agent", title, "--seq", String(seq)]);
+}
+
+/** `herdr pane send-keys <pane_id> ctrl+c` - sent to the pane running
+ * `fabrica watch` right before its tab closes, so that process stops
+ * cleanly instead of being torn down mid-read by the tab going away. */
+function sendCtrlC(bin: string[], recordHome: string, paneId: string): void {
+  tryHerdr(bin, recordHome, ["pane", "send-keys", paneId, "ctrl+c"]);
+}
+
+/** `herdr tab close <tab_id>` - closes the tab itself. CLI closes are
+ * documented as immediate, no confirmation. */
+function closeTab(bin: string[], recordHome: string, tabId: string): void {
+  tryHerdr(bin, recordHome, ["tab", "close", tabId]);
 }
 
 /** The task's title - used both as the tab's `--label` and as every
@@ -217,6 +240,7 @@ export interface CreateHerdrWatcherOptions {
 
 interface TaskRow {
   paneId: string;
+  tabId: string;
   title: string;
   /** The last --seq value sent for this task - increases by one on
    * every report-agent/release-agent call for it. */
@@ -250,12 +274,12 @@ export function createHerdrWatcher(opts: CreateHerdrWatcherOptions): HerdrWatche
 
         if (event.name === "task-received") {
           const title = titleFor(recordHome, event.taskId);
-          const paneId = createTab(bin, recordHome, title);
-          if (paneId === null) continue; // logged already; nothing else to do for this task
-          const task: TaskRow = { paneId, title, seq: 0 };
+          const created = createTab(bin, recordHome, title);
+          if (created === null) continue; // logged already; nothing else to do for this task
+          const task: TaskRow = { paneId: created.paneId, tabId: created.tabId, title, seq: 0 };
           tasks.set(event.taskId, task);
-          runInPane(bin, recordHome, paneId, watchCommandFor(event.taskId));
-          reportAgent(bin, recordHome, paneId, title, "working", nextSeq(task));
+          runInPane(bin, recordHome, task.paneId, watchCommandFor(event.taskId));
+          reportAgent(bin, recordHome, task.paneId, title, "working", nextSeq(task));
           continue;
         }
 
@@ -267,6 +291,8 @@ export function createHerdrWatcher(opts: CreateHerdrWatcherOptions): HerdrWatche
 
         if (reaction.action === "release") {
           releaseAgent(bin, recordHome, task.paneId, task.title, nextSeq(task));
+          sendCtrlC(bin, recordHome, task.paneId);
+          closeTab(bin, recordHome, task.tabId);
           tasks.delete(event.taskId); // closed for good - rule 6's "accept"/"wrong"
           continue;
         }

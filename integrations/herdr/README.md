@@ -10,15 +10,20 @@ which proves nothing under `src/` mentions it.
 
 `herdr-watcher.ts` follows `events.jsonl` (the same byte-offset tail
 reader `fabrica watch` reads through - `createLineTail`, re-exported from
-`src/index.ts`) and reacts to it using exactly four Herdr commands - the
-ones the Client has verified by hand on his real Herdr. Nothing else:
-no `pane split`, no `agent rename`, no `pane report-metadata`.
+`src/index.ts`) and reacts to it using exactly six Herdr commands - the
+ones the Client has verified by hand on his real Herdr, plus `pane
+send-keys`/`tab close` for closing a task's tab (https://herdr.dev/llms-full.txt).
+Nothing else: no `pane split`, no `agent rename`, no `pane
+report-metadata`.
 
 For every **new** `task-received` event:
 
 1. `herdr tab create --no-focus --label "<title>"` - opens a new tab.
-   The pane id is taken from the JSON response's
-   `result.root_pane.pane_id` field, never from raw stdout otherwise:
+   The pane id and tab id are taken from the JSON response's
+   `result.root_pane.pane_id` and `result.tab.tab_id` fields, never from
+   raw stdout otherwise - both are kept for the task's whole lifetime,
+   the pane id for every report/release/send-keys call and the tab id
+   for the eventual close:
 
    ```json
    {"id":"cli:tab:create","result":{"root_pane":{"pane_id":"w2:p6", ...},"tab":{"tab_id":"w2:t5","label":"...", ...}}}
@@ -52,15 +57,23 @@ above. `working`, `idle`, and `blocked` are the only states this
 watcher ever sends.
 
 A `verdict-recorded` event with ruling `accept` or `wrong` (rule 6: the
-two rulings that actually close the task) instead runs the fourth
-command, `herdr pane release-agent <pane_id> --source custom:fabrica
---agent "<title>" --seq N`, and stops tracking the task - Herdr's own
-docs describe `release-agent` as clearing the row's name, state, and
-resume command, to be called "only when the user actually quits," which
-a closed task is. A `fix` verdict does neither: it reopens the loop
-rather than closing it, and the next heartbeat the resumed worker emits
-already reports `working` again, so there's no separate case for it
-here.
+two rulings that actually close the task) instead runs three commands,
+in order, and stops tracking the task:
+
+1. `herdr pane release-agent <pane_id> --source custom:fabrica --agent
+   "<title>" --seq N` - Herdr's own docs describe `release-agent` as
+   clearing the row's name, state, and resume command, to be called
+   "only when the user actually quits," which a closed task is.
+2. `herdr pane send-keys <pane_id> ctrl+c` - stops the `fabrica watch`
+   process running in that pane cleanly, before the tab it's running in
+   disappears out from under it.
+3. `herdr tab close <tab_id>` - closes the tab itself. Herdr's docs note
+   CLI/API closes are immediate, no confirmation prompt.
+
+A `fix` verdict does none of this: it reopens the loop rather than
+closing it, and the next heartbeat the resumed worker emits already
+reports `working` again, so there's no separate case for it here - the
+tab stays open exactly as before.
 
 `--seq` is a per-task counter, starting at 1 on the task's first
 `report-agent` call and increasing by one on every `report-agent` or
@@ -80,16 +93,18 @@ It only ever opens tabs for tasks received while it's running.
 
 ## A failing Herdr call never stops the watcher
 
-Every one of the four commands above is wrapped: if it fails (Herdr's
+Every one of the six commands above is wrapped: if it fails (Herdr's
 own CLI exits 1 with a JSON error on timeout or a server error, or 2 on
 invalid syntax - https://herdr.dev/llms-full.txt), the exact arguments
 and whatever Herdr printed are appended as one line to this record
 home's own `herdr-watcher.log`, and the watcher moves on to the next
 event or the next poll - it never exits because one command failed. A
 failed `tab create` means that task is skipped entirely (there's no
-pane id to do anything else with); a failed `pane run` or
-`report-agent`/`release-agent` call is logged but doesn't stop the
-other calls around it or any later poll.
+pane id to do anything else with); a failed `pane run`,
+`report-agent`/`release-agent`, `send-keys`, or `tab close` call is
+logged but doesn't stop the other calls around it (a failed close still
+leaves the task untracked - there's nothing more to retry it with) or
+any later poll.
 
 ## Starting it
 
@@ -151,9 +166,10 @@ every ~15s), flips to **idle** the moment there's a delivery sitting
 there for your verdict, or **blocked** on a clarifying question or a
 failure, and is released entirely once you give a verdict that actually
 closes it (`accept` or `wrong`; a `fix` verdict instead flips it back to
-**working** as soon as the next heartbeat lands). The pane itself is
-never closed or touched again by this watcher - only its reported state
-changes.
+**working** as soon as the next heartbeat lands). On that same closing
+verdict, the pane's `fabrica watch` process is sent `ctrl+c` and the tab
+itself closes right after - the one case where this watcher touches the
+pane/tab beyond reporting state; a `fix` verdict leaves it untouched.
 
 ## The documented Herdr CLI this relies on
 
@@ -168,12 +184,16 @@ guessed:
   watcher only ever sends `idle`, `working`, or `blocked`.
 - `herdr pane release-agent <pane_id> --source ID --agent LABEL [--seq
   N]`.
+- `herdr pane send-keys <pane_id> <key> [key ...]` - this watcher only
+  ever sends a single `ctrl+c`.
+- `herdr tab close <tab_id>` - CLI/API closes are documented as
+  immediate, no confirmation prompt.
 
 Each is wrapped in exactly one function in `herdr-watcher.ts`
-(`createTab`, `runInPane`, `reportAgent`, `releaseAgent`) - if Herdr's
-CLI shape ever changes, only those four functions should need to
-change; nothing else here depends on the shape of a Herdr call, only on
-when one happens.
+(`createTab`, `runInPane`, `reportAgent`, `releaseAgent`, `sendCtrlC`,
+`closeTab`) - if Herdr's CLI shape ever changes, only those six
+functions should need to change; nothing else here depends on the shape
+of a Herdr call, only on when one happens.
 
 ## Testing
 
@@ -181,7 +201,7 @@ when one happens.
 real, just records every invocation it receives as one JSON line in the
 file named by `FAKE_HERDR_LOG`, answers `tab create` with the documented
 JSON shape (a deterministic, incrementing pane/tab id pair counted from
-that same log) and a small ack for the other three commands, and can
+that same log) and a small ack for the other commands, and can
 simulate a failing call via `FAKE_HERDR_FAIL_SUBCOMMAND` (e.g. `"pane
 report-agent"`) plus `FAKE_HERDR_FAIL_TIMES` (default 1) - the first N
 calls matching that subcommand exit 1 with a JSON error on stderr, the
