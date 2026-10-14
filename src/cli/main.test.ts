@@ -197,5 +197,26 @@ test("main: top-level help mentions the up command", async () => {
   const io = captureIo();
   const code = await main(["--help"], io);
   assert.equal(code, 0);
-  assert.match(io.out[0], /\n  up\n/);
+  assert.match(io.out[0], /\n {2}up \[-c\|--continue\]\n/);
+});
+
+test("main: `update --help` prints the update command's own usage and exits 0, without running anything", async () => {
+  const io = captureIo();
+  const code = await main(["update", "--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /Usage: fabrica update/);
+});
+
+test("main: `update -h` also short-circuits to help", async () => {
+  const io = captureIo();
+  const code = await main(["update", "-h"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /Usage: fabrica update/);
+});
+
+test("main: top-level help mentions the update command", async () => {
+  const io = captureIo();
+  const code = await main(["--help"], io);
+  assert.equal(code, 0);
+  assert.match(io.out[0], /\n {2}update\n/);
 });

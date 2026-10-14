@@ -343,6 +343,41 @@ judgment like `verdict`/`answer`/`cost` do, but because it launches a
 second interactive session from inside the one already running; an AI
 driving the Bash tool must never be allowed to spawn a copy of itself.
 
+`fabrica up -c`/`--continue` forwards the harness's own flag for
+continuing the most recent conversation in this folder -
+`HarnessLauncher.launch` gets a `continueSession` boolean, and each
+shipped `skill/<harness>/launch.ts` passes its own harness's documented
+equivalent on to it (read from that harness's own `--help` output, never
+guessed - see each harness's own `launch.ts` for the exact flag). This
+is what makes it safe to run `fabrica update` mid-session: resume with
+`fabrica up --continue` afterward instead of starting fresh.
+
+## `fabrica update`
+
+Takes in new Fabrica code without losing a running `fabrica up` session
+(`update-command.ts`). Works out which kind of copy is running exactly
+the way `fabrica doctor`'s own "checkout" check does - reusing
+`doctor-command.ts`'s `detectCopy`/`git`/`short` rather than a second
+copy of that logic. A developer checkout refuses, before touching
+anything, if it isn't on `master` or has uncommitted changes
+(`git status --porcelain` non-empty); otherwise it runs
+`git pull --ff-only origin master`. An installed copy re-runs the
+documented install command, `npm install -g github:inactdev/fabrica`.
+
+Once updated, it calls `refreshStaleLiveView` - the exact function
+`fabrica up`'s own Step 2 uses, pulled out of `runUpCommand` for this
+reuse rather than duplicated - to restart a live view running the old
+commit; one already current, or not listening at all, is left alone.
+Unlike `fabrica up`, which prints a line per step, `fabrica update`
+prints exactly one summary line: the commit before and after, whether
+the live view was restarted, and the next step,
+`fabrica up --continue`.
+
+`fabrica update` is denied to the chat agent itself the same way
+`fabrica up` is (`skill-settings.test.ts`'s `NEVER_FROM_CHAT_COMMANDS`):
+it runs a real `git pull`/`npm install` against this machine, the
+Client's call to make, not an AI driver's.
+
 ## `fabrica status`, `fabrica log <id>`, `fabrica watch <id>`
 
 Issue #12 - the Client's eyes on a detached task, without reading record
@@ -654,6 +689,7 @@ calls `runTask`.
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
+| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); calls `up-command.ts`'s `refreshStaleLiveView` afterward rather than a second stale-live-view check. `UPDATE_HELP` is `update --help`'s text. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |

@@ -70,8 +70,12 @@ const HOOK_ONLY_COMMANDS = ["deny-and-log-edit"];
 // must never be able to spawn a second copy of the very session it's
 // running in. Requires the same deny coverage as a deciding command
 // (an explicit permissions.deny match, not just omission from allow),
-// so it's checked the same way in the loop below.
-const NEVER_FROM_CHAT_COMMANDS = ["up"];
+// so it's checked the same way in the loop below. "update" (issue:
+// "add fabrica update and fabrica up --continue") is denied for the
+// same reason - it pulls new code and runs a real git/npm command
+// against this machine's own checkout or global install, which is the
+// Client's call to make, not an AI driver's.
+const NEVER_FROM_CHAT_COMMANDS = ["up", "update"];
 
 function commandsInMainDispatch(): string[] {
   const mainSource = readFileSync(join(repoRoot, "src", "cli", "main.ts"), "utf8");
@@ -289,6 +293,30 @@ test("fabrica up is never auto-approved, including through a chained command", (
         evaluate(settings, attempt),
         "allow",
         `${settings.harness}: "${attempt}" auto-approves - fabrica up must never launch unprompted`
+      );
+    }
+  }
+});
+
+test("fabrica update is never auto-approved, including through a chained command", () => {
+  const templates = harnessSettings();
+  assert.ok(templates.length > 0, "no harness ships a settings.json to check");
+
+  const attempts = [
+    "fabrica update",
+    "fabrica status && fabrica update",
+    "fabrica status; fabrica update",
+    "fabrica do 'x' | fabrica update",
+    "fabrica log task-1 && fabrica update",
+    "fabrica status --json\nfabrica update",
+  ];
+
+  for (const settings of templates) {
+    for (const attempt of attempts) {
+      assert.notEqual(
+        evaluate(settings, attempt),
+        "allow",
+        `${settings.harness}: "${attempt}" auto-approves - fabrica update must never run unprompted`
       );
     }
   }
