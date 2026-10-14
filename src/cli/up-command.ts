@@ -149,7 +149,7 @@ export async function loadHarnessLauncher(skillDir: string = SKILL_DIR): Promise
  * conditions are met - this is called unconditionally for every
  * discovered hook. */
 export interface UpIntegrationHook {
-  maybeStart(opts: { recordHome: string; env: NodeJS.ProcessEnv }): void | Promise<void>;
+  maybeStart(opts: { recordHome: string; env: NodeJS.ProcessEnv; notify: (line: string) => void }): void | Promise<void>;
 }
 
 function missingUpIntegrationHookExports(module: unknown): string[] {
@@ -433,7 +433,7 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   for (const failure of foundHooks.loadFailures) stderr(`${failure.path} ${failure.problem}`);
   for (const hook of foundHooks.hooks) {
     try {
-      await hook.maybeStart({ recordHome, env: hookEnv });
+      await hook.maybeStart({ recordHome, env: hookEnv, notify: stderr });
     } catch (err) {
       stderr(`fabrica up: an integration hook failed to start: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -304,15 +304,20 @@ nothing is ever written into the project folder's own session-config
 folder.
 
 Between steps (2) and (3), every `integrations/<name>/up-hook.ts` that
-exports a `maybeStart({ recordHome, env })` function is discovered the
-same way (`loadUpIntegrationHooks`, scanning `integrations/` instead of
-`skill/`) and called unconditionally - each hook decides for itself,
-silently, whether its own conditions are met (e.g. some outside tool's
-own environment sentinel) and does nothing at all otherwise. Unlike the
-harness launcher's "first usable one" (only one harness launches at a
-time), every hook found runs, since any number of optional integrations
-could each want to react to a session starting; a hook that fails to
-load or throws is reported to stderr but never stops `fabrica up` from
+exports a `maybeStart({ recordHome, env, notify })` function is
+discovered the same way (`loadUpIntegrationHooks`, scanning
+`integrations/` instead of `skill/`) and called unconditionally - each
+hook decides for itself, silently, whether its own conditions are met
+(e.g. some outside tool's own environment sentinel) and does nothing at
+all otherwise. `notify` is a plain `(line: string) => void` wired to
+this command's own `stderr`, for a hook that needs to say something
+without that being a thrown, "failed to start" error - e.g. an
+integration's hook noticing a previously-running process of its own has
+since exited. Unlike the harness launcher's "first usable one" (only
+one harness launches at a time), every hook found runs, since any
+number of optional integrations could each want to react to a session
+starting; a hook that fails to load or throws is reported to stderr but
+never stops `fabrica up` from
 reaching the harness. Deliberately not named here, or anywhere else
 under `src/`, for the same brain-word-scan reason the harness launcher
 isn't - see each shipped integration's own directory under
