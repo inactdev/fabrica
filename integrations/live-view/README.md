@@ -27,9 +27,26 @@ way to ask it for anything else. It reads only `events.jsonl` and the
 `tasks/<id>/` folders under the given record home, and never writes
 anything: every filesystem call in this directory is a `readFileSync`/
 `readdirSync`, directly or through `src/index.ts`. The only thing a
-request can send it is which task id to show a transcript for, and that
-is checked against `TASK_ID_PATTERN` (the same shape `src/record/ids.ts`
+request can send it is which task id it wants (its own `/tasks/<id>`
+page, `/api/tasks/<id>`, or `/api/tasks/<id>/transcript`), and that is
+checked against `TASK_ID_PATTERN` (the same shape `src/record/ids.ts`
 generates) before it ever reaches a file path.
+
+## What the task list page shows, and what's one click away
+
+A row on `/` shows only two things: a short title and the state word -
+the worker's write-up title (`WorkerWriteup.title`, carried as a sibling
+of `delivery` on the "delivered" event's own `details` - never on the
+ratified `Delivery` shape itself, which the contract doesn't promise it)
+once there is one, else the task text's first line cut to about 60
+characters (`record-view.ts`'s `taskTitle`). Clicking a row expands it in
+place with the task text, project, attempt, cost, the pull request link,
+and the write-up's what/why/how once it exists - everything `record-view.ts`'s
+`TaskView` carries except the transcript. The transcript is the one thing
+too long to expand in place: each task gets its own page at `/tasks/<id>`
+(`public/task.html`/`task.js`, served for any path matching
+`TASK_ID_PATTERN`) with the full write-up and the live transcript, and the
+expanded row links there.
 
 ## Why a corrupt line in events.jsonl can't take it down
 
@@ -48,7 +65,8 @@ events.jsonl at all.
 
 ## What's new on `src/index.ts`
 
-`daySpend`, `readTaskFile`, and `TASK_ID_PATTERN` were not previously
-exported from Fabrica's one public entry point - this integration adds
-them there rather than reaching into `src/foreman/`/`src/record/`
-directly, the same rule `src/cli/` already follows.
+`daySpend`, `readTaskFile`, `TASK_ID_PATTERN`, and `WorkerWriteup` were
+not previously exported from Fabrica's one public entry point - this
+integration adds them there rather than reaching into
+`src/foreman/`/`src/record/`/`contract/` directly, the same rule
+`src/cli/` already follows.

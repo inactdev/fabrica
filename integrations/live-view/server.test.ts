@@ -190,6 +190,55 @@ test("startLiveView: an unknown task id's transcript is a 404, not a crash", asy
   }
 });
 
+test("startLiveView: /api/tasks/<id> answers a known task's full view, and 404s an unknown one", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = registerTask(recordHome, "look at me directly").id;
+  appendEvent(recordHome, { taskId, name: "work-started", details: { project: "/p" } });
+
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const found = await fetch(`http://127.0.0.1:${view.port}/api/tasks/${taskId}`);
+    assert.equal(found.status, 200);
+    const body = await found.json();
+    assert.equal(body.task.id, taskId);
+    assert.equal(body.task.project, "/p");
+
+    const notFound = await fetch(`http://127.0.0.1:${view.port}/api/tasks/20260101-ghost-zz`);
+    assert.equal(notFound.status, 404);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a task id that fails the id pattern is refused on /api/tasks/<id> too", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/tasks/..%2f..%2fetc`);
+    assert.equal(res.status, 400);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /tasks/<id> serves the task page for a real task id's shape, and falls through to 404 otherwise", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = registerTask(recordHome, "give me my own page").id;
+
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const page = await fetch(`http://127.0.0.1:${view.port}/tasks/${taskId}`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /<html/);
+
+    // Not shaped like a real task id (TASK_ID_PATTERN) - never reaches
+    // task.html, same as any other unknown route.
+    const notATaskId = await fetch(`http://127.0.0.1:${view.port}/tasks/not-a-real-id`);
+    assert.equal(notATaskId.status, 404);
+  } finally {
+    await view.close();
+  }
+});
+
 test("startLiveView: no request, of any kind, ever changes a file on disk", async () => {
   const recordHome = tempRecordHome();
   const taskId = registerTask(recordHome, "do not touch me").id;
@@ -205,7 +254,10 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
       fetch(`${base}/`),
       fetch(`${base}/app.js`),
       fetch(`${base}/style.css`),
+      fetch(`${base}/task.js`),
+      fetch(`${base}/tasks/${taskId}`),
       fetch(`${base}/api/state`),
+      fetch(`${base}/api/tasks/${taskId}`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),
       fetch(`${base}/no-such-route`),

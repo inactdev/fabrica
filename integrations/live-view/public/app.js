@@ -1,7 +1,7 @@
 // Plain JavaScript, no framework, no build step. Polls the server every
-// 2 seconds and never sends it anything but which task id (if any) is
-// currently expanded - this page has no forms and makes no other
-// requests of any kind, to this server or anyone else.
+// 2 seconds. The only thing this page ever sends the server is which task
+// id (if any) is currently expanded, and only to read that one task back -
+// there are no forms and no other requests, to this server or anyone else.
 
 const POLL_MS = 2000;
 let expandedTaskId = null;
@@ -26,16 +26,12 @@ function renderSpend(spend) {
   document.getElementById("spend").textContent = bits.join(" ");
 }
 
-function taskLine(task) {
-  // The task's id is already shown on the line above (next to its
-  // state), so it is deliberately not repeated here. "no attempts yet"
-  // is the one phrase that covers both "which attempt" and "cost so
-  // far" when there's genuinely nothing to report yet - gated on
-  // costLabel itself (the literal source of that phrase), not on
-  // task.attempt, since an attempt already in flight (a heartbeat, no
-  // receipt yet) can have a real attempt number while its cost is still
-  // "no attempts yet" - that case still belongs in this branch, not a
-  // mix of "attempt 1" and "no attempts yet" side by side.
+// The one phrase that covers both "which attempt" and "cost so far" when
+// there's genuinely nothing to report yet - gated on costLabel itself
+// (the literal source of that phrase), not on task.attempt, since an
+// attempt already in flight (a heartbeat, no receipt yet) can have a real
+// attempt number while its cost is still "no attempts yet".
+function taskMetaLine(task) {
   const bits = [task.project || "unknown project"];
   if (task.costLabel === "no attempts yet") {
     bits.push("no attempts yet");
@@ -48,28 +44,37 @@ function taskLine(task) {
   return bits.join("  ·  ");
 }
 
-function renderTask(task) {
+function renderWriteup(writeup) {
+  const section = (label, text) =>
+    el("p", { className: "writeup-section" }, [el("span", { className: "writeup-label" }, [`${label}: `]), text]);
+  return el("div", { className: "writeup" }, [section("What", writeup.what), section("Why", writeup.why), section("How", writeup.how)]);
+}
+
+function renderExpanded(task) {
   const children = [
-    el("p", { className: "task-line" }, [
-      el("span", { className: "task-id" }, [task.id + "  "]),
-      el("span", { className: "state" }, [task.state]),
-    ]),
-    el("p", { className: "task-line" }, [taskLine(task)]),
     el("p", { className: "task-text" }, [task.taskText || "(no task text)"]),
+    el("p", { className: "task-meta" }, [taskMetaLine(task)]),
   ];
-  if (task.prUrl) {
-    children.push(el("p", { className: "task-line" }, [el("a", { href: task.prUrl }, [task.prUrl])]));
-  }
-  if (task.id === expandedTaskId) {
-    children.push(el("div", { className: "transcript", id: "transcript" }, ["Loading transcript…"]));
-  }
+  if (task.prUrl) children.push(el("p", { className: "task-meta" }, [el("a", { href: task.prUrl }, [task.prUrl])]));
+  if (task.writeup) children.push(renderWriteup(task.writeup));
+  children.push(el("p", { className: "task-meta" }, [el("a", { href: `/tasks/${task.id}` }, ["Full details and transcript →"])]));
+  return el("div", { className: "task-expanded" }, children);
+}
+
+// Each row shows only the title and the state word - nothing else, so
+// rows stay short and the state actually stands out. Everything else is
+// one click away, either inline (renderExpanded) or on the task's own
+// page (/tasks/<id>, for the transcript).
+function renderTask(task) {
+  const row = el("p", { className: "task-row" }, [el("span", { className: "task-title" }, [task.title]), el("span", { className: "state" }, [task.state])]);
+  const children = [row];
+  if (task.id === expandedTaskId) children.push(renderExpanded(task));
   return el("div", { className: "task", onclick: () => toggleTask(task.id) }, children);
 }
 
 function toggleTask(taskId) {
   expandedTaskId = expandedTaskId === taskId ? null : taskId;
   if (window.__lastState) renderTasks(window.__lastState);
-  if (expandedTaskId) loadTranscript();
 }
 
 function renderTasks(state) {
@@ -116,34 +121,5 @@ async function loadState() {
   renderTasks(state);
 }
 
-async function loadTranscript() {
-  if (!expandedTaskId) return;
-  const res = await fetch(`/api/tasks/${encodeURIComponent(expandedTaskId)}/transcript`);
-  const container = document.getElementById("transcript");
-  if (!container) return;
-  if (!res.ok) {
-    container.replaceChildren(document.createTextNode("No transcript yet."));
-    return;
-  }
-  const body = await res.json();
-  if (body.error) {
-    container.replaceChildren(document.createTextNode(body.error));
-    return;
-  }
-  const { transcript } = body;
-  container.replaceChildren(
-    ...(transcript.length
-      ? transcript.map((entry) =>
-          el("p", { className: "transcript-entry" }, [el("span", { className: "transcript-kind" }, [`[${entry.kind}] `]), entry.text])
-        )
-      : [document.createTextNode("No transcript yet.")])
-  );
-}
-
-function poll() {
-  loadState();
-  loadTranscript();
-}
-
-poll();
-setInterval(poll, POLL_MS);
+loadState();
+setInterval(loadState, POLL_MS);
