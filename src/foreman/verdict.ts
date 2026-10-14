@@ -18,14 +18,14 @@ import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { failedWithNoDelivery, latestDeliveredDetails, refusedWithNoDelivery } from "./queries.ts";
 import { gateWasTouched } from "./gate-changes.ts";
-import { prepareRound, roundOutcome } from "./judge.ts";
+import { prepareRound, roundOutcome, skipIfUnchanged } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { renderCommitMessage } from "./pr-body.ts";
 import { runAttempts } from "./attempts.ts";
-import { buildCommitFailureDelivery, buildDelivery, renderDeliveryMarkdown } from "./delivery.ts";
-import { diffFiles, validateDelivery } from "../delivery/index.ts";
+import { buildCommitFailureDelivery, buildDelivery, buildNothingChangedDelivery, renderDeliveryMarkdown } from "./delivery.ts";
+import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf, recordCapStop, recordReceipt, requireRoomToStart, spendLimitsFor, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps, Receipt } from "../../contract/surface.ts";
 import type { Delivery, Inspector } from "../inspector/types.ts";
@@ -81,6 +81,8 @@ export function recordVerdictDecision(
   const deliveredIndex = events.map((event) => event.name).lastIndexOf("delivered");
   const latestInspection = events.filter((event) => event.name === "inspection-finished").at(-1);
   const inspectionVerdict = (latestInspection?.details as { verdict?: string } | undefined)?.verdict;
+  const latestRefusalIsAfterDelivery =
+    inspectionVerdict === "refused" && deliveredIndex !== -1 && events.lastIndexOf(latestInspection!) > deliveredIndex;
   // A task Inspector refused before it ever reached a delivery has
   // nothing for "accept" or "fix" to work with - no delivery details to
   // reopen a line from, no verdict to repair toward - so those two stay
@@ -88,10 +90,19 @@ export function recordVerdictDecision(
   // the task), so it is the one ruling the Client can still use to close
   // this state instead of it refusing every ruling forever (Client ruling).
   const closesRefusedWithNoDelivery = ruling === "wrong" && refusedWithNoDelivery(events);
+  // A refusal that comes AFTER a real delivery is a different case: that
+  // delivery is still there for the Client to rule on directly, so
+  // "accept"/"wrong" rule on it as if the later refusal never happened
+  // (recorded as superseded below) - "fix" alone still refuses here, since
+  // Inspector's own refusal is itself what needs resolving before a fresh
+  // worker attempt is worth running.
+  const rulesOnDeliveryDespiteLaterRefusal =
+    latestRefusalIsAfterDelivery && (ruling === "accept" || ruling === "wrong");
   if (
     inspectionVerdict === "refused" &&
     events.lastIndexOf(latestInspection!) > deliveredIndex &&
-    !closesRefusedWithNoDelivery
+    !closesRefusedWithNoDelivery &&
+    !rulesOnDeliveryDespiteLaterRefusal
   ) {
     throw new ForemanError(
       "inspection-refused",
@@ -155,7 +166,15 @@ export function recordVerdictDecision(
   // "delivered" event: a failure between the two must never leave a task
   // showing as ruled on with no record of what the Client actually said.
   appendTaskFile(recordHome, taskId, "verdict", `${new Date().toISOString()} ${ruling}${note ? `: ${note}` : ""}\n`);
-  appendEvent(recordHome, { taskId, name: "verdict-recorded", details: { ruling, note: note ?? "" } });
+  appendEvent(recordHome, {
+    taskId,
+    name: "verdict-recorded",
+    details: {
+      ruling,
+      note: note ?? "",
+      ...(rulesOnDeliveryDespiteLaterRefusal ? { supersedesRefusal: true } : {}),
+    },
+  });
 }
 
 /**
@@ -269,10 +288,19 @@ async function runFixRound(
   const line = reopenProductionLine({ project, taskId, recordHome });
 
   try {
-    const { judge, mode, protectedPathApplies } = prepareRound(recordHome, taskId, line, baseCommit, {
+    // Captured before this round's worker ever runs: the branch's HEAD at
+    // the exact commit the task's last round left it at (and so, in
+    // Inspector mode, the exact commit Inspector last reviewed). Compared
+    // against HEAD again once the attempt below has committed, so a round
+    // whose worker made no change is caught before it is ever handed back
+    // to a check or Inspector (`skipIfUnchanged`, judge.ts) - re-handing
+    // the identical, already-reviewed commit only draws a refusal.
+    const priorHead = baseCommitOf(line.workdir);
+    const { judge: roundJudge, mode, protectedPathApplies } = prepareRound(recordHome, taskId, line, baseCommit, {
       inspector,
       checkBox,
     });
+    const judge = skipIfUnchanged(roundJudge, line.workdir, priorHead);
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
@@ -311,6 +339,36 @@ async function runFixRound(
     if (lastJudgement.kind === "refused") return;
 
     const declaredGateChanges = mergeGateDeclarations(priorGateChanges, roundGateChanges);
+
+    // Rule 10 still wins if it also stopped this same round (capStop is
+    // computed from spend regardless of what was judged) - so this only
+    // takes over when nothing else already has an opinion about why the
+    // loop stopped.
+    if (lastJudgement.kind === "unchanged" && !capStop) {
+      const allReceipts = [...priorReceipts, ...newReceipts];
+      const delivery = buildNothingChangedDelivery({
+        attempts: allReceipts.length,
+        branch: line.branch,
+        files: diffFiles(line.project, line.branch, baseCommit),
+        declaredGateChanges,
+      });
+      validateDelivery(delivery);
+      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
+      appendEvent(recordHome, {
+        taskId,
+        name: "delivered",
+        details: {
+          outcome: delivery.outcome,
+          delivery,
+          receipts: allReceipts,
+          project,
+          totalAttempts,
+          baseCommit,
+          ...(writeup ? { writeup } : {}),
+        },
+      });
+      return;
+    }
 
     const undeclaredGateChange =
       protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;

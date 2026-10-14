@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
@@ -109,7 +109,12 @@ test("Inspector mode: the record and delivery say the check was delegated, and n
 test("Inspector mode: a fix verdict goes back through Inspector on the same branch", async () => {
   const inspector = fakeInspector(["red", "red", "green"]);
   const foreman = createForeman({ recordHome: freshHome(), inspector });
-  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
+  // Each call writes a new version of the same file, so the fix round
+  // lands a real new commit and is genuinely handed to Inspector again,
+  // rather than being skipped as a no-op round.
+  let version = 0;
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "linter.txt"), `v${++version}\n`) });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
   assert.equal((await foreman.deliveryOf(task.id))?.outcome, "inspection-red");
 
   await foreman.verdict(task.id, "fix", "make the linter happy");

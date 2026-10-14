@@ -28,6 +28,7 @@ const OUTCOMES: ReadonlySet<Delivery["outcome"]> = new Set([
   "inspection-red",
   "cap-stopped",
   "not-verified",
+  "nothing-changed",
 ]);
 const INSPECTION_VERDICTS = new Set(["green", "red", "refused"]);
 
@@ -45,13 +46,13 @@ export function validateDelivery(value: unknown): asserts value is Delivery {
   if (d.outcome === undefined) {
     throw new DeliveryError(
       "malformed",
-      'delivery is missing required field "outcome" (must be "done", "failure-report", "discarded-protected-path", "inspection-red", "cap-stopped", or "not-verified")'
+      'delivery is missing required field "outcome" (must be "done", "failure-report", "discarded-protected-path", "inspection-red", "cap-stopped", "not-verified", or "nothing-changed")'
     );
   }
   if (typeof d.outcome !== "string" || !OUTCOMES.has(d.outcome as Delivery["outcome"])) {
     throw new DeliveryError(
       "malformed",
-      `delivery's "outcome" field is invalid (must be "done", "failure-report", "discarded-protected-path", "inspection-red", "cap-stopped", or "not-verified")`
+      `delivery's "outcome" field is invalid (must be "done", "failure-report", "discarded-protected-path", "inspection-red", "cap-stopped", "not-verified", or "nothing-changed")`
     );
   }
 

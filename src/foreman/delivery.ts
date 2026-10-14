@@ -14,7 +14,12 @@ import { describeInvalidWriteup } from "./pr-body.ts";
 /** Where a task stands once this outcome is delivered: anything handed to
  * the Client for a ruling is "delivered"; the rest are honest failures. */
 export function deliveredState(outcome: Delivery["outcome"] | undefined): "delivered" | "failed" {
-  return outcome === "done" || outcome === "inspection-red" || outcome === "not-verified" ? "delivered" : "failed";
+  return outcome === "done" ||
+    outcome === "inspection-red" ||
+    outcome === "not-verified" ||
+    outcome === "nothing-changed"
+    ? "delivered"
+    : "failed";
 }
 
 export function buildDelivery(
@@ -230,6 +235,39 @@ export function buildCommitFailureDelivery(ctx: {
       "the Worker or the project's checks caused. Retrying the task from scratch is the only recovery.",
     branch: ctx.branch,
     files: [],
+    gateChanges: ctx.declaredGateChanges ?? "",
+  };
+}
+
+/**
+ * A `Delivery` for a fix round whose worker left the branch exactly where
+ * it already was - no new commit versus what this round's line was
+ * reopened at. `verdict.ts`'s `skipIfUnchanged` (`judge.ts`) already kept
+ * this round from ever handing that same commit back to Inspector (which
+ * would only draw a refusal, since Inspector already reviewed it) or
+ * re-running a self-test check that could only repeat its last answer -
+ * so there is no check output to report, honestly, rather than a
+ * fabricated green or red.
+ */
+export function buildNothingChangedDelivery(ctx: {
+  attempts: number;
+  branch: string;
+  files: string[];
+  declaredGateChanges: string | undefined;
+}): Delivery {
+  return {
+    outcome: "nothing-changed",
+    confidence: 100,
+    summary: "Nothing changed: this round's worker left the branch exactly where it already was.",
+    evidence:
+      "No new commit landed this round, so nothing was handed to a check or Inspector - the branch is " +
+      "identical to what was already reviewed.",
+    assumptions: "",
+    gaps:
+      `The work from earlier rounds is still committed on \`${ctx.branch}\` and unchanged. Give a fix ` +
+      "verdict again with a clearer correction if more work is needed, or rule accept/wrong to close it.",
+    branch: ctx.branch,
+    files: ctx.files,
     gateChanges: ctx.declaredGateChanges ?? "",
   };
 }
