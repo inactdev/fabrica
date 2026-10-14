@@ -21,6 +21,11 @@ export interface LaunchOptions {
   cwd: string;
   settingsPath: string;
   appendSystemPrompt: string;
+  /** Passes `claude`'s own `-c`/`--continue` (verified against `claude
+   * --help`: "Continue the most recent conversation in the current
+   * directory") so `fabrica up --continue` resumes the session that was
+   * running in this folder rather than starting a new one. */
+  continueSession?: boolean;
 }
 
 export interface LaunchResult {
@@ -30,7 +35,9 @@ export interface LaunchResult {
 /** Blocks until the interactive session exits, inheriting this
  * process's stdio so the Client's terminal is the session itself. */
 export function launch(opts: LaunchOptions): LaunchResult {
-  const result = spawnSync("claude", ["--settings", opts.settingsPath, "--append-system-prompt", opts.appendSystemPrompt], {
+  const args = ["--settings", opts.settingsPath, "--append-system-prompt", opts.appendSystemPrompt];
+  if (opts.continueSession) args.push("--continue");
+  const result = spawnSync("claude", args, {
     cwd: opts.cwd,
     stdio: "inherit",
   });

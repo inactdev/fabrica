@@ -95,7 +95,11 @@ export function nodeCheck(actual: string, expected: string | null): DoctorCheck 
     : { ok: false, label, detail: `v${have}, but the check box runs ${expected}`, fix: `install Node ${expected}` };
 }
 
-function short(sha: string | null): string {
+/** Exported so anything else that reports a commit for display (e.g.
+ * `fabrica update`'s before/after summary line) formats it the same
+ * way doctor's own "checkout" line does, rather than a second copy of
+ * this one-liner. */
+export function short(sha: string | null): string {
   return sha ? sha.slice(0, 12) : "unknown";
 }
 
@@ -140,7 +144,10 @@ function pinnedNodeVersion(): string | null {
   }
 }
 
-function git(cwd: string, args: string[]): string | null {
+/** Exported for the same reason `short` is: `fabrica update` needs the
+ * identical "quiet git, null on failure" probe to drive detectCopy's
+ * own gitIn callback over this checkout, rather than a second copy. */
+export function git(cwd: string, args: string[]): string | null {
   try {
     return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {

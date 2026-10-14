@@ -16,6 +16,7 @@ import { VERIFY_HOOK_HELP, runVerifyHookCommand } from "./verify-hook-command.ts
 import { COST_HELP, runCostCommand } from "./cost-command.ts";
 import { DOCTOR_HELP, runDoctorCommand } from "./doctor-command.ts";
 import { UP_HELP, runUpCommand } from "./up-command.ts";
+import { UPDATE_HELP, runUpdateCommand } from "./update-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
 
 export async function main(
@@ -114,6 +115,14 @@ export async function main(
       return 0;
     }
     return runUpCommand(rest, io);
+  }
+
+  if (command === "update") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(UPDATE_HELP);
+      return 0;
+    }
+    return runUpdateCommand(rest, io);
   }
 
   if (command === "deny-and-log-edit") {

@@ -430,6 +430,92 @@ test("runUpCommand: launch is called with the handbook text and this harness's s
   assert.equal(captured!.settingsPath, join(skillDir, "working-harness", "settings.json"));
 });
 
+test("runUpCommand: --continue is passed through to the harness launcher", async () => {
+  const io = captureIo();
+  let captured: { continueSession?: boolean } | undefined;
+
+  const code = await runUpCommand(["--continue"], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async (opts) => {
+        captured = opts;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(captured?.continueSession, true);
+});
+
+test("runUpCommand: -c is accepted as the short form of --continue", async () => {
+  const io = captureIo();
+  let captured: { continueSession?: boolean } | undefined;
+
+  const code = await runUpCommand(["-c"], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async (opts) => {
+        captured = opts;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(captured?.continueSession, true);
+});
+
+test("runUpCommand: without --continue, the harness launcher gets continueSession: false", async () => {
+  const io = captureIo();
+  let captured: { continueSession?: boolean } | undefined;
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async (opts) => {
+        captured = opts;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(captured?.continueSession, false);
+});
+
+test("runUpCommand: an unknown flag alongside --continue is still refused", async () => {
+  const io = captureIo();
+  const code = await runUpCommand(["--continue", "--json"], { recordHome: tempRecordHome(), ...io });
+
+  assert.equal(code, 1);
+  assert.match(io.err[0], /unknown flag "--json"/);
+});
+
 test("runUpCommand: the project folder is never created in, written to, or otherwise changed", async () => {
   const projectDir = tempCwd();
   writeFileSync(join(projectDir, "existing.txt"), "hello\n");

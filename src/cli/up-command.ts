@@ -23,7 +23,7 @@ import { runDoctorCommand, runningCopyCommit, type DoctorProbes } from "./doctor
 import { spawnDetachedLiveView } from "./spawn-detached.ts";
 import { findLiveViewProcess as locateLiveViewProcess, stopLiveViewProcess as terminateLiveViewProcess } from "./live-view-process.ts";
 
-export const UP_USAGE = "fabrica up";
+export const UP_USAGE = "fabrica up [-c|--continue]";
 
 export const UP_HELP = `Usage: ${UP_USAGE}
 
@@ -44,6 +44,10 @@ order:
      loaded through its own command-line flags - nothing is ever
      written into this folder.
 
+  -c, --continue  Also pass the harness's own flag for continuing the
+                  most recent conversation in this folder, so running
+                  \`fabrica update\` doesn't cost you your session.
+
 When the harness exits, the live view keeps running - this prints one
 line saying how to stop it.
 
@@ -51,16 +55,22 @@ Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
 `;
 
-/** `fabrica up` takes no flags or positionals - anything given is
- * refused with the exact usage line, the same way verify-hook refuses
- * (src/cli/verify-hook-command.ts's parseVerifyHookArgs). */
-export function parseUpArgs(argv: string[]): void {
-  const [first] = argv;
-  if (first === undefined) return;
-  if (first.startsWith("-")) {
-    throw new CliError("bad-usage", `fabrica up: unknown flag "${first}". Usage: ${UP_USAGE}`);
+/** `fabrica up` takes only an optional -c/--continue flag - anything
+ * else is refused with the exact usage line, the same way verify-hook
+ * refuses (src/cli/verify-hook-command.ts's parseVerifyHookArgs). */
+export function parseUpArgs(argv: string[]): { continueSession: boolean } {
+  let continueSession = false;
+  for (const arg of argv) {
+    if (arg === "-c" || arg === "--continue") {
+      continueSession = true;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      throw new CliError("bad-usage", `fabrica up: unknown flag "${arg}". Usage: ${UP_USAGE}`);
+    }
+    throw new CliError("bad-usage", `fabrica up: unexpected argument "${arg}" - up takes none. Usage: ${UP_USAGE}`);
   }
-  throw new CliError("bad-usage", `fabrica up: unexpected argument "${first}" - up takes none. Usage: ${UP_USAGE}`);
+  return { continueSession };
 }
 
 const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -80,7 +90,14 @@ function liveViewUrl(port: number): string {
 }
 
 export interface HarnessLauncher {
-  launch(opts: { cwd: string; settingsPath: string; appendSystemPrompt: string }): { exitCode: number } | Promise<{ exitCode: number }>;
+  launch(opts: {
+    cwd: string;
+    settingsPath: string;
+    appendSystemPrompt: string;
+    /** Passes the harness's own flag for continuing the most recent
+     * conversation in cwd (`fabrica up --continue`). */
+    continueSession?: boolean;
+  }): { exitCode: number } | Promise<{ exitCode: number }>;
   harnessAvailable(): boolean;
 }
 
@@ -282,6 +299,106 @@ function defaultOpenBrowser(url: string): void {
   }
 }
 
+/** Starts a fresh live view and reports the outcome - shared by both the
+ * "nothing listening yet" and "stale, just stopped" paths below, and by
+ * refreshStaleLiveView's own restart, so there is exactly one place that
+ * starts a live view and announces whether it actually came up in time. */
+async function startLiveViewAndReport(opts: {
+  recordHome: string;
+  port: number;
+  isListening: (host: string, port: number) => Promise<boolean>;
+  startLiveView: (opts: { recordHome: string; port: number }) => void;
+  openBrowser: (url: string) => void;
+  startTimeoutMs: number;
+  stdout: (line: string) => void;
+  stderr: (line: string) => void;
+}): Promise<boolean> {
+  opts.startLiveView({ recordHome: opts.recordHome, port: opts.port });
+  const started = await waitUntilListening(opts.isListening, opts.port, opts.startTimeoutMs);
+  if (started) {
+    opts.openBrowser(liveViewUrl(opts.port));
+    opts.stdout(`Live view started - ${liveViewUrl(opts.port)}`);
+  } else {
+    opts.stderr(`the live view did not start listening on 127.0.0.1:${opts.port} in time - continuing anyway.`);
+    opts.stdout(`Live view may still be starting - ${liveViewUrl(opts.port)}`);
+  }
+  return started;
+}
+
+export type LiveViewStaleOutcome = "not-listening" | "current" | "restarted" | "could-not-identify-process";
+
+export interface RefreshStaleLiveViewOptions {
+  recordHome: string;
+  port?: number;
+  isListening?: (host: string, port: number) => Promise<boolean>;
+  fetchLiveViewVersion?: (port: number) => Promise<string | null>;
+  getRunningCommit?: () => string | null;
+  findLiveViewProcess?: (recordHome: string) => { pid: number } | null;
+  stopLiveViewProcess?: (pid: number) => void;
+  startLiveView?: (opts: { recordHome: string; port: number }) => void;
+  openBrowser?: (url: string) => void;
+  startTimeoutMs?: number;
+  stdout?: (line: string) => void;
+  stderr?: (line: string) => void;
+}
+
+/**
+ * The stale-live-view check `fabrica up`'s own Step 2 runs (below):
+ * nothing listening is left alone (there is nothing to restart), a live
+ * view already running this exact commit is left alone, and one running
+ * anything else is stopped and replaced with a fresh one. Pulled out so
+ * `fabrica update` (src/cli/update-command.ts) can run the identical
+ * check after pulling new code - without a second copy of this logic,
+ * per the Client's own instruction - and report whether it restarted
+ * anything in its own one-line summary.
+ */
+export async function refreshStaleLiveView(opts: RefreshStaleLiveViewOptions): Promise<LiveViewStaleOutcome> {
+  const { recordHome } = opts;
+  const port = opts.port ?? LIVE_VIEW_PORT;
+  const isListening = opts.isListening ?? probePortListening;
+  const startTimeoutMs = opts.startTimeoutMs ?? 10_000;
+  const stdout = opts.stdout ?? (() => {});
+  const stderr = opts.stderr ?? (() => {});
+
+  if (!(await isListening("127.0.0.1", port))) return "not-listening";
+
+  const fetchVersion = opts.fetchLiveViewVersion ?? defaultFetchLiveViewVersion;
+  const getRunningCommit = opts.getRunningCommit ?? (() => runningCopyCommit(CHECKOUT));
+  const remoteCommit = await fetchVersion(port);
+  const ourCommit = getRunningCommit();
+  const sameCommit = remoteCommit !== null && ourCommit !== null && remoteCommit === ourCommit;
+
+  if (sameCommit) {
+    stdout(`Live view already running - ${liveViewUrl(port)}`);
+    return "current";
+  }
+
+  const findProcess = opts.findLiveViewProcess ?? locateLiveViewProcess;
+  const found = findProcess(recordHome);
+  if (!found) {
+    stderr(
+      `something is already listening on 127.0.0.1:${port}, but it doesn't look like the live view ` +
+        `(no matching pid file or process found) - stop whatever that is yourself, then try again.`
+    );
+    return "could-not-identify-process";
+  }
+  const stopProcess = opts.stopLiveViewProcess ?? terminateLiveViewProcess;
+  stopProcess(found.pid);
+  await waitUntilNotListening(isListening, port, startTimeoutMs);
+
+  await startLiveViewAndReport({
+    recordHome,
+    port,
+    isListening,
+    startLiveView: opts.startLiveView ?? (() => spawnDetachedLiveView({ recordHome })),
+    openBrowser: opts.openBrowser ?? defaultOpenBrowser,
+    startTimeoutMs,
+    stdout,
+    stderr,
+  });
+  return "restarted";
+}
+
 export interface RunUpCommandOptions {
   recordHome?: string;
   cwd?: string;
@@ -343,8 +460,9 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   const stdout = opts.stdout ?? ((line: string) => console.log(line));
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
+  let continueSession: boolean;
   try {
-    parseUpArgs(argv);
+    ({ continueSession } = parseUpArgs(argv));
   } catch (err) {
     stderr(err instanceof Error ? err.message : String(err));
     return 1;
@@ -378,44 +496,34 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   const isListening = opts.isLiveViewListening ?? probePortListening;
   const startTimeoutMs = opts.liveViewStartTimeoutMs ?? 10_000;
 
-  const startFreshLiveView = async () => {
-    const startLiveView = opts.startLiveView ?? (() => spawnDetachedLiveView({ recordHome }));
-    startLiveView({ recordHome, port });
-
-    const started = await waitUntilListening(isListening, port, startTimeoutMs);
-    if (started) {
-      (opts.openBrowser ?? defaultOpenBrowser)(liveViewUrl(port));
-      stdout(`Live view started - ${liveViewUrl(port)}`);
-    } else {
-      stderr(`fabrica up: the live view did not start listening on 127.0.0.1:${port} in time - continuing anyway.`);
-      stdout(`Live view may still be starting - ${liveViewUrl(port)}`);
-    }
-  };
+  const startFreshLiveView = () =>
+    startLiveViewAndReport({
+      recordHome,
+      port,
+      isListening,
+      startLiveView: opts.startLiveView ?? (() => spawnDetachedLiveView({ recordHome })),
+      openBrowser: opts.openBrowser ?? defaultOpenBrowser,
+      startTimeoutMs,
+      stdout,
+      stderr,
+    });
 
   if (await isListening("127.0.0.1", port)) {
-    const fetchVersion = opts.fetchLiveViewVersion ?? defaultFetchLiveViewVersion;
-    const getRunningCommit = opts.getRunningCommit ?? (() => runningCopyCommit(CHECKOUT));
-    const remoteCommit = await fetchVersion(port);
-    const ourCommit = getRunningCommit();
-    const sameCommit = remoteCommit !== null && ourCommit !== null && remoteCommit === ourCommit;
-
-    if (sameCommit) {
-      stdout(`Live view already running - ${liveViewUrl(port)}`);
-    } else {
-      const findProcess = opts.findLiveViewProcess ?? locateLiveViewProcess;
-      const found = findProcess(recordHome);
-      if (!found) {
-        stderr(
-          `fabrica up: something is already listening on 127.0.0.1:${port}, but it doesn't look like the live view ` +
-            `(no matching pid file or process found) - stop whatever that is yourself, then try again.`
-        );
-        return 1;
-      }
-      const stopProcess = opts.stopLiveViewProcess ?? terminateLiveViewProcess;
-      stopProcess(found.pid);
-      await waitUntilNotListening(isListening, port, startTimeoutMs);
-      await startFreshLiveView();
-    }
+    const outcome = await refreshStaleLiveView({
+      recordHome,
+      port,
+      isListening,
+      fetchLiveViewVersion: opts.fetchLiveViewVersion,
+      getRunningCommit: opts.getRunningCommit,
+      findLiveViewProcess: opts.findLiveViewProcess,
+      stopLiveViewProcess: opts.stopLiveViewProcess,
+      startLiveView: opts.startLiveView,
+      openBrowser: opts.openBrowser,
+      startTimeoutMs,
+      stdout,
+      stderr,
+    });
+    if (outcome === "could-not-identify-process") return 1;
   } else {
     await startFreshLiveView();
   }
@@ -466,7 +574,7 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   }
 
   const appendSystemPrompt = readFileSync(opts.handbookPath ?? HANDBOOK_PATH, "utf8");
-  const { exitCode } = await launcher.launch({ cwd, settingsPath, appendSystemPrompt });
+  const { exitCode } = await launcher.launch({ cwd, settingsPath, appendSystemPrompt, continueSession });
 
   stdout(`Live view is still running at ${liveViewUrl(port)} - stop it with: pkill -f "live-view/start.ts"`);
   return exitCode;
