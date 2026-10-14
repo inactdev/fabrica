@@ -23,7 +23,12 @@ import {
   stateOf,
   taskSpend,
 } from "../../src/index.ts";
-import type { Caps, FabricaEvent, FabricaTask, TaskFollower, TranscriptEntry } from "../../src/index.ts";
+import type { Caps, FabricaEvent, FabricaTask, TaskFollower, TranscriptEntry, WorkerWriteup } from "../../src/index.ts";
+
+/** How much of the task's own text stands in for a title before a
+ * worker's write-up exists - long enough to be recognizable, short
+ * enough to keep a list row to one line. */
+const FALLBACK_TITLE_MAX_LENGTH = 60;
 
 /** The states the page shows. Mostly a collapse of FabricaTask's own
  * richer union ("checking" folds into "working" - detail this tiny
@@ -88,6 +93,9 @@ function latestVerdictRuling(events: FabricaEvent[]): "accept" | "wrong" | null 
 
 export interface TaskView {
   id: string;
+  /** The write-up title once there is one, else the task text's first
+   * line cut to ~60 characters - what a list row shows, nothing else. */
+  title: string;
   project: string | null;
   state: DisplayState;
   taskText: string;
@@ -96,6 +104,7 @@ export interface TaskView {
   costUsd: number;
   perTaskCapUsd?: number;
   prUrl: string | null;
+  writeup: WorkerWriteup | null;
   finished: boolean;
   lastActivityMs: number;
 }
@@ -136,6 +145,33 @@ function prUrlFromEvents(events: FabricaEvent[]): string | null {
     if (details?.url) return details.url;
   }
   return null;
+}
+
+/** The worker's own structured write-up (title/what/why/how/deviations),
+ * carried on a "delivered" event's own `details` (src/foreman/do.ts and
+ * verdict.ts, alongside `delivery`) rather than on the ratified `Delivery`
+ * shape itself - `Delivery` is CONTRACT rule 4's contract type, and this
+ * is presentation-only metadata the contract never promised. Absent until
+ * an attempt's write-up was valid; the latest "delivered" event wins,
+ * same as `prUrlFromEvents`. */
+function writeupFromEvents(events: FabricaEvent[]): WorkerWriteup | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].name !== "delivered") continue;
+    const writeup = (events[i].details as { writeup?: WorkerWriteup } | undefined)?.writeup;
+    if (writeup) return writeup;
+  }
+  return null;
+}
+
+/** The short label a list row shows: the worker's own write-up title once
+ * there is one, otherwise the task text's first line cut to about 60
+ * characters - never both, and never the full task text on the row
+ * itself. */
+export function taskTitle(taskText: string, writeupTitle: string | undefined): string {
+  if (writeupTitle && writeupTitle.trim()) return writeupTitle.trim();
+  const firstLine = taskText.split("\n", 1)[0].trim();
+  if (firstLine.length <= FALLBACK_TITLE_MAX_LENGTH) return firstLine || "(no task text)";
+  return `${firstLine.slice(0, FALLBACK_TITLE_MAX_LENGTH).trimEnd()}…`;
 }
 
 /** The highest attempt number mentioned by any event this task has
@@ -215,24 +251,7 @@ export function createRecordView(recordHome: string) {
     const allEvents = perTask.flatMap(({ events }) => events);
     const { knownUsd: dailyUsd } = daySpend(allEvents, now);
 
-    const tasks: TaskView[] = perTask.map(({ id, events }) => {
-      const spend = taskSpend(events, id);
-      const rawState = stateOf(events);
-      const state = displayState(rawState, rawState === "closed" ? latestVerdictRuling(events) : null);
-      return {
-        id,
-        project: projectFromEvents(events),
-        state,
-        taskText: (readTaskFile(recordHome, id, "request.md") ?? "").trim(),
-        attempt: latestAttempt(events),
-        costLabel: describeTaskCost(spend, hasAttempts(events, id)),
-        costUsd: spend.knownUsd,
-        ...(caps.perTaskUsd !== undefined ? { perTaskCapUsd: caps.perTaskUsd } : {}),
-        prUrl: prUrlFromEvents(events),
-        finished: isFinished(state),
-        lastActivityMs: lastActivityMs(events),
-      };
-    });
+    const tasks: TaskView[] = perTask.map(({ id, events }) => buildTaskView(id, events, caps));
 
     tasks.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 
@@ -248,6 +267,39 @@ export function createRecordView(recordHome: string) {
     };
   }
 
+  function buildTaskView(id: string, events: FabricaEvent[], caps: Caps): TaskView {
+    const spend = taskSpend(events, id);
+    const rawState = stateOf(events);
+    const state = displayState(rawState, rawState === "closed" ? latestVerdictRuling(events) : null);
+    const taskText = (readTaskFile(recordHome, id, "request.md") ?? "").trim();
+    const writeup = writeupFromEvents(events);
+    return {
+      id,
+      title: taskTitle(taskText, writeup?.title),
+      project: projectFromEvents(events),
+      state,
+      taskText,
+      attempt: latestAttempt(events),
+      costLabel: describeTaskCost(spend, hasAttempts(events, id)),
+      costUsd: spend.knownUsd,
+      ...(caps.perTaskUsd !== undefined ? { perTaskCapUsd: caps.perTaskUsd } : {}),
+      prUrl: prUrlFromEvents(events),
+      writeup,
+      finished: isFinished(state),
+      lastActivityMs: lastActivityMs(events),
+    };
+  }
+
+  /** One task's full view, for the per-task page (/tasks/<id>) - null for
+   * a task id this record home has never heard of. Reuses the same
+   * `buildTaskView` `getState` uses, so the list and the detail page never
+   * disagree on one task's own fields. */
+  function getTask(taskId: string): TaskView | null {
+    if (!discoverTaskIds(recordHome).includes(taskId)) return null;
+    const { events } = followerFor(taskId).read();
+    return buildTaskView(taskId, events, loadCapsOrDefault(recordHome));
+  }
+
   /** The worker's transcript for one task, tailing as it grows - null for
    * a task id this record home has never heard of. Reuses the same
    * follower `getState` uses, so the two never fall out of step. */
@@ -256,7 +308,7 @@ export function createRecordView(recordHome: string) {
     return followerFor(taskId).read().transcript;
   }
 
-  return { getState, getTranscript };
+  return { getState, getTask, getTranscript };
 }
 
 export type RecordView = ReturnType<typeof createRecordView>;

@@ -33,7 +33,7 @@ export {
   unmeasuredSpend,
 } from "./foreman/index.ts";
 export type { TaskFollower, TaskProgress } from "./foreman/index.ts";
-export type { TranscriptEntry } from "../contract/surface.ts";
+export type { TranscriptEntry, WorkerWriteup } from "../contract/surface.ts";
 export type {
   Delivery,
   FabricaTask,

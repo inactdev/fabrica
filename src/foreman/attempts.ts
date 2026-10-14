@@ -7,7 +7,7 @@
 // is a number honored, not a ceiling the code is free to cut short.
 
 import { registerLiveTranscriptListener } from "../brain/index.ts";
-import type { Brain, BrainWorkResult, TranscriptEntry } from "../brain/index.ts";
+import type { Brain, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../brain/index.ts";
 import type { GateResult, Receipt } from "../../contract/surface.ts";
 import type { Judge, Judgement } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
@@ -44,6 +44,12 @@ export interface AttemptLoopResult {
    * never the task's own words. What do.ts/verdict.ts commit onto the
    * branch with, should anything be left uncommitted once the loop ends. */
   finalMessage: FinalMessageForCommit;
+  /** The last attempt's own structured write-up (title/what/why/how/
+   * deviations), set only when it was valid - absent when the last
+   * attempt's write-up was missing or invalid, same as `finalMessage.ok`
+   * being false. For a live view to show the worker's actual words
+   * rather than `finalMessage`'s already-rendered commit body. */
+  writeup?: WorkerWriteup;
 }
 
 /** Why rule 10 stopped a running task, and the numbers behind it. */
@@ -138,6 +144,7 @@ export async function runAttempts(opts: {
   let spentUsd = spendLimits?.priorKnownUsd ?? 0;
   let capStop: CapStop | undefined;
   let lastFinalMessage: FinalMessageForCommit | undefined;
+  let lastWriteup: WorkerWriteup | undefined;
   // True while the branch's last commit is this loop's own, carrying a
   // fallback message: it was never handed to Inspector, so never pushed,
   // and the next attempt amends it rather than stacking on top of it.
@@ -203,6 +210,7 @@ export async function runAttempts(opts: {
     // alone, never judged, and its reason is what the next brief quotes.
     const finalMessage = finalMessageFor(workResult.writeup, fallbackTitle);
     lastFinalMessage = finalMessage;
+    lastWriteup = finalMessage.ok ? workResult.writeup : undefined;
     let commitError: string | undefined;
     try {
       const committed = commitWorktreeChanges(workdir, renderCommitMessage(finalMessage), {
@@ -271,6 +279,7 @@ export async function runAttempts(opts: {
     declaredGateChanges,
     finalMessage: lastFinalMessage!,
     ...(capStop ? { capStop } : {}),
+    ...(lastWriteup ? { writeup: lastWriteup } : {}),
   };
 }
 

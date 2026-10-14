@@ -283,6 +283,7 @@ async function runFixRound(
       declaredGateChanges: roundGateChanges,
       capStop,
       finalMessage,
+      writeup,
     } = await runAttempts({
       brain,
       brief: buildFixBrief(originalBrief, note),
@@ -377,7 +378,15 @@ async function runFixRound(
     appendEvent(recordHome, {
       taskId,
       name: "delivered",
-      details: { outcome: delivery.outcome, delivery, receipts: allReceipts, project, totalAttempts, baseCommit },
+      details: {
+        outcome: delivery.outcome,
+        delivery,
+        receipts: allReceipts,
+        project,
+        totalAttempts,
+        baseCommit,
+        ...(writeup ? { writeup } : {}),
+      },
     });
   } finally {
     destroyProductionLine(line);

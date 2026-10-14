@@ -23,9 +23,16 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/": { file: "index.html", contentType: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", contentType: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", contentType: "text/css; charset=utf-8" },
+  "/task.js": { file: "task.js", contentType: "text/javascript; charset=utf-8" },
 };
 
 const TRANSCRIPT_PATH = /^\/api\/tasks\/([^/]+)\/transcript$/;
+const TASK_API_PATH = /^\/api\/tasks\/([^/]+)$/;
+/** A task's own page (issue: "styling the live app better" - the live
+ * transcript is too much to expand in place, so it gets a page of its
+ * own). Matched against `TASK_ID_PATTERN` itself, not just `[^/]+`, so
+ * nothing but a real task id ever reaches `task.html`. */
+const TASK_PAGE_PATH = new RegExp(`^/tasks/(${TASK_ID_PATTERN.source.slice(1, -1)})$`);
 
 export interface LiveView {
   readonly port: number;
@@ -73,6 +80,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, view: ReturnTy
     return;
   }
 
+  // A task's own page - TASK_PAGE_PATH is built from TASK_ID_PATTERN
+  // itself, so nothing but a real task id's shape ever reaches this; the
+  // page's own script (task.js) reads the id back out of
+  // `location.pathname` and asks the API routes below for its data.
+  if (TASK_PAGE_PATH.test(url.pathname)) {
+    send(res, 200, "text/html; charset=utf-8", readFileSync(join(PUBLIC_DIR, "task.html")));
+    return;
+  }
+
   if (url.pathname === "/api/state") {
     // Building this state calls straight into every reused query over
     // whatever is actually on disk (taskSpend, formatUsd, ...), none of
@@ -88,6 +104,34 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, view: ReturnTy
     } catch (err) {
       sendRecordError(res, err);
     }
+    return;
+  }
+
+  const taskMatch = TASK_API_PATH.exec(url.pathname);
+  if (taskMatch) {
+    let taskId: string;
+    try {
+      taskId = decodeURIComponent(taskMatch[1]);
+    } catch {
+      send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
+      return;
+    }
+    if (!TASK_ID_PATTERN.test(taskId)) {
+      send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
+      return;
+    }
+    let task: ReturnType<typeof view.getTask>;
+    try {
+      task = view.getTask(taskId);
+    } catch (err) {
+      sendRecordError(res, err);
+      return;
+    }
+    if (task === null) {
+      send(res, 404, "text/plain; charset=utf-8", "No such task.");
+      return;
+    }
+    send(res, 200, "application/json", JSON.stringify({ task }));
     return;
   }
 

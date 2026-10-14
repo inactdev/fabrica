@@ -196,7 +196,7 @@ async function productionRound(
     // open task without waiting for delivery.
     appendEvent(recordHome, { taskId, name: "work-started", details: { project: line.project } });
 
-    const { receipts, lastGate, lastJudgement, declaredGateChanges, capStop, finalMessage } = await runAttempts({
+    const { receipts, lastGate, lastJudgement, declaredGateChanges, capStop, finalMessage, writeup } = await runAttempts({
       brain,
       brief,
       workdir: line.workdir,
@@ -332,7 +332,15 @@ async function productionRound(
     appendEvent(recordHome, {
       taskId,
       name: "delivered",
-      details: { outcome: delivery.outcome, delivery, receipts, project: line.project, totalAttempts, baseCommit },
+      details: {
+        outcome: delivery.outcome,
+        delivery,
+        receipts,
+        project: line.project,
+        totalAttempts,
+        baseCommit,
+        ...(writeup ? { writeup } : {}),
+      },
     });
 
     return { id: taskId, state: deliveredState(outcome) };

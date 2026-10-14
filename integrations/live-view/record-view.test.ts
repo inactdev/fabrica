@@ -4,7 +4,7 @@ import { mkdtempSync, appendFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEvent, recordPath, registerTask } from "../../src/record/index.ts";
-import { createRecordView, displayState, isFinished } from "./record-view.ts";
+import { createRecordView, displayState, isFinished, taskTitle } from "./record-view.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-live-view-test-"));
@@ -37,6 +37,22 @@ test("isFinished: a closed verdict, a real stop, or a failure all count as histo
   assert.equal(isFinished("closed (accept)"), true);
   assert.equal(isFinished("closed (wrong)"), true);
   assert.equal(isFinished("closed"), true);
+});
+
+test("taskTitle: the write-up title wins once there is one, trimmed", () => {
+  assert.equal(taskTitle("the raw task text", "  Fix the flaky retry  "), "Fix the flaky retry");
+});
+
+test("taskTitle: falls back to the task text's first line, cut to about 60 characters", () => {
+  assert.equal(taskTitle("fix the bug\nmore detail below", undefined), "fix the bug");
+  const long = "a".repeat(80);
+  const cut = taskTitle(long, undefined);
+  assert.ok(cut.length <= 61, "the fallback title stays short");
+  assert.ok(cut.endsWith("…"), "a cut title is marked, not silently truncated");
+});
+
+test("taskTitle: an empty write-up title is treated as none, not shown as a blank title", () => {
+  assert.equal(taskTitle("fix the bug", "   "), "fix the bug");
 });
 
 test("createRecordView: an unregistered record home reads as empty, not an error", () => {
@@ -138,6 +154,44 @@ test("createRecordView: finished tasks sort newest-first", async () => {
 
   const ids = view.getState().tasks.filter((t) => t.finished).map((t) => t.id);
   assert.deepEqual(ids, [newer, older]);
+});
+
+test("createRecordView: a delivered task's write-up becomes the row's title and is carried whole on the task view", () => {
+  const recordHome = tempRecordHome();
+  const view = createRecordView(recordHome);
+  const taskId = registerTask(recordHome, "fix the thing that is broken").id;
+  appendEvent(recordHome, { taskId, name: "work-started", details: { project: "/p" } });
+  const writeup = { title: "Fix the broken thing", what: "w", why: "y", how: "h", deviations: "None." };
+  appendEvent(recordHome, { taskId, name: "delivered", details: { outcome: "done", writeup } });
+
+  const task = view.getState().tasks.find((t) => t.id === taskId);
+  assert.equal(task?.title, "Fix the broken thing");
+  assert.deepEqual(task?.writeup, writeup);
+});
+
+test("createRecordView: before any write-up exists, the row's title falls back to the task text and writeup reads null", () => {
+  const recordHome = tempRecordHome();
+  const view = createRecordView(recordHome);
+  const taskId = registerTask(recordHome, "still working on it").id;
+  appendEvent(recordHome, { taskId, name: "work-started", details: { project: "/p" } });
+
+  const task = view.getState().tasks.find((t) => t.id === taskId);
+  assert.equal(task?.title, "still working on it");
+  assert.equal(task?.writeup, null);
+});
+
+test("createRecordView: getTask returns the same view getState would, for one task id", () => {
+  const recordHome = tempRecordHome();
+  const view = createRecordView(recordHome);
+  const taskId = registerTask(recordHome, "look at just this one").id;
+  appendEvent(recordHome, { taskId, name: "work-started", details: { project: "/p" } });
+
+  assert.deepEqual(view.getTask(taskId), view.getState().tasks.find((t) => t.id === taskId));
+});
+
+test("createRecordView: getTask reads as null for a task id this record home has never heard of", () => {
+  const view = createRecordView(tempRecordHome());
+  assert.equal(view.getTask("20260101-ghost-zz"), null);
 });
 
 test("createRecordView: never writes to the record home", () => {
