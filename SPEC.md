@@ -78,8 +78,8 @@ The whole tool in one command.
    counts here (one fix pass) are code, not judgment (Contract 3). If the
    task's base commit contains `.inspector.json`, a green result commits
    the branch and directly triggers Inspector; Fabrica never polls it.
-   Inspector may repair and commit mechanical, request-independent
-   failures. Green proceeds to delivery; red carries Inspector's report
+   Inspector never repairs anything - it only checks and, for green work,
+   may publish. Green proceeds to delivery; red carries Inspector's report
    into a delivery for the Client's request-aware verdict; refused means
    no Inspector verdict and no delivery. Without that config, green
    proceeds directly to delivery as before.

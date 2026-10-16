@@ -19,12 +19,11 @@ To see the current state:
     npm install
     npm test
 
-Expected today: **mostly green, a little red, on purpose**. `npm test`
-runs the contract suite together with the tool's own tests. The loop
-itself (`fabrica do`) is built and most contract rules pass; the tests
-still red reach for the parts that do not exist yet. Run the command for
-today's exact tally - it is meant to move with every issue closed, so it
-is not quoted here.
+Expected today: **every contract test green**. `npm test` runs the
+contract suite together with the tool's own tests; a red contract test
+is a real regression, not an unbuilt part. Run the command yourself for
+the exact tally, since the tool's own test count still moves with every
+issue closed.
 
 Phase 1 has exactly one definition of done: every contract test turns green.
 
@@ -82,8 +81,8 @@ and, if the image is missing or out of date, it prints the exact
 Dockerfile itself, which changes over time - `doctor` is the one place
 that command is kept current, rather than copied here where it would go
 stale). See `src/containment/README.md` for what the container confines,
-and `src/brain/adapters/claude-code.md` for the one step still open
-inside it - the coding agent's credential, which is the next section.
+and `src/brain/adapters/claude-code.md` for how the coding agent's
+credential reaches it - set up in the next section.
 
 ### The worker token
 
