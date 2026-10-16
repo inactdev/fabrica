@@ -22,8 +22,13 @@ export interface RunContainedOptions {
   workdir: string;
   /** Network is denied unless deliberately allowed - required, no
    * default, so every call site states the choice rather than inheriting
-   * one silently. */
-  network: "denied" | "allowed";
+   * one silently. `{ isolatedNetwork }` (issue #186) is the third
+   * option: attach to a named network with no route to the internet
+   * (`src/containment/isolated-network.ts`'s `createIsolatedNetwork`)
+   * instead of either extreme - the container can still reach that
+   * network's own gateway address, which is where a per-task relay
+   * (`src/relay/`) listens. */
+  network: "denied" | "allowed" | { isolatedNetwork: string };
   /** The exact environment variables the contained process receives -
    * "the worker has what it needs," not the Foreman's whole environment.
    * Docker never auto-inherits the host's environment into a container,

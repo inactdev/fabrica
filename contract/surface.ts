@@ -242,7 +242,12 @@ export type FabricaEventName =
   /** Inspector opened a pull request (details: { url }) - only ever
    * appended when Inspector's own stdout printed "pull request: <url>";
    * nothing else triggers it. */
-  | "pr-opened";
+  | "pr-opened"
+  /** The host-side relay (issue #186) turned away a worker box's attempt
+   * to reach a host outside its short fixed allowlist (details: { host,
+   * port }) - the worker's own credential never left the box, since the
+   * refusal happens before anything is forwarded anywhere. */
+  | "network-refused";
 
 export interface FabricaEvent {
   occurredAt: string;

@@ -19,7 +19,7 @@ const CONTAINER_WORKDIR = "/workdir";
 
 export function buildDockerArgs(opts: {
   workdir: string;
-  network: "denied" | "allowed";
+  network: "denied" | "allowed" | { isolatedNetwork: string };
   envFile?: string;
   image: string;
   user?: string;
@@ -61,7 +61,15 @@ export function buildDockerArgs(opts: {
   // Denied is the absence of network access, not a rule fenced around
   // it - Docker's own `--network none` gives the container no network
   // interface at all (verified: DNS resolution itself fails under it).
+  // The isolated-network form (issue #186) is the middle ground: a
+  // named network with no route to the internet (created by
+  // isolated-network.ts's createIsolatedNetwork, "--internal") but
+  // whose own gateway address - where src/relay/'s relay listens - the
+  // container can still reach, since that address is a direct neighbor
+  // on the same bridge rather than a destination reached through a
+  // route the daemon refuses to configure.
   if (opts.network === "denied") args.push("--network", "none");
+  else if (typeof opts.network === "object") args.push("--network", opts.network.isolatedNetwork);
 
   // Docker never auto-inherits the host's environment into a container
   // (verified), so nothing needs filtering here - only what's in the
