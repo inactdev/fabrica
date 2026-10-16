@@ -17,26 +17,41 @@ import type { Receipt, TranscriptEntry } from "../../contract/surface.ts";
  * day - so there is no midnight at which a day's spend resets at once. */
 export const DAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** What one attempt's usage entries add up to: the dollar figure (null if
+ * unknown), and whether that figure is real, billed money or a flat-rate
+ * subscription's own notional estimate (issue #188). */
+export interface AttemptCost {
+  costUsd: number | null;
+  costBasis: "metered" | "subscription-estimate";
+}
+
 /** contract/surface.ts's TranscriptEntry: an entry with kind "usage"
- * carries `{ totalCostUsd: number | null, ... }`. The attempt's cost is
- * the sum of them all, and unknown (null) if any one is null or
- * unreadable, or there is none at all. */
-export function costFromTranscript(transcript: TranscriptEntry[]): number | null {
+ * carries `{ totalCostUsd: number | null, costBasis?: ..., ... }`. The
+ * attempt's cost is the sum of them all, and unknown (null) if any one is
+ * null or unreadable, or there is none at all. `costBasis` defaults to
+ * "metered" when an entry omits it (the conservative default - an
+ * adapter that says nothing is still held to the caps); the last entry
+ * to declare "subscription-estimate" wins, since a real attempt carries
+ * exactly one usage entry from one adapter in practice. */
+export function costFromTranscript(transcript: TranscriptEntry[]): AttemptCost {
   let total = 0;
   let seen = false;
+  let costBasis: "metered" | "subscription-estimate" = "metered";
   for (const entry of transcript) {
     if (entry.kind !== "usage") continue;
-    let cost: unknown;
+    let parsed: { totalCostUsd?: unknown; costBasis?: unknown } | null;
     try {
-      cost = (JSON.parse(entry.text) as { totalCostUsd?: unknown } | null)?.totalCostUsd;
+      parsed = JSON.parse(entry.text) as { totalCostUsd?: unknown; costBasis?: unknown } | null;
     } catch {
-      return null;
+      return { costUsd: null, costBasis };
     }
-    if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return null;
+    const cost = parsed?.totalCostUsd;
+    if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return { costUsd: null, costBasis };
     total += cost;
     seen = true;
+    if (parsed?.costBasis === "subscription-estimate") costBasis = "subscription-estimate";
   }
-  return seen ? total : null;
+  return { costUsd: seen ? total : null, costBasis };
 }
 
 interface AttemptSpend {
@@ -44,6 +59,10 @@ interface AttemptSpend {
   attempt: number;
   startedAtMs: number;
   costUsd: number | null;
+  /** Issue #188: defaults to "metered" for the clarifying step (whose
+   * BrainAskResult has no basis field of its own) and for any stored
+   * receipt from before this field existed. */
+  costBasis: "metered" | "subscription-estimate";
 }
 
 /** Everything a "cost-recorded" event's `details` carries. */
@@ -69,6 +88,7 @@ function askSpendIn(event: FabricaEvent): AttemptSpend | undefined {
     attempt: CLARIFYING_STEP,
     startedAtMs: Date.parse(details.startedAt ?? event.occurredAt),
     costUsd: typeof details.costUsd === "number" ? details.costUsd : null,
+    costBasis: "metered",
   };
 }
 
@@ -100,6 +120,7 @@ function ledger(events: FabricaEvent[]): { attempts: AttemptSpend[]; handCosts: 
         attempt: receipt.attempt,
         startedAtMs: Date.parse(receipt.startedAt),
         costUsd: typeof receipt.costUsd === "number" ? receipt.costUsd : null,
+        costBasis: receipt.costBasis === "subscription-estimate" ? "subscription-estimate" : "metered",
       });
     }
   }
@@ -123,33 +144,50 @@ export function unmeasuredSpend(events: FabricaEvent[]): { taskId: string; attem
   return Array.from(byTask, ([taskId, list]) => ({ taskId, attempts: list }));
 }
 
+/** Known spend, split by whether it is real, billed money or a flat-rate
+ * subscription's own notional estimate (issue #188). Rule 10's caps bind
+ * only on `meteredUsd` - `subscriptionUsd` is recorded and shown, never
+ * refused on its own. A hand-recorded cost (`fabrica cost`) is always
+ * metered: the owner is vouching for a real figure. */
+export interface SpendTotals {
+  meteredUsd: number;
+  subscriptionUsd: number;
+}
+
 /** Known spend over the last 24 hours, ending at `now`. A hand-recorded
  * cost counts when any attempt it covers started inside the window. */
-export function daySpend(events: FabricaEvent[], now: number): { knownUsd: number } {
+export function daySpend(events: FabricaEvent[], now: number): SpendTotals {
   const since = now - DAY_WINDOW_MS;
   const { attempts, handCosts } = ledger(events);
-  let knownUsd = 0;
+  let meteredUsd = 0;
+  let subscriptionUsd = 0;
   for (const attempt of attempts) {
-    if (attempt.costUsd !== null && attempt.startedAtMs >= since) knownUsd += attempt.costUsd;
+    if (attempt.costUsd === null || attempt.startedAtMs < since) continue;
+    if (attempt.costBasis === "subscription-estimate") subscriptionUsd += attempt.costUsd;
+    else meteredUsd += attempt.costUsd;
   }
   for (const hand of handCosts) {
     const covered = attempts.filter((a) => a.taskId === hand.taskId && hand.attempts.includes(a.attempt));
-    if (covered.some((a) => a.startedAtMs >= since)) knownUsd += hand.usd;
+    if (covered.some((a) => a.startedAtMs >= since)) meteredUsd += hand.usd;
   }
-  return { knownUsd };
+  return { meteredUsd, subscriptionUsd };
 }
 
 /** One task's own spend across every round: known dollars (measured or
- * recorded by hand) and, separately, the attempts still unknown. */
-export function taskSpend(events: FabricaEvent[], taskId: string): { knownUsd: number; unknownAttempts: number[] } {
+ * recorded by hand), split the same way `daySpend` is, and, separately,
+ * the attempts still unknown. */
+export function taskSpend(events: FabricaEvent[], taskId: string): SpendTotals & { unknownAttempts: number[] } {
   const { attempts, handCosts } = ledger(events.filter((e) => e.taskId === taskId));
-  let knownUsd = handCosts.reduce((sum, h) => sum + h.usd, 0);
+  let meteredUsd = handCosts.reduce((sum, h) => sum + h.usd, 0);
+  let subscriptionUsd = 0;
   const unknownAttempts: number[] = [];
   for (const attempt of attempts) {
-    if (attempt.costUsd !== null) knownUsd += attempt.costUsd;
-    else if (!isCovered(handCosts, attempt)) unknownAttempts.push(attempt.attempt);
+    if (attempt.costUsd !== null) {
+      if (attempt.costBasis === "subscription-estimate") subscriptionUsd += attempt.costUsd;
+      else meteredUsd += attempt.costUsd;
+    } else if (!isCovered(handCosts, attempt)) unknownAttempts.push(attempt.attempt);
   }
-  return { knownUsd, unknownAttempts };
+  return { meteredUsd, subscriptionUsd, unknownAttempts };
 }
 
 /** Whether `taskId` has run any attempt at all - "no attempts yet" is a
@@ -167,12 +205,23 @@ export function formatUsd(usd: number): string {
   return `$${usd.toFixed(4).replace(/(\.\d\d\d?)0+$/, "$1")}`;
 }
 
+/** The known part of a spend, worded for a person: metered dollars alone
+ * read exactly as before this field existed ("$6.50"); a subscription
+ * estimate is marked with a "~" and named, so it is never mistaken for
+ * billed money (issue #188). */
+function formatKnownCost(spend: SpendTotals): string {
+  if (spend.subscriptionUsd === 0) return formatUsd(spend.meteredUsd);
+  if (spend.meteredUsd === 0) return `~${formatUsd(spend.subscriptionUsd)} subscription-estimate`;
+  return `${formatUsd(spend.meteredUsd)} + ~${formatUsd(spend.subscriptionUsd)} subscription-estimate`;
+}
+
 /** A task's cost in one phrase - never blank, and never $0 for spend
  * nobody measured. */
-export function describeTaskCost(spend: { knownUsd: number; unknownAttempts: number[] }, hasAttempts: boolean): string {
+export function describeTaskCost(spend: SpendTotals & { unknownAttempts: number[] }, hasAttempts: boolean): string {
   if (!hasAttempts) return "no attempts yet";
-  if (spend.unknownAttempts.length === 0) return formatUsd(spend.knownUsd);
-  return spend.knownUsd > 0 ? `unknown (${formatUsd(spend.knownUsd)} measured)` : "unknown";
+  const known = formatKnownCost(spend);
+  if (spend.unknownAttempts.length === 0) return known;
+  return spend.meteredUsd > 0 || spend.subscriptionUsd > 0 ? `unknown (${known} measured)` : "unknown";
 }
 
 /** The one wording for the SPEND UNKNOWN block, shared by the refusal,

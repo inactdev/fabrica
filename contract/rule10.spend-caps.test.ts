@@ -211,3 +211,36 @@ test("rule 10: an unknown clarifying-step cost is not zero - it blocks, until re
   await foreman.recordCost(unmeasured.id, 0.03);
   assert.equal((await foreman.do("now it may start", { project, brain: fakeBrain({ costUsd: 0 }) })).state, "delivered");
 });
+
+// Issue #188: the caps meter the figure a brain reports, but on a
+// flat-rate subscription that figure never moves a bill. Two fake
+// adapters - one metered, one a subscription's own notional estimate -
+// prove the daily cap binds on metered spend alone.
+test("rule 10: the daily cap refuses only on metered spend - a subscription estimate is recorded but never binds it", async () => {
+  const recordHome = home();
+  const project = makeFixtureRepo("exit 0");
+  const foreman = createForeman({ recordHome, caps: { perDayUsd: 5 }, inspector: fakeInspector("green") });
+
+  // Far more than the $5 cap, but a subscription's own notional figure -
+  // must not refuse anything on its own.
+  const subscriptionTask = await foreman.do("a subscription-metered brain's work", {
+    project,
+    brain: fakeBrain({ costUsd: 50, costBasis: "subscription-estimate" }),
+  });
+  assert.equal(subscriptionTask.state, "delivered");
+  const [subscriptionReceipt] = await foreman.receiptsOf(subscriptionTask.id);
+  assert.equal(subscriptionReceipt.costBasis, "subscription-estimate");
+
+  // Metered spend, reaching exactly the cap, still refuses the next task -
+  // proving the $50 above never counted toward it (otherwise this would
+  // already have been refused, or the message below would show $55).
+  const meteredTask = await foreman.do("a metered brain's work", { project, brain: fakeBrain({ costUsd: 5 }) });
+  const [meteredReceipt] = await foreman.receiptsOf(meteredTask.id);
+  assert.equal(meteredReceipt.costBasis, "metered");
+
+  await assert.rejects(
+    () => foreman.do("a further metered task", { project, brain: fakeBrain({ costUsd: 1 }) }),
+    (err: Error) => /\$5\.00/.test(err.message) && !/\$55\.00/.test(err.message),
+    "the $50 subscription estimate must not count toward the $5 daily cap"
+  );
+});

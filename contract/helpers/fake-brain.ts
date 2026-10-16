@@ -26,6 +26,12 @@ export function fakeBrain(
      * reports a cost the brain cannot say; omitted, no usage entry is
      * emitted at all. */
     costUsd?: number | null;
+    /** Issue #188: the basis each work() call's usage entry reports -
+     * omitted (the default) matches a metered adapter; "subscription-
+     * estimate" stands in for a flat-rate subscription's own notional
+     * figure, which the caps never bind on. Ignored when `costUsd` is
+     * omitted (no usage entry at all, so no basis to report either). */
+    costBasis?: "metered" | "subscription-estimate";
     /** Rule 10: what each ask() call reports spending (BrainAskResult's
      * costUsd). A fake spends nothing, so it reports 0 unless told
      * otherwise; null reports a cost it cannot say. */
@@ -71,7 +77,7 @@ export function fakeBrain(
         transcript.push({
           occurredAt: new Date().toISOString(),
           kind: "usage",
-          text: JSON.stringify({ totalCostUsd: opts.costUsd }),
+          text: JSON.stringify({ totalCostUsd: opts.costUsd, ...(opts.costBasis ? { costBasis: opts.costBasis } : {}) }),
         });
       }
       return {

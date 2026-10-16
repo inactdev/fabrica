@@ -101,7 +101,10 @@ export interface TaskView {
   taskText: string;
   attempt: number | null;
   costLabel: string;
+  /** Issue #188: real, metered dollars only - what the per-task cap
+   * binds on. `subscriptionUsd` is the separate, notional figure. */
   costUsd: number;
+  subscriptionUsd: number;
   perTaskCapUsd?: number;
   prUrl: string | null;
   writeup: WorkerWriteup | null;
@@ -110,8 +113,13 @@ export interface TaskView {
 }
 
 export interface SpendView {
+  /** Issue #188: real, metered dollars - what `perDayCapUsd` binds on. */
   dailyUsd: number;
   dailyLabel: string;
+  /** The day's flat-rate subscription estimate - notional, shown
+   * separately, never counted against `perDayCapUsd`. */
+  dailySubscriptionUsd: number;
+  dailySubscriptionLabel: string;
   perDayCapUsd?: number;
   perTaskCapUsd?: number;
 }
@@ -249,7 +257,7 @@ export function createRecordView(recordHome: string) {
     });
 
     const allEvents = perTask.flatMap(({ events }) => events);
-    const { knownUsd: dailyUsd } = daySpend(allEvents, now);
+    const { meteredUsd: dailyUsd, subscriptionUsd: dailySubscriptionUsd } = daySpend(allEvents, now);
 
     const tasks: TaskView[] = perTask.map(({ id, events }) => buildTaskView(id, events, caps));
 
@@ -260,6 +268,8 @@ export function createRecordView(recordHome: string) {
       spend: {
         dailyUsd,
         dailyLabel: formatUsd(dailyUsd),
+        dailySubscriptionUsd,
+        dailySubscriptionLabel: formatUsd(dailySubscriptionUsd),
         ...(caps.perDayUsd !== undefined ? { perDayCapUsd: caps.perDayUsd } : {}),
         ...(caps.perTaskUsd !== undefined ? { perTaskCapUsd: caps.perTaskUsd } : {}),
       },
@@ -281,7 +291,8 @@ export function createRecordView(recordHome: string) {
       taskText,
       attempt: latestAttempt(events),
       costLabel: describeTaskCost(spend, hasAttempts(events, id)),
-      costUsd: spend.knownUsd,
+      costUsd: spend.meteredUsd,
+      subscriptionUsd: spend.subscriptionUsd,
       ...(caps.perTaskUsd !== undefined ? { perTaskCapUsd: caps.perTaskUsd } : {}),
       prUrl: prUrlFromEvents(events),
       writeup,

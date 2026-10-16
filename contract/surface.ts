@@ -36,11 +36,17 @@ export interface ProductionLine {
  *
  * One kind is reserved (rule 10, issue #11): an entry with kind
  * "usage" carries, as its `text`, a JSON object
- * `{ "totalCostUsd": number | null, ... }` - what that one `work()` call
- * cost, in dollars, or null when the brain cannot say. Whatever assembles
- * a Receipt reads it: the attempt's `costUsd` is the sum of every usage
+ * `{ "totalCostUsd": number | null, "costBasis"?: "metered" |
+ * "subscription-estimate", ... }` - what that one `work()` call cost, in
+ * dollars, or null when the brain cannot say. Whatever assembles a
+ * Receipt reads it: the attempt's `costUsd` is the sum of every usage
  * entry's `totalCostUsd`, and null if any of them is null, unparseable,
  * or there is no usage entry at all. Null never counts as zero.
+ * `costBasis` (issue #188) says whether that figure is real, billed
+ * money ("metered") or a flat-rate subscription's own notional estimate
+ * ("subscription-estimate") that does not move a bill - omitted means
+ * "metered", so an adapter that says nothing is still held to the
+ * conservative default rather than silently escaping the caps.
  */
 export interface TranscriptEntry {
   occurredAt: string;
@@ -168,6 +174,12 @@ export interface Receipt {
    * `costUsd` is null, written on the record so the unknown is attached
    * to this specific spend rather than inferred later. */
   costUnknown: boolean;
+  /** Issue #188: whether `costUsd` is real, billed money or a flat-rate
+   * subscription's own notional estimate that never moves a bill (see
+   * `TranscriptEntry`'s "usage" kind). The caps (rule 10) bind only on
+   * "metered" spend; "subscription-estimate" spend is recorded and shown
+   * - with a "~" - but never refuses work on its own. */
+  costBasis: "metered" | "subscription-estimate";
   session: string | null;
   reasoningEffort: string | null;
   checks: GateResult | null;

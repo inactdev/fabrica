@@ -489,11 +489,37 @@ test("runStatusCommand: the spend line matches daySpend to the cent, with a cap 
     brain: fakeBrain({ costUsd: 0.0421 }),
   });
   const now = Date.now();
-  const expectedKnownUsd = daySpend(readEvents(recordHome), now).knownUsd;
+  const expectedMeteredUsd = daySpend(readEvents(recordHome), now).meteredUsd;
   const io = captureIo();
 
   const code = await runStatusCommand([], { recordHome, now, ...io });
 
   assert.equal(code, 0);
-  assert.equal(io.out[0], `spent in the last 24 hours: ${formatUsd(expectedKnownUsd)} of $100.00`);
+  assert.equal(io.out[0], `spent in the last 24 hours: ${formatUsd(expectedMeteredUsd)} of $100.00`);
+});
+
+// Issue #188: a flat-rate subscription's own notional figure never binds
+// the cap, and the opening line names it separately from metered spend.
+test("runStatusCommand: the spend line names a subscription estimate separately, and it never counts against the cap", async () => {
+  const recordHome = tempRecordHome();
+  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 5\n");
+  const project = makeFixtureRepo("exit 0");
+  const foreman = createForeman({ recordHome, caps: { perDayUsd: 5 }, inspector: fixtureInspector() });
+
+  // Far more than the $5 cap, but notional - must not block anything.
+  const subTask = await foreman.do("subscription work", {
+    project,
+    brain: fakeBrain({ costUsd: 50, costBasis: "subscription-estimate" }),
+  });
+  assert.equal(subTask.state, "delivered");
+  await foreman.do("metered work, well under the cap", { project, brain: fakeBrain({ costUsd: 1 }) });
+
+  const io = captureIo();
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  assert.equal(
+    io.out[0],
+    "spent in the last 24 hours: $1.00 of $5.00 (+ ~$50.00 subscription-estimate, not counted against the cap)"
+  );
 });
