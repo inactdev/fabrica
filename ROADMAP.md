@@ -69,12 +69,13 @@ Ask "how's that thing going?" about anything and get a real answer,
 instantly. It speaks up on its own when something finishes, gets stuck,
 or needs you.
 
-Adopted shape (Aug 2026, from SSSF's trace design): the permanent record
-stays plain files; a disposable database mirror (SQLite) of it feeds a
-read-only live view in the browser — every run as a timeline, click any
-lane for the fine grain (brief, model, transcript, receipts, cost), one
-simple poll query — plus heartbeat events so a silent worker shows up
-as "quiet too long" instead of as ambiguity. Requirement (Aug 2026):
+Adopted shape (Oct 2026, superseding the earlier SSSF-trace-design
+mirror plan): the permanent record stays plain files, and a read-only
+live view (`integrations/live-view/`) reads those files directly, with
+no database mirror — every run as a timeline, click any lane for the
+fine grain (brief, model, transcript, receipts, cost), one simple poll
+loop over the record itself — plus heartbeat events so a silent worker
+shows up as "quiet too long" instead of as ambiguity. Requirement (Aug 2026):
 reachable from anywhere the Client has an internet connection — phone
 included — over a private path (his own devices, not the public web),
 with spend-at-a-glance front and center.
@@ -118,13 +119,11 @@ load-bearing rules stay in our code, never in a framework's.
   off) — candidate for Phase 6, Amy's conversational runtime, and
   possibly Phase 4's awareness plumbing. Logged Aug 2026.
 
-- **no-mistakes** (the shipping gate already trusted today — the
-  program that reviews, tests, and lints a branch before it's allowed
-  to become a pull request) — kept, not rebuilt, for now: pinned to an
-  exact version and wrapped behind our own adapter so nothing else in
-  the tool ever talks to it directly. Candidate to replace with our own
-  gate in a later phase, only if living with it says so. Logged Aug
-  2026.
+- **no-mistakes** (the shipping gate once trusted for reviewing,
+  testing, and linting a branch before it could become a pull request)
+  — superseded, not kept: Inspector (`src/inspector/`, issue #56) is our
+  own gate, and no-mistakes was never wrapped behind an adapter or
+  wired in. Logged Aug 2026; closed when Inspector landed.
 
 - **Grok Build** (xAI's official terminal coding agent, launched May
   2026 — sign in with a SuperGrok or X Premium+ subscription; has a
