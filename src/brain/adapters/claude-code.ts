@@ -524,6 +524,11 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
           totalCostUsd: result.total_cost_usd ?? null,
           durationMs: result.duration_ms ?? null,
           usage: result.usage ?? null,
+          // Issue #188: this account is a flat-rate subscription (see
+          // claude-code.md's "Cost, duration, and token usage" section),
+          // so the figure above is notional, not billed money - marked
+          // here so the caps bind on real, metered spend only.
+          costBasis: "subscription-estimate",
         }),
       });
 

@@ -174,7 +174,7 @@ test("startLiveView: an event with a valid JSON shape but unexpected contents ne
   // rendered (describeTaskCost only calls formatUsd down that path) -
   // then a "cost-recorded" event whose "usd" is a string, not a number:
   // valid JSON, wrong type. taskSpend's reduce has no type guard on it,
-  // so "knownUsd" silently becomes a string ("0" + the string, via "+"),
+  // so "meteredUsd" silently becomes a string ("0" + the string, via "+"),
   // and formatUsd's usd.toFixed(2) throws once something downstream
   // actually tries to format it - deep inside reused library code this
   // integration never parses itself.

@@ -44,7 +44,11 @@ history.
 This listing opens with the same number the daily cap check itself
 uses - "spent in the last 24 hours: $X of $Y" when [caps].perDayUsd is
 set, "$X, no daily cap" when it isn't - so the Client never has to add
-up task lines by hand to see where that cap stands.
+up task lines by hand to see where that cap stands. A flat-rate
+subscription's own notional figure (e.g. the reference adapter's Max
+plan) is never folded into that $X: it's named separately, with a "~",
+as "(+ ~$Z subscription-estimate, not counted against the cap)" - real,
+metered dollars are the only thing the cap ever binds on.
 
 Every line carries the task's cost so far - "cost: unknown" when an
 attempt's spend was never measured, never a silent $0. While a spending
@@ -114,7 +118,7 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     // Issues #81/#110: the same number the daily cap check itself derives
     // (caps.ts's requireRoomToStart), so this never drifts from what
     // actually gates new work.
-    stdout(formatDaySpendLine(daySpend(allEvents, now).knownUsd, caps.perDayUsd));
+    stdout(formatDaySpendLine(daySpend(allEvents, now), caps.perDayUsd));
 
     // Rule 10 (issue #11, Client ruling 2026-10-08): derived from the
     // record on every run, closed tasks included, so the block survives
@@ -182,14 +186,20 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
 const PHANTOM_TASK_PREFIX = "project:";
 
 /** Issues #81/#110: the one line this listing opens with - the same
- * `knownUsd` the daily cap check (`caps.ts`'s `requireRoomToStart`)
+ * `meteredUsd` the daily cap check (`caps.ts`'s `requireRoomToStart`)
  * derives from `daySpend`, so this can never say something different
- * from what actually gates new work. */
-function formatDaySpendLine(knownUsd: number, perDayUsd: number | undefined): string {
-  const spent = formatUsd(knownUsd);
-  return perDayUsd === undefined
-    ? `spent in the last 24 hours: ${spent}, no daily cap`
-    : `spent in the last 24 hours: ${spent} of ${formatUsd(perDayUsd)}`;
+ * from what actually gates new work. Issue #188: a nonzero subscription
+ * estimate is named separately, with a "~", since it never counts
+ * against the cap above it. */
+function formatDaySpendLine(spend: { meteredUsd: number; subscriptionUsd: number }, perDayUsd: number | undefined): string {
+  const spent = formatUsd(spend.meteredUsd);
+  const base =
+    perDayUsd === undefined
+      ? `spent in the last 24 hours: ${spent}, no daily cap`
+      : `spent in the last 24 hours: ${spent} of ${formatUsd(perDayUsd)}`;
+  return spend.subscriptionUsd > 0
+    ? `${base} (+ ~${formatUsd(spend.subscriptionUsd)} subscription-estimate, not counted against the cap)`
+    : base;
 }
 
 function refusedByCap(events: FabricaEvent[]): boolean {

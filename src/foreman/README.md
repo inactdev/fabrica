@@ -768,6 +768,28 @@ usage entry into the attempt's `Receipt.costUsd`. If any of them is
 null or unreadable, or there is none at all, the cost is `null` and the
 receipt carries `costUnknown: true`. Unknown is never counted as $0.
 
+**Metered money and subscription estimates don't mix (issue #188).** The
+same usage entry can carry `"costBasis": "metered" | "subscription-
+estimate"` - omitted means "metered". A flat-rate subscription's own
+tool (the reference adapter's flat-rate subscription account, see that
+adapter's own doc file)
+reports a real, computed dollar figure that never moves a bill; it
+marks every usage entry `"subscription-estimate"` so the caps never
+treat it as the real money rule 10 was written for. `costFromTranscript`
+(`spend.ts`) returns `{ costUsd, costBasis }`; the basis lands on
+`Receipt.costBasis` and on `spend.ts`'s `SpendTotals` (`{ meteredUsd,
+subscriptionUsd }`, what `daySpend`/`taskSpend` return instead of a
+single total). `requireRoomToStart` and `spendLimitsFor` read only
+`meteredUsd` - a subscription estimate, however large, never refuses a
+task or stops one mid-run on its own. `fabrica status` and the live view
+still show it, separately and marked with a "~" (`describeTaskCost`'s
+`formatKnownCost`), so the Client can see it without it ever binding a
+cap. An unknown cost (no usage entry, or one that can't be parsed) still
+blocks under any cap regardless of basis - there is no basis to know
+yet, so this stays the conservative default it always was. A
+hand-recorded cost (`fabrica cost`) is always metered: the owner is
+vouching for a real figure.
+
 **Where spend is counted from.** Only the record, read fresh every time
 (`spend.ts`). Each attempt appends a `"receipt-recorded"` event the
 moment it exists, so a task still running, or one that throws later,
@@ -860,7 +882,7 @@ step", until `fabrica cost` records it.
 | `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf`, `refusedWithNoDelivery`, `failedWithNoDelivery` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal, while `receiptsOf` reads the latest event carrying receipts. `refusedWithNoDelivery` is narrower than that: true only when there is no `"delivered"` event at all and the latest `"inspection-finished"` is a refusal - `verdict.ts`'s one carve-out letting `wrong` close such a task. `failedWithNoDelivery` (issue #143) is the sibling carve-out for a task that never reached a delivery because it failed first - `stateOf` reads `"failed"` and no `"delivered"` event exists anywhere in its history. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. |
 | `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
-| `spend.ts` | Rule 10's ledger, derived from the record: `costFromTranscript`, `daySpend` (rolling 24 hours), `taskSpend`, `unmeasuredSpend`, and the shared wording (`formatUsd`, `describeTaskCost`, `SPEND_UNKNOWN_LINE`). |
+| `spend.ts` | Rule 10's ledger, derived from the record: `costFromTranscript` (now `{ costUsd, costBasis }`), `daySpend`/`taskSpend` (rolling 24 hours, returning `SpendTotals` - metered vs. subscription-estimate, issue #188), `unmeasuredSpend`, and the shared wording (`formatUsd`, `describeTaskCost`, `SPEND_UNKNOWN_LINE`). |
 | `caps.ts` | Rule 10's enforcement: `requireRoomToStart`, the per-round `spendLimitsFor`, the `"receipt-recorded"`/`"cap-stopped"` writers, and `recordCost`. See "Rule 10: spending caps" above. |
 | `task-failure.ts` | #73: `recordingFailure` appends `"task-failed"` (with the message) for any error after `task-received` and before a delivery or refusal - except one already on the record as `ask-failed` or `cap-refused`. `requireGitRoot` refuses a project path that is missing or not a git root before the clarifying step spends anything. |
 | `standing-question.ts` | CONTRACT rule 11: `withStandingQuestion` puts the standing question, then the write-up notice (the structured write-up every worker must return, stated here rather than left to a file a worker might not read), at the start of every brief - applied where `attempts.ts` hands the brief over and in each brief builder (correction, fix, answered round), never twice. |

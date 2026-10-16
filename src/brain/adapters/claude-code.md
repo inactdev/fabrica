@@ -433,8 +433,14 @@ This account is a flat-rate subscription (`claude auth status` reports
 `"subscriptionType": "max"`), so the dollar figure above is notional -
 real to compute, but it doesn't move a bill the way a metered API call
 would (see issue #6's design comments). It's recorded anyway, faithfully,
-in whatever unit the tool itself reports it in; the caps treat it as real
-dollars, which is the safe direction to be wrong in.
+in whatever unit the tool itself reports it in, and marked
+`costBasis: "subscription-estimate"` on that same usage entry (issue
+#188) - so once a metered adapter arrives, the two kinds of dollar never
+mix in one total. `fabrica status` and the live view show it with a "~"
+and it never refuses work on its own; only real, metered spend binds the
+caps. This is hardcoded for this adapter, not detected from `claude auth
+status` at runtime - v1 only ever runs this adapter against the Client's
+own subscription (ROADMAP.md), so there is no live case to detect yet.
 
 ## `writeup` and `--json-schema`
 

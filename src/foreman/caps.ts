@@ -71,15 +71,15 @@ export function requireRoomToStart(
   }
 
   if (caps!.perDayUsd !== undefined) {
-    const { knownUsd } = daySpend(events, now);
-    if (knownUsd >= caps!.perDayUsd) {
+    const { meteredUsd } = daySpend(events, now);
+    if (meteredUsd >= caps!.perDayUsd) {
       refuse(recordHome, taskId, "cap-refused", {
         reason: "per-day-cap",
         ...project,
         capUsd: caps!.perDayUsd,
-        spentUsd: knownUsd,
+        spentUsd: meteredUsd,
         message:
-          `Refused by the daily cap: ${formatUsd(knownUsd)} has been spent in the last 24 hours, and the cap ` +
+          `Refused by the daily cap: ${formatUsd(meteredUsd)} has been spent in the last 24 hours, and the cap ` +
           `is ${formatUsd(caps!.perDayUsd)}. Nothing was started. The window is a rolling 24 hours, so room ` +
           `comes back as older spend ages out; raising [caps].perDayUsd in projects.toml is the other way.`,
       });
@@ -87,15 +87,15 @@ export function requireRoomToStart(
   }
 
   if (caps!.perTaskUsd !== undefined) {
-    const { knownUsd } = taskSpend(events, taskId);
-    if (knownUsd >= caps!.perTaskUsd) {
+    const { meteredUsd } = taskSpend(events, taskId);
+    if (meteredUsd >= caps!.perTaskUsd) {
       refuse(recordHome, taskId, "cap-refused", {
         reason: "per-task-cap",
         ...project,
         capUsd: caps!.perTaskUsd,
-        spentUsd: knownUsd,
+        spentUsd: meteredUsd,
         message:
-          `Refused by the per-task cap: task ${taskId} has already spent ${formatUsd(knownUsd)}, and the cap ` +
+          `Refused by the per-task cap: task ${taskId} has already spent ${formatUsd(meteredUsd)}, and the cap ` +
           `is ${formatUsd(caps!.perTaskUsd)}. Nothing was started. Raise [caps].perTaskUsd in projects.toml ` +
           `to let it continue.`,
       });
@@ -104,12 +104,14 @@ export function requireRoomToStart(
 }
 
 /** The spend limits one round of attempts runs under, with this task's
- * own earlier rounds already counted. */
+ * own earlier rounds already counted. Issue #188: only metered spend
+ * counts toward `perTaskUsd` - a subscription estimate never contributes
+ * to a cap on its own. */
 export function spendLimitsFor(recordHome: string, taskId: string, caps: Caps | undefined): AttemptSpendLimits {
   return {
     capsActive: capsActive(caps),
     perTaskUsd: caps?.perTaskUsd,
-    priorKnownUsd: taskSpend(readEventsForTask(recordHome, taskId), taskId).knownUsd,
+    priorMeteredUsd: taskSpend(readEventsForTask(recordHome, taskId), taskId).meteredUsd,
   };
 }
 

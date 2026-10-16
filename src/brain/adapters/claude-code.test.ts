@@ -388,6 +388,10 @@ test("claudeCodeAdapter carries cost, duration, and token usage on a 'usage' tra
     cache_read_input_tokens: 5,
     cache_creation_input_tokens: 1,
   });
+  // Issue #188: this account is a flat-rate subscription, so the figure
+  // above is notional - marked so the caps never bind on it as if it
+  // were metered money.
+  assert.equal(payload.costBasis, "subscription-estimate");
 });
 
 test("claudeCodeAdapter passes maxSpendUsd as --max-budget-usd", async (t) => {

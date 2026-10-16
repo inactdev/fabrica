@@ -87,6 +87,7 @@ function renderSpend(spend) {
   if (!spendEl) return; // history.html has no spend line
   const bits = [`Today: ${spend.dailyLabel}`];
   bits.push(spend.perDayCapUsd === undefined ? "(no daily cap set)" : `of $${spend.perDayCapUsd.toFixed(2)} daily cap`);
+  if (spend.dailySubscriptionUsd > 0) bits.push(`+ ~${spend.dailySubscriptionLabel} subscription-estimate`);
   if (spend.perTaskCapUsd !== undefined) bits.push(`— per-task cap $${spend.perTaskCapUsd.toFixed(2)}`);
   const text = bits.join(" ");
   if (spendEl.textContent !== text) spendEl.textContent = text;

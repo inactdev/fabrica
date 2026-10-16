@@ -62,12 +62,13 @@ export interface CapStop {
 }
 
 /** Rule 10 inside the loop. `capsActive` is whether any cap is set at
- * all (an unknown cost only stops work under a cap); `priorKnownUsd` is
- * what this task already spent in earlier rounds. */
+ * all (an unknown cost only stops work under a cap); `priorMeteredUsd` is
+ * what this task already spent in earlier rounds, metered spend only -
+ * issue #188: a subscription estimate never counts toward `perTaskUsd`. */
 export interface AttemptSpendLimits {
   capsActive: boolean;
   perTaskUsd?: number;
-  priorKnownUsd: number;
+  priorMeteredUsd: number;
 }
 
 export async function runAttempts(opts: {
@@ -141,7 +142,7 @@ export async function runAttempts(opts: {
   let lastGate: GateResult | undefined;
   let lastJudgement: Judgement | undefined;
   let declaredGateChanges: string | undefined;
-  let spentUsd = spendLimits?.priorKnownUsd ?? 0;
+  let spentUsd = spendLimits?.priorMeteredUsd ?? 0;
   let capStop: CapStop | undefined;
   let lastFinalMessage: FinalMessageForCommit | undefined;
   let lastWriteup: WorkerWriteup | undefined;
@@ -235,8 +236,11 @@ export async function runAttempts(opts: {
     lastJudgement = judgement;
     if (gate) lastGate = gate;
 
-    const costUsd = costFromTranscript(workResult.transcript);
-    if (costUsd !== null) spentUsd += costUsd;
+    const { costUsd, costBasis } = costFromTranscript(workResult.transcript);
+    // Issue #188: only metered spend counts toward the running total a
+    // per-task cap checks against - a subscription estimate is recorded
+    // on the receipt but never moves this number.
+    if (costUsd !== null && costBasis === "metered") spentUsd += costUsd;
     const receipt: Receipt = {
       task: taskId,
       attempt,
@@ -246,6 +250,7 @@ export async function runAttempts(opts: {
       durationMs,
       costUsd,
       costUnknown: costUsd === null,
+      costBasis,
       session: session ?? null,
       reasoningEffort: null,
       checks: gate ? gateForRecord(gate) : null,

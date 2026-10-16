@@ -39,7 +39,7 @@ async function runOnce(result: BrainAskResult) {
 test("a reported clarifying-step cost is recorded and counted in the task's spend", async () => {
   const { events, taskId } = await runOnce({ costUsd: 0.25 });
   assert.ok(events.some((e) => e.name === "ask-cost-recorded"), "the clarifying step's cost is not on the record");
-  assert.equal(taskSpend(events, taskId).knownUsd, 0.25);
+  assert.equal(taskSpend(events, taskId).meteredUsd, 0.25);
   assert.deepEqual(unmeasuredSpend(events), []);
 });
 
