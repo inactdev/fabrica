@@ -99,6 +99,32 @@ test("fix re-enters the same warm worker session on the same line", async () => 
   assert.equal(delivery?.outcome, "done");
 });
 
+// Issue #200: a fix round spends too (runFixRound's own runAttempts
+// call), so a cap-requiring brain's gate has to be checked again there,
+// not only on a task's first round - caps can genuinely differ between
+// rounds (a fresh process reading a changed projects.toml), so this
+// uses two separate Foreman instances over the same record rather than
+// one that could only ever see one caps value.
+test("a fix round refuses a cap-requiring brain exactly like a fresh task does", async () => {
+  const recordHome = freshHome();
+  // costUsd: 0 (a known, measured figure) so the pre-existing "unmeasured
+  // spend blocks every start under any cap" rule (requireRoomToStart)
+  // never fires here - this test is about requiresPerTaskCap alone.
+  const brain = fakeBrain({ requiresPerTaskCap: true, costUsd: 0 });
+  const delivering = createForeman({ recordHome, caps: { perTaskUsd: 100 }, inspector: fixtureInspector() });
+  const task = await delivering.do("small change", { project: makeFixtureRepo("exit 0"), brain });
+  assert.equal(task.state, "delivered");
+  assert.equal(brain.calls, 1);
+
+  const uncapped = createForeman({ recordHome, inspector: fixtureInspector(), brain });
+  await assert.rejects(() => uncapped.verdict(task.id, "fix", "one more pass"), /perTaskUsd/);
+  assert.equal(brain.calls, 1, "no fix work must run before the cap is refused");
+
+  const recapped = createForeman({ recordHome, caps: { perTaskUsd: 1 }, inspector: fixtureInspector(), brain });
+  await recapped.verdict(task.id, "fix", "one more pass");
+  assert.equal(brain.calls, 2, "the fix round ran once a per-task cap was configured again");
+});
+
 test("fix draws from no budget of its own - the Client can rule it any number of times (issue #65)", async () => {
   const recordHome = freshHome();
   const brain = fakeBrain();

@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
-import { WRITEUP_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
+import { WRITEUP_FIELDS, WRITEUP_JSON_SCHEMA } from "../writeup.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
@@ -37,22 +37,13 @@ export class ClaudeCodeError extends Error {
 // installs and why a fresh build has nothing authenticated yet.
 export const DEFAULT_IMAGE = "fabrica-claude-code:latest";
 
-/** The write-up work() asks for, as a JSON Schema passed to
- * `--json-schema`. The CLI holds the model's final answer to it and
- * returns the object on the result line's `structured_output` (verified
- * on 2.1.222), so no write-up is ever parsed out of prose. */
-export const WRITEUP_JSON_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: [...WRITEUP_FIELDS],
-  properties: {
-    title: { type: "string", minLength: 1, maxLength: WRITEUP_TITLE_MAX_LENGTH },
-    what: { type: "string", minLength: 1 },
-    why: { type: "string", minLength: 1 },
-    how: { type: "string", minLength: 1 },
-    deviations: { type: "string", minLength: 1 },
-  },
-};
+// The write-up work() asks for, as a JSON Schema passed to
+// `--json-schema`. The CLI holds the model's final answer to it and
+// returns the object on the result line's `structured_output` (verified
+// on 2.1.222), so no write-up is ever parsed out of prose. Declared once,
+// in ../writeup.ts, and re-exported here for this file's existing
+// importers (every direct-API adapter asks for the identical shape too).
+export { WRITEUP_JSON_SCHEMA } from "../writeup.ts";
 
 export interface ClaudeCodeAdapterOptions {
   /** Value for `claude --model` (an alias like "sonnet" or a full model

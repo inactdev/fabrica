@@ -59,6 +59,11 @@ export function fakeBrain(
      * a valid one so ordinary tests still see a "done" delivery without
      * constructing it themselves; null returns none at all. */
     writeup?: WorkerWriteup | null;
+    /** Issue #200's `Brain.requiresPerTaskCap` - stands in for a
+     * direct-API adapter that must not run without `[caps].perTaskUsd`
+     * configured. Omitted (the default) matches every brain before that
+     * field existed. */
+    requiresPerTaskCap?: boolean;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -71,6 +76,7 @@ export function fakeBrain(
   return {
     name: "fake",
     model: "fake-1",
+    ...(opts.requiresPerTaskCap ? { requiresPerTaskCap: true } : {}),
     get calls() {
       return calls;
     },

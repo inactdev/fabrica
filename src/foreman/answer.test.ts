@@ -287,3 +287,34 @@ test("answerTask rejects a blank answer", async () => {
     (err: unknown) => err instanceof ForemanError && err.code === "missing-answer"
   );
 });
+
+// Issue #200: a resumed round never calls brain.ask() again (the
+// ask-first dial is fixed), so a cap-requiring brain's own gate has to
+// be checked again where the resumed round's work actually starts
+// (do.ts's productionRound) - recordAnswerDecision's own foreground half
+// resolves no brain at all and so cannot check this itself.
+test("a resumed round refuses a cap-requiring brain exactly like a fresh task does", async () => {
+  const project = makeFixtureRepo("exit 0");
+  const recordHome = freshHome();
+  const brain = fakeBrain({ askQuestions: ["Which?"], requiresPerTaskCap: true });
+
+  // The clarifying step itself spends too, so the first round needs the
+  // cap configured just to reach "asking" at all.
+  const asked = await doTask(recordHome, "build me an app", { project, brain, caps: { perTaskUsd: 100 } });
+  assert.equal(asked.state, "asking");
+
+  const workBrain = fakeBrain({ requiresPerTaskCap: true });
+  await assert.rejects(
+    () => answerTask(recordHome, asked.id, "Use Postgres.", { brain: workBrain, inspector: fixtureInspector() }),
+    /perTaskUsd/
+  );
+  assert.equal(workBrain.calls, 0, "no work must run before the cap is refused");
+
+  const delivered = await answerTask(recordHome, asked.id, "Use Postgres.", {
+    brain: workBrain,
+    inspector: fixtureInspector(),
+    caps: { perTaskUsd: 1 },
+  });
+  assert.equal(delivered.state, "delivered");
+  assert.equal(workBrain.calls, 1);
+});

@@ -763,6 +763,25 @@ yet, so this stays the conservative default it always was. A
 hand-recorded cost (`fabrica cost`) is always metered: the owner is
 vouching for a real figure.
 
+**A brain can require a cap to even exist (issue #200).** Every check
+above is about room under an already-configured cap; `caps.ts`'s
+`requireCapForBrain` is the other thing rule 10 gates on - whether
+`[caps].perTaskUsd` is configured at all. `Brain.requiresPerTaskCap`
+(contract/surface.ts) is how a brain declares it must not run without
+one - true for both of `src/brain/adapters/direct-api/`'s factories, a
+direct, metered API with no flat-rate subscription ceiling to fall back
+on if the Client simply never sets a cap. A no-op for every other brain,
+so this changes nothing about the reference CLI adapter's own uncapped-
+by-default behavior. Checked at the same three gates `requireRoomToStart`
+already guards (`ask.ts` before `brain.ask()`, `do.ts`'s `productionRound`
+before a resumed round's attempts, `verdict.ts`'s `runFixRound` before a
+fix round's) - a resumed round's own foreground half
+(`recordAnswerDecision`/`recordVerdictDecision`) resolves no brain at
+all, so it cannot check this itself; the round that actually spends,
+which does have the brain, is where this is checked instead. Refuses
+through the exact same `"cap-refused"` event (`reason:
+"adapter-requires-cap"`), naming the exact setting to add.
+
 **Where spend is counted from.** Only the record, read fresh every time
 (`spend.ts`). Each attempt appends a `"receipt-recorded"` event the
 moment it exists, so a task still running, or one that throws later,
@@ -856,7 +875,7 @@ step", until `fabrica cost` records it.
 | `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
 | `spend.ts` | Rule 10's ledger, derived from the record: `costFromTranscript` (now `{ costUsd, costBasis }`), `daySpend`/`taskSpend` (rolling 24 hours, returning `SpendTotals` - metered vs. subscription-estimate, issue #188), `unmeasuredSpend`, and the shared wording (`formatUsd`, `describeTaskCost`, `SPEND_UNKNOWN_LINE`). |
-| `caps.ts` | Rule 10's enforcement: `requireRoomToStart`, the per-round `spendLimitsFor`, the `"receipt-recorded"`/`"cap-stopped"` writers, and `recordCost`. See "Rule 10: spending caps" above. |
+| `caps.ts` | Rule 10's enforcement: `requireRoomToStart`, `requireCapForBrain` (issue #200), the per-round `spendLimitsFor`, the `"receipt-recorded"`/`"cap-stopped"` writers, and `recordCost`. See "Rule 10: spending caps" above. |
 | `task-failure.ts` | #73: `recordingFailure` appends `"task-failed"` (with the message) for any error after `task-received` and before a delivery or refusal - except one already on the record as `ask-failed` or `cap-refused`. `requireGitRoot` refuses a project path that is missing or not a git root before the clarifying step spends anything. |
 | `standing-question.ts` | CONTRACT rule 11: `withStandingQuestion` puts the standing question, then the write-up notice (the structured write-up every worker must return, stated here rather than left to a file a worker might not read), at the start of every brief - applied where `attempts.ts` hands the brief over and in each brief builder (correction, fix, answered round), never twice. |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path and `answer()` both use. |

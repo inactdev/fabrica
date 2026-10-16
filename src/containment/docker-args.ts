@@ -61,7 +61,21 @@ export function buildDockerArgs(opts: {
   // Denied is the absence of network access, not a rule fenced around
   // it - Docker's own `--network none` gives the container no network
   // interface at all (verified: DNS resolution itself fails under it).
-  if (opts.network === "denied") args.push("--network", "none");
+  if (opts.network === "denied") {
+    args.push("--network", "none");
+  } else {
+    // "host-gateway" is Docker's own special --add-host value, resolving
+    // to the host's real address from inside the container (confirmed
+    // against Docker's own reference docs). Docker Desktop already
+    // resolves host.docker.internal for every container without this
+    // flag; adding it explicitly is what also makes that same hostname
+    // resolve on native Linux Docker Engine, where nothing does so by
+    // default - needed by any adapter whose contained process has to
+    // reach a server running on the host itself (e.g. a local model
+    // server), not just the public network. Harmless for a call that
+    // never looks up that name.
+    args.push("--add-host", "host.docker.internal:host-gateway");
+  }
 
   // Docker never auto-inherits the host's environment into a container
   // (verified), so nothing needs filtering here - only what's in the

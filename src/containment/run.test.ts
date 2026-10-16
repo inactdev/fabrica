@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import net from "node:net";
 import { ContainmentError } from "./errors.ts";
 import { runContained } from "./run.ts";
 
@@ -167,6 +168,31 @@ test("runContained: network reaches out when deliberately allowed", async (t) =>
     image: IMAGE,
   });
   assert.equal(result.exitCode, 0, 'network: "allowed" must let the process actually reach it');
+});
+
+test("runContained: network allowed reaches a server on the host itself via host.docker.internal", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+
+  // A real TCP listener bound to every interface, standing in for
+  // something like a locally-run model server - the one thing
+  // `--add-host=host.docker.internal:host-gateway` (docker-args.ts)
+  // exists to make reachable from inside the container, on native Linux
+  // Docker Engine as well as Docker Desktop.
+  const server = net.createServer((socket) => socket.end());
+  await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
+  const port = (server.address() as net.AddressInfo).port;
+
+  try {
+    const result = await runContained("nc", ["-z", "-w", "3", "host.docker.internal", String(port)], {
+      workdir,
+      network: "allowed",
+      image: IMAGE,
+    });
+    assert.equal(result.exitCode, 0, "host.docker.internal must resolve and reach the host's listener");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("runContained: the host's environment never leaks in - only the explicit env allowlist", async (t) => {

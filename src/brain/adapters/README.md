@@ -59,7 +59,11 @@ officially approved harnesses, and per-token API pipes stay closed
 unless he deliberately opens one behind a cap that can be zero. So the
 CLI family comes first - issue #6 built the first CLI adapter, listed
 below - and direct API adapters arrive later, behind that deliberate
-switch.
+switch. Issue #200 built the first one (`direct-api/`, below): nothing
+wires it in as a default the way `defaultBrainAdapter()` does for the
+reference CLI adapter, and nothing should, without a fresh ruling - it's
+reachable only by a caller explicitly passing it as `Foreman.do()`'s
+own `brain` option, which is what "deliberately" means here.
 
 ## Guarding a fake against drift from the real thing
 
@@ -115,6 +119,14 @@ assumed to be handled.
   through the `claude` CLI's non-interactive mode. The first CLI
   adapter (issue #6). See [`claude-code.md`](./claude-code.md) for what
   was verified against the real binary and why each flag is there.
+- **`direct-api/`** - the first direct-API family (issue #200), opening
+  the per-token pipe ROADMAP.md's "v1 ordering" above describes as
+  staying closed until deliberately opened behind a cap: `openRouterAdapter`
+  (one hosted, open-weight model via OpenRouter) and `ollamaAdapter` (one
+  local Ollama model). Both set `requiresPerTaskCap: true` - this family
+  must not run a single task without `[caps].perTaskUsd` configured,
+  unlike every CLI adapter riding a flat-rate subscription. See
+  [`direct-api.md`](./direct-api.md).
 
 ## Candidate CLI adapters
 

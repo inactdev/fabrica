@@ -244,3 +244,43 @@ test("rule 10: the daily cap refuses only on metered spend - a subscription esti
     "the $50 subscription estimate must not count toward the $5 daily cap"
   );
 });
+
+// Issue #200: a brain that declares `requiresPerTaskCap` (a direct,
+// metered API with no flat-rate subscription ceiling to fall back on)
+// must not run a single task without `[caps].perTaskUsd` configured -
+// even though no cap at all has always meant "unlimited" for every other
+// brain. Refused the same way any other rule 10 refusal is: a
+// "cap-refused" event, before anything spends.
+test("rule 10: a brain that requires a per-task cap refuses to run at all until one is configured", async () => {
+  const recordHome = home();
+  const project = makeFixtureRepo("exit 0");
+  const brain = fakeBrain({ requiresPerTaskCap: true });
+
+  const uncapped = createForeman({ recordHome, inspector: fakeInspector("green") });
+  await assert.rejects(
+    () => uncapped.do("needs a cap", { project, brain }),
+    /perTaskUsd/,
+    "must refuse, naming the exact setting to add, when no cap is configured at all"
+  );
+  assert.equal(brain.calls, 0, "no work must run before the cap is refused");
+
+  const task = (await uncapped.status()).find((t) => t.state === "failed");
+  assert.ok(task, "the refused task must still be on the record");
+  const events = await uncapped.events(task!.id);
+  assert.ok(events.some((e) => e.name === "cap-refused"), "no cap-refused event on the refused task's record");
+
+  // The exact same brain, with perTaskUsd now set, runs normally - a
+  // daily-only cap is not enough, since this is specifically about
+  // whether THIS task has any per-task ceiling at all.
+  const dailyOnly = createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fakeInspector("green") });
+  await assert.rejects(
+    () => dailyOnly.do("still needs perTaskUsd specifically", { project, brain }),
+    /perTaskUsd/,
+    "a daily-only cap must not satisfy a brain that requires its own per-task cap"
+  );
+
+  const capped = createForeman({ recordHome, caps: { perTaskUsd: 1 }, inspector: fakeInspector("green") });
+  const delivered = await capped.do("now it may run", { project, brain });
+  assert.equal(delivered.state, "delivered");
+  assert.equal(brain.calls, 1);
+});

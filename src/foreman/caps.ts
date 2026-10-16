@@ -6,7 +6,7 @@
 // Client sees - before it is thrown.
 
 import { appendEvent, readEvents, readEventsForTask } from "../record/index.ts";
-import type { Caps, Receipt } from "../../contract/surface.ts";
+import type { Brain, Caps, Receipt } from "../../contract/surface.ts";
 import { ForemanError } from "./errors.ts";
 import { markRecorded } from "./task-failure.ts";
 import type { AttemptSpendLimits, CapStop } from "./attempts.ts";
@@ -28,7 +28,7 @@ export function capsActive(caps: Caps | undefined): boolean {
 
 /** Everything a "cap-refused" event's `details` carries. */
 export interface CapRefusedDetails {
-  reason: "spend-unknown" | "per-day-cap" | "per-task-cap";
+  reason: "spend-unknown" | "per-day-cap" | "per-task-cap" | "adapter-requires-cap";
   message: string;
   capUsd?: number;
   spentUsd?: number;
@@ -101,6 +101,39 @@ export function requireRoomToStart(
       });
     }
   }
+}
+
+/** The one other thing rule 10 gates on, separate from room under a cap
+ * that's already set: whether a cap is configured AT ALL, for a brain
+ * that declares it must not run without one (`Brain.requiresPerTaskCap`
+ * - e.g. a direct, metered API adapter with no flat-rate subscription
+ * ceiling to fall back on). A no-op for every other brain. Checked at
+ * the same three gates `requireRoomToStart` is: a fresh task, right
+ * before `brain.ask()` (ask.ts); a resumed round and a `fix` round,
+ * right before any attempt runs (do.ts, verdict.ts) - both of those
+ * have `brain` in scope already, unlike the foreground halves of
+ * `fabrica answer`/`fabrica verdict` (recordAnswerDecision/
+ * recordVerdictDecision), which resolve no brain at all and so cannot
+ * call this; the round that follows does. Refuses through the exact
+ * same "cap-refused" event `requireRoomToStart` uses, so every reader of
+ * that event (fabrica status, the live view) already understands this
+ * refusal without learning a new shape. */
+export function requireCapForBrain(
+  recordHome: string,
+  taskId: string,
+  brain: Brain,
+  caps: Caps | undefined,
+  opts: { project?: string } = {}
+): void {
+  if (!brain.requiresPerTaskCap || caps?.perTaskUsd !== undefined) return;
+  const project = opts.project === undefined ? {} : { project: opts.project };
+  refuse(recordHome, taskId, "cap-refused", {
+    reason: "adapter-requires-cap",
+    ...project,
+    message:
+      `Refused: ${brain.name} must not run without a per-task spending cap. Add [caps].perTaskUsd to ` +
+      `projects.toml (e.g. perTaskUsd = 1.00), then try again.`,
+  });
 }
 
 /** The spend limits one round of attempts runs under, with this task's

@@ -132,6 +132,20 @@ export interface Brain {
    * call cannot touch any project, so CONTRACT rule 1 holds here without
    * relying on the brain's own good behavior. See BrainAskResult. */
   ask(brief: string): Promise<BrainAskResult>;
+  /** True when this brain must never run a single dollar of spend
+   * without rule 10's own per-task cap configured - e.g. a direct,
+   * metered API with no flat-rate subscription ceiling of its own to
+   * fall back on. Omitted or false (every adapter before this field
+   * existed, and any CLI adapter riding a flat-rate subscription): no
+   * such requirement - an unset cap just means unlimited, as rule 10
+   * has always allowed. Checked once, before anything spends, at the
+   * same three gates `requireRoomToStart` already guards (a fresh
+   * task's `ask()`, a resumed round, a `fix` round) - see
+   * `src/foreman/caps.ts`'s `requireCapForBrain`. Deliberately binds on
+   * `caps.perTaskUsd` specifically, never `perDayUsd`: this is about
+   * whether *this task* has any ceiling at all, not the rolling daily
+   * total. */
+  requiresPerTaskCap?: boolean;
 }
 
 /**

@@ -81,7 +81,19 @@ Every call runs a fresh, throwaway container (`docker run --rm`):
 - **Network** is denied by passing `--network none` (verified: DNS
   resolution itself fails under it, and so does a plain TCP connect to
   a real listener) and allowed by omitting it (the container gets
-  Docker's normal default bridge network).
+  Docker's normal default bridge network) plus
+  `--add-host=host.docker.internal:host-gateway` - Docker's own special
+  `host-gateway` value, resolving to the real host from inside the
+  container. Docker Desktop already resolves that hostname for every
+  container without this flag; adding it is what also makes it resolve
+  on native Linux Docker Engine, which otherwise has no such default -
+  needed by a contained process that has to reach something running on
+  the host itself (a local model server, say), not just the public
+  network. `run.test.ts` has a live test for this (a TCP listener bound
+  to the host, reached from inside a `network: "allowed"` container via
+  that hostname) - not yet run against a real daemon here, since Docker
+  isn't installed on the machine this was written on; it skips loudly
+  rather than silently, same as every other live test in this file.
 - **Environment** needs no filtering the way a host-process sandbox
   does: Docker never auto-inherits the host's environment into a
   container (verified) - only what the caller's own `env` allowlist

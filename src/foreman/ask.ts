@@ -17,7 +17,7 @@
 import { appendEvent, registerTask, writeTaskFile } from "../record/index.ts";
 import type { Brain, BrainAskResult } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
-import { requireRoomToStart } from "./caps.ts";
+import { requireCapForBrain, requireRoomToStart } from "./caps.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
 import type { Caps } from "../../contract/surface.ts";
 
@@ -104,6 +104,11 @@ export async function registerAndAsk(
     // Rule 10: refused before anything spends - ask() itself costs money
     // on a metered brain. Registered first so the refusal, with its
     // numbers, lands on this task's own record (`fabrica log <id>`).
+    // requireCapForBrain runs first: a brain that must not run at all
+    // without a configured cap is refused on that alone, before
+    // requireRoomToStart's own room-under-the-cap arithmetic even
+    // applies (there may be no cap to compute room under).
+    requireCapForBrain(recordHome, taskId, brain, opts.caps, { project: opts.project });
     requireRoomToStart(recordHome, taskId, opts.caps, { project: opts.project });
 
     // A task must never look started when its very first step never ran -

@@ -23,7 +23,7 @@ import { recordingFailure } from "./task-failure.ts";
 import { runAttempts } from "./attempts.ts";
 import { recordRoundResult } from "./round.ts";
 import { baseCommitOf } from "../delivery/index.ts";
-import { recordReceipt, requireRoomToStart, spendLimitsFor } from "./caps.ts";
+import { recordReceipt, requireCapForBrain, requireRoomToStart, spendLimitsFor } from "./caps.ts";
 import type { Caps, Receipt } from "../../contract/surface.ts";
 import type { Inspector } from "../inspector/types.ts";
 import type { CheckBox } from "../brain/index.ts";
@@ -261,6 +261,11 @@ async function runFixRound(
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
+
+  // Rule 10: same gate as do.ts's productionRound - a brain that must
+  // not run without a configured cap is refused before this fix round
+  // reopens the line, not just on a task's first round.
+  requireCapForBrain(recordHome, taskId, brain, caps, { project });
 
   // Reopens the same line directly rather than going through
   // runProductionRound, so this round appends "work-started" below but

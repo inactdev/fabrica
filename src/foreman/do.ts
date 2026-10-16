@@ -17,7 +17,7 @@ import { recordRoundResult } from "./round.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { recordingFailure } from "./task-failure.ts";
-import { recordReceipt, spendLimitsFor } from "./caps.ts";
+import { recordReceipt, requireCapForBrain, spendLimitsFor } from "./caps.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { FabricaTask } from "../inspector/types.ts";
 import type { Inspector } from "../inspector/index.ts";
@@ -161,6 +161,16 @@ async function productionRound(
   // first cut, so a failure baked into that history - no check.sh in
   // that commit, a project path already wrong then - throws the same
   // error on every retry.
+  // Rule 10: a brain that must not run without a configured cap
+  // (`Brain.requiresPerTaskCap`) is refused here too, not only in
+  // ask.ts - this is the gate a resumed `fabrica answer` round actually
+  // reaches (its own foreground half, recordAnswerDecision, resolves no
+  // brain at all and so cannot check this). A no-op for every other
+  // brain, and for a fresh doTask() call this never fires: ask.ts
+  // already refused before brain.ask() ran, so doTask never reaches
+  // here in that case.
+  requireCapForBrain(recordHome, taskId, brain, caps, { project });
+
   const line = isRetry
     ? reopenProductionLine({ project, taskId, recordHome })
     : createProductionLine({ project, taskId, recordHome });

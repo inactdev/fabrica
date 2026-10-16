@@ -37,6 +37,14 @@ test("buildDockerArgs adds --network none when denied, omits it when allowed", (
   assert.ok(!allowed.includes("--network"));
 });
 
+test("buildDockerArgs adds --add-host host.docker.internal:host-gateway when allowed, omits it when denied", () => {
+  const allowed = buildDockerArgs({ workdir: "/w", network: "allowed", image: "alpine" });
+  const denied = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine" });
+
+  assert.equal(allowed[allowed.indexOf("--add-host") + 1], "host.docker.internal:host-gateway");
+  assert.ok(!denied.includes("--add-host"));
+});
+
 test("buildDockerArgs passes envFile as --env-file, with no key or value ever in argv", () => {
   const args = buildDockerArgs({
     workdir: "/w",
