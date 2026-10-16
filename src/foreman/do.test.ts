@@ -51,6 +51,9 @@ test("the delivery commit's Deviations section carries the worker's own write-up
       what: "Widened check.sh's timeout.",
       why: "The suite grew.",
       how: "Bumped the sleep value.",
+      confidence: 90,
+      assumptions: "None.",
+      expectedOutcomes: "The check no longer times out on the larger suite.",
       deviations: "Widened check.sh's timeout because the suite grew.",
     },
   });
@@ -71,7 +74,16 @@ test("a worker's write-up with an empty title is refused, not delivered as done"
   const recordHome = freshHome();
   const brain = fakeBrain({
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
-    writeup: { title: "", what: "Did the work.", why: "Asked to.", how: "Directly.", deviations: "None." },
+    writeup: {
+      title: "",
+      what: "Did the work.",
+      why: "Asked to.",
+      how: "Directly.",
+      confidence: 90,
+      assumptions: "None.",
+      expectedOutcomes: "None.",
+      deviations: "None.",
+    },
   });
 
   const task = await doTask(recordHome, "small change", {
@@ -118,6 +130,9 @@ test("a valid write-up becomes the delivery commit's exact subject and body", as
       what: "Retries login on timeout.",
       why: "Users were seeing spurious failures.",
       how: "Wrapped the call in a retry loop.",
+      confidence: 95,
+      assumptions: "None.",
+      expectedOutcomes: "Login no longer fails spuriously on a timeout.",
       deviations: "None.",
     },
   });
@@ -133,6 +148,9 @@ test("a valid write-up becomes the delivery commit's exact subject and body", as
       "What:\nRetries login on timeout.\n\n" +
       "Why:\nUsers were seeing spurious failures.\n\n" +
       "How:\nWrapped the call in a retry loop.\n\n" +
+      "What to look at:\nConfidence: 95/100\n\n" +
+      "Assumptions:\nNone.\n\n" +
+      "Expected outcomes:\nLogin no longer fails spuriously on a timeout.\n\n" +
       "Deviations:\nNone."
   );
 });
@@ -195,7 +213,16 @@ function liveStreamingBrain(): Brain {
           { occurredAt: now(), kind: "text", text: THIRD_ENTRY_TEXT },
         ],
         session: "s1",
-        writeup: { title: "Stream three entries", what: "a", why: "b", how: "c", deviations: "None." },
+        writeup: {
+          title: "Stream three entries",
+          what: "a",
+          why: "b",
+          how: "c",
+          confidence: 90,
+          assumptions: "None.",
+          expectedOutcomes: "None.",
+          deviations: "None.",
+        },
       };
     },
   };

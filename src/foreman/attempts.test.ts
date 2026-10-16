@@ -100,7 +100,16 @@ test("truncation never stores a half-character left by cutting mid-symbol", () =
 // all, but runAttempts makes an attempt red whenever one is missing, so
 // without it "lastGate?.green" would be false here for a reason
 // unrelated to what this test is actually checking.
-const SLOW_WRITEUP = { title: "Slow brain update", what: "Slept.", why: "Testing heartbeats.", how: "A timer.", deviations: "None." };
+const SLOW_WRITEUP = {
+  title: "Slow brain update",
+  what: "Slept.",
+  why: "Testing heartbeats.",
+  how: "A timer.",
+  confidence: 90,
+  assumptions: "None.",
+  expectedOutcomes: "None.",
+  deviations: "None.",
+};
 
 function slowBrain(delayMs: number): Brain {
   return {

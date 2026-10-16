@@ -95,7 +95,20 @@ test("an invalid write-up is red with no Inspector call and no PR - a later vali
     async work(_brief, workdir) {
       writeFileSync(join(workdir, `feature-${calls}.txt`), "work\n");
       const title = titles[calls++];
-      return { transcript: [], session: "s1", writeup: { title, what: "a", why: "b", how: "c", deviations: "None." } };
+      return {
+        transcript: [],
+        session: "s1",
+        writeup: {
+          title,
+          what: "a",
+          why: "b",
+          how: "c",
+          confidence: 90,
+          assumptions: "None.",
+          expectedOutcomes: "None.",
+          deviations: "None.",
+        },
+      };
     },
   };
   const foreman = createForeman({ recordHome, inspector });
@@ -365,6 +378,9 @@ test("Inspector is handed the worker's own write-up title as pr-title and its se
       what: "Retries once.",
       why: "It happens on retry.",
       how: "Added a retry.",
+      confidence: 92,
+      assumptions: "None.",
+      expectedOutcomes: "Login no longer fails on the first timeout.",
       deviations: "None.",
     },
   });
@@ -375,7 +391,9 @@ test("Inspector is handed the worker's own write-up title as pr-title and its se
   assert.equal(inspector.calls[0].prTitle, "Fix retry on login timeout");
   assert.equal(
     inspector.calls[0].prBody,
-    "What:\nRetries once.\n\nWhy:\nIt happens on retry.\n\nHow:\nAdded a retry.\n\nDeviations:\nNone."
+    "What:\nRetries once.\n\nWhy:\nIt happens on retry.\n\nHow:\nAdded a retry.\n\n" +
+      "What to look at:\nConfidence: 92/100\n\nAssumptions:\nNone.\n\n" +
+      "Expected outcomes:\nLogin no longer fails on the first timeout.\n\nDeviations:\nNone."
   );
 });
 

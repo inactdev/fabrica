@@ -135,6 +135,9 @@ switch (brief) {
       what: "What it did.",
       why: "Why it did it.",
       how: "How it did it.",
+      confidence: 90,
+      assumptions: "None.",
+      expectedOutcomes: "It works as described.",
       deviations: "None.",
     };
     line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });

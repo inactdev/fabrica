@@ -26,6 +26,9 @@ const WRITEUP: WorkerWriteup = {
   what: "Retries login once on a timeout.",
   why: "Users saw spurious failures.",
   how: "Wrapped the call in one retry.",
+  confidence: 90,
+  assumptions: "None.",
+  expectedOutcomes: "A timed-out login succeeds on the retry.",
   deviations: "None.",
 };
 
@@ -34,6 +37,9 @@ const WRITEUP_MESSAGE =
   "What:\nRetries login once on a timeout.\n\n" +
   "Why:\nUsers saw spurious failures.\n\n" +
   "How:\nWrapped the call in one retry.\n\n" +
+  "What to look at:\nConfidence: 90/100\n\n" +
+  "Assumptions:\nNone.\n\n" +
+  "Expected outcomes:\nA timed-out login succeeds on the retry.\n\n" +
   "Deviations:\nNone.";
 
 function freshHome(): string {

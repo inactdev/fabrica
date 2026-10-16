@@ -6,7 +6,29 @@ import type { WorkerWriteup } from "./types.ts";
 
 export const WRITEUP_TITLE_MAX_LENGTH = 60;
 
-/** In the order a commit message and a pull request body render them -
- * Deviations last, since it is what the Client reads to see what to
- * double-check. */
-export const WRITEUP_FIELDS = ["title", "what", "why", "how", "deviations"] as const satisfies readonly (keyof WorkerWriteup)[];
+/** Every field of a write-up, in the order the pull request body renders
+ * them: What/Why/How verbatim, then confidence/assumptions/
+ * expectedOutcomes/deviations folded together into one final "What to
+ * look at" section for the reviewer. */
+export const WRITEUP_FIELDS = [
+  "title",
+  "what",
+  "why",
+  "how",
+  "confidence",
+  "assumptions",
+  "expectedOutcomes",
+  "deviations",
+] as const satisfies readonly (keyof WorkerWriteup)[];
+
+/** `WRITEUP_FIELDS` minus `confidence` - the fields checked for being a
+ * non-empty string. `confidence` is numeric and checked separately. */
+export const WRITEUP_STRING_FIELDS = [
+  "title",
+  "what",
+  "why",
+  "how",
+  "assumptions",
+  "expectedOutcomes",
+  "deviations",
+] as const satisfies readonly (keyof WorkerWriteup)[];

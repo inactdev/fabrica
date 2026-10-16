@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
-import { WRITEUP_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
+import { WRITEUP_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
 import { ContainmentError, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
@@ -50,6 +50,9 @@ export const WRITEUP_JSON_SCHEMA = {
     what: { type: "string", minLength: 1 },
     why: { type: "string", minLength: 1 },
     how: { type: "string", minLength: 1 },
+    confidence: { type: "number", minimum: 0, maximum: 100 },
+    assumptions: { type: "string", minLength: 1 },
+    expectedOutcomes: { type: "string", minLength: 1 },
     deviations: { type: "string", minLength: 1 },
   },
 };
@@ -577,13 +580,23 @@ export function claudeCodeCheckBox(opts: { image?: string } = {}): CheckBox {
 }
 
 /** The result line's structured_output as a write-up, when it has the
- * shape asked for: an object whose five fields are all strings. Anything
- * else is no write-up - the Foreman checks the contents (empty fields,
- * title length) and names what is wrong. */
+ * shape asked for: an object whose string fields are all strings and
+ * whose `confidence` is a number. Anything else is no write-up - the
+ * Foreman checks the contents (empty fields, title length, confidence
+ * range) and names what is wrong. */
 function writeupFrom(value: unknown): WorkerWriteup | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const record = value as Record<string, unknown>;
-  if (!WRITEUP_FIELDS.every((field) => typeof record[field] === "string")) return undefined;
-  const [title, what, why, how, deviations] = WRITEUP_FIELDS.map((field) => record[field] as string);
-  return { title, what, why, how, deviations };
+  if (!WRITEUP_STRING_FIELDS.every((field) => typeof record[field] === "string")) return undefined;
+  if (typeof record.confidence !== "number") return undefined;
+  return {
+    title: record.title as string,
+    what: record.what as string,
+    why: record.why as string,
+    how: record.how as string,
+    confidence: record.confidence,
+    assumptions: record.assumptions as string,
+    expectedOutcomes: record.expectedOutcomes as string,
+    deviations: record.deviations as string,
+  };
 }
