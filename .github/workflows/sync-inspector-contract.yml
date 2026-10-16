@@ -1,0 +1,54 @@
+# sync-inspector-contract (issue #109, "Fabrica side"). Keeps Inspector's
+# copy of the consumer contract (cmd/inspector/testdata/fabrica-consumer-
+# contract.json, read by its own TestFabricaConsumerContract) in step with
+# Fabrica's own src/inspector/consumer-contract.json - the one committed
+# note of the call Fabrica makes to Inspector: flags, exit codes, the
+# pull-request stdout line, the token env var. A sentence telling people to
+# keep the two in step by hand is not reliable (Client ruling, issue #109),
+# so this runs automatically instead.
+#
+# Triggered only by a push to Fabrica's own default branch that changes the
+# contract file - already-merged, trusted content, unlike rule9-gate.yml's
+# pull_request_target jobs, so an ordinary checkout here is safe.
+#
+# The real work is .github/scripts/sync-inspector-contract.sh: it compares
+# Fabrica's file against Inspector's current copy (read live over the
+# GitHub Contents API) and, if they differ, opens or updates a pull request
+# on inactdev/inspector on a fixed branch name, so a second change updates
+# the same open pull request instead of opening another. Inspector's own CI
+# (inspector PR #45) is what then fails if its copy is ever hand-edited
+# instead of replaced by one of these pull requests.
+#
+# This workflow file is itself a protected path (.github/workflows/** -
+# see rule9-gate.yml) and so is the script it calls under .github/scripts/
+# in spirit, even though it isn't literally under .github/workflows/ - both
+# this file and Inspector's matching workflow are one-time additions the
+# Client merges by hand.
+#
+# INSPECTOR_SYNC_TOKEN is a repository secret: a token scoped to the
+# inactdev/inspector repository only (contents and pull requests), not a
+# token with any access to this repository or any other. github.token
+# (this repo's own default GITHUB_TOKEN) has no permissions on a different
+# repository and cannot be used here. When issue #187 (the GitHub App)
+# lands, that App's own short-lived, per-installation key replaces this
+# secret - #187 is where that change happens, not here.
+name: sync-inspector-contract
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - src/inspector/consumer-contract.json
+
+jobs:
+  sync-inspector-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync consumer-contract.json to inactdev/inspector
+        env:
+          GH_TOKEN: ${{ secrets.INSPECTOR_SYNC_TOKEN }}
+          FABRICA_SHA: ${{ github.sha }}
+        run: .github/scripts/sync-inspector-contract.sh
