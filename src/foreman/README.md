@@ -109,23 +109,17 @@ return early" below.
    or the box's output) is the next attempt's correction brief; green
    stops early. See "How `attempts` actually behaves" below — it is not
    simply "retry until green."
-5. **Checks for an undeclared gate change** (`gate-changes.ts`) — CONTRACT
-   rule 9. If the check script changed and nothing declared it, the
-   outcome is forced to `discarded-protected-path` regardless of whether
-   the check went green - recorded honestly, not thrown away (see "Rule
-   9: blocked by CI, not by Fabrica's own mark" below).
-6. **Commits, hands off, builds, and validates the delivery**: any changes
+5. **Commits, hands off, builds, and validates the delivery**: any changes
    still sitting uncommitted in the worktree are committed onto the
    ProductionLine's branch (`commit.ts`) before that worktree is
    destroyed - see `src/delivery/README.md`'s "files-list-vs-teardown
-   decision" for why. This runs for every outcome uniformly, including
-   `discarded-protected-path` - a rule 9 violation is no longer force-
-   reset or thrown away (Client ruling, superseding the original
-   design): the work stays committed on the ordinary `fabrica/<taskId>`
-   branch, exactly like any other outcome. Fabrica does not mark the
-   branch, rename it, or otherwise flag it for CI - see "Rule 9: blocked
-   by CI, not by Fabrica's own mark" below for why that mark was tried
-   and then deliberately removed.
+   decision" for why. This runs for every outcome uniformly: the work
+   stays committed on the ordinary `fabrica/<taskId>` branch, exactly
+   like any other outcome, whether or not it touched the project's
+   checks and whether or not that was declared. Fabrica runs no check of
+   its own over whether the gate changed (CONTRACT rule 9) - it never
+   has a watch to skip or a mark to withhold - see "Rule 9: blocked by
+   CI, not by Fabrica's own mark" below.
    In Inspector mode every attempt records `inspector-called` and invokes
    Inspector on this checked-out branch before a delivery exists. This
    requirement survives every fix round; any final config blob that
@@ -184,7 +178,7 @@ return early" below.
    error instead, `doTask` still writes `delivery.md` and appends
    `"delivered"`, and returns early - scoped minimally, no retry
    machinery, just an honest record of what happened.
-7. **Destroys the ProductionLine** in every case — success, failure, or a
+6. **Destroys the ProductionLine** in every case — success, failure, or a
    thrown error — via a single `finally`.
 
 ### `project`
@@ -263,41 +257,9 @@ repos, or an ad hoc path before it's ever registered) gets the
 `check.sh` convention. Nothing about how `do()` runs changes between the
 two — only which command the self-test runs in the Worker's box.
 
-## What CONTRACT rule 9 protects, and what it doesn't yet
+## Rule 9: blocked by CI, not by Fabrica, and not watched by Fabrica either
 
-`gate-changes.ts` asks git, after the attempt loop, whether `check.sh` in
-the workdir differs from its content at the task's pinned `baseCommit`.
-Differ with no `gateChanges` declared, and the outcome is forced to
-`"discarded-protected-path"` — overriding even a green check, exactly as
-CONTRACT rule 9 requires ("no matter how good the result looks").
-
-The baseline is the *pinned base commit*, never the file the round found
-in the workdir when it started. A rule 6 "fix" round reopens a worktree
-on `fabrica/<taskId>`, which already carries whatever the previous round
-committed, so a round-local snapshot would make round 1's tampered gate
-round 2's idea of "pristine": the tamper would read as clean, and a
-worker honestly putting `check.sh` back would be accused of changing it.
-The same reason is why `verdict.ts` carries the previous round's
-`gateChanges` declaration forward (`mergeGateDeclarations`) — the
-comparison is cumulative since `baseCommit`, so the declaration covering
-a change still on the branch has to be cumulative too, or a round that
-merely leaves a legitimately declared change alone would be flagged for
-it. Because the whole comparison rests on that commit being readable,
-`requireGateBaseline` proves it is before any Worker runs, rather than
-discovering it after an attempt has been spent.
-
-**Known v1 limitation:** this protection only applies when the check
-command in use is the `check.sh` convention above. A project registered
-with a custom `check` command (`bin/ci`, `npm test`, …) has no single
-file this module knows to watch, so an undeclared change to *that*
-project's real checks isn't caught yet. This is a real, documented gap,
-not a silent one — closing it needs a way for a registered project to
-say which paths are its "ratified tests and check settings," which
-doesn't exist yet.
-
-## Rule 9: blocked by CI, not by Fabrica's own mark
-
-Two earlier designs here, both superseded by Client rulings. First, an
+Three earlier designs here, all superseded by Client rulings. First, an
 undeclared gate change force-reset the branch back to its fork point and
 saved the discarded work as a patch in the record (`discarded.patch`),
 so nothing tampered ever reached a mergeable branch — overturned because
@@ -309,33 +271,45 @@ branch was left mergeable but renamed from `fabrica/<taskId>` to
 `fabrica/discarded/<taskId>`, so a CI workflow could find and block it by
 name — overturned in turn, for a sharper reason: that design still had
 Fabrica marking its own violation, and CI trusting the mark. A bug in
-`gate-changes.ts`, or a Worker clever enough to evade its detection,
-would mean the rename never happens, and CI sees an ordinary branch name
-and waves it through. The thing being policed was writing its own
-accusation.
+the detection, or a Worker clever enough to evade it, would mean the
+rename never happens, and CI sees an ordinary branch name and waves it
+through. The thing being policed was writing its own accusation.
 
-So today a `discarded-protected-path` outcome behaves exactly like every
-other outcome, full stop: whatever a Worker left in the worktree,
-committed or not, ends up on the ordinary `fabrica/<taskId>` branch, and
-Fabrica does nothing further to flag it. Detection stays exactly where
-it was — `gate-changes.ts` still forces this outcome, honestly, no
-matter how good the check looked, and it still lands in the delivery and
-the receipt (rule 5's total-recall concern, separate from enforcement).
-What changed is that detection no longer drives enforcement at all.
+Third, `gate-changes.ts` kept the rename gone but kept the detection: it
+still asked git, on the host, whether `check.sh` in the workdir differed
+from the task's pinned `baseCommit`, and still forced a dedicated
+outcome naming the violation outright — recorded honestly, changing
+nothing about enforcement (already CI's job by then), but still a
+host-side watch Fabrica ran over a file the Worker just edited.
+Overturned by the same Client ruling that removed every other
+host-side check (issue #64, 2026-10-08, "Fabrica runs no project check
+on the host"): `gate-changes.ts` is deleted, `requireGateBaseline` and
+`gateWasTouched` along with it, and `Receipt`/`Delivery["outcome"]` no
+longer has that dedicated member at all - only `"done"`, `"failure-report"`,
+and `"cap-stopped"` are left on `Delivery`.
 
-**Enforcement lives outside Fabrica, in `.github/workflows/
-rule9-gate.yml`.** It queries the GitHub API for the pull request's
-changed-file list - never a checkout, never `git diff` - for whether it
-touches a protected path (`check.sh` today, the same file
-`gate-changes.ts` watches, plus `.github/workflows/**` itself; the list
-is one `PROTECTED_PATHS` value in the workflow file, easy to extend for
-a project with a different check convention). This needs nothing from
-Fabrica: not `delivery.outcome`, not a branch name, not any record file.
-It works identically for a human contributor's PR and for a Worker's,
-and a bug or an evasion in Fabrica's own detection can't also blind the
-thing meant to catch it. It deliberately blocks a *declared* gate change
-too, not only an undeclared one — a change to the thing that decides
-whether work passes deserves the Client's eyes every time; Fabrica's own
+So today Fabrica detects nothing about rule 9, full stop: whatever a
+Worker left in the worktree, committed or not, ends up on the ordinary
+`fabrica/<taskId>` branch like any other outcome, declared gate change
+or not, and Fabrica does not compare it against anything. The only trace
+of rule 9 left on Fabrica's side is `gateChanges` itself — the Worker's
+own stated declaration, carried onto the delivery (`mergeGateDeclarations`
+in `round.ts` keeps an earlier round's declaration from being lost by a
+later round that leaves it alone), never verified against the diff.
+
+**Detection and enforcement both live outside Fabrica, in
+`.github/workflows/rule9-gate.yml`.** It queries the GitHub API for the
+pull request's changed-file list - never a checkout, never `git diff` -
+for whether it touches a protected path (`check.sh` today, the same file
+`gate-changes.ts` used to watch, plus `.github/workflows/**` itself; the
+list is one `PROTECTED_PATHS` value in the workflow file, easy to extend
+for a project with a different check convention). This needs nothing
+from Fabrica: not `delivery.outcome`, not a branch name, not any record
+file. It works identically for a human contributor's PR and for a
+Worker's, and nothing in Fabrica can blind it, because nothing in
+Fabrica feeds it. It deliberately blocks a *declared* gate change too,
+not only an undeclared one — a change to the thing that decides whether
+work passes deserves the Client's eyes every time; Fabrica's own
 delivery record still tells the two apart for the Client's benefit
 (`gateChanges`), the CI check does not need to.
 
@@ -344,11 +318,9 @@ workflow pass for `*.test.ts`, after the contract pass. A contract test is a
 contract change first and keeps that message; any other test change says it
 changes what Fabrica considers correct and needs the Client's review. This is
 a temporary stopgap until Inspector's examiner (inactdev/inspector#7) lands,
-then it must be removed. `gate-changes.ts` deliberately does not mirror this
-list: it detects undeclared Worker edits to the active `check.sh` and chooses a
-recorded task outcome, while this CI-only rule reviews every pull request's
-test changes, declared or not. Treating a test edit as a
-`discarded-protected-path` outcome would conflate those separate decisions.
+then it must be removed. This pass is unrelated to `gateChanges`: it reviews
+every pull request's test changes, declared or not, independent of whatever a
+Worker did or didn't say about its own check-script edits.
 
 **Protecting its own definition.** An earlier version of this workflow
 ran on plain `pull_request`, which has a sharp edge review caught twice:
@@ -652,11 +624,12 @@ with issue #12's `status`/`log`/`watch` lane; that lane has since landed,
 so #68 is now only waiting on being picked up.
 
 One consequence: the last attempt's `Receipt.outcome` can't be decided
-until *after* the attempt loop and the rule-9 gate check both finish (an
-attempt that looked "delivered" the moment its check went green can still
-turn into `"discarded-protected-path"` a moment later). Since
-`events.jsonl` is append-only, that receipt can't be corrected in place —
-so `do()` computes every receipt's final `outcome` before it ever calls
+until *after* the attempt loop and the pre-teardown commit both finish
+(an attempt that looked "delivered" the moment its check went green can
+still turn into `"failed"` a moment later if that commit itself fails -
+`round.ts`'s own commit-failure path). Since `events.jsonl` is
+append-only, that receipt can't be corrected in place — so `do()`
+computes every receipt's final `outcome` before it ever calls
 `appendEvent`, and logs the whole batch once on the round's final result
 event, already correct. A `fix` verdict's round does the same, carrying
 cumulative receipts on either its new `"delivered"` event or a refused
@@ -866,15 +839,14 @@ step", until `fabrica cost` records it.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `gate-baseline-unreadable`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`, and `inspector-not-ready` (Inspector mode with no GitHub token - see `src/inspector/README.md`), and `project-not-a-repo`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`, and `inspector-not-ready` (Inspector mode with no GitHub token - see `src/inspector/README.md`), and `project-not-a-repo`. |
 | `judge.ts` | Who judges each attempt (issue #64): Inspector, or a self-test in the Worker's box. `prepareRound` picks the mode; `roundOutcome` turns the last judgement into a delivery outcome. `Judge` is handed each attempt's resolved `finalMessage` (pr-body.ts) alongside `gateChanges`, so `inspectorJudge`'s own per-attempt commit and Inspector's pull request always carry the same title/body `attempts.ts` computed - `attempts.ts` only calls `judge()` once that message is valid, so this commit and that pull request are only ever made with a valid write-up as their message. Nothing here runs a check on the host - `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`. `skipIfUnchanged(judge, workdir, priorHead)` wraps any `Judge` so an attempt that leaves `workdir`'s HEAD exactly at `priorHead` never reaches the real judge at all - returns `Judgement.unchanged` instead - `verdict.ts`'s `runFixRound` is the one caller, `priorHead` being the branch's HEAD the moment that round's line was reopened. |
 | `pr-body.ts` | `writeupProblem`/`finalMessageFor`/`renderCommitMessage`: checks a worker's structured write-up (`BrainWorkResult.writeup` - five non-empty fields, title at most 60 characters) and renders it as the commit message and (when Inspector is configured) the pull request title and body - or, when it is missing or invalid, a fallback naming what is wrong, never the task's own words. Nothing is parsed out of the worker's prose. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention; `requireCheckCommand` refuses a self-tested task with none. |
-| `gate-changes.ts` | Compares `check.sh` against the task's pinned `baseCommit`, for rule 9's undeclared-change detection. |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. Commits every attempt the moment `work()` returns, with the worker's write-up as the message (`pr-body.ts`), or a fallback naming what is wrong. A missing or invalid write-up makes the attempt red on that alone (`write-up invalid: <reason>`, set as `Judgement.writeupInvalid`) without calling `judge()`, so it is never handed to Inspector; that fallback commit is unpublished, and the next attempt amends it - new changes and message together, or only the message - rather than stacking another. The next attempt's correction brief quotes the reason back; a round that ends on it delivers as `failure-report`, never `inspection-red` (`judge.ts`'s `roundOutcome`). Returns the last attempt's resolved message as `finalMessage`, which `do.ts`/`verdict.ts` use for their pre-teardown commit should anything be left uncommitted. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. Also ticks `onHeartbeat` every `DEFAULT_HEARTBEAT_INTERVAL_MS` while a `brain.work` call is in flight, so a long opaque await still shows up on the record (issue #12) - `do.ts` and `verdict.ts` both wire it to a `"heartbeat"` event - and fires `onCheckStarted` right before the check runs, so `"check-run"` lands twice per attempt (`details.phase: "started"`, then the result-carrying one) and a task genuinely mid-check is distinguishable from one that already finished a check (`queries.ts`'s `stateOf`). `onTranscriptEntry` fires once per transcript entry, live, the moment a streaming-capable brain reports it through `src/brain/live-transcript.ts`'s workdir-keyed listener registry (issue #70) - registered before `brain.work()` is called and unregistered once it settles; any entry `workResult.transcript` carries that never arrived that way (every entry, for a brain with no finer-grained signal than "the whole call just finished") is delivered right after, from the return value's remainder - so every entry reaches `onTranscriptEntry` exactly once, in order, whether or not the brain streams. `do.ts`/`verdict.ts` wire it straight to an `appendTaskFile` call per entry. |
-| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, `discarded-protected-path` included - see "Rule 9: blocked by CI, not by Fabrica's own mark" above. |
+| `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, declared or undeclared gate change included - see "Rule 9: blocked by CI, not by Fabrica, and not watched by Fabrica either" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing - and `buildNothingChangedDelivery` for a fix round `judge.ts`'s `skipIfUnchanged` caught before it ever reached a check or Inspector. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. `deliveredState` treats `"nothing-changed"` as `"delivered"`, same as `"done"`/`"inspection-red"`/`"not-verified"`. |
-| `round.ts` | `recordRoundResult` (issue #182) - the one place "judge the work, commit it, decide the outcome, hand over the delivery, write the record" is written: everything a round does once `runAttempts` resolves - the refused check, the fix-only "nothing changed" short-circuit, rule 9's gate-change check, the pre-teardown commit (and its own failure-report path), building/validating the `Delivery`, and writing `delivery.md` plus the `"delivered"` event. `do.ts`'s `productionRound` and `verdict.ts`'s `runFixRound` both call this with the same `AttemptLoopResult` shape and differ only in what they pass as `ctx` - a pinned vs. freshly-cut `baseCommit`, and (fix only) `priorReceipts`/`priorGateChanges` to carry forward via `mergeGateDeclarations` (moved here from `verdict.ts`, its only caller). Everything before this point (reopen vs. create the ProductionLine, the attempt budget, the `work-started` event, `runAttempts` itself) stays in each caller, since that's exactly where the two round-starters still differ. |
+| `round.ts` | `recordRoundResult` (issue #182) - the one place "judge the work, commit it, decide the outcome, hand over the delivery, write the record" is written: everything a round does once `runAttempts` resolves - the refused check, the fix-only "nothing changed" short-circuit, the pre-teardown commit (and its own failure-report path), building/validating the `Delivery`, and writing `delivery.md` plus the `"delivered"` event. `do.ts`'s `productionRound` and `verdict.ts`'s `runFixRound` both call this with the same `AttemptLoopResult` shape and differ only in what they pass as `ctx` - a pinned vs. freshly-cut `baseCommit`, and (fix only) `priorReceipts`/`priorGateChanges` to carry forward via `mergeGateDeclarations` (moved here from `verdict.ts`, its only caller) so rule 9's declaration survives a round that leaves it alone. Everything before this point (reopen vs. create the ProductionLine, the attempt budget, the `work-started` event, `runAttempts` itself) stays in each caller, since that's exactly where the two round-starters still differ. |
 | `inspection.ts` | Records the configured Inspector handoff and its green, red, or refused result. A refusal reaches the record and task status but never becomes a red delivery. |
 | `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
 | `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/inspect/result, shared with `answer.ts`'s resume path) - its tail, once a round's attempts are done, is `round.ts`'s `recordRoundResult`. |

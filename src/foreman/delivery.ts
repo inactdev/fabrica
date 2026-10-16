@@ -57,31 +57,18 @@ export function buildDelivery(
       ? `Completed: ${ctx.taskText}`
       : outcome === "failure-report"
         ? `The project's check did not pass after ${ctx.attempts} attempt(s).`
-        : outcome === "inspection-red"
-          ? `Inspector reported the committed branch red after ${ctx.attempts} attempt(s).`
-          : "The project's checks changed without a declared gate change (rule 9) - blocked from " +
-            "merging until the Client reviews it and chooses to override.";
+        : `Inspector reported the committed branch red after ${ctx.attempts} attempt(s).`;
 
   const checkOutput = ctx.lastGate ? gateForRecord(ctx.lastGate).output : "";
 
-  const evidence =
-    outcome === "discarded-protected-path"
-      ? "check.sh no longer matches what the ProductionLine started with, and no gateChanges " +
-        `declaration came with it. Last check: ${checkOutput}`
-      : checkOutput;
+  const evidence = checkOutput;
 
   const gaps =
     outcome === "failure-report"
       ? "The project's check did not pass; see evidence for the failure output."
       : outcome === "inspection-red"
         ? "Inspector could not reach green after its mechanical repairs. The Client can give a fix verdict for work that needs the request's context."
-        : outcome === "discarded-protected-path"
-          ? `The work is not discarded - it is committed on \`${ctx.branch}\` like any other outcome. ` +
-            "The merge is meant to be blocked by a repository CI gate reading the pull request's diff " +
-            "for the touched protected path - today only Fabrica's own repository has one " +
-            "(https://github.com/inactdev/fabrica/issues/55 tracks giving every managed project its " +
-            "own). Only the Client can review the undeclared change and override that check to merge it."
-          : "";
+        : "";
 
   // No Inspector: the builder checked the builder. Said plainly, and the
   // push is left to the Client rather than done for him.

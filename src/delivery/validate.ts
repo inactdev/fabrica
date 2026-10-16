@@ -12,11 +12,12 @@
 // claim laundered through a Delivery object. Comparing that value to the
 // diff it was itself read from compares the diff to itself and cannot
 // fail; even a misreporting Worker couldn't hide anything, since the
-// Client sees the real diff either way. "Claims verified by code, never
-// taken on faith" is sound and stays applied where a claim actually
-// exists to distrust: CONTRACT rule 9 never trusts a Worker's word about
-// whether the checks changed — it compares the gate against the task's
-// pinned base commit (src/foreman/gate-changes.ts).
+// Client sees the real diff either way. CONTRACT rule 9's gateChanges is
+// different: it is the Worker's own declared intent, never compared
+// against anything on this side (Client ruling, issue #64 follow-up,
+// 2026-10-08) — Fabrica runs no host-side watch over the gate at all now;
+// a declared or undeclared change is only ever caught by the repository's
+// own CI reading the pull request's diff.
 
 import type { Delivery } from "../inspector/types.ts";
 import { DeliveryError } from "./errors.ts";
@@ -24,7 +25,6 @@ import { DeliveryError } from "./errors.ts";
 const OUTCOMES: ReadonlySet<Delivery["outcome"]> = new Set([
   "done",
   "failure-report",
-  "discarded-protected-path",
   "inspection-red",
   "cap-stopped",
   "not-verified",
@@ -46,13 +46,13 @@ export function validateDelivery(value: unknown): asserts value is Delivery {
   if (d.outcome === undefined) {
     throw new DeliveryError(
       "malformed",
-      'delivery is missing required field "outcome" (must be "done", "failure-report", "discarded-protected-path", "inspection-red", "cap-stopped", "not-verified", or "nothing-changed")'
+      'delivery is missing required field "outcome" (must be "done", "failure-report", "inspection-red", "cap-stopped", "not-verified", or "nothing-changed")'
     );
   }
   if (typeof d.outcome !== "string" || !OUTCOMES.has(d.outcome as Delivery["outcome"])) {
     throw new DeliveryError(
       "malformed",
-      `delivery's "outcome" field is invalid (must be "done", "failure-report", "discarded-protected-path", "inspection-red", "cap-stopped", "not-verified", or "nothing-changed")`
+      `delivery's "outcome" field is invalid (must be "done", "failure-report", "inspection-red", "cap-stopped", "not-verified", or "nothing-changed")`
     );
   }
 

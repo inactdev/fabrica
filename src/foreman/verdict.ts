@@ -280,7 +280,7 @@ async function runFixRound(
     // to a check or Inspector (`skipIfUnchanged`, judge.ts) - re-handing
     // the identical, already-reviewed commit only draws a refusal.
     const priorHead = baseCommitOf(line.workdir);
-    const { judge: roundJudge, mode, protectedPathApplies } = prepareRound(recordHome, taskId, line, baseCommit, {
+    const { judge: roundJudge, mode } = prepareRound(recordHome, taskId, line, baseCommit, {
       inspector,
       checkBox,
     });
@@ -318,7 +318,7 @@ async function runFixRound(
       recordHome,
       taskId,
       line,
-      { baseCommit, taskText, totalAttempts, mode, protectedPathApplies, caps, priorReceipts, priorGateChanges },
+      { baseCommit, taskText, totalAttempts, mode, caps, priorReceipts, priorGateChanges },
       attemptsResult
     );
   } finally {

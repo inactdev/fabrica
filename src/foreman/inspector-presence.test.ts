@@ -10,8 +10,9 @@
 // reached from the first round, the answer/resume round, and the fix round;
 // delivery text, `fabrica log` and `fabrica status` render its result.
 // Two more branches hang off the same answer: whether a missing check.sh
-// refuses the task (only the self-test needs one), and rule 9's check.sh
-// comparison.
+// refuses the task (only the self-test needs one), and that an undeclared
+// check.sh edit is never specially detected by Fabrica either way (rule 9
+// is CI's job now, not Fabrica's).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -216,19 +217,19 @@ test("no check.sh, Inspector not installed: refused before any worker runs - the
   assert.equal(box.calls.length, 0);
 });
 
-// --- 8. Rule 9's check.sh comparison ---
+// --- 8. Rule 9: Fabrica no longer watches check.sh at all ---
 
 const undeclaredCheckEdit = () =>
   fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "check.sh"), "#!/bin/sh\nexit 0 # tampered\n") });
 
-test("rule 9, Inspector installed: an undeclared check.sh edit is still recorded as discarded-protected-path", async () => {
+test("rule 9, Inspector installed: an undeclared check.sh edit is delivered like any other outcome - Fabrica does not detect it", async () => {
   const { foreman, project } = setup(true);
   const task = await foreman.do("small change", { project, brain: undeclaredCheckEdit() });
-  assert.equal((await foreman.deliveryOf(task.id))?.outcome, "discarded-protected-path");
+  assert.equal((await foreman.deliveryOf(task.id))?.outcome, "done");
 });
 
-test("rule 9, Inspector not installed: an undeclared check.sh edit is still recorded as discarded-protected-path", async () => {
+test("rule 9, Inspector not installed: an undeclared check.sh edit is delivered like any other outcome - Fabrica does not detect it", async () => {
   const { foreman, project } = setup(false);
   const task = await foreman.do("small change", { project, brain: undeclaredCheckEdit() });
-  assert.equal((await foreman.deliveryOf(task.id))?.outcome, "discarded-protected-path");
+  assert.equal((await foreman.deliveryOf(task.id))?.outcome, "done");
 });

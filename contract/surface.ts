@@ -183,14 +183,14 @@ export interface Receipt {
   session: string | null;
   reasoningEffort: string | null;
   checks: GateResult | null;
-  outcome: "delivered" | "failed" | "discarded-protected-path" | "cap-stopped";
+  outcome: "delivered" | "failed" | "cap-stopped";
 }
 
 /** What reaches the Client (rule 4). All fields required. */
 export interface Delivery {
   /** "cap-stopped" (rule 10): a cap stopped the work, which is not the
    * same as the work having failed. */
-  outcome: "done" | "failure-report" | "discarded-protected-path" | "cap-stopped";
+  outcome: "done" | "failure-report" | "cap-stopped";
   confidence: number;
   summary: string;
   evidence: string;

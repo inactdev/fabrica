@@ -35,20 +35,6 @@ test("a delivery's evidence stores only the tail of a long check output, behind 
   assertTruncatedLikeAReceipt(delivery.evidence);
 });
 
-test("the discarded-protected-path evidence is truncated too, keeping its own explanation", () => {
-  const delivery = buildDelivery("discarded-protected-path", {
-    taskText: "do the thing",
-    attempts: 1,
-    lastGate: noisyRedGate(),
-    branch: "fabrica/task-1",
-    files: ["check.sh"],
-    declaredGateChanges: undefined,
-  });
-
-  assertTruncatedLikeAReceipt(delivery.evidence);
-  assert.ok(delivery.evidence.startsWith("check.sh no longer matches"));
-});
-
 test("a commit-failure delivery's evidence is truncated the same way", () => {
   const delivery = buildCommitFailureDelivery({
     attempts: 1,
