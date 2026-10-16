@@ -7,22 +7,19 @@
 // attempts behaves the way it does, why the promise doesn't resolve
 // early).
 
-import { appendEvent, appendTaskFile, readTaskFile, writeTaskFile } from "../record/index.ts";
+import { appendEvent, appendTaskFile, readTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
-import { ForemanError } from "./errors.ts";
-import { gateWasTouched } from "./gate-changes.ts";
-import { prepareRound, roundOutcome } from "./judge.ts";
-import { commitWorktreeChanges } from "./commit.ts";
-import { renderCommitMessage } from "./pr-body.ts";
+import { prepareRound } from "./judge.ts";
 import { runAttempts } from "./attempts.ts";
-import { buildDelivery, buildCommitFailureDelivery, deliveredState, renderDeliveryMarkdown } from "./delivery.ts";
-import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
+import { deliveredState } from "./delivery.ts";
+import { recordRoundResult } from "./round.ts";
+import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { recordingFailure } from "./task-failure.ts";
-import { costLabelOf, recordCapStop, recordReceipt, spendLimitsFor, spendUnknownUnderCap } from "./caps.ts";
+import { recordReceipt, spendLimitsFor } from "./caps.ts";
 import type { Caps } from "../../contract/surface.ts";
-import type { Delivery, FabricaTask } from "../inspector/types.ts";
+import type { FabricaTask } from "../inspector/types.ts";
 import type { Inspector } from "../inspector/index.ts";
 import type { CheckBox } from "../brain/index.ts";
 
@@ -203,7 +200,7 @@ async function productionRound(
     // open task without waiting for delivery.
     appendEvent(recordHome, { taskId, name: "work-started", details: { project: line.project } });
 
-    const { receipts, lastGate, lastJudgement, declaredGateChanges, capStop, finalMessage, writeup } = await runAttempts({
+    const attemptsResult = await runAttempts({
       brain,
       brief,
       workdir: line.workdir,
@@ -224,133 +221,18 @@ async function productionRound(
       },
     });
 
-    // Inspector reached no verdict: recorded as such, never as red, and
-    // nothing is delivered for a Client ruling.
-    if (lastJudgement.kind === "refused") return { id: taskId, state: "refused" };
-
-    const undeclaredGateChange =
-      protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;
-
-    const outcome: Delivery["outcome"] = roundOutcome({
-      undeclaredGateChange,
-      capStopped: capStop !== undefined,
-      lastJudgement,
-      mode,
-    });
-
-    if (outcome === "discarded-protected-path") {
-      receipts[receipts.length - 1].outcome = "discarded-protected-path";
-    }
-
-    // A worker's edits live only as uncommitted changes in this throwaway
-    // worktree, and destroyProductionLine (below, in `finally`) force-
-    // removes it. Left alone, that is PR #43's flagged tension: the
-    // delivery's `files` field could name real work that is about to
-    // vanish, while `branch` points at a branch with nothing ever
-    // committed to it. Committing here, before teardown, resolves it by
-    // construction rather than by validating around it: `files` is then
-    // read back from the branch's own diff (diffFiles), so it and `branch`
-    // describe the same surviving reality, and the Client's `git merge`
-    // has something to merge. This now runs uniformly for every outcome,
-    // discarded-protected-path included — see the rule 9 comment below for
-    // why that outcome no longer skips it. Called unconditionally:
-    // commitWorktreeChanges already asks the index directly and no-ops
-    // when there is nothing staged, so a separate "is there anything to
-    // commit" check here would only re-answer the same question.
-    let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
-    if (commitError === undefined) {
-      try {
-        commitWorktreeChanges(line.workdir, renderCommitMessage(finalMessage));
-      } catch (err) {
-        if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
-        commitError = err.message;
-      }
-    }
-    if (commitError !== undefined) {
-      // A commit failure here (a stale lock, a full disk, a read-only
-      // mount) used to propagate straight out of doTask: `finally` below
-      // still force-removes the worktree, destroying the Worker's
-      // uncommitted work, and nothing was ever written to the record - a
-      // task vanishing without a trace, the worst version of losing work
-      // (Client ruling, PR #54 follow-up). The record must always say
-      // what happened, so this is caught and turned into a delivery of
-      // its own instead - scoped minimally, no retry machinery, just an
-      // honest failure report.
-      receipts[receipts.length - 1].outcome = "failed";
-      const delivery = buildCommitFailureDelivery({
-        attempts: receipts.length,
-        lastGate,
-        branch: line.branch,
-        declaredGateChanges,
-        error: commitError,
-      });
-      validateDelivery(delivery);
-      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
-      appendEvent(recordHome, {
-        taskId,
-        name: "delivered",
-        details: { outcome: delivery.outcome, delivery, receipts, project: line.project, totalAttempts, baseCommit },
-      });
-      return { id: taskId, state: "failed" };
-    }
-
-
-    // CONTRACT rule 9 (Client ruling, superseding the original
-    // force-reset-and-patch design, and then again superseding a
-    // branch-rename design): an undeclared gate change is never force-
-    // reset, thrown away, or specially marked on the branch any more. The
-    // branch stays `fabrica/<taskId>` for every outcome, discarded-
-    // protected-path included - the uniform commit above already put the
-    // work there. Detection stays exactly as it was (`gate-changes.ts`
-    // still forces this outcome, honestly, regardless of how good the
-    // check looked); what moved is enforcement. `.github/workflows/
-    // rule9-gate.yml` blocks the merge by asking the GitHub API which
-    // files the pull request changed and matching them against its
-    // protected paths (`check.sh`, plus the workflow directory itself) -
-    // it needs nothing from Fabrica, so a bug in this detection or a
-    // Worker evading it can't also fool the thing policing it. See
-    // `src/foreman/README.md`'s "Rule 9: blocked by CI, not by Fabrica's
-    // own mark" for the full reasoning, and issue #55 for the limitation
-    // that this check exists only in Fabrica's own repository today.
-    const delivery = buildDelivery(outcome, {
-      taskText,
-      attempts: receipts.length,
-      lastGate,
-      branch: line.branch,
-      files: diffFiles(line.project, line.branch, baseCommit),
-      declaredGateChanges,
-      inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
-      selfTested: mode.mode === "self-test",
-      notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
-      writeupInvalid: lastJudgement.kind === "verdict" ? lastJudgement.writeupInvalid : undefined,
-      capStop,
+    // judge-commit-outcome-deliver-record: one shared tail (issue #182),
+    // round.ts's recordRoundResult, also used by verdict.ts's fix round.
+    const result = recordRoundResult(
+      recordHome,
       taskId,
-      spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, caps),
-    });
+      line,
+      { baseCommit, taskText, totalAttempts, mode, protectedPathApplies, caps },
+      attemptsResult
+    );
 
-    // Never present a malformed delivery as done (rule 4) — prove the
-    // Foreman's own output before anyone else has to. `files` above is
-    // already read straight from the real diff, not a separate claim, so
-    // there is nothing left to verify it against (src/delivery/README.md).
-    validateDelivery(delivery);
-
-    if (capStop) recordCapStop(recordHome, taskId, capStop, delivery.summary);
-    writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
-    appendEvent(recordHome, {
-      taskId,
-      name: "delivered",
-      details: {
-        outcome: delivery.outcome,
-        delivery,
-        receipts,
-        project: line.project,
-        totalAttempts,
-        baseCommit,
-        ...(writeup ? { writeup } : {}),
-      },
-    });
-
-    return { id: taskId, state: deliveredState(outcome) };
+    if (result.kind === "refused") return { id: taskId, state: "refused" };
+    return { id: taskId, state: deliveredState(result.outcome) };
   } finally {
     destroyProductionLine(line);
   }
