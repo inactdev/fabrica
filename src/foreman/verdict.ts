@@ -12,23 +12,20 @@
 // for every ruling, per rule 6, before any of "fix"'s follow-up work
 // happens.
 
-import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTaskFile } from "../record/index.ts";
+import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile } from "../record/index.ts";
 import { destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { failedWithNoDelivery, latestDeliveredDetails, refusedWithNoDelivery } from "./queries.ts";
-import { gateWasTouched } from "./gate-changes.ts";
-import { prepareRound, roundOutcome, skipIfUnchanged } from "./judge.ts";
+import { prepareRound, skipIfUnchanged } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { recordingFailure } from "./task-failure.ts";
-import { commitWorktreeChanges } from "./commit.ts";
-import { renderCommitMessage } from "./pr-body.ts";
 import { runAttempts } from "./attempts.ts";
-import { buildCommitFailureDelivery, buildDelivery, buildNothingChangedDelivery, renderDeliveryMarkdown } from "./delivery.ts";
-import { baseCommitOf, diffFiles, validateDelivery } from "../delivery/index.ts";
-import { costLabelOf, recordCapStop, recordReceipt, requireRoomToStart, spendLimitsFor, spendUnknownUnderCap } from "./caps.ts";
+import { recordRoundResult } from "./round.ts";
+import { baseCommitOf } from "../delivery/index.ts";
+import { recordReceipt, requireRoomToStart, spendLimitsFor } from "./caps.ts";
 import type { Caps, Receipt } from "../../contract/surface.ts";
-import type { Delivery, Inspector } from "../inspector/types.ts";
+import type { Inspector } from "../inspector/types.ts";
 import type { CheckBox } from "../brain/index.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
@@ -244,19 +241,6 @@ function buildFixBrief(originalBrief: string, note: string): string {
   );
 }
 
-/** Rule 9 across rounds: the gate is compared against the task's pinned
- * baseCommit, so a declaration an earlier round made for a change that is
- * still on the branch has to travel with it — otherwise a round whose
- * worker simply leaves the (declared, legitimate) gate change alone would
- * be reported as an undeclared one. Both rounds' declarations are kept
- * when they differ; the delivery reports the whole cumulative diff, so it
- * must account for all of it. */
-function mergeGateDeclarations(prior: string | undefined, current: string | undefined): string | undefined {
-  if (!prior) return current;
-  if (!current || current === prior) return prior;
-  return `${prior}\n\n${current}`;
-}
-
 async function runFixRound(
   recordHome: string,
   taskId: string,
@@ -304,15 +288,7 @@ async function runFixRound(
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
-    const {
-      receipts: newReceipts,
-      lastGate,
-      lastJudgement,
-      declaredGateChanges: roundGateChanges,
-      capStop,
-      finalMessage,
-      writeup,
-    } = await runAttempts({
+    const attemptsResult = await runAttempts({
       brain,
       brief: buildFixBrief(originalBrief, note),
       workdir: line.workdir,
@@ -336,116 +312,15 @@ async function runFixRound(
       },
     });
 
-    if (lastJudgement.kind === "refused") return;
-
-    const declaredGateChanges = mergeGateDeclarations(priorGateChanges, roundGateChanges);
-
-    // Rule 10 still wins if it also stopped this same round (capStop is
-    // computed from spend regardless of what was judged) - so this only
-    // takes over when nothing else already has an opinion about why the
-    // loop stopped.
-    if (lastJudgement.kind === "unchanged" && !capStop) {
-      const allReceipts = [...priorReceipts, ...newReceipts];
-      const delivery = buildNothingChangedDelivery({
-        attempts: allReceipts.length,
-        branch: line.branch,
-        files: diffFiles(line.project, line.branch, baseCommit),
-        declaredGateChanges,
-      });
-      validateDelivery(delivery);
-      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
-      appendEvent(recordHome, {
-        taskId,
-        name: "delivered",
-        details: {
-          outcome: delivery.outcome,
-          delivery,
-          receipts: allReceipts,
-          project,
-          totalAttempts,
-          baseCommit,
-          ...(writeup ? { writeup } : {}),
-        },
-      });
-      return;
-    }
-
-    const undeclaredGateChange =
-      protectedPathApplies && gateWasTouched(line.workdir, baseCommit) && !declaredGateChanges;
-
-    const outcome: Delivery["outcome"] = roundOutcome({
-      undeclaredGateChange,
-      capStopped: capStop !== undefined,
-      lastJudgement,
-      mode,
-    });
-
-    if (outcome === "discarded-protected-path") {
-      newReceipts[newReceipts.length - 1].outcome = "discarded-protected-path";
-    }
-
-    const allReceipts = [...priorReceipts, ...newReceipts];
-
-    let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
-    if (commitError === undefined) {
-      try {
-        commitWorktreeChanges(line.workdir, renderCommitMessage(finalMessage));
-      } catch (err) {
-        if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
-        commitError = err.message;
-      }
-    }
-    if (commitError !== undefined) {
-      newReceipts[newReceipts.length - 1].outcome = "failed";
-      const delivery = buildCommitFailureDelivery({
-        attempts: allReceipts.length,
-        lastGate,
-        branch: line.branch,
-        declaredGateChanges,
-        error: commitError,
-      });
-      validateDelivery(delivery);
-      writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
-      appendEvent(recordHome, {
-        taskId,
-        name: "delivered",
-        details: { outcome: delivery.outcome, delivery, receipts: allReceipts, project, totalAttempts, baseCommit },
-      });
-      return;
-    }
-
-    const delivery = buildDelivery(outcome, {
-      taskText,
-      attempts: allReceipts.length,
-      lastGate,
-      branch: line.branch,
-      files: diffFiles(line.project, line.branch, baseCommit),
-      declaredGateChanges,
-      inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
-      selfTested: mode.mode === "self-test",
-      notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
-      writeupInvalid: lastJudgement.kind === "verdict" ? lastJudgement.writeupInvalid : undefined,
-      capStop,
+    // judge-commit-outcome-deliver-record: one shared tail (issue #182),
+    // round.ts's recordRoundResult, also used by do.ts's productionRound.
+    recordRoundResult(
+      recordHome,
       taskId,
-      spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, caps),
-    });
-
-    validateDelivery(delivery);
-    if (capStop) recordCapStop(recordHome, taskId, capStop, delivery.summary);
-    writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
-    appendEvent(recordHome, {
-      taskId,
-      name: "delivered",
-      details: {
-        outcome: delivery.outcome,
-        delivery,
-        receipts: allReceipts,
-        project,
-        totalAttempts,
-        baseCommit,
-        ...(writeup ? { writeup } : {}),
-      },
-    });
+      line,
+      { baseCommit, taskText, totalAttempts, mode, protectedPathApplies, caps, priorReceipts, priorGateChanges },
+      attemptsResult
+    );
   } finally {
     destroyProductionLine(line);
   }
