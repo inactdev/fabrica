@@ -511,10 +511,10 @@ test("formatEventLine: delivered flags a declared gate change", () => {
     taskId: "x",
     name: "delivered",
     details: {
-      outcome: "discarded-protected-path",
+      outcome: "done",
       delivery: {
-        confidence: 0,
-        summary: "blocked",
+        confidence: 100,
+        summary: "done",
         branch: "fabrica/x",
         files: [],
         gateChanges: "loosened rule 9's cap-refusal test per issue #11",

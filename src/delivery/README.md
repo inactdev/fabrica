@@ -65,11 +65,11 @@ anything - the Client would still see the real diff either way, since
 that's what `files` *is*. All such a check could ever have revealed is
 "a Worker misreports," a signal about the Worker with no consumer today.
 
-The principle is still sound, and stays applied where a claim actually
-exists to distrust: CONTRACT rule 9 never trusts a Worker's word about
-whether the checks changed - `gate-changes.ts` compares the gate against
-the task's pinned base commit, rather than reading a declaration. See
-"Rule 9 and this module" below.
+CONTRACT rule 9's `gateChanges` is a different kind of field: it's the
+Worker's own declared intent, and Fabrica deliberately never checks it
+against anything on this side any more (Client ruling, issue #64
+follow-up, 2026-10-08) - there is no host-side watch over the gate at
+all. See "Rule 9 and this module" below.
 
 ## `diffFiles(project, branch, base?)`
 
@@ -139,9 +139,9 @@ didn't before), chosen because `src/line/README.md` already documented
 intent - a commit was always the missing half of that promise, not a
 new decision this module invented.
 
-`discarded-protected-path` now goes through the exact same commit as
-every other outcome - see "Rule 9 and this module" below for why an
-undeclared gate change no longer skips it.
+A declared or undeclared gate change goes through the exact same commit
+as every other outcome - see "Rule 9 and this module" below for why
+Fabrica never skips it or special-cases it.
 
 ## Errors
 
@@ -160,24 +160,22 @@ undeclared gate change no longer skips it.
 
 ## Rule 9 and this module
 
-CONTRACT rule 9 ("it can't grade its own homework in the dark") is
-detected in `src/foreman/gate-changes.ts`, not here - `do.ts` already
-knows, before it ever builds a `Delivery`, whether an undeclared gate
-change forces `outcome: "discarded-protected-path"`. This module doesn't
-re-check that: `gateChanges` is validated the same as any other required
-string field (present, right type), and an empty string is a legitimate
-"the gate was untouched," not a violation. Duplicating rule 9's detection
-here would just be a second place for it to disagree with the first.
+CONTRACT rule 9 ("it can't grade its own homework in the dark") is not
+detected anywhere in Fabrica any more (Client ruling, issue #64
+follow-up, 2026-10-08, superseding first a force-reset-and-patch design,
+then a branch-rename design, then `src/foreman/gate-changes.ts`'s own
+host-side `git diff` comparison against the task's pinned base commit -
+see `src/foreman/README.md`'s "Rule 9: blocked by CI, not by Fabrica's
+own mark" for the full history). This module never re-checked that
+detection and still doesn't: `gateChanges` is validated the same as any
+other required string field (present, right type), and an empty string
+is a legitimate "nothing to declare," not a violation.
 
-What a `discarded-protected-path` outcome means for this module's
-checks: nothing, any more. Client ruling (superseding first a
-force-reset-and-patch design, then a branch-rename design) - see
-`src/foreman/README.md`'s "Rule 9: blocked by CI, not by Fabrica's own
-mark" for the full reasoning - moved rule 9's consequence off Fabrica
-entirely and onto the repository's own CI: the work commits onto the
-ordinary branch like any other outcome, and `diffFiles(project, branch,
-base)` reports its real diff like any other outcome. Nothing here marks
-the branch or the delivery for enforcement; `.github/workflows/
-rule9-gate.yml` blocks the merge by querying the GitHub API for a
-touched protected path, independent of anything this module or `do.ts`
-produces. This module has no special case for it left to document.
+Fabrica's `Delivery["outcome"]` has no slot for a gate-change violation
+any more - there is nothing for this module's checks to special-case.
+The work commits onto the ordinary branch like any other outcome, and
+`diffFiles(project, branch, base)` reports its real diff like any other
+outcome, declared gate change or not. Enforcement and detection both
+live entirely in `.github/workflows/rule9-gate.yml`, which blocks the
+merge by querying the GitHub API for a touched protected path,
+independent of anything this module or `do.ts` produces.

@@ -189,7 +189,7 @@ async function productionRound(
 
     // Who judges each attempt: Inspector, or the worker's own box (issue
     // #64) - never a check run on the host.
-    const { judge, mode, protectedPathApplies } = prepareRound(recordHome, taskId, line, baseCommit, {
+    const { judge, mode } = prepareRound(recordHome, taskId, line, baseCommit, {
       inspector,
       checkBox,
     });
@@ -227,7 +227,7 @@ async function productionRound(
       recordHome,
       taskId,
       line,
-      { baseCommit, taskText, totalAttempts, mode, protectedPathApplies, caps },
+      { baseCommit, taskText, totalAttempts, mode, caps },
       attemptsResult
     );
 

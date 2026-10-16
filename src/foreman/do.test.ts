@@ -387,7 +387,7 @@ test("doTask rejects when no brain is provided", async () => {
   );
 });
 
-test("doTask on an undeclared gate change keeps the work on the ordinary branch, it does not discard it", async () => {
+test("doTask on an undeclared gate change delivers normally - Fabrica runs no watch over the gate at all", async () => {
   const project = makeFixtureRepo("exit 1", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({
@@ -400,7 +400,7 @@ test("doTask on an undeclared gate change keeps the work on the ordinary branch,
   const task = await doTask(recordHome, "make it pass", { project, brain, checkBox: fixtureCheckBox().box });
 
   const delivery = deliveryOf(recordHome, task.id);
-  assert.equal(delivery?.outcome, "discarded-protected-path");
+  assert.equal(delivery?.outcome, "done", "no gate-change detection is left on Fabrica's side to override a green check");
   const branch = `fabrica/${task.id}`;
   assert.equal(delivery?.branch, branch, "delivery.branch must stay the ordinary branch");
   assert.deepEqual(
@@ -413,7 +413,7 @@ test("doTask on an undeclared gate change keeps the work on the ordinary branch,
   assert.equal(content, "possibly good work\n", "the branch must carry the worker's real content");
 });
 
-test("doTask keeps the work on the ordinary branch on an undeclared gate change even when the worker commits it itself", async () => {
+test("doTask delivers normally on an undeclared gate change even when the worker commits it itself", async () => {
   const project = makeFixtureRepo("exit 1", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({
@@ -430,7 +430,7 @@ test("doTask keeps the work on the ordinary branch on an undeclared gate change 
   const task = await doTask(recordHome, "make it pass", { project, brain, checkBox: fixtureCheckBox().box });
 
   const delivery = deliveryOf(recordHome, task.id);
-  assert.equal(delivery?.outcome, "discarded-protected-path");
+  assert.equal(delivery?.outcome, "done", "no gate-change detection is left on Fabrica's side to override a green check");
   const branch = `fabrica/${task.id}`;
   assert.equal(delivery?.branch, branch, "delivery.branch must stay the ordinary branch");
   assert.deepEqual(

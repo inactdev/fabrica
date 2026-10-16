@@ -21,7 +21,10 @@ function freshHome(): string {
 const PRISTINE_CHECK = "#!/bin/sh\nexit 0\n";
 
 /** A worker that rewrites the gate without declaring it, and does some
- * real work alongside it - rule 9's discarded-protected-path case. */
+ * real work alongside it. Fabrica runs no watch over this any more (rule
+ * 9, issue #64 follow-up) - included here only as an ordinary edit a fix
+ * round's delivery must still carry forward on the branch, not as
+ * anything the delivery's outcome reacts to. */
 function tamperingBrain() {
   return fakeBrain({
     onWork: (_brief, workdir) => {
@@ -396,38 +399,34 @@ test("an unrecognized ruling refuses rather than silently doing nothing", async 
   );
 });
 
-test("a fix round measures rule 9 against the task's pristine base, not what the last round left on the branch", async () => {
+test("an undeclared gate change is delivered plainly, and a fix round that leaves it alone stays plain too - Fabrica runs no watch over it", async () => {
   const recordHome = freshHome();
   const project = makeFixtureRepo("exit 0");
   const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   const task = await foreman.do("small change", { project, brain: tamperingBrain() });
-  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "discarded-protected-path");
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "done", "nothing on Fabrica's side compares the gate to any baseline any more");
 
-  // The fix round's worker never touches check.sh - but the tampered one
-  // round 1 committed is still on the branch, so the delivery must still
-  // say so rather than reporting a clean "done" over it.
+  // The fix round's worker never touches check.sh - the tampered one
+  // round 1 committed is still on the branch, and nothing here reacts to
+  // that either way.
   const innocent = fakeBrain({
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "more.txt"), "the correction\n"),
   });
   await recordVerdict(recordHome, task.id, "fix", "also add more.txt", { brain: innocent, inspector: fixtureInspector() });
 
   const delivery = deliveryOf(recordHome, task.id);
-  assert.equal(
-    delivery?.outcome,
-    "discarded-protected-path",
-    "an undeclared gate change carried over from round 1 must not read as clean in round 2"
-  );
-  assert.equal(receiptsOf(recordHome, task.id).at(-1)?.outcome, "discarded-protected-path");
+  assert.equal(delivery?.outcome, "done", "an undeclared gate change carried over from round 1 is still never flagged in round 2");
+  assert.equal(receiptsOf(recordHome, task.id).at(-1)?.outcome, "delivered");
 });
 
-test("a fix round that puts the gate back the way it was is not flagged for it", async () => {
+test("a fix round that puts the gate back the way it was drops check.sh from the cumulative diff", async () => {
   const recordHome = freshHome();
   const project = makeFixtureRepo("exit 0");
   const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   const task = await foreman.do("small change", { project, brain: tamperingBrain() });
-  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "discarded-protected-path");
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "done");
 
   const honest = fakeBrain({
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "check.sh"), PRISTINE_CHECK),
@@ -435,8 +434,12 @@ test("a fix round that puts the gate back the way it was is not flagged for it",
   await recordVerdict(recordHome, task.id, "fix", "put check.sh back the way it was", { brain: honest, inspector: fixtureInspector() });
 
   const delivery = deliveryOf(recordHome, task.id);
-  assert.equal(delivery?.outcome, "done", "restoring the gate to its base state is not a gate change");
-  assert.deepEqual(delivery?.files, ["feature.txt"], "the round's real work still lands on the branch");
+  assert.equal(delivery?.outcome, "done");
+  assert.deepEqual(
+    delivery?.files,
+    ["feature.txt"],
+    "check.sh ends up byte-identical to the pinned base commit, so the cumulative diff no longer names it"
+  );
 });
 
 test("a gate change declared in an earlier round still counts for the fix round that inherits it", async () => {

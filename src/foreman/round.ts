@@ -10,7 +10,6 @@
 
 import { appendEvent, writeTaskFile } from "../record/index.ts";
 import { ForemanError } from "./errors.ts";
-import { gateWasTouched } from "./gate-changes.ts";
 import { roundOutcome } from "./judge.ts";
 import type { CheckMode } from "./judge.ts";
 import { commitWorktreeChanges } from "./commit.ts";
@@ -22,13 +21,11 @@ import { costLabelOf, recordCapStop, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps, ProductionLine, Receipt } from "../../contract/surface.ts";
 import type { Delivery } from "../inspector/types.ts";
 
-/** Rule 9 across rounds: the gate is compared against the task's pinned
- * baseCommit, so a declaration an earlier round made for a change that is
- * still on the branch has to travel with it — otherwise a round whose
- * worker simply leaves the (declared, legitimate) gate change alone would
- * be reported as an undeclared one. Both rounds' declarations are kept
- * when they differ; the delivery reports the whole cumulative diff, so it
- * must account for all of it. */
+/** Rule 9's declaration travels across rounds: a fix round that leaves an
+ * earlier round's declared gate change alone must not lose that
+ * declaration from the delivery. Both rounds' declarations are kept when
+ * they differ; the delivery reports the whole cumulative diff, so it must
+ * account for all of it. */
 export function mergeGateDeclarations(prior: string | undefined, current: string | undefined): string | undefined {
   if (!prior) return current;
   if (!current || current === prior) return prior;
@@ -44,13 +41,12 @@ export type RoundRecordResult =
 /**
  * Everything that happens once a round's `runAttempts` call has
  * resolved: interpret the last judgement, commit whatever is left
- * uncommitted, decide the delivery outcome (including rule 9's
- * undeclared-gate-change override and a fix round's "nothing changed"
- * short-circuit), build and validate the `Delivery`, and write both
- * `delivery.md` and the `"delivered"` event. Runs for every outcome
- * uniformly - see `src/foreman/README.md`'s "Rule 9: blocked by CI, not
- * by Fabrica's own mark" for why `discarded-protected-path` is no
- * exception.
+ * uncommitted, decide the delivery outcome (including a fix round's
+ * "nothing changed" short-circuit), build and validate the `Delivery`,
+ * and write both `delivery.md` and the `"delivered"` event. Runs for
+ * every outcome uniformly - see `src/foreman/README.md`'s "Rule 9:
+ * blocked by CI, not by Fabrica's own mark" for why a declared or
+ * undeclared gate change is never a special case here.
  */
 export function recordRoundResult(
   recordHome: string,
@@ -61,11 +57,10 @@ export function recordRoundResult(
     taskText: string;
     totalAttempts: number | undefined;
     mode: CheckMode;
-    protectedPathApplies: boolean;
     caps?: Caps;
     /** A fix round's earlier receipts/gate declaration, carried forward
-     * so the delivery's attempt count and rule 9 comparison stay
-     * cumulative across the whole task. Omitted for a first-ever or
+     * so the delivery's attempt count and declared-gate-change wording
+     * stay cumulative across the whole task. Omitted for a first-ever or
      * resumed-from-questions round, which has none. */
     priorReceipts?: Receipt[];
     priorGateChanges?: string;
@@ -114,30 +109,21 @@ export function recordRoundResult(
     return { kind: "recorded", outcome: delivery.outcome };
   }
 
-  const undeclaredGateChange =
-    ctx.protectedPathApplies && gateWasTouched(line.workdir, ctx.baseCommit) && !declaredGateChanges;
-
   const outcome: Delivery["outcome"] = roundOutcome({
-    undeclaredGateChange,
     capStopped: capStop !== undefined,
     lastJudgement,
     mode: ctx.mode,
   });
-
-  if (outcome === "discarded-protected-path") {
-    newReceipts[newReceipts.length - 1].outcome = "discarded-protected-path";
-  }
 
   // A worker's edits live only as uncommitted changes in this throwaway
   // worktree, and the caller's teardown force-removes it once this
   // function returns. Committing here, before that, resolves PR #43's
   // flagged tension by construction: `files` is read back from the
   // branch's own diff (diffFiles) below, so it and `branch` describe the
-  // same surviving reality. Runs for every outcome, discarded-protected-path
-  // included - see the rule 9 comment in README.md for why that outcome
-  // no longer skips it. Called unconditionally: commitWorktreeChanges
-  // already asks the index directly and no-ops when there is nothing
-  // staged.
+  // same surviving reality. Runs for every outcome uniformly, declared or
+  // undeclared gate change included - see the rule 9 comment in
+  // README.md. Called unconditionally: commitWorktreeChanges already
+  // asks the index directly and no-ops when there is nothing staged.
   let commitError = lastJudgement.kind === "commit-failed" ? lastJudgement.error : undefined;
   if (commitError === undefined) {
     try {

@@ -28,7 +28,7 @@ export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 export interface AttemptLoopResult {
   /** One per attempt actually run, in order. Each entry's `outcome`
    * reflects its own check result; the caller overwrites the last entry
-   * only if rule 9's gate-change check forces discarded-protected-path. */
+   * only if the pre-teardown commit itself then fails. */
   receipts: Receipt[];
   /** The last red or green verdict; absent when no attempt reached one. */
   lastGate: GateResult | undefined;
