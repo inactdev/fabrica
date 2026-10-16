@@ -1,13 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { extractPrUrl, inspectorAdapter, inspectorIsConfigured, reportForRecord, MAX_INSPECTION_REPORT_BYTES } from "./run.ts";
 
 /** A fake token, so no test here ever asks the machine's real `gh`. */
 function testAdapter(command: string) {
   return inspectorAdapter(command, { env: { ...process.env, GITHUB_TOKEN: "fake-test-token" } });
+}
+
+/** The ratified consumer contract (issue #109): the one copy of the call's
+ * flags and exit-code mapping Fabrica commits, mirrored byte-for-byte into
+ * Inspector's own repo by a CI job that reads this file, never hand-copied.
+ * Tests below derive their expectations from here so a flag or exit code
+ * changed in run.ts without a matching edit here fails this suite. */
+interface ConsumerContract {
+  flags: { name: string; description: string; required?: boolean }[];
+  exitCodes: Record<string, number>;
+  stdout: { pullRequestLine: string };
+  env: { githubToken: string };
+}
+
+const here = dirname(fileURLToPath(import.meta.url));
+const CONTRACT: ConsumerContract = JSON.parse(readFileSync(join(here, "consumer-contract.json"), "utf8"));
+
+/** The `-<name>` argv flag for a contract-declared flag, failing loudly if
+ * run.ts and consumer-contract.json ever name it differently. */
+function flag(name: string): string {
+  const declared = CONTRACT.flags.find((f) => f.name === name);
+  assert.ok(declared, `consumer-contract.json declares no "${name}" flag`);
+  return `-${declared.name}`;
 }
 
 function tempDir(): string {
@@ -34,11 +58,7 @@ function commandStreams(dir: string, exitCode: number, stdout: string, stderr: s
 test("inspectorAdapter maps Inspector's three verdict exit codes without the real binary or GitHub", async () => {
   const workdir = tempDir();
 
-  for (const [exitCode, verdict] of [
-    [0, "green"],
-    [1, "red"],
-    [2, "refused"],
-  ] as const) {
+  for (const [verdict, exitCode] of Object.entries(CONTRACT.exitCodes)) {
     const inspection = await testAdapter(command(workdir, exitCode, `${verdict} report`)).inspect({
       branch: "fabrica/task",
       workdir,
@@ -97,7 +117,7 @@ test("inspectorAdapter names the branch Inspector may publish: -branch fabrica/<
 
   const inspection = await testAdapter(path).inspect({ branch: "fabrica/task-1", workdir });
 
-  assert.equal(inspection.report, `-repo ${workdir} -branch fabrica/task-1`);
+  assert.equal(inspection.report, `${flag("repo")} ${workdir} ${flag("branch")} fabrica/task-1`);
 });
 
 // Negative first: a green run that never printed the line gets no prUrl -
@@ -151,7 +171,10 @@ test("inspectorAdapter passes -pr-title and -pr-body-file, and the body file hol
 
   assert.equal(
     inspection.report,
-    `-repo|${workdir}|-branch|fabrica/task-1|-pr-title|Fix the login bug|-pr-body-file|` +
+    [flag("repo"), workdir, flag("branch"), "fabrica/task-1", flag("pr-title"), "Fix the login bug", flag("pr-body-file")].join(
+      "|"
+    ) +
+      "|" +
       "Completed: Fix the login bug\n\nDeviations:\nNone."
   );
 });
