@@ -59,6 +59,29 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Removal, not just a stop, and on every path that can throw once
+// `docker run` has been attempted: the `--rm` that run carries only
+// reaps a container that started and then exited, and a `docker stop`
+// returns before the daemon's own reap of it necessarily has. Either
+// way the container can still be sitting in `docker ps -a` attached to
+// the isolated network, and a network with a container attached to it
+// refuses to be removed - so the caller's own teardown failed too,
+// leaking both (src/brain/adapters/'s reference adapter calls
+// `removeIsolatedNetwork` right after `relay.close()`). Observed on the
+// Client's machine after the 2026-10-17 proof runs: a leftover
+// `fabrica-relay-<id>` container alongside three undeleted
+// `fabrica-worker-<id>` / `fabrica-relay-egress-<id>` networks.
+//
+// `-f` so whichever state the container got to - created but never
+// started, running, exited but not yet reaped - doesn't decide whether
+// the cleanup works. A failure here is deliberately swallowed rather
+// than reported: the error on its way past this point is the one the
+// Client needs to see, and this is a cleanup attempt on something that
+// may legitimately already be gone.
+async function removeContainer(name: string): Promise<void> {
+  await execFileAsync("docker", ["rm", "-f", name]).catch(() => {});
+}
+
 async function waitForListening(name: string, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -72,12 +95,16 @@ async function waitForListening(name: string, timeoutMs = 15_000): Promise<void>
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
+  // Read while the container is still there: its caller removes it the
+  // moment this throws, and its own output is the only account of why it
+  // never listened, so the tail of it has to ride on the message.
   let logs = "";
   try {
     const { stdout, stderr } = await execFileAsync("docker", ["logs", name]);
     logs = (stderr || stdout).trim();
   } catch {
-    // Fall through with no logs to show - the container may be gone.
+    // Fall through with no logs to show - the container may be gone
+    // already (`--rm` reaps one that started and exited on its own).
   }
   throw new RelayError(
     "listen-failed",
@@ -109,7 +136,9 @@ async function relayAddressOn(name: string, network: string): Promise<string> {
  * `opts.egressNetwork` (its own route to the real internet) - see this
  * file's header for why it has to be two networks, and two legs, rather
  * than one. Throws `RelayError("listen-failed")` if the container never
- * starts or never confirms it's listening. */
+ * starts or never confirms it's listening - and on every one of those
+ * paths removes the container first, so the caller's own networks can
+ * still be torn down afterwards. */
 export async function startContainerizedRelay(opts: ContainerizedRelayOptions): Promise<ContainerizedRelayHandle> {
   const image = opts.image ?? RELAY_IMAGE;
   const name = `fabrica-relay-${randomUUID().replace(/-/g, "")}`;
@@ -132,43 +161,51 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
   const envFile = join(envFileDir, "env");
   writeFileSync(envFile, `FABRICA_RELAY_CONFIG=${JSON.stringify(config)}\n`);
 
+  // One failure path from the `docker run` attempt onward: whatever goes
+  // wrong between here and a handle being returned - the run itself, the
+  // container never reporting it's listening, no address on the isolated
+  // network, anything unexpected - the container must not be left behind
+  // (see `removeContainer` above for what that costs when it is).
   try {
-    await execFileAsync("docker", [
-      "run",
-      "-d",
-      "--rm",
-      "--name",
-      name,
-      "--network",
-      opts.isolatedNetwork,
-      "--network",
-      opts.egressNetwork,
-      "--mount",
-      `type=bind,source=${repoRoot},target=${repoRoot},readonly`,
-      "--mount",
-      `type=bind,source=${recordHome},target=${recordHome}`,
-      "--env-file",
-      envFile,
-      "--init",
-      image,
-      "node",
-      // Computed from `repoRoot` (post-realpath), not from this file's
-      // own `import.meta.url`-derived directory: the two could disagree
-      // if the checkout sits behind a symlink (the same macOS /tmp ->
-      // /private/tmp class of trap src/line/README.md calls out
-      // elsewhere), and `repoRoot` is also what's actually bind-mounted
-      // into the container below, so the path handed to `node` must be
-      // built from that same resolved root to be guaranteed to exist at
-      // the mounted location.
-      join(repoRoot, "src", "relay", "container", "bootstrap.mjs"),
-    ]);
-  } catch (err) {
-    rmSync(envFileDir, { recursive: true, force: true });
-    throw new RelayError("listen-failed", `could not start the relay container: ${errorMessage(err)}`);
-  }
+    try {
+      await execFileAsync("docker", [
+        "run",
+        "-d",
+        "--rm",
+        "--name",
+        name,
+        "--network",
+        opts.isolatedNetwork,
+        "--network",
+        opts.egressNetwork,
+        "--mount",
+        `type=bind,source=${repoRoot},target=${repoRoot},readonly`,
+        "--mount",
+        `type=bind,source=${recordHome},target=${recordHome}`,
+        "--env-file",
+        envFile,
+        "--init",
+        image,
+        "node",
+        // Computed from `repoRoot` (post-realpath), not from this file's
+        // own `import.meta.url`-derived directory: the two could
+        // disagree if the checkout sits behind a symlink (the same macOS
+        // /tmp -> /private/tmp class of trap src/line/README.md calls
+        // out elsewhere), and `repoRoot` is also what's actually
+        // bind-mounted into the container below, so the path handed to
+        // `node` must be built from that same resolved root to be
+        // guaranteed to exist at the mounted location.
+        join(repoRoot, "src", "relay", "container", "bootstrap.mjs"),
+      ]);
+    } catch (err) {
+      // A failed run is not necessarily a container that doesn't exist:
+      // `docker run` creates it first and starts it second, so a failure
+      // at the start can leave one behind, which the outer catch removes
+      // like any other.
+      throw new RelayError("listen-failed", `could not start the relay container: ${errorMessage(err)}`);
+    }
 
-  try {
-    await waitForListening(name);
+    await waitForListening(name, opts.listenTimeoutMs);
     const host = await relayAddressOn(name, opts.isolatedNetwork);
     return {
       host,
@@ -179,7 +216,7 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
       },
     };
   } catch (err) {
-    await execFileAsync("docker", ["stop", name]).catch(() => {});
+    await removeContainer(name);
     rmSync(envFileDir, { recursive: true, force: true });
     throw err;
   }
