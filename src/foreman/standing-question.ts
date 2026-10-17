@@ -32,7 +32,22 @@ export const FINAL_MESSAGE_FORMAT_NOTICE =
   "field is required and must not be empty, except confidence, which must be a number from 0 to 100. Do not " +
   "type the write-up out as text; an attempt without a valid structured write-up is not accepted as done.";
 
-const STANDING_PREFIX = `${STANDING_QUESTION}\n\n${FINAL_MESSAGE_FORMAT_NOTICE}`;
+/** A project-intrinsic fact a worker discovers (build/test/release/
+ * architecture, a sharp edge) belongs in the project's root agent-memory
+ * file, but not as a bullet appended straight into its shared body: two
+ * tasks running in parallel branches (the common case here) both insert
+ * text at that same spot, and their pull requests collide on merge every
+ * time. `notes/` is the merge-safe alternative - one new file per task,
+ * which can never collide with another new file - folded into the
+ * curated document by hand later. See `notes/README.md` for the naming
+ * convention. */
+export const DURABLE_NOTES_NOTICE =
+  "If you find a durable, project-intrinsic fact worth keeping, add it as a new file under notes/ (one file per " +
+  "task - see notes/README.md for the naming convention) instead of editing the project's root agent-memory " +
+  "file's shared body directly - that is what causes parallel tasks' pull requests to conflict on the same " +
+  "spot, every time.";
+
+const STANDING_PREFIX = `${STANDING_QUESTION}\n\n${FINAL_MESSAGE_FORMAT_NOTICE}\n\n${DURABLE_NOTES_NOTICE}`;
 
 /** `brief`, beginning with the standing question and the write-up
  * notice exactly once - applied by every brief builder and again
