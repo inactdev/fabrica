@@ -129,6 +129,26 @@ to `<recordHome>/herdr-watcher.pid` on startup, and `herdrWatcherStatus`
 checks that file's pid for real liveness (a signal-0 `kill`, not just
 "the file exists") before `fabrica up` decides whether to start another.
 
+Liveness means more than "a process with that pid answers signal 0",
+because a zombie does. `fabrica up` starts this watcher detached and
+then blocks in the foreground harness, so its own event loop never runs
+again to collect the watcher's exit status: a watcher that dies leaves a
+finished-but-unreaped process behind, which answers signal 0 for as long
+as that `fabrica up` session lives (observed in the wild: three days of
+`<defunct>`, with `fabrica up` reporting nothing and never starting a
+replacement). So `isProcessAlive` reads the pid's real process state as
+well, and treats a zombie (state `Z`) as exited - from the kernel's own
+`/proc/<pid>/stat` where `/proc` exists, otherwise from `ps -o state=
+-p <pid>`, the shape POSIX itself specifies. The check is deliberately
+one-directional: only a state positively read as a zombie overturns what
+signal 0 said, and a state that can't be read at all keeps the old
+answer - the opposite default would have `fabrica up` start a second
+watcher alongside a healthy one and duplicate every tab, which is worse
+than the problem it fixes. A freshness-based check (the watcher stamping
+its pid file every poll, a stale stamp read as dead) was considered and
+rejected for the same reason: the Mac this runs on sleeps, and a
+genuinely live watcher looks stale the moment it wakes up.
+
 If that status comes back `"exited"` - a watcher really was running for
 this record home and is gone now, not just never started -
 `fabrica up` says so (via the generic `notify` callback every
@@ -144,7 +164,12 @@ same shape, and the same reason (CONTRACT rule 8's brain-word scan - see
 discovered by scanning `skill/` instead. Its own tests
 (`up-hook.test.ts`) use injected fakes for the status check and the
 spawn itself; `herdr-watcher.test.ts` covers the real pid-file liveness
-check separately.
+check separately - including a real zombie, built by
+`helpers/zombie-parent.mjs` (a child that spawns a grandchild, lets it
+exit, then blocks its own event loop forever so the grandchild is never
+reaped). That test asserts the zombie still answers signal 0 before
+asserting the status reads `"exited"`, so it can't quietly degrade into
+re-testing the ordinary dead-pid case next to it.
 
 Environment:
 

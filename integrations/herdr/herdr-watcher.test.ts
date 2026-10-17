@@ -12,11 +12,19 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { appendEvent, registerTask } from "../../src/record/index.ts";
-import { createHerdrWatcher, herdrWatcherLogPath, herdrWatcherStatus, isHerdrWatcherRunning } from "./herdr-watcher.ts";
+import {
+  createHerdrWatcher,
+  herdrWatcherLogPath,
+  herdrWatcherStatus,
+  isHerdrWatcherRunning,
+  parseProcStatState,
+} from "./herdr-watcher.ts";
 
 const FAKE_HERDR = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-herdr.mjs");
+const ZOMBIE_PARENT = join(dirname(fileURLToPath(import.meta.url)), "helpers", "zombie-parent.mjs");
 
 function makeRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-herdr-record-"));
@@ -427,6 +435,64 @@ test("herdrWatcherStatus: running when the pid file names a real, live process",
 
   assert.equal(herdrWatcherStatus(recordHome), "running");
   assert.equal(isHerdrWatcherRunning(recordHome), true);
+});
+
+test("parseProcStatState: reads the state field, even when comm holds spaces and parentheses", () => {
+  // Real shape, recorded from this project's own container: the second
+  // field is parenthesised and can itself contain both, so the state
+  // field is only findable after the LAST ")".
+  assert.equal(parseProcStatState("127 (MainThread) Z 120 109 109 0 -1 4227084 3407 0\n"), "Z");
+  assert.equal(parseProcStatState("841 (node) S 1 841 841 0 -1 4194304 29999 0\n"), "S");
+  assert.equal(parseProcStatState("42 (weird (name) here) Z 1 42 42 0\n"), "Z");
+  assert.equal(parseProcStatState("nothing parenthesised here"), null);
+  assert.equal(parseProcStatState("42 (node)"), null);
+});
+
+test("herdrWatcherStatus: a finished-but-unreaped watcher (a zombie) reads as exited, not running", async () => {
+  const recordHome = makeRecordHome();
+  const pidFile = join(recordHome, "herdr-watcher.pid");
+  const handoff = join(makeRecordHome(), "zombie.pid");
+
+  // A real zombie: this child spawns a grandchild that exits at once and
+  // then blocks its own event loop forever, so the grandchild is never
+  // reaped - the same shape `fabrica up` produces when it spawns the
+  // watcher detached and then blocks in the foreground harness.
+  const parent = spawn(process.execPath, [ZOMBIE_PARENT, handoff], { stdio: "ignore" });
+  try {
+    const deadline = Date.now() + 15_000;
+    let zombiePid = 0;
+    while (zombiePid === 0 && Date.now() < deadline) {
+      if (existsSync(handoff)) zombiePid = Number(readFileSync(handoff, "utf8").trim());
+      if (zombiePid === 0) await delay(50);
+    }
+    assert.ok(Number.isInteger(zombiePid) && zombiePid > 0, "the helper should have reported its child's pid");
+
+    // Poll until the grandchild has actually exited (it starts out
+    // genuinely running, which must still read as "running").
+    let status: ReturnType<typeof herdrWatcherStatus> = "never-started";
+    while (Date.now() < deadline) {
+      writeFileSync(pidFile, String(zombiePid), "utf8"); // rewritten each turn: "exited" removes it
+      status = herdrWatcherStatus(recordHome);
+      if (status === "exited") break;
+      await delay(50);
+    }
+
+    // The assertion that makes this test about zombies at all: the pid
+    // must still exist, i.e. signal 0 alone - all this check used to do -
+    // would have called it "running" and `fabrica up` would never have
+    // started a replacement. If it has been reaped, this is just the
+    // ordinary dead-pid case the test above already covers.
+    assert.doesNotThrow(
+      () => process.kill(zombiePid, 0),
+      "the child should still be an unreaped zombie - signal 0 must still find it"
+    );
+    assert.equal(status, "exited");
+    assert.equal(existsSync(pidFile), false, "a zombie's pid file should be cleaned up too");
+    writeFileSync(pidFile, String(zombiePid), "utf8");
+    assert.equal(isHerdrWatcherRunning(recordHome), false);
+  } finally {
+    parent.kill("SIGKILL"); // releases the zombie: reparented to init, reaped
+  }
 });
 
 test("herdrWatcherStatus: exited, and the stale file is removed, when the pid names a process that's gone", () => {
