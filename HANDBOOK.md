@@ -209,10 +209,14 @@ project uses - rather than inventing either one:
   language-version step (`actions/setup-node` with `node-version: 24`
   means a Node 24 image). Pin a version; never leave it floating on
   `latest`.
-- Add **`--network`** if that check installs anything of its own -
-  `apt-get install`, `apk add`, `pip install`, `npm ci` against the
-  registry. Without it the check later runs in a box with no network and
-  fails on the install step, not on the project.
+- Add **`--network`** if that check installs anything of its own into
+  the project - `npm ci` against the registry, `pip install` into a
+  virtualenv. Without it the check later runs in a box with no network
+  and fails on the install step, not on the project. A check that
+  installs a *system* package (`apt-get install shellcheck`) is a
+  different matter: no network flag helps, because the box runs as your
+  own user and cannot write outside the project. Pick an `--image` that
+  already ships that tool instead.
 
 Then run it:
 

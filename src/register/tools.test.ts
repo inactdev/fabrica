@@ -37,6 +37,16 @@ import { RECORDED_CHECK } from "./origin.ts";
 // use alpine/git because it passes git subcommands as the command.
 const CHECK_IMAGE = "alpine";
 
+// For the one assertion that needs git present: an image that already
+// ships it, because nothing can be installed inside a check box (see
+// that assertion's own comment). cimg/base has no ENTRYPOINT, runs a
+// normal user that runContained's --user overrides, and ships git from
+// the git-core PPA; the tag is pinned rather than floating on `latest`,
+// the same rule register's own --image help gives the Client. It is also
+// the image the first real registration will use, so this doubles as
+// proof of that path.
+const GIT_BEARING_IMAGE = "cimg/base:2025.10";
+
 function dockerAvailable(): boolean {
   try {
     execFileSync("docker", ["info"], { stdio: "ignore" });
@@ -100,14 +110,17 @@ test("realRegisterTools.runCheck runs the command inside the image, against the 
     assert.equal(red.ran && red.exitCode, 7);
 
     // git works in there, through the read-only mounts - a real project's
-    // check often shells out to it. Installed first, rather than run from
-    // an image that ships it: `runCheck` allows the network for exactly
-    // this reason (a real check installs what it needs), and this is that
-    // case in miniature.
+    // check often shells out to it. Run from an image that already ships
+    // git, never installed: runContained runs every box as the host
+    // uid:gid (src/containment/run.ts's --user), so a check box can
+    // install nothing, in any image - a package manager cannot write to
+    // /var, /etc or /usr as an unknown user. That is the containment
+    // design holding, not a gap: a root container's writes into the bind
+    // mount would come out root-owned on the host.
     const gitWorks = await realRegisterTools.runCheck({
       workdir: line.workdir,
-      image: CHECK_IMAGE,
-      command: "apk add -q git && git status",
+      image: GIT_BEARING_IMAGE,
+      command: "git status",
     });
     assert.equal(gitWorks.ran, true);
     assert.equal(gitWorks.ran && gitWorks.exitCode, 0, `git should work inside the box: ${JSON.stringify(gitWorks)}`);

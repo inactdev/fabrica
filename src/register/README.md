@@ -114,11 +114,12 @@ protect nothing, which is CONTRACT rule 9's whole subject.
 Both describe the box **Inspector** will run the check in later, and
 both only ever land in `.inspector.json`:
 
-- `--network` writes `network: true`. A check that installs its own
-  tools — `apt-get install shellcheck`, `apk add`, `pip install` —
-  cannot pass in a box with no network, and that is a common enough
-  shape (a dotfiles repository's shellcheck run, for one) to need a
-  flag rather than a hand-edit after the fact.
+- `--network` writes `network: true`. A check that fetches anything —
+  `npm ci` against the registry, `pip install` into a virtualenv — cannot
+  pass in a box with no network, and that is a common enough shape to
+  need a flag rather than a hand-edit after the fact. (A check that
+  installs a *system* package is a different problem, and this flag is
+  not its answer: see the testing section below.)
 - `--timeout <seconds>` writes `timeoutSeconds`.
 
 "Off" is the **absence** of the key, not `network: false` or
@@ -130,8 +131,9 @@ what "default off" means here.
 
 Neither flag changes the one proving run `register` itself does.
 `tools.ts`'s `realRunCheck` has always passed `network: "allowed"`, for
-the same reason a worker's own check box does: a real check installs
-dependencies. Gating that run behind `--network` would make a check
+the same reason a worker's own check box does: a real check installs its
+project-local dependencies (`npm ci`, a virtualenv), which it can,
+because those land in the bind-mounted workdir it owns. Gating that run behind `--network` would make a check
 that is about to be green on Inspector refuse here as **red**, which is
 the one outcome this command must never produce. `--timeout` has
 nothing to bind to on this side at all — `RunContainedOptions` has no
@@ -215,13 +217,34 @@ honors what it says, so `--check "exit 3"` is genuinely red and
 
 `tools.test.ts` is the other half: the real containerized run, skipping
 (never failing) without a Docker daemon, and genuinely executed by
-`.github/workflows/docker-tests.yml`. Its image is plain `alpine`, and
-that matters — `runContained` passes the command straight after the
-image name with no `--entrypoint` override, so an image whose
-entrypoint is a program (`alpine/git`'s is `git`) would run
-`git sh -c ./check.sh` and fail for a reason that has nothing to do
-with the check. `src/line/worktree-git.test.ts` can use `alpine/git`
-because it passes git *subcommands* as the command. Where that test
-needs git, it installs it (`apk add -q git && git status`) rather than
-switching images — which is also the `--network` case above, in
-miniature.
+`.github/workflows/docker-tests.yml`. It uses two images, for two
+reasons.
+
+Plain `alpine` for the red-vs-green assertions — the image
+`FIXTURE_INSPECTOR_CONFIG` names, and deliberately not one with its own
+entrypoint: `runContained` passes the command straight after the image
+name with no `--entrypoint` override, so an image whose entrypoint is a
+program (`alpine/git`'s is `git`) would run `git sh -c ./check.sh` and
+fail for a reason that has nothing to do with the check.
+`src/line/worktree-git.test.ts` can use `alpine/git` because it passes
+git *subcommands* as the command.
+
+`cimg/base:2025.10` for the one assertion that needs git present,
+because **nothing can be installed inside a check box**: `runContained`
+runs every container as the host `uid:gid` (`src/containment/run.ts`'s
+`--user`), and a package manager cannot write to `/var`, `/etc` or
+`/usr` as an unknown user with no sudo. That is the containment design
+holding rather than a gap — a root container's writes into the bind
+mount would come out root-owned on the host. So the assertion uses an
+image that already ships git. `cimg/base` has no `ENTRYPOINT`, runs a
+normal user that `--user` overrides, and ships git from the git-core
+PPA; it is also the image the first real registration will use, so the
+assertion doubles as proof of that path.
+
+That last fact has a consequence for the Client, not just for this
+test: a check that installs a system package (`apt-get install
+shellcheck`) cannot pass `register`'s proving run either, network or
+no network, and `register` will refuse with the check's own output.
+Name an `--image` that already ships what the check needs — which is
+also what stops the later Inspector run depending on a package
+repository being up.

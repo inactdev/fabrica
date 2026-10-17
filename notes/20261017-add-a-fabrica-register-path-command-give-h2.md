@@ -53,6 +53,9 @@ command straight after the image name with no `--entrypoint` override, so
 `contract/helpers/fixture.ts`'s `FIXTURE_INSPECTOR_CONFIG` already names,
 so the test and the fixtures agree on one stock image.
 
+The *install git* half of that was wrong, and the next round corrected
+it — see below. The `alpine` half stands.
+
 **Rejected: adding an `--entrypoint ""` override to `runContained`** (or
 to `realRunCheck`). It would have made every entrypoint-bearing image
 usable as a check image, which sounds like an improvement — but it
@@ -79,6 +82,48 @@ the codebase, but the Client asked for a default-off switch, the
 `--network false` — a spelling no live config shows. Off is therefore the
 *absence* of the key, not `false`: `register` only ever writes values
 that have been seen in a working config.
+
+## The third round's decision, written before the change
+
+The previous round's "install git inside the box" assertion fails with
+`apk` exit 99, `Unable to open log: Permission denied`: `runContained`
+always passes `--user <host uid>:<host gid>` (`src/containment/run.ts`
+reads `process.getuid`/`getgid`, and only omits the flag on a platform
+that has neither), so **a check box can install nothing, in any image.**
+That is the containment design working, not a bug: a root container's
+writes into the bind mount would come out root-owned on the host, which
+is what `--user` exists to prevent.
+
+**Chosen: a second image for that one assertion — `cimg/base:2025.10` —
+and no production change at all.** Safest, because it is still only a
+test that changes: an image that already ships git needs nothing
+installed, so the assertion tests the git mounts rather than the package
+manager. It is also the most accurate of the options, because that is the
+image the first real registration (the dotfiles repository) will use, so
+the assertion doubles as proof of the path a real Client is about to take.
+`alpine` stays for the exit-0 and exit-7 assertions: they prove red-vs-
+green and want the smallest, fastest image, and `alpine` is the one
+`FIXTURE_INSPECTOR_CONFIG` names.
+
+**Rejected: `--entrypoint ""` on `runContained`, again** — and for the
+same reason as last round, now with a second one on top. It would not
+even have helped here: `cimg/base` has no `ENTRYPOINT` to override, and
+the failure this round was a permission error from `apk`, not an
+entrypoint mix-up. Changing the container every worker's check runs in,
+to fix a test, remains the wrong trade. Also rejected: giving
+`realRunCheck` a root container for its proving run only. It would let a
+check install its own tools during registration — but then the box
+`register` proves the check in would differ from the box Inspector later
+runs it in, so a green registration would stop meaning anything, and
+root-owned files would be left in the temporary worktree on the host.
+
+`cimg/base:2025.10`'s three relevant facts — no `ENTRYPOINT`, a normal
+user that `--user` overrides, git from the git-core PPA, and the tag
+existing on Docker Hub for amd64 and arm64 — come from the Client's own
+reading of CircleCI's Dockerfile and Docker Hub. They could not be
+re-verified from here (`raw.githubusercontent.com` is blocked from a
+worker box, same as every other host listed below), so they are recorded
+as sourced rather than as independently confirmed.
 
 ## Facts worth keeping
 

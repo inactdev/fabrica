@@ -171,10 +171,13 @@ Docker; `--protected <glob,...>` adds paths a Worker may never quietly
 change, on top of `check.sh` and `.inspector.json`, which always are.
 
 Two more flags describe the box the check runs in later, and go into
-`.inspector.json`: `--network`, if the check installs its own tools
-(`apt-get install shellcheck`, `apk add`, `pip install`) and so cannot
-pass without a network, and `--timeout <seconds>`, if it needs longer
-than Inspector's own default. Both are off unless you pass them.
+`.inspector.json`: `--network`, if the check installs its own project
+dependencies (`npm ci`, a virtualenv) and so cannot pass without a
+network, and `--timeout <seconds>`, if it needs longer than Inspector's
+own default. Both are off unless you pass them. A check that installs a
+*system* package needs an `--image` that already ships it rather than a
+flag - every check box runs as your own user, and so can write only
+inside the project.
 
 This is the one Fabrica command that pushes, and it is allowed to
 because of what it is: it runs as you, on your machine, with your own

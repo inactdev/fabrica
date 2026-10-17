@@ -28,8 +28,11 @@ once per project, before the first \`fabrica do\` against it.
                             project's check on your machine.
   --network                Lets the check reach the network when it runs
                             later - what a check that installs its own
-                            tools (apt, apk, pip) needs. Off unless you
-                            pass this.
+                            project dependencies (npm ci, a virtualenv)
+                            needs. Off unless you pass this. A check that
+                            installs a system package needs an image that
+                            already ships it, not this flag: the box runs
+                            as you and cannot write outside the project.
   --timeout <seconds>      How long the check may take before it counts
                             as failed. Left to Inspector's own default
                             unless you pass this.

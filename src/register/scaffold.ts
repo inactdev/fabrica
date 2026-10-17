@@ -32,7 +32,8 @@ export function inspectorConfigJson(opts: {
   image: string;
   protectedPaths: readonly string[];
   /** `--network`: writes `network: true`, so the check box can reach the
-   * network - what a check that installs its own tools needs. */
+   * network - what a check that fetches its own project dependencies
+   * needs. */
   network?: boolean;
   /** `--timeout <seconds>`: writes `timeoutSeconds`. */
   timeoutSeconds?: number;

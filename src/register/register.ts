@@ -66,8 +66,9 @@ export interface RegisterRequest {
   protectedPaths?: readonly string[];
   /** `--network`: writes `network: true` into .inspector.json, so the
    * box Inspector later runs the check in can reach the network - what a
-   * check that installs its own tools (apt, apk, pip) needs. Off by
-   * default. It does not change this command's own one proving run,
+   * check that fetches its own project dependencies (npm ci, a
+   * virtualenv) needs. Off by default. It does not change this
+   * command's own one proving run,
    * which always allows the network: see src/register/README.md's
    * "--network and --timeout". */
   network?: boolean;
