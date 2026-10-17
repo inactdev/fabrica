@@ -169,8 +169,19 @@ export function formatStatusLine(
      * "no attempts yet") - omitted, the line says nothing about cost. */
     cost?: string;
     /** Why a failed task with no delivery never started, when it was not
-     * the brain's clarify step (e.g. a spending cap refused it). */
+     * the brain's clarify step (e.g. a spending cap refused it). The exact
+     * same string `earlyStopKindOf` (queries.ts) hands the phone review
+     * page for the same task, so the two can never disagree (issue #202
+     * follow-up). */
     failedBecause?: string;
+    /** Set only for an Inspector refusal with no delivery behind it
+     * (`earlyStopKindOf`'s "refused" case) - Inspector's own report, shown
+     * plainly instead of the generic liveness label, alongside the one
+     * verdict ("wrong") that closes it. Omitted for the rarer case where a
+     * later refusal supersedes an earlier real delivery: that one still has
+     * a delivery for "accept" to rule on too, so the wording stays as it
+     * was before this existed. */
+    refusalReason?: string;
     /** The pull request Inspector opened, if any - shown once, on a
      * delivered task's own line, never implied for any other state. */
     prUrl?: string | null;
@@ -186,8 +197,14 @@ export function formatStatusLine(
   }
   if (isDeadEnd(task.state, opts.hasDelivery)) {
     if (task.state === "failed") {
+      // isDeadEnd's "failed" branch is exactly `failedWithNoDelivery`
+      // (queries.ts), so this is always closeable by "wrong" (issue #143) -
+      // no separate flag needed the way the refused branch below needs one.
       const because = opts.failedBecause ?? "brain's clarify step threw before any work started";
-      return `${base}  <- FAILED, UNRESOLVABLE: ${because} - see \`fabrica log ${task.id}\``;
+      return `${base}  <- FAILED, UNRESOLVABLE: ${because} - see \`fabrica log ${task.id}\` - \`fabrica verdict ${task.id} wrong\` closes it`;
+    }
+    if (opts.refusalReason !== undefined) {
+      return `${base}  <- INSPECTOR REACHED NO VERDICT: ${opts.refusalReason} - \`fabrica verdict ${task.id} wrong\` closes it (see \`fabrica log ${task.id}\`)`;
     }
     return `${base}  <- ${(opts.liveness ?? "Inspector reached no verdict").toUpperCase()}: fabrica log ${task.id}`;
   }

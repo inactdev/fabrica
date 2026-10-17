@@ -361,6 +361,41 @@ test("startLiveView: /api/review lists a delivered task with its write-up, Inspe
   }
 });
 
+test("startLiveView: /api/review also lists an Inspector refusal with no delivery, and a task that failed before any work started - each with one reason and no write-up fields", async () => {
+  const recordHome = tempRecordHome();
+  const refusedId = registerTask(recordHome, "refuse me").id;
+  appendEvent(recordHome, { taskId: refusedId, name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, {
+    taskId: refusedId,
+    name: "inspection-finished",
+    details: { verdict: "refused", report: "GITHUB_TOKEN is missing" },
+  });
+  const failedId = registerTask(recordHome, "fail me").id;
+  appendEvent(recordHome, { taskId: failedId, name: "task-failed", details: { message: "the project path /nope does not exist" } });
+
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const byId = new Map((body.rows as Array<Record<string, unknown>>).map((r) => [r.id as string, r]));
+
+    const refused = byId.get(refusedId);
+    assert.ok(refused, "the refused task must appear on the review page");
+    assert.equal(refused!.kind, "refused");
+    assert.equal(refused!.reason, "GITHUB_TOKEN is missing");
+    assert.equal(refused!.writeupBody, undefined);
+
+    const failed = byId.get(failedId);
+    assert.ok(failed, "the failed task must appear on the review page");
+    assert.equal(failed!.kind, "failed");
+    assert.equal(failed!.reason, "the project path /nope does not exist");
+    assert.equal(failed!.writeupBody, undefined);
+  } finally {
+    await view.close();
+  }
+});
+
 test("startLiveView: a verdict POST with no Tailscale identity header is refused, and records nothing", async () => {
   const recordHome = tempRecordHome();
   const task = await deliveredTask(recordHome);

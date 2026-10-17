@@ -278,6 +278,8 @@ test("createRecordView: getReviewRows shows only delivered tasks, with the real 
   assert.deepEqual(rows.map((r) => r.id), [delivered]);
 
   const row = rows[0];
+  assert.equal(row.kind, "delivered");
+  if (row.kind !== "delivered") throw new Error("unreachable");
   assert.equal(row.title, "Ship the thing");
   assert.equal(row.inspectorStamp, "green");
   assert.equal(row.inspectorDetail, null);

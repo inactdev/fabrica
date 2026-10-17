@@ -235,3 +235,48 @@ export function failedWithNoDelivery(events: FabricaEvent[]): boolean {
   if (events.some((event) => event.name === "delivered")) return false;
   return stateOf(events) === "failed";
 }
+
+/** The one thing worth telling the Client about a task that is waiting on
+ * a "wrong" verdict despite never reaching a delivery - `null` for every
+ * other task (still open, delivered, or already closed). `fabrica status`
+ * and the phone review page (issue #202 follow-up: "show every task
+ * waiting on me") both call this instead of each working out their own
+ * wording, so the reason shown in one can never disagree with the reason
+ * shown in the other. "refused" names Inspector's own report
+ * (`inspection-finished`'s `report` field) rather than the generic
+ * "Inspector reached no verdict" label `nameLastSignal` uses elsewhere -
+ * here, the actual words matter. "failed" names whichever of
+ * `"cap-refused"`/`"task-failed"`/`"ask-failed"` actually killed the task,
+ * in that order (a cap refusal before any work started takes precedence
+ * since it's the most specific; "ask-failed" has no matching "task-failed"
+ * - see task-failure.ts's `alreadyRecorded`), falling back to the same
+ * generic sentence `formatStatusLine` always used to. */
+export function earlyStopKindOf(events: FabricaEvent[]): { kind: "refused" | "failed"; reason: string } | null {
+  if (refusedWithNoDelivery(events)) {
+    const latestInspection = events.filter((event) => event.name === "inspection-finished").at(-1);
+    const report = (latestInspection?.details as { report?: string } | undefined)?.report;
+    return { kind: "refused", reason: report ?? "Inspector reached no verdict" };
+  }
+  if (failedWithNoDelivery(events)) {
+    return { kind: "failed", reason: earlyFailureReason(events) };
+  }
+  return null;
+}
+
+function earlyFailureReason(events: FabricaEvent[]): string {
+  const refusedByCap = events.some((event) => event.name === "cap-refused") && !events.some((event) => event.name === "work-started");
+  if (refusedByCap) {
+    const message = (events.filter((event) => event.name === "cap-refused").at(-1)?.details as { message?: string } | undefined)
+      ?.message;
+    return message ?? "a spending cap refused it before any work started";
+  }
+  const taskFailedMessage = (events.filter((event) => event.name === "task-failed").at(-1)?.details as
+    | { message?: string }
+    | undefined)?.message;
+  if (taskFailedMessage) return taskFailedMessage.split("\n")[0];
+  const askFailedMessage = (events.filter((event) => event.name === "ask-failed").at(-1)?.details as
+    | { error?: string }
+    | undefined)?.error;
+  if (askFailedMessage) return askFailedMessage;
+  return "brain's clarify step threw before any work started";
+}
