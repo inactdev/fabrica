@@ -34,46 +34,65 @@ starts - there is no way to get it from inside the task itself.
 
 The Client later supplied the actual evidence by hand (pass/fail/cancelled
 counts plus the 3 test names) instead of a log, which unblocked this
-without `gh` access. Root cause, verified in this sandbox (not on the
-real CI runner, which stayed unreachable) against Node 24 on Linux/arm64:
+without `gh` access.
 
-`src/cli/deny-and-log-edit-command.ts`'s `readStdin` raced a real
-`for await (const chunk of stream)` loop against a timeout. On timeout it
-called `stream.destroy()` and returned immediately, without waiting for
-that abandoned loop's own promise to settle - a genuine dangling-async-work
-bug, confirmed by instrumenting the original function: across 5/5 runs,
-`readStdin` resolved and returned to its caller while its internal
-`read` promise had `readSettledAtReturn === false` (still pending).
-Awaiting that promise after `destroy()` (instead of firing-and-forgetting
-it) made it `true` on 5/5 runs, with no change to timing or to what the
-three affected tests assert.
+**First diagnosis (wrong, since reverted):** a theory that `readStdin`
+left its abandoned `for await` read-loop dangling past `destroy()`,
+fixed by adding `await read`. Plausible-looking, matched the available
+(incomplete) evidence, but wrong - the Client reproduced the real cause
+directly on Node 22 on an idle Linux machine, in under a second, running
+only this one test file, and the added `await read` made no difference
+to it either way.
 
-Why this surfaces as "cancelled" specifically on a loaded Linux CI runner
-and not on a quiet machine: Node's `node --test` runs each file in its
-own child process (default `--test-isolation=process`), and top-level
-tests within one file run sequentially (concurrency 1) - but "sequential"
-only governs when each test's *own* callback promise resolves, not
-whether stray background work it kicked off (and never awaited) has
-finished by the time the next test starts. One of the three affected
-tests enables `t.mock.timers.enable({ apis: ["setTimeout"] })`, which
-patches the process-wide `setTimeout` for the file's one process. If the
-prior test's abandoned read-loop teardown is still in flight at that
-moment - far more likely on a CI runner whose CPU is shared with dozens
-of concurrently running real `docker run` processes from the rest of
-`npm test` than on an idle laptop - anything that teardown still depends
-on can be starved by the mock, and the file's process never reports the
-remaining tests, which the outer test runner then shows as cancelled
-rather than failed. This was not reproduced as an actual hang in this
-sandbox (no Docker here to generate the matching CPU pressure); the fix
-is the general one - never let `readStdin` return before the work it
-abandoned on timeout has actually settled - which removes the dangling
-promise regardless of the precise way a loaded runner's scheduling
-would have exposed it.
+**Real cause, confirmed by the Client's own reproduction and corroborated
+here against Node's own documented test-runner behavior:**
+`readStdin` (`src/cli/deny-and-log-edit-command.ts`) built its timeout
+race with `timer.unref?.()` on the deadline timer. The three affected
+tests all drive `readStdin` with a fake stdin (a bare `new Readable({
+read() {} })`, or an already-ended `Readable.from([...])`) that holds no
+real OS handle of its own. When the *only* thing that could ever resolve
+the pending race is an unref'd timer, Node's event loop can decide it has
+no more real (ref'd) work left and begin shutting the process down before
+that timer ever fires - leaving the test's `await` on that race
+permanently unsettled. Node's test runner has a specific, documented
+diagnostic for exactly this shape, `"Promise resolution is still pending
+but the event loop has already resolved"` (nodejs/node#49952, and the
+exact AbortSignal.timeout()-unref case in that issue's linked fix), and
+per that issue, once one test in a file hits it, the failure "propagates
+to all other tests" after it in the same run - matching this file's
+pattern exactly: the three cancelled tests are consecutive, from the
+first one that exercises the timeout path through the end of the file.
 
-General, durable takeaway for this codebase: any function that races a
-real stream-consuming loop against a timeout and calls `.destroy()` on
-timeout must `await` that loop's own promise before returning. Returning
-first and letting the loop settle "whenever" is invisible on a quiet
-machine and only shows up as flaky, hard-to-reproduce failures elsewhere
-once something else in the same process touches global timers or the
-event loop is under real contention.
+Why Node 22 and not Node 24 (confirmed here only indirectly: this sandbox
+has no way to install Node 22 to reproduce side-by-side, no npm registry
+access and no second runtime preinstalled) - the Client's own repro
+report states it reproduces on 22 and that removing just the `unref()`
+call (no other change) makes all 7 pass; this note takes that as given
+rather than re-deriving it, since the Client already has both versions
+to compare and this sandbox does not.
+
+**Fix applied:** delete `timer.unref?.()` entirely - the timer is always
+`clearTimeout`'d immediately after the race settles either way, so there
+was nothing for `unref()` to protect against (no risk of outliving the
+function); it only ever removed the one thing keeping the deadline honest
+when nothing else does. The `await read` block from the first diagnosis
+is reverted - it was solving a problem that wasn't the real one, and its
+own inline comment's explanation (mocked timers starving a dangling
+stream teardown) was never actually confirmed, only theorized.
+
+Separately, `.github/workflows/docker-tests.yml` pinned `node-version:
+"22"`, inconsistent with every other Node-version pin in this project
+(the worker Dockerfile and relay image pin `node:24.18.0-alpine` by
+digest, `.inspector.json` pins `cimg/node:24.18.0`, README says Node 24)
+- changed to `"24"`. This was itself *masking* a divergence worth noting
+for next time: the Node-22-only failure above would not have been caught
+by a contributor running `npm test` locally on Node 24, nor (before this
+fix) by this very CI job once it also ran Node 24 - it needed exactly the
+mismatched pin plus a from-cold reproduction to surface at all.
+
+General, durable takeaway for this codebase: never `unref()` a timer that
+some `await`ed race is the *only* path to resolving - if nothing else in
+that race holds a real handle, Node is free to end the process before an
+unref'd timer fires, and the failure mode is an unresolved promise, not a
+thrown error, which node:test reports as the whole file's tests from that
+point on being "cancelled."

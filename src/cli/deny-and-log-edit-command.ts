@@ -53,22 +53,11 @@ async function readStdin(stream: NodeJS.ReadableStream, timeoutMs: number): Prom
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<"timed-out">((resolve) => {
     timer = setTimeout(() => resolve("timed-out"), timeoutMs);
-    timer.unref?.();
   });
 
   const outcome = await Promise.race([read, deadline]);
   clearTimeout(timer);
-  if (outcome === "timed-out") {
-    (stream as Partial<NodeJS.ReadStream>).destroy?.();
-    // Wait for the abandoned read loop to actually settle before returning,
-    // instead of leaving it running in the background: a test (or a real
-    // caller) that moves on the instant this function resolves can end up
-    // racing that leftover work - e.g. node:test's own mocked timers, which
-    // patch the process-wide setTimeout a still-running destroy/iterator
-    // teardown may itself depend on, something only visible under the
-    // scheduling pressure of a full, loaded test run, not a quiet one.
-    await read;
-  }
+  if (outcome === "timed-out") (stream as Partial<NodeJS.ReadStream>).destroy?.();
   return Buffer.concat(chunks).toString("utf8");
 }
 
