@@ -28,3 +28,4 @@ piled up, rewrite or extend the relevant part of `AGENTS.md`, then delete
 the file(s) just absorbed. A note that hasn't been folded in yet is still
 visible to a future agent session — nothing here is hidden — just not
 yet distilled.
+
