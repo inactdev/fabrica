@@ -68,7 +68,16 @@ export function fakeBrain(
       opts.onWork?.(workdir);
       const writeup =
         opts.writeup === undefined
-          ? { title: "Fake brain update", what: `fake brain saw: ${brief}`, why: "Testing.", how: "Directly.", deviations: "None." }
+          ? {
+              title: "Fake brain update",
+              what: `fake brain saw: ${brief}`,
+              why: "Testing.",
+              how: "Directly.",
+              confidence: 90,
+              assumptions: "None.",
+              expectedOutcomes: "The fake's work lands as described.",
+              deviations: "None.",
+            }
           : opts.writeup;
       const transcript: TranscriptEntry[] = [
         { occurredAt: new Date().toISOString(), kind: "text", text: `fake brain saw: ${brief}` },

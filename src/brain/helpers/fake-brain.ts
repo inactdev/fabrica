@@ -106,7 +106,16 @@ export function fakeBrain(
       const saw = `fake brain saw ${history.length} brief(s) on session ${session}: ${history.join(" | ")}`;
       const writeup =
         opts.writeup === undefined
-          ? { title: "Fake brain update", what: saw, why: "Testing.", how: "Directly.", deviations: "None." }
+          ? {
+              title: "Fake brain update",
+              what: saw,
+              why: "Testing.",
+              how: "Directly.",
+              confidence: 90,
+              assumptions: "None.",
+              expectedOutcomes: "The fake's work lands as described.",
+              deviations: "None.",
+            }
           : opts.writeup;
       const entry: TranscriptEntry = {
         occurredAt: new Date().toISOString(),

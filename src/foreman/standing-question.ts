@@ -12,19 +12,25 @@ export const STANDING_QUESTION =
 
 /** Pull requests must read like a human wrote them: a worker returns its
  * write-up as a structured answer (BrainWorkResult.writeup) - title, what,
- * why, how, deviations - which Fabrica uses as the commit message and,
- * when Inspector is configured, the pull request title and body. It is
- * never parsed out of the worker's prose and never falls back to the
- * task's own words. A missing or invalid write-up makes the attempt red,
- * named back to the worker on the next attempt (see attempts.ts), so this
- * is stated as a requirement, not a suggestion. */
+ * why, how, confidence, assumptions, expectedOutcomes, deviations (issues
+ * #185/#194 added the last three) - which Fabrica uses as the commit
+ * message and, when Inspector is configured, the pull request title and
+ * body: what/why/how render verbatim, and confidence/assumptions/
+ * expectedOutcomes/deviations fold into one final "What to look at"
+ * section (`src/foreman/pr-body.ts`). It is never parsed out of the
+ * worker's prose and never falls back to the task's own words. A missing
+ * or invalid write-up makes the attempt red, named back to the worker on
+ * the next attempt (see attempts.ts), so this is stated as a requirement,
+ * not a suggestion. */
 export const FINAL_MESSAGE_FORMAT_NOTICE =
-  "When you finish, give your write-up as the structured answer you are asked for - five fields, which Fabrica " +
+  "When you finish, give your write-up as the structured answer you are asked for - eight fields, which Fabrica " +
   "uses verbatim as the commit message and (when a pull request is opened) its title and body: title (your own " +
-  "words, at most 60 characters, summarizing the change - never the task text itself), what, why, how, and " +
-  'deviations (what you deviated from the request and why, or "None." if nothing). Every field is required and ' +
-  "must not be empty. Do not type the write-up out as text; an attempt without a valid structured write-up is " +
-  "not accepted as done.";
+  "words, at most 60 characters, summarizing the change - never the task text itself), what, why, how, " +
+  "confidence (a number from 0 to 100, how sure you are in this result), assumptions (every judgment call you " +
+  "made where the brief was silent), expectedOutcomes (what should be true once this change lands, so it can " +
+  'be checked), and deviations (what you deviated from the request and why, or "None." if nothing). Every ' +
+  "field is required and must not be empty, except confidence, which must be a number from 0 to 100. Do not " +
+  "type the write-up out as text; an attempt without a valid structured write-up is not accepted as done.";
 
 const STANDING_PREFIX = `${STANDING_QUESTION}\n\n${FINAL_MESSAGE_FORMAT_NOTICE}`;
 

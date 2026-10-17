@@ -60,7 +60,16 @@ function slowBrain(delayMs: number): Brain {
         session: "s1",
         // A valid write-up: without one the attempt is red and the round a
         // write-up failure report, not the delivery this test watches for.
-        writeup: { title: "Slow brain update", what: "Slept.", why: "Testing watch.", how: "A timer.", deviations: "None." },
+        writeup: {
+          title: "Slow brain update",
+          what: "Slept.",
+          why: "Testing watch.",
+          how: "A timer.",
+          confidence: 90,
+          assumptions: "None.",
+          expectedOutcomes: "None.",
+          deviations: "None.",
+        },
       };
     },
     async ask() {

@@ -445,10 +445,12 @@ own subscription (ROADMAP.md), so there is no live case to detect yet.
 ## `writeup` and `--json-schema`
 
 Every `work()` call passes `--json-schema` with `WRITEUP_JSON_SCHEMA`: an
-object of five required, non-empty strings (`title` at most 60
-characters, `what`, `why`, `how`, `deviations`), no other keys. Verified
-on 2.1.222 with a real call: the result line then carries the answer as
-an object on `structured_output` (with `subtype: "success"`), and `work()`
+object of eight required fields, no other keys - seven non-empty strings
+(`title` at most 60 characters, `what`, `why`, `how`, `assumptions`,
+`expectedOutcomes`, `deviations`) plus one number, `confidence`, from 0
+to 100 (issues #185/#194). Verified on 2.1.222 with a real call: the
+result line then carries the answer as an object on `structured_output`
+(with `subtype: "success"`), and `work()`
 returns it as `writeup`. Nothing is ever parsed out of the worker's text;
 a result line without a well-shaped `structured_output` returns no
 `writeup`, and the Foreman makes that attempt red. A result line with

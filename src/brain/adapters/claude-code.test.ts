@@ -246,7 +246,7 @@ test("claudeCodeAdapter omits --resume, --model, --effort when not given", async
 
 // The write-up is structured output the CLI validates against this
 // schema, never prose Fabrica parses (Client ruling 2026-10-13).
-test("claudeCodeAdapter passes --json-schema for the write-up: five required strings, title at most 60", async (t) => {
+test("claudeCodeAdapter passes --json-schema for the write-up: eight required fields, title at most 60", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
@@ -257,10 +257,16 @@ test("claudeCodeAdapter passes --json-schema for the write-up: five required str
   assert.ok(at >= 0, "--json-schema was not passed");
   const schema = JSON.parse(argsSeen[at + 1]);
   assert.equal(schema.type, "object");
-  assert.deepEqual([...schema.required].sort(), ["deviations", "how", "title", "what", "why"]);
-  for (const field of ["title", "what", "why", "how", "deviations"]) {
+  assert.deepEqual(
+    [...schema.required].sort(),
+    ["assumptions", "confidence", "deviations", "expectedOutcomes", "how", "title", "what", "why"]
+  );
+  for (const field of ["title", "what", "why", "how", "assumptions", "expectedOutcomes", "deviations"]) {
     assert.equal(schema.properties[field].type, "string", `${field} is not a string field`);
   }
+  assert.equal(schema.properties.confidence.type, "number");
+  assert.equal(schema.properties.confidence.minimum, 0);
+  assert.equal(schema.properties.confidence.maximum, 100);
   assert.equal(schema.properties.title.maxLength, 60);
   assert.equal(schema.additionalProperties, false);
 });
@@ -276,6 +282,9 @@ test("claudeCodeAdapter fills writeup from the result line's structured_output",
     what: "What it did.",
     why: "Why it did it.",
     how: "How it did it.",
+    confidence: 90,
+    assumptions: "None.",
+    expectedOutcomes: "It works as described.",
     deviations: "None.",
   });
 });

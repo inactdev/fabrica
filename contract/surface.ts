@@ -96,12 +96,23 @@ export interface BrainWorkResult {
 
 /** A worker's write-up: the commit message, and the pull request's title
  * and body when one is opened. The title is the worker's own words, at
- * most 60 characters; every field is required and non-empty. */
+ * most 60 characters; every string field is required and non-empty, and
+ * `confidence` is required and must be a number from 0 to 100 (issues
+ * #185/#194). The pull request body renders these as exactly four
+ * sections - What, Why, How, and "What to look at," the last of which
+ * folds confidence, assumptions, expectedOutcomes, and deviations
+ * together for the reviewer (`src/foreman/pr-body.ts`). */
 export interface WorkerWriteup {
   title: string;
   what: string;
   why: string;
   how: string;
+  /** How sure the worker is in this result, 0-100. */
+  confidence: number;
+  /** Every judgment call made where the brief was silent. */
+  assumptions: string;
+  /** What should be true once this change lands, so a reviewer knows what to check. */
+  expectedOutcomes: string;
   /** What the worker deviated from the request and why, or "None." */
   deviations: string;
 }

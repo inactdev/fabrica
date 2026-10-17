@@ -104,11 +104,17 @@ function field(label, valueNode) {
 }
 
 function renderWriteup(writeup) {
+  const whatToLookAt = [
+    `Confidence: ${writeup.confidence}/100`,
+    `Assumptions: ${writeup.assumptions}`,
+    `Expected outcomes: ${writeup.expectedOutcomes}`,
+    `Deviations: ${writeup.deviations}`,
+  ].join("\n");
   return [
     field("What", writeup.what),
     field("Why", writeup.why),
     field("How", writeup.how),
-    field("Deviations", writeup.deviations),
+    field("What to look at", whatToLookAt),
   ];
 }
 
