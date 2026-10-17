@@ -12,6 +12,8 @@ import { LineError } from "../../line/index.ts";
 import { registerLiveTranscriptListener } from "../live-transcript.ts";
 import type { TranscriptEntry } from "../types.ts";
 import { withStandingQuestion } from "../../foreman/standing-question.ts";
+import { credentialEnvFrom } from "./index.ts";
+import { resolveRecordHome } from "../../cli/record-home.ts";
 
 const FAKE_CLI_SOURCE = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-claude-cli.mjs");
 // A container only ever sees `workdir` (mounted at /workdir) - the fake
@@ -652,37 +654,30 @@ test("claudeCodeAdapter persists $HOME across separate work() calls for the same
 // since work() always runs through Docker (the host's own installed
 // binary is a native macOS executable and can never run in a
 // container - see claude-code.md). It requires DEFAULT_IMAGE to exist
-// (`docker build`, see docker/Dockerfile) and be authenticated inside
-// the container; it skips (does not fail) rather than lie about
-// proving this when that's not true on the machine running it.
+// (`docker build`, see docker/Dockerfile) and the worker token the real
+// `fabrica` uses (the environment or `<record home>/brain.env`, read by
+// credentialEnvFrom exactly as defaultBrainAdapter does). With the token
+// the call goes through the relay like a real task: the container gets
+// a placeholder, the relay holds the token. It skips (does not fail)
+// rather than lie about proving this when either is missing.
 test("claude-code adapter: real binary does real work in a real worktree (capability spike)", async (t) => {
   if (!dockerAvailable()) {
     realBinarySkipReason = "Docker is not available on this machine";
     t.skip(realBinarySkipReason);
     return;
   }
-  // This guard probes auth as the image's own default user with the
-  // image's own $HOME - not the `--user <host-uid>` / bind-mounted
-  // homeDir combination work() actually runs with. That's equivalent as
-  // long as the credential gap is closed via an env-provided token
-  // (which reaches both the same way); if it is ever closed by baking
-  // auth into the image itself, this guard would report logged-in while
-  // work()'s contained run still finds no credential, and must be
-  // realigned with work()'s real runtime conditions then - see
-  // claude-code.md, "Process containment".
   try {
-    const status = JSON.parse(
-      execFileSync("docker", ["run", "--rm", "fabrica-claude-code:latest", "claude", "auth", "status"], {
-        encoding: "utf8",
-      })
-    );
-    if (status.loggedIn !== true) {
-      realBinarySkipReason = "the containerized real binary is installed but not authenticated";
-      t.skip(realBinarySkipReason);
-      return;
-    }
+    execFileSync("docker", ["image", "inspect", "fabrica-claude-code:latest"], { stdio: "ignore" });
   } catch {
-    realBinarySkipReason = "could not confirm the containerized real binary is built and authenticated on this machine";
+    realBinarySkipReason = "the containerized real binary's image (fabrica-claude-code:latest) is not built on this machine";
+    t.skip(realBinarySkipReason);
+    return;
+  }
+  let credentials: ReturnType<typeof credentialEnvFrom>;
+  try {
+    credentials = credentialEnvFrom(process.env, resolveRecordHome());
+  } catch (err) {
+    realBinarySkipReason = `no worker token on this machine: ${err instanceof Error ? err.message : String(err)}`;
     t.skip(realBinarySkipReason);
     return;
   }
@@ -692,7 +687,7 @@ test("claude-code adapter: real binary does real work in a real worktree (capabi
   const line = createProductionLine({ project, taskId: "spike-adapter-6", recordHome });
 
   try {
-    const brain = claudeCodeAdapter();
+    const brain = claudeCodeAdapter(credentials);
     const result = await brain.work(
       "Create a file named spike-proof.txt in the current directory containing exactly the text: adapter spike proof",
       line.workdir
