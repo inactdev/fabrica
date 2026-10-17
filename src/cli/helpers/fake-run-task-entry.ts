@@ -1,5 +1,5 @@
 // Test-only stand-in for run-task-entry.ts: same argv contract
-// (<recordHome> <projectPath> <taskText>), but runs against fakeBrain
+// (<recordHome> <projectPath> <taskText> [issue]), but runs against fakeBrain
 // instead of the real default adapter, so spawn-detached and do-command
 // tests can exercise the real spawn-then-discover mechanism as a real
 // separate process without ever invoking a real coding agent.
@@ -21,7 +21,8 @@ import { prefixTaskLog } from "../task-log.ts";
 
 const setLogTaskId = prefixTaskLog();
 
-const [, , recordHome, projectPath, taskText] = process.argv;
+const [, , recordHome, projectPath, taskText, issueArg] = process.argv;
+const issue = issueArg !== undefined ? Number(issueArg) : undefined;
 
 try {
   const askQuestions = taskText.includes("ASK_ME_SOMETHING")
@@ -36,6 +37,7 @@ try {
     inspector: fixtureInspector(),
     checkBox: fixtureCheckBox().box,
     onTaskRegistered: setLogTaskId,
+    issue,
   });
 } catch (err) {
   console.error(`fake-run-task-entry: ${(err as Error).message}`);

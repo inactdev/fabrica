@@ -83,6 +83,18 @@ If one sentence contains several asks ("add a health endpoint and fix the
 delete bug"), that's several tasks, not one. Run `fabrica do` once per
 ask, each in the Client's own words for that ask, and report every id.
 
+When this task **is** one GitHub issue's whole of work - not part of it,
+not several issues at once - the pull request it opens should close that
+issue on merge. If the Client's own words already open with "Issue #N:"
+(verbatim, nothing paraphrased), that happens automatically. Otherwise,
+when you already know the number some other way, pass it explicitly
+instead of editing his words to fit the prefix:
+
+    fabrica do "<task text>" --project <path-or-name> --issue <N>
+
+Leave `--issue` off when the task is only part of an issue ("the first
+half of #186") - closing it early would be wrong.
+
 ### 2. "How's it going"
 
 Run `fabrica status` (it takes no arguments) and summarize it in plain

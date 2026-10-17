@@ -22,10 +22,18 @@ export async function runTask(
   projectPath: string,
   taskText: string,
   brain: Brain,
-  extra: { inspector?: Inspector; checkBox?: CheckBox; onTaskRegistered?: (taskId: string) => void } = {}
+  extra: {
+    inspector?: Inspector;
+    checkBox?: CheckBox;
+    onTaskRegistered?: (taskId: string) => void;
+    /** The issue number `fabrica do --issue <N>` named explicitly - see
+     * src/foreman/pr-body.ts's `closesIssueFor`. */
+    issue?: number;
+  } = {}
 ): Promise<void> {
+  const { issue, ...foremanExtra } = extra;
   // Rule 10: the caps in projects.toml are law for every task this
   // process starts - read here, in the process that actually spends.
-  const foreman = createForeman({ recordHome, caps: loadConfigOrDefault(recordHome).caps, ...extra });
-  await foreman.do(taskText, { project: projectPath, brain });
+  const foreman = createForeman({ recordHome, caps: loadConfigOrDefault(recordHome).caps, ...foremanExtra });
+  await foreman.do(taskText, { project: projectPath, brain, issue });
 }

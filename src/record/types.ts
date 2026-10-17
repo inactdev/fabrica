@@ -31,4 +31,9 @@ export type TaskFile =
    * worktree it lived in is destroyed - see src/foreman/inspection.ts. */
   | "inspector-latest.json"
   /** The run file latest.json's "run" field named, under `.inspector/runs/`. */
-  | "inspector-run.json";
+  | "inspector-run.json"
+  /** The issue number the chat agent named explicitly at `fabrica do`
+   * time (`do(..., { issue })`), plain text, written once at
+   * registration - never derived from task text, which is re-read from
+   * request.md instead. See src/foreman/pr-body.ts's `closesIssueFor`. */
+  | "issue";

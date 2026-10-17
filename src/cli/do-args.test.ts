@@ -53,6 +53,33 @@ test("parseDoArgs: two positionals refuses (task text needs quoting)", () => {
   );
 });
 
+test("parseDoArgs: --issue <N> is the chat agent's explicit alternative to an \"Issue #N:\" prefix", () => {
+  assert.deepEqual(parseDoArgs(["fix the flaky test", "--project", "spending-app", "--issue", "186"]), {
+    taskText: "fix the flaky test",
+    projectArg: "spending-app",
+    issue: 186,
+  });
+});
+
+test("parseDoArgs: --issue=<value> form", () => {
+  assert.deepEqual(parseDoArgs(["fix it", "--project=spending-app", "--issue=7"]), {
+    taskText: "fix it",
+    projectArg: "spending-app",
+    issue: 7,
+  });
+});
+
+test("parseDoArgs: --issue must be a positive integer", () => {
+  assert.throws(
+    () => parseDoArgs(["fix it", "--project", "spending-app", "--issue", "0"]),
+    (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--issue")
+  );
+  assert.throws(
+    () => parseDoArgs(["fix it", "--project", "spending-app", "--issue", "nope"]),
+    (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--issue")
+  );
+});
+
 test("parseDoArgs: an unknown flag refuses", () => {
   assert.throws(
     () => parseDoArgs(["fix it", "--project", "spending-app", "--attempts", "3"]),

@@ -14,6 +14,7 @@ import { prepareRound } from "./judge.ts";
 import { runAttempts } from "./attempts.ts";
 import { deliveredState } from "./delivery.ts";
 import { recordRoundResult } from "./round.ts";
+import { closesIssueFor } from "./pr-body.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { recordingFailure } from "./task-failure.ts";
@@ -32,6 +33,9 @@ export async function doTask(
     project: string;
     attempts?: number;
     brain?: Brain;
+    /** The issue number the chat agent names explicitly - see
+     * src/foreman/pr-body.ts's `closesIssueFor`. */
+    issue?: number;
     inspector?: Inspector;
     checkBox?: CheckBox;
     caps?: Caps;
@@ -122,6 +126,11 @@ async function productionRound(
   // (`readTaskFile(..., "request.md")` for taskText, `brief.md` only for
   // the worker's own brief) - mirrored here rather than reinvented.
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? brief;
+  // Re-derived the same way taskText is: an explicit issue number has no
+  // home in taskText, so ask.ts persisted it once, at registration, for
+  // every round of this task to read back here.
+  const explicitIssueRaw = readTaskFile(recordHome, taskId, "issue");
+  const closesIssue = closesIssueFor(taskText, explicitIssueRaw !== null ? Number(explicitIssueRaw) : undefined);
   // `isRetry` is an explicit signal the caller derives from the RECORD -
   // answer.ts sets it true only when this exact taskId, in this exact
   // record home, already has a "line-cut" event: proof that
@@ -192,6 +201,7 @@ async function productionRound(
     const { judge, mode } = prepareRound(recordHome, taskId, line, baseCommit, {
       inspector,
       checkBox,
+      closesIssue,
     });
 
     // `project` rides on work-started's details, not a dedicated event -

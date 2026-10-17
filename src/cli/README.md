@@ -40,16 +40,20 @@ developer-only install: every command breaks the moment this checkout
 is mid-edit or mid-merge, which the global install above exists to
 avoid for anyone who isn't actively changing this repo's code.
 
-## `fabrica do "<task text>" --project <path-or-name>`
+## `fabrica do "<task text>" --project <path-or-name> [--issue <N>]`
 
 The one command this issue builds. What it does, in order:
 
 1. **Parses arguments** (`do-args.ts`). Exactly one positional (the task
-   text - quote it if it has spaces) and one required `--project`
-   (`--project <value>` or `--project=<value>`, either order). Anything
-   else - missing task text, missing `--project`, an unrecognized flag,
-   two positionals - refuses with the exact usage line, exit 1, nothing
-   spawned.
+   text - quote it if it has spaces), one required `--project`
+   (`--project <value>` or `--project=<value>`, either order), and one
+   optional `--issue <N>`/`--issue=<N>` (a positive integer) - the chat
+   agent's explicit alternative to `<task text>` itself starting with
+   "Issue #N:", so the opened pull request's body ends with "Closes #N"
+   (`src/foreman/pr-body.ts`'s `closesIssueFor`; see `foreman/README.md`).
+   Anything else - missing task text, missing `--project`, an
+   unrecognized flag, a non-positive-integer `--issue`, two positionals -
+   refuses with the exact usage line, exit 1, nothing spawned.
 2. **Reads config** (`loadConfig`, from `src/index.ts`) for the record
    home's project registry and caps. A record home with no
    `projects.toml` at all yet (a brand-new install) is not an error -

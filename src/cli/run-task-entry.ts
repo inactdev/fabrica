@@ -15,18 +15,25 @@ import { prefixTaskLog } from "./task-log.ts";
 
 const setLogTaskId = prefixTaskLog();
 
-const [, , recordHome, projectPath, taskText] = process.argv;
+const [, , recordHome, projectPath, taskText, issueArg] = process.argv;
 
 if (recordHome === undefined || projectPath === undefined || taskText === undefined) {
   console.error(
-    `fabrica (detached runner): expected <recordHome> <projectPath> <taskText>, got ` +
+    `fabrica (detached runner): expected <recordHome> <projectPath> <taskText> [issue], got ` +
       `${process.argv.length - 2} argument(s).`
   );
   process.exit(1);
 }
 
+// issueArg travels as a trailing positional (spawn-detached.ts), present
+// only when `fabrica do --issue <N>` named one explicitly.
+const issue = issueArg !== undefined ? Number(issueArg) : undefined;
+
 try {
-  await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome), { onTaskRegistered: setLogTaskId });
+  await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome), {
+    onTaskRegistered: setLogTaskId,
+    issue,
+  });
 } catch (err) {
   console.error(`fabrica do: task on "${projectPath}" failed: ${(err as Error).message}`);
   process.exit(1);
