@@ -5,6 +5,7 @@
 export type ForemanErrorCode =
   | "no-brain"
   | "invalid-attempts"
+  | "invalid-issue"
   | "missing-check"
   | "inspector-not-ready"
   | "project-not-a-repo"

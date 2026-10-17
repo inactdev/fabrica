@@ -66,7 +66,19 @@ export interface RegisterAndAskResult {
 export async function registerAndAsk(
   recordHome: string,
   taskText: string,
-  opts: { project: string; brain?: Brain; attempts?: number; caps?: Caps; onTaskRegistered?: (taskId: string) => void }
+  opts: {
+    project: string;
+    brain?: Brain;
+    attempts?: number;
+    /** The issue number the chat agent names explicitly, the alternative
+     * to `taskText` itself starting with "Issue #N:" - see
+     * src/foreman/pr-body.ts's `closesIssueFor`. Persisted once here,
+     * since nothing about it lives in `taskText` for a later round to
+     * re-derive. */
+    issue?: number;
+    caps?: Caps;
+    onTaskRegistered?: (taskId: string) => void;
+  }
 ): Promise<RegisterAndAskResult> {
   const brain = opts.brain;
   if (!brain) {
@@ -86,6 +98,13 @@ export async function registerAndAsk(
   }
   const totalAttempts = opts.attempts ?? DEFAULT_ATTEMPTS;
 
+  if (opts.issue !== undefined && (!Number.isInteger(opts.issue) || opts.issue < 1)) {
+    throw new ForemanError(
+      "invalid-issue",
+      `fabrica do: issue must be a positive integer, got ${opts.issue}.`
+    );
+  }
+
   const { id: taskId } = registerTask(recordHome, taskText);
   opts.onTaskRegistered?.(taskId);
   // Ownership split: registerTask (src/record) writes request.md as part
@@ -95,6 +114,11 @@ export async function registerAndAsk(
   // `fabrica answer` only has to append a round to answers.md and
   // re-derive brief.md from what's already there.
   writeTaskFile(recordHome, taskId, "brief.md", taskText);
+  // Persisted once, up front, the same way brief.md is: a later fix
+  // round (verdict.ts) re-derives this the same way it re-derives
+  // taskText from request.md, rather than it being threaded through a
+  // parameter that round never receives.
+  if (opts.issue !== undefined) writeTaskFile(recordHome, taskId, "issue", String(opts.issue));
 
   return recordingFailure(recordHome, taskId, async () => {
     // Before anything spends, the clarifying step included: the project

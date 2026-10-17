@@ -278,3 +278,84 @@ main {
 .row-fade {
   opacity: 0.55;
 }
+
+/* Phone review page (issue #202) - deliberately narrow (one column, a
+   phone's own width) and deliberately large-touch-target, unlike the
+   dense desktop list pages above: this is the one page meant to be
+   opened on a phone, reached over Tailscale, to act on a delivery with
+   a thumb. */
+body.review-page main {
+  display: block;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.review-card {
+  border-bottom: 1px solid var(--hairline);
+  padding: 0.85rem 0.75rem;
+}
+
+.review-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin-bottom: 0.5rem;
+}
+
+.review-writeup {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 14rem;
+  overflow-y: auto;
+  margin-bottom: 0.6rem;
+  padding: 0.5rem;
+  background: var(--accent-bg);
+}
+
+.review-line {
+  color: var(--dim);
+  margin-bottom: 0.3rem;
+}
+
+.review-stamp {
+  font-weight: 600;
+}
+
+.stamp-green { color: var(--green); }
+.stamp-red { color: var(--red); }
+.stamp-amber { color: var(--amber); }
+.stamp-gray { color: var(--gray); }
+
+.review-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.review-btn {
+  flex: 1 1 auto;
+  appearance: none;
+  border: 1px solid var(--hairline);
+  border-radius: 0;
+  background: var(--accent-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1rem;
+  min-height: 44px;
+  padding: 0.5rem 0.4rem;
+  cursor: pointer;
+}
+
+.review-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-accept { color: var(--green); }
+.btn-wrong { color: var(--red); }
+.btn-fix { color: var(--amber); }
+
+.review-status {
+  color: var(--red);
+  margin-top: 0.5rem;
+  min-height: 1.2em;
+}

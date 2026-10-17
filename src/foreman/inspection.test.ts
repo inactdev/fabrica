@@ -72,6 +72,62 @@ test("a green Fabrica check hands a configured branch to Inspector before delive
   assert.ok(io.out.some((line) => line.includes("Inspector green: independent check passed")));
 });
 
+// "Make every pull request it opens close its issue on merge": case 1,
+// the task's own text names the issue as the whole of the work.
+test("a task whose text starts with \"Issue #N:\" gets a pull request body ending with Closes #N", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "green", report: "ok" });
+  const foreman = createForeman({ recordHome, inspector });
+
+  await foreman.do("Issue #186: add retries", { project: inspectedProject(), brain: fakeBrain() });
+
+  assert.equal(inspector.calls.length, 1);
+  assert.match(inspector.calls[0].prBody ?? "", /\nCloses #186$/);
+});
+
+// Case 2, the chat agent names the issue explicitly instead - even when
+// the text itself doesn't start with the "Issue #N:" prefix.
+test("a task whose caller names an issue explicitly gets the same closing line", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "green", report: "ok" });
+  const foreman = createForeman({ recordHome, inspector });
+
+  await foreman.do("add retries, see the issue tracker", { project: inspectedProject(), brain: fakeBrain(), issue: 186 });
+
+  assert.equal(inspector.calls.length, 1);
+  assert.match(inspector.calls[0].prBody ?? "", /\nCloses #186$/);
+});
+
+// A task that is only part of an issue's work names it in passing, not
+// as the whole of the work - no closing line, and the explicit path
+// (case 2) is simply never used for it.
+test("a task that is only part of an issue's work gets no closing line", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "green", report: "ok" });
+  const foreman = createForeman({ recordHome, inspector });
+
+  await foreman.do("the first half of #186, only the worker part", { project: inspectedProject(), brain: fakeBrain() });
+
+  assert.equal(inspector.calls.length, 1);
+  assert.ok(!/Closes #/.test(inspector.calls[0].prBody ?? ""));
+});
+
+// A "fix" round re-opens the same pull request's body - the closing
+// line must still be there, re-derived from the record rather than lost
+// once the first round's process has exited.
+test("a fix round's pull request body still ends with Closes #N", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector({ verdict: "red", report: "lint fails" }, { verdict: "green", report: "fixed" });
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "f.txt"), `${Math.random()}\n`) });
+  const foreman = createForeman({ recordHome, inspector });
+
+  const task = await foreman.do("Issue #186: add retries", { project: inspectedProject(), brain, attempts: 1 });
+  await foreman.verdict(task.id, "fix", "repair the lint failure");
+
+  assert.equal(inspector.calls.length, 2);
+  assert.match(inspector.calls[1].prBody ?? "", /\nCloses #186$/);
+});
+
 // Negative first (the write-up rule's own fix #1, revised by the
 // structured write-up ruling 2026-10-13): a worker whose write-up is
 // invalid is red on that alone - judge() never runs for that attempt, so

@@ -60,7 +60,7 @@ attempt, cost, pull request link, and write-up - everything
 on the right, and the full live transcript as the page's own dense event
 stream on the left.
 
-## Two pages, split by whether a task is still open
+## Two pages, split by whether a task is still open (a third, `/review`, is below)
 
 `/` (the default) lists only open tasks - working, asked a question,
 delivered - newest activity first, with a plain "History" link in the
@@ -110,6 +110,69 @@ undone by the next poll. Turning tail on with the toggle button is the
 one deliberate exception: that always jumps to the bottom immediately,
 regardless of where the view currently is.
 
+## The phone review page: `/review`
+
+A third page (issue #202), deliberately narrow (phone-width, large touch
+targets) rather than matching the two desktop list pages above. It shows
+only tasks sitting in "delivered" - the one state that's actually
+waiting on the Client's verdict - one card per task: its title, the
+pull request's own write-up (rendered through the exact same
+`finalMessageFor` that built the real pull request body, never a second
+hand-written copy of it), Inspector's stamp, and the gate's declared
+state (`record-view.ts`'s `getReviewRows`/`inspectorStampLabel`/
+`gateStateLabel` - see their own doc comments for exactly what each
+label means and where it comes from). "Inspector's stamp" and "the
+gate's state" here are both read from Fabrica's own record - the real
+`Delivery.inspection`/`Delivery.gateChanges` Fabrica already has, never
+a live call out to GitHub's API: that would mean this read-only viewer
+needing its own GitHub credential and network egress for a page whose
+whole point is reviewing a handful of deliveries already sitting in
+front of it.
+
+Each card has three buttons - accept, fix (with a one-line note,
+required), wrong (with a one-line note, optional) - and a tap records
+the verdict through the *exact same* `recordVerdictDecision` -
+`spawnDetachedResume` pair `fabrica verdict` itself calls
+(`src/cli/verdict-command.ts`): a bad ruling fails the same way here as
+on the command line, and a "fix" hands the round to the same detached
+background process, returning immediately rather than waiting for it
+(issue #123).
+
+### This is the one write anywhere in this directory
+
+Everything else in this module only ever reads. `POST /api/review/tasks/
+<id>/verdict` is the sole exception, and it's held to two checks GET
+never needs:
+
+- **Identity.** A request carrying no `Tailscale-User-Login` header is
+  refused (403) before its body is even read. This server still only
+  ever binds to `127.0.0.1` (`HOST`, in `server.ts` - unchanged by this
+  page); the one legitimate way a real header lands here at all is a
+  locally-running `tailscale serve` adding it while proxying a request
+  in from the tailnet. That's Tailscale's own documented design, not
+  something invented here: Serve's reverse-proxy target only ever
+  supports `http://127.0.0.1` (its own docs, verified before writing any
+  of this), it adds `Tailscale-User-Login`/`-User-Name`/
+  `-User-Profile-Pic` to a proxied request and *strips* those same
+  headers from anything a client tried to send itself ("to avoid header
+  spoofing" - its own words), and its own best-practice note is to keep
+  the backend on loopback precisely so nothing but Serve can ever
+  produce a trustworthy header. Binding this server anywhere else (the
+  tailnet address directly, say) would both break Serve's proxy contract
+  and make the header meaningless - anyone who could reach the port
+  directly could forge it.
+- **A real decision.** The same validation `fabrica verdict` already
+  does (unknown task, already closed, a "fix" with no note, an unknown
+  ruling) runs before anything is recorded, by calling the identical
+  function.
+
+**What's deliberately NOT here (the "dotfiles half" of issue #202):**
+actually running `tailscale serve` to publish this port onto the
+tailnet is a one-time, host-level command outside this repository - the
+same way nothing in this repo runs `tailscaled` itself or configures
+Tailscale ACLs. This page is reachable from a phone once that's set up;
+nothing in this directory sets it up.
+
 ## Why a corrupt line in events.jsonl can't take it down
 
 `record-view.ts` builds its whole picture of the record through
@@ -131,4 +194,14 @@ events.jsonl at all.
 not previously exported from Fabrica's one public entry point - this
 integration adds them there rather than reaching into
 `src/foreman/`/`src/record/`/`contract/` directly, the same rule
-`src/cli/` already follows.
+`src/cli/` already follows. Issue #202's review page added two more:
+`deliveryOf` (the real `Delivery`, for Inspector's stamp and the gate's
+declared state) and `finalMessageFor` (the pull request's own write-up
+text, rendered once and reused rather than reimplemented). Recording a verdict itself needs two more things only `src/cli/` had
+before: `loadConfigOrDefault` (the record's caps) and
+`spawnDetachedResume` (handing a "fix" round to the same detached
+background process `fabrica verdict fix` uses) - reached the same way
+`/api/version`'s `runningCopyCommit` already was, imported directly
+from `src/cli/` rather than through `src/index.ts`, the one established
+exception to the "integrations reach Fabrica only through `src/index.ts`"
+rule.

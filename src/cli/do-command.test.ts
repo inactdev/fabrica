@@ -16,7 +16,7 @@ import { makeFixtureRepo, pushToOrigin } from "../../contract/helpers/fixture.ts
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
-import { readEventsForTask } from "../record/index.ts";
+import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { runDoCommand } from "./do-command.ts";
 
 const FAKE_ENTRY = fileURLToPath(new URL("./helpers/fake-run-task-entry.ts", import.meta.url));
@@ -51,6 +51,45 @@ test("runDoCommand: a literal project path registers a task and prints just its 
   assert.equal(io.out.length, 1);
   assert.match(io.out[0], /^\d{8}-/);
   assert.deepEqual(io.err, []);
+});
+
+// "Make every pull request it opens close its issue on merge": the
+// chat agent's explicit alternative to an "Issue #N:" text prefix is a
+// CLI flag, which has to survive the detached-process boundary
+// (spawn-detached.ts's argv, picked back up by the entry script) the
+// same way <task text> and --project already do.
+test("runDoCommand: --issue <N> survives the detached process and lands on the task's own record", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["add a comment", "--project", project, "--issue", "186"], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  const taskId = io.out[0];
+  assert.equal(readTaskFile(recordHome, taskId, "issue"), "186");
+});
+
+test("runDoCommand: --issue must be a positive integer", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["add a comment", "--project", project, "--issue", "0"], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.equal(io.out.length, 0);
+  assert.ok(io.err[0].includes("--issue"));
 });
 
 // Issue #8's own definition of done, scenario 1, exercised end to end

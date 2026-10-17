@@ -271,7 +271,14 @@ export interface FabricaEvent {
 export interface Foreman {
   do(
     taskText: string,
-    opts: { project: string; attempts?: number; brain?: Brain }
+    /** `issue` (optional): the number of the one GitHub issue this task's
+     * whole of work is, named explicitly by the chat agent rather than
+     * derived from `taskText` - the alternative to `taskText` itself
+     * starting with "Issue #N:" (src/foreman/pr-body.ts's
+     * `closesIssueFor`). Either way, the opened pull request's body ends
+     * with "Closes #N"; a task that is only part of an issue's work
+     * gets neither and the body says nothing about closing anything. */
+    opts: { project: string; attempts?: number; brain?: Brain; issue?: number }
   ): Promise<FabricaTask>;
   /** `fabrica answer <id> -m "<text>"` (issue #8): appends a clarification
    * round to a task stopped for questions, re-derives its brief, and

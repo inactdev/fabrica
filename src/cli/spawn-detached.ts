@@ -34,6 +34,10 @@ export interface SpawnDetachedTaskOptions {
   recordHome: string;
   projectPath: string;
   taskText: string;
+  /** The issue number the chat agent names explicitly (do-args.ts's
+   * `--issue`) - forwarded as a trailing positional so run-task-entry.ts
+   * can pass it on to doTask. Omitted, nothing is appended. */
+  issue?: number;
   /** Overridden in tests to point at a fixture entry script that uses a
    * fake brain, so exercising the real spawn-and-discover mechanism
    * never has to invoke the real adapter's coding agent. */
@@ -47,7 +51,7 @@ export interface SpawnDetachedTaskOptions {
 export async function spawnDetachedTask(
   opts: SpawnDetachedTaskOptions
 ): Promise<{ taskId: string; isRunning: () => boolean }> {
-  const { recordHome, projectPath, taskText, entryScript = DEFAULT_ENTRY_SCRIPT, timeoutMs } = opts;
+  const { recordHome, projectPath, taskText, issue, entryScript = DEFAULT_ENTRY_SCRIPT, timeoutMs } = opts;
 
   // A first-ever `fabrica do` on a fresh machine has no recordHome yet -
   // registerTask would create it in time, but that happens inside the
@@ -56,7 +60,7 @@ export async function spawnDetachedTask(
   const logFd = openSync(join(recordHome, "cli.log"), "a");
   const child = spawn(
     process.execPath,
-    [BOOTSTRAP, entryScript, recordHome, projectPath, taskText],
+    [BOOTSTRAP, entryScript, recordHome, projectPath, taskText, ...(issue !== undefined ? [String(issue)] : [])],
     { detached: true, stdio: ["ignore", logFd, logFd] }
   );
   closeSync(logFd); // the child holds its own duplicated copy from here on
