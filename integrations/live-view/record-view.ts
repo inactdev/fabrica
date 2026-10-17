@@ -135,11 +135,12 @@ export interface LiveViewState {
 
 /** One row of the phone review page (issue #202, extended by the
  * "show every task waiting on me" follow-up) - everything a tap on
- * accept/fix/wrong (or, for the two narrower kinds below, just wrong)
- * needs to show before deciding. Every task this page shows is one
- * `earlyStopKindOf`/`state === "delivered"` says is actually waiting on
- * the Client, nothing else. */
-export type ReviewRow = DeliveredReviewRow | EarlyStopReviewRow;
+ * accept/fix/wrong (or, for the two narrower kinds below, just wrong;
+ * or, for an asking row, typing an answer) needs to show before
+ * deciding. Every task this page shows is one `earlyStopKindOf`/
+ * `state === "delivered"`/`state === "asking"` says is actually waiting
+ * on the Client, nothing else. */
+export type ReviewRow = DeliveredReviewRow | EarlyStopReviewRow | AskingReviewRow;
 
 export interface DeliveredReviewRow {
   id: string;
@@ -174,6 +175,22 @@ export interface EarlyStopReviewRow {
   title: string;
   kind: "refused" | "failed";
   reason: string;
+  lastActivityMs: number;
+}
+
+/** A task that stopped on its clarifying questions (SPEC.md step 2,
+ * issue #8) and is waiting on the Client's words, not on a verdict - so
+ * this row carries no write-up, no stamp and no verdict buttons at all,
+ * just the questions as asked and somewhere to answer them. `questions`
+ * is the worker's own list, verbatim and in order, off the same
+ * `"questions-asked"` event `fabrica answer` itself reads to build
+ * `answers.md` - this page numbers them for display only, never
+ * rewrites them. */
+export interface AskingReviewRow {
+  id: string;
+  title: string;
+  kind: "asking";
+  questions: string[];
   lastActivityMs: number;
 }
 
@@ -250,6 +267,25 @@ function writeupFromEvents(events: FabricaEvent[]): WorkerWriteup | null {
     if (writeup) return writeup;
   }
   return null;
+}
+
+/** The questions a task stopped on - the latest `"questions-asked"`
+ * event's own `details.questions` (src/foreman/ask.ts's `AskedDetails`),
+ * which is the same event `recordAnswerDecision` reads to build the
+ * clarification round in `answers.md`, so the page can never show a
+ * question the recorded answer won't be filed against. Latest wins, the
+ * same way `prUrlFromEvents`/`writeupFromEvents` above take the last of
+ * their own event. Anything but an array of strings reads as no
+ * questions rather than throwing - this page is a viewer, and
+ * `stateOf` already decided the task is asking. */
+export function questionsFromEvents(events: FabricaEvent[]): string[] {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].name !== "questions-asked") continue;
+    const questions = (events[i].details as { questions?: unknown } | undefined)?.questions;
+    if (Array.isArray(questions)) return questions.filter((q): q is string => typeof q === "string");
+    return [];
+  }
+  return [];
 }
 
 /** The short label a list row shows: the worker's own write-up title once
@@ -403,11 +439,13 @@ export function createRecordView(recordHome: string) {
   /** The phone review page's rows (issue #202, extended to show every
    * task waiting on the Client, not only delivered ones) - a "delivered"
    * task gets its full card (the pull request's write-up, Inspector's
-   * stamp, the gate's declared state), while a task Inspector refused or
-   * that failed before any work started gets a narrower card naming the
-   * one reason and the one verdict ("wrong") that closes it -
-   * `earlyStopKindOf` (src/foreman/queries.ts) decides which, the exact
-   * same function `fabrica status` calls for the same task, so the two
+   * stamp, the gate's declared state), a task that stopped on its
+   * clarifying questions gets its questions and somewhere to answer
+   * them, and a task Inspector refused or that failed before any work
+   * started gets a narrower card naming the one reason and the one
+   * verdict ("wrong") that closes it - `earlyStopKindOf`
+   * (src/foreman/queries.ts) decides the last of those, the exact same
+   * function `fabrica status` calls for the same task, so the two
    * surfaces can never show a task the other doesn't, or a different
    * reason for the one they agree on. Reads each task's own events
    * through the same per-task follower cache `getState`/`getTask`/
@@ -418,6 +456,12 @@ export function createRecordView(recordHome: string) {
     const rows: ReviewRow[] = discoverTaskIds(recordHome).flatMap((id): ReviewRow[] => {
       const { events } = followerFor(id).read();
       const task = buildTaskView(id, events, caps);
+
+      // Waiting on the Client's words rather than on a ruling - the one
+      // row kind here that isn't a verdict at all.
+      if (task.state === "asked a question") {
+        return [{ id, title: task.title, kind: "asking", questions: questionsFromEvents(events), lastActivityMs: task.lastActivityMs }];
+      }
 
       if (task.state === "delivered") {
         const delivery = deliveryOf(recordHome, id);
