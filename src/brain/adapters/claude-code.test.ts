@@ -1,6 +1,6 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -242,6 +242,59 @@ test("claudeCodeAdapter omits --resume, --model, --effort when not given", async
     "--json-schema",
     JSON.stringify(WRITEUP_JSON_SCHEMA),
   ]);
+});
+
+// Issue #186's second half: when the caller's env carries the real
+// worker token (HOST_TOKEN_VAR, what defaultBrainAdapter forwards it
+// under), the container must never see it - only a per-call placeholder,
+// with the relay holding the real value instead. Requires Docker twice
+// over: once for runContained, once for the isolated network/relay
+// themselves (src/containment/isolated-network.ts), so it skips, never
+// fails, exactly like every other test in this file, when Docker isn't
+// reachable.
+test("claudeCodeAdapter.work() never forwards the real worker token into the container - only a placeholder, with the relay standing behind it", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+
+  const realToken = "a-fake-real-token-not-the-actual-secret";
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    env: { CLAUDE_CODE_OAUTH_TOKEN: realToken },
+  });
+
+  const result = await brain.work("PRINT_ENV", makeFakeCliWorkdir());
+
+  const seenEnv = JSON.parse(result.transcript[0].text);
+  assert.equal(seenEnv.CLAUDE_CODE_OAUTH_TOKEN, undefined, "the real token's own variable must not reach the container at all");
+  assert.ok(seenEnv.ANTHROPIC_BASE_URL?.startsWith("http://"), "no relay base URL reached the container");
+  assert.ok(seenEnv.ANTHROPIC_AUTH_TOKEN, "no placeholder credential reached the container");
+  assert.notEqual(seenEnv.ANTHROPIC_AUTH_TOKEN, realToken, "the placeholder must not be the real token itself");
+});
+
+// Same proof for ask() - a separate code path (its own scratch workdir,
+// not a ProductionLine) that goes through the same prepareNetwork().
+// BrainAskResult has no transcript field, so this reads the file the
+// fake CLI's PRINT_ENV scenario writes into its cwd instead - always
+// the host's own scratch dir, on the other side of the bind mount.
+test("claudeCodeAdapter.ask() never forwards the real worker token into the container either", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+
+  const realToken = "a-fake-real-token-not-the-actual-secret";
+  const scratchDir = makeFakeCliScratchDir();
+  const brain = claudeCodeAdapter({
+    binPath: FAKE_CLI_IN_CONTAINER,
+    image: TEST_IMAGE,
+    env: { CLAUDE_CODE_OAUTH_TOKEN: realToken },
+    askScratchDir: scratchDir,
+  });
+
+  await brain.ask("PRINT_ENV");
+
+  const seenEnv = JSON.parse(readFileSync(join(scratchDir, "env-dump.json"), "utf8"));
+  assert.equal(seenEnv.CLAUDE_CODE_OAUTH_TOKEN, undefined, "the real token's own variable must not reach the container at all");
+  assert.ok(seenEnv.ANTHROPIC_BASE_URL?.startsWith("http://"), "no relay base URL reached the container");
+  assert.ok(seenEnv.ANTHROPIC_AUTH_TOKEN, "no placeholder credential reached the container");
+  assert.notEqual(seenEnv.ANTHROPIC_AUTH_TOKEN, realToken, "the placeholder must not be the real token itself");
 });
 
 // The write-up is structured output the CLI validates against this
