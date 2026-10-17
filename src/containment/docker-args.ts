@@ -63,11 +63,16 @@ export function buildDockerArgs(opts: {
   // interface at all (verified: DNS resolution itself fails under it).
   // The isolated-network form (issue #186) is the middle ground: a
   // named network with no route to the internet (created by
-  // isolated-network.ts's createIsolatedNetwork, "--internal") but
-  // whose own gateway address - where src/relay/'s relay listens - the
-  // container can still reach, since that address is a direct neighbor
-  // on the same bridge rather than a destination reached through a
-  // route the daemon refuses to configure.
+  // isolated-network.ts's createIsolatedNetwork, "--internal") whose
+  // only other member is a relay container (src/relay/container/
+  // launch.ts) - the one thing on this network the worker can still
+  // reach, since containers on the same network can always reach each
+  // other regardless of `--internal`. Nothing here binds to this
+  // network's own gateway address any more - that address turned out to
+  // belong to the Docker Desktop VM on Mac/Windows, not to the host
+  // process, so a relay bound there was unreachable; see isolated-
+  // network.ts's own header for the proven fact and src/relay/
+  // container/launch.ts for the fix.
   if (opts.network === "denied") args.push("--network", "none");
   else if (typeof opts.network === "object") args.push("--network", opts.network.isolatedNetwork);
 

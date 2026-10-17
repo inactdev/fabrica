@@ -25,9 +25,11 @@ export interface RunContainedOptions {
    * one silently. `{ isolatedNetwork }` (issue #186) is the third
    * option: attach to a named network with no route to the internet
    * (`src/containment/isolated-network.ts`'s `createIsolatedNetwork`)
-   * instead of either extreme - the container can still reach that
-   * network's own gateway address, which is where a per-task relay
-   * (`src/relay/`) listens. */
+   * instead of either extreme - the container can still reach the one
+   * other thing attached to that same network, a per-task relay
+   * container (`src/relay/container/launch.ts`), since containers
+   * sharing a network can always reach each other regardless of
+   * `--internal`. */
   network: "denied" | "allowed" | { isolatedNetwork: string };
   /** The exact environment variables the contained process receives -
    * "the worker has what it needs," not the Foreman's whole environment.

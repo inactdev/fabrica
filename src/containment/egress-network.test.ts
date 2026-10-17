@@ -1,0 +1,47 @@
+// The real proof, against the real Docker daemon - skips (never fails)
+// when Docker isn't available, matching isolated-network.test.ts's own
+// convention.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createEgressNetwork, removeEgressNetwork } from "./egress-network.ts";
+import { ContainmentError } from "./errors.ts";
+
+function dockerAvailable(): boolean {
+  try {
+    execFileSync("docker", ["info"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("createEgressNetwork creates a plain (non-internal) network; removeEgressNetwork cleans it up", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const name = `fabrica-test-egress-${process.pid}`;
+
+  const network = await createEgressNetwork(name);
+  try {
+    assert.equal(network.name, name);
+
+    const inspected = execFileSync("docker", ["network", "inspect", name, "--format", "{{.Internal}}"]).toString().trim();
+    assert.equal(inspected, "false", "an egress network must not be created with --internal");
+  } finally {
+    await removeEgressNetwork(name);
+  }
+
+  assert.throws(
+    () => execFileSync("docker", ["network", "inspect", name], { stdio: "ignore" }),
+    "removeEgressNetwork must actually remove the network"
+  );
+});
+
+test("removeEgressNetwork on a network that never existed throws ContainmentError, not a raw docker error", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+
+  await assert.rejects(
+    removeEgressNetwork(`fabrica-test-never-existed-${process.pid}`),
+    (err: unknown) => err instanceof ContainmentError && err.code === "network-remove-failed"
+  );
+});

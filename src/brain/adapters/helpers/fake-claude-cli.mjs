@@ -41,7 +41,19 @@ const resultLine = (overrides) => ({
 // fixed template (buildAskPrompt in ../claude-code.ts) rather than
 // passing it as `brief` directly, so these scenarios match by substring
 // instead of the exact-equality switch below.
-if (brief?.includes("ASK_SCENARIO_QUESTIONS")) {
+if (brief?.includes("PRINT_ENV")) {
+  // Matched by substring, same as the ASK_SCENARIO_* cases below, so
+  // ask() - whose brief is PRINT_ENV wrapped inside buildAskPrompt's
+  // fixed template - reaches this exact same scenario as work() does.
+  // work()'s own test reads the transcript entry below; ask() has no
+  // transcript at all (BrainAskResult only ever reports questions/cost),
+  // so its test instead reads the file this writes into cwd - /workdir
+  // inside the container, which is always the caller's own workdir/
+  // scratch dir on the host side of the bind mount.
+  writeFileSync(join(process.cwd(), "env-dump.json"), JSON.stringify(process.env));
+  line({ type: "assistant", message: { content: [{ type: "text", text: JSON.stringify(process.env) }] } });
+  line(resultLine({}));
+} else if (brief?.includes("ASK_SCENARIO_QUESTIONS")) {
   line(resultLine({ result: JSON.stringify({ questions: ["What database?", "Multi-tenant?"] }) }));
 } else if (brief?.includes("ASK_SCENARIO_NONE")) {
   line(resultLine({ result: JSON.stringify({ questions: [] }) }));

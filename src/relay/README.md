@@ -1,26 +1,25 @@
 # relay
 
-The first half of issue #186: a host-side relay a worker box's traffic
-is forced through, instead of reaching the network itself. This module
-is the relay and the policy it enforces; `src/containment/
-isolated-network.ts` is the Docker-side half that makes "forced
+The first half of issue #186: a relay a worker box's traffic is forced
+through, instead of reaching the network itself. This module is the
+relay and the policy it enforces; `src/containment/isolated-network.ts`
+and `container/launch.ts` are the Docker-side halves that make "forced
 through" actually true rather than a convention a worker could ignore.
 
 ## What's in scope here, and what isn't
 
 This half builds and tests the mechanism on its own - the issue's own
 acceptance shape, "a fake worker and a fake provider" (`server.test.ts`,
-`helpers/fake-provider.ts`). It does **not** wire the reference CLI
-adapter (`src/brain/adapters/`) to actually run through it. Three
-things that wiring needs don't exist yet, each explicitly deferred
-to issue #186's second half rather than guessed at here: a real place to
-configure a real credential per project (`projects.toml`), a `fabrica
-doctor` check that the relay/isolated-network mechanism is actually
-healthy before a task starts, and the docs telling the Client about any
-of this. Shipping a "wired in" adapter today would mean inventing all
-three on the spot, which is exactly the scope this round was told to
-leave alone. What's here is a complete, independently correct
-mechanism, ready to be pointed at from that wiring once it exists.
+`helpers/fake-provider.ts`) - and, as of a later, scoped-down slice of
+issue #186's second half, wires the reference CLI adapter's own
+`connectThroughRelay`/`prepareNetwork` helpers (`src/brain/adapters/`) to
+actually run every real call through it. Still missing, and still
+deferred to whoever picks up the rest of #186's second half: a real
+place to configure a credential per *project*
+(`projects.toml` - the adapter's credential today is still the one
+`defaultBrainAdapter` already reads from the host or `brain.env`, just
+no longer forwarded into the worker's container raw) and a `fabrica
+doctor` check that the mechanism is healthy before a task starts.
 
 ## Why not the third-party sandboxing/proxy tool the issue named
 
@@ -119,9 +118,9 @@ exports `GITHUB_HOSTS` (GitHub is a destination, not a brain, so it's
 fine here), but the model provider's own hostname is never a constant
 in this module - it is whatever host a caller's `GatewayTarget` names.
 The "short, fixed list" issue #186 asks for is therefore assembled at
-the call site (eventually `src/brain/adapters/`, once wired - see
-"What's in scope here, and what isn't" above), not inside `src/relay/`
-itself.
+the call site (the reference adapter's own provider-host constant, in
+`src/brain/adapters/` - see "What's in scope here, and what isn't"
+above), not inside `src/relay/` itself.
 
 ## The isolated network: `src/containment/isolated-network.ts`
 
@@ -133,40 +132,96 @@ between each other, but not with any other network, as no default
 route is configured and firewall rules are set up to drop all traffic
 to or from other networks" -
 <https://docs.docker.com/reference/cli/docker/network/create/>) as
-having no route anywhere outside itself. The same reference also states
-that "the host may communicate with any container IP directly" - the
-relationship this module leans on is the symmetric half of that: the
-network's gateway IP *is* the host's own interface on that bridge, a
-direct neighbor of every container on it with no "internal" restriction
-in play, since nothing about reaching a direct neighbor on the same
-subnet needs the route that flag removes. `src/containment/docker-args.ts`'s
-`network` option gained a third shape, `{ isolatedNetwork: string }`,
-alongside `"denied"`/`"allowed"`, for exactly this: attach the container
-to that network instead of either extreme. `src/relay/server.ts`'s
-`startRelay` binds to a caller-chosen address (`bindAddress`) for the
-same reason - a real deployment binds it to the isolated network's own
-gateway IP, the one address a container on that network can actually
-reach.
+having no route anywhere outside itself. `src/containment/
+docker-args.ts`'s `network` option gained a third shape, `{
+isolatedNetwork: string }`, alongside `"denied"`/`"allowed"`, for
+exactly this: attach the worker's container to that network instead of
+either extreme.
+
+## Why the relay is the container with two networks, not the worker
+
+An earlier version of this module additionally leaned on the same
+`docker network create` reference's "the host may communicate with any
+container IP directly," reasoning that a network's gateway IP is the
+host's own interface on the bridge, so a relay *process* (not a
+container) could bind there and a worker's container could reach it.
+That is true on native Linux Docker - and **false on Docker Desktop
+(Mac/Windows)**, proven on the Client's own Mac on 2026-10-17: a
+container on an `--internal` network cannot reach the host at all,
+neither via the gateway address (the Docker Desktop VM owns it, not the
+Mac) nor via `host.docker.internal` (`--internal` strips the route
+Docker Desktop otherwise sets up for that name). The relay therefore has
+to run as a container too - something a container on the isolated
+network can actually reach, since "containers on an internal network
+may communicate between each other" is the one part of `--internal`'s
+own documented behavior that was never in question.
+
+That still leaves a relay container needing its own route to the real
+internet, which the isolated network by definition doesn't have. Two
+ways to give it one were weighed:
+
+- **The relay is its own container, attached to the isolated network
+  *and* a second, separate (non-internal) network as its own egress
+  leg.** The worker's container keeps exactly one network interface -
+  the isolated one, proven to have no route out at all.
+- **The worker's container gets a second network instead - a plain,
+  non-internal one whose only other member is the relay.**
+
+The first is what's built here (`container/launch.ts`,
+`src/containment/egress-network.ts`), and it's the smaller trust
+surface: a non-internal Docker bridge network isn't a point-to-point
+link to "the other thing on it" - it's an ordinary network with a real
+default route, NAT'd to the internet for *everything* attached to it.
+Giving the worker a second interface on one, even one with only the
+relay as its other member, would hand the worker its own route to
+anywhere on the internet through that network's own gateway, with
+nothing to stop it bypassing the relay (its allowlisting, its
+credential-scoping) entirely - exactly the guarantee `--internal` exists
+to provide, undone by the fix. The relay container is Fabrica's own
+trusted code, not anything a worker (or a model acting inside one)
+drives directly, so it being the one thing with a real route out costs
+nothing a worker could exploit; the worker never gains a second network
+or a second idea about where to send a request.
+
+`container/launch.ts` doesn't build or maintain a bespoke relay image:
+it bind-mounts the running Fabrica checkout itself (read-only) into a
+stock, digest-pinned Node image and runs the relay straight from its
+own TypeScript source via `tsx`, the same way `fabrica` already runs
+itself (`src/cli/bin.mjs`) - see that file's own header for the full
+reasoning and why nothing here needs rebuilding when the relay's code
+changes. Neither side of the control plane (confirming the container is
+listening, reading its address on the isolated network) touches the
+network at all - both are read through the Docker CLI/API (`docker
+logs`, `docker inspect`), which works regardless of the same
+Docker-Desktop host/VM boundary that broke the old design, since it's
+never network traffic in the first place.
 
 ### What's verified, what isn't
 
 Every Docker-specific claim above is sourced from Docker's own current
-reference docs, read for this change rather than assumed - the `--internal`
-quote above, and the `docker network inspect --format
-'{{range .IPAM.Config}}{{.Gateway}}{{end}}'` form `isolated-network.ts`
-uses to read a new network's gateway address back. What this round
-could **not** do is additionally verify any of it live: no Docker
-daemon was reachable on the machine these files were written on.
-`isolated-network.test.ts` and `docker-isolation.test.ts` (the
-containerized "fake worker reaches the relay, not the open internet"
-proof) both skip rather than fail when `docker info` doesn't succeed -
-the same convention `src/containment/run.test.ts` already established
-for its own daemon-dependent tests, not a new exception carved out for
-this module. They are written to run for real, and will, the next time
-`npm test` runs somewhere Docker is actually installed; until then,
-treat the Docker-network half as documented-and-reasoned, not
-machine-verified, which this repository's own culture of "verified
-live, not assumed" means stating plainly rather than leaving implicit.
+reference docs, read for this change rather than assumed - the
+`--internal` quote above, the `docker run`/`docker network connect`
+pages' confirmation that a container can be attached to more than one
+network, and the `docker inspect`/`docker network inspect` field shapes
+(`NetworkSettings.Networks.<name>.IPAddress`) `container/launch.ts`
+reads back. The Docker-Desktop-specific fact itself (a container on an
+`--internal` network can reach neither the gateway address nor
+`host.docker.internal`) is not documentation - it's the Client's own
+report from testing directly on their Mac on 2026-10-17, which is what
+this redesign exists to fix. No Docker daemon was reachable on the
+machine these files were last edited from to additionally verify any of
+it live. `isolated-network.test.ts`, `egress-network.test.ts`, and
+`docker-isolation.test.ts` (the containerized "worker reaches the relay
+container, not the open internet, and the relay container itself
+reaches the real internet" proof) all skip rather than fail when
+`docker info` doesn't succeed - the same convention `src/containment/
+run.test.ts` already established for its own daemon-dependent tests,
+not a new exception carved out for this module. They are written to run
+for real wherever Docker actually is - the Client's own Mac being
+exactly the case this redesign is for - and will; until then, treat the
+Docker-network half as documented-and-reasoned, not machine-verified,
+which this repository's own culture of "verified live, not assumed"
+means stating plainly rather than leaving implicit.
 
 ## Files
 
@@ -174,8 +229,9 @@ live, not assumed" means stating plainly rather than leaving implicit.
 | --- | --- |
 | `types.ts` | `AllowedHost`, `CredentialSwap`, `GatewayTarget`, `RelayOptions`, `RelayHandle` - this module's own configuration shapes, not shared with `contract/surface.ts` except by `FabricaEventName` gaining `"network-refused"` there. |
 | `allowlist.ts` | `GITHUB_HOSTS` and `isAllowedTarget` - hostname matching (exact or one level of `*.` wildcard, optional port), used by tunnel mode. |
-| `server.ts` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `"network-refused"` event. |
-| `errors.ts` | `RelayError` - `"invalid-config"` (a malformed `GatewayTarget`) and `"listen-failed"`. |
+| `server.ts` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `"network-refused"` event. Runs identically whether started in-process (this module's own fast tests) or inside `container/`'s own container. |
+| `errors.ts` | `RelayError` - `"invalid-config"` (a malformed `GatewayTarget`) and `"listen-failed"` (also used for a container that never starts or never confirms it's listening). |
+| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side), `entrypoint.ts` (runs inside the container), `bootstrap.mjs` (teaches that fresh `node` process TypeScript, the same way `src/cli/bin.mjs` does for `fabrica` itself). |
 | `helpers/fake-provider.ts` | Test-only: a plain-HTTP stand-in for "the model provider," recording every request it receives so a test can assert on exactly what crossed the wire. |
 | `server.test.ts` | The fake-worker/fake-provider proof: gateway credential swap, tunnel allow/refuse, the refusal event, per-task event isolation. |
-| `docker-isolation.test.ts` | The containerized proof: a real worker box, on the isolated network, reaches the relay and nothing else. |
+| `docker-isolation.test.ts` | The containerized proof: a real worker box, on the isolated network, reaches the relay container and nothing else; the relay container itself reaches the real internet through its own egress network. |

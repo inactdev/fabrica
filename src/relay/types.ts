@@ -62,10 +62,13 @@ export interface RelayOptions {
   port?: number;
   /** Address to bind the listener to. Defaults to "127.0.0.1" (same-
    * process/same-host callers, e.g. this module's own fast tests). A
-   * worker box reaches the relay from inside its own isolated Docker
-   * network (`src/containment/isolated-network.ts`), so a real
-   * deployment binds this to that network's gateway IP instead - the
-   * one address a container on that network can actually route to. */
+   * real deployment runs the relay itself as a container on the
+   * isolated network a worker box also joins
+   * (`src/relay/container/launch.ts`, `src/containment/
+   * isolated-network.ts`) and binds this to "0.0.0.0" there, since the
+   * worker reaching it is a different container on that same network -
+   * not this process's own loopback, and (proven on Docker Desktop)
+   * never the network's gateway address either. */
   bindAddress?: string;
   /** CONNECT-tunnel-eligible hosts (issue #186: "a short fixed list of
    * allowed hosts") - raw bytes pass through untouched once a target
