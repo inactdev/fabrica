@@ -14,7 +14,9 @@ import { join } from "node:path";
 import {
   ConfigError,
   daySpend,
+  deliveryOf,
   describeTaskCost,
+  finalMessageFor,
   followTask,
   formatUsd,
   hasAttempts,
@@ -23,7 +25,7 @@ import {
   stateOf,
   taskSpend,
 } from "../../src/index.ts";
-import type { Caps, FabricaEvent, FabricaTask, TaskFollower, TranscriptEntry, WorkerWriteup } from "../../src/index.ts";
+import type { Caps, Delivery, FabricaEvent, FabricaTask, TaskFollower, TranscriptEntry, WorkerWriteup } from "../../src/index.ts";
 
 /** How much of the task's own text stands in for a title before a
  * worker's write-up exists - long enough to be recognizable, short
@@ -128,6 +130,65 @@ export interface LiveViewState {
   now: number;
   spend: SpendView;
   tasks: TaskView[];
+}
+
+/** One row of the phone review page (issue #202) - everything a tap on
+ * accept/fix/wrong needs to show before deciding, for one task sitting
+ * in "delivered" (the only state this page shows: it's the one state
+ * that is actually waiting on a verdict). */
+export interface ReviewRow {
+  id: string;
+  title: string;
+  /** The pull request's own body, rendered through the exact same
+   * `finalMessageFor` that built it (src/foreman/pr-body.ts) - never a
+   * second hand-written copy of the four-section shape, so this page
+   * can never show text that disagrees with the real pull request. */
+  writeupBody: string;
+  /** False when the write-up was invalid and `writeupBody` is Fabrica's
+   * own fallback wording naming what was wrong, not the worker's words. */
+  writeupOk: boolean;
+  inspectorStamp: string;
+  /** Inspector's own report text, when the stamp is anything but green -
+   * null when there's nothing more to say (green, or no Inspector
+   * involved at all). */
+  inspectorDetail: string | null;
+  gateState: string;
+  prUrl: string | null;
+  lastActivityMs: number;
+}
+
+/** "Inspector's stamp" - green/red/refused when this delivery was
+ * actually handed to Inspector, else a plain label for the self-tested
+ * (no Inspector installed) path, derived from the same `Delivery.outcome`
+ * `fabrica status`'s own wording already covers (render.ts's
+ * describeLiveness/isDeadEnd) - kept as its own tiny copy here for the
+ * same reason this directory already keeps its own `taskTitle`/
+ * `stateSymbol` copies: that function lives under src/cli/, and this
+ * integration reaches Fabrica only through src/index.ts. */
+export function inspectorStampLabel(delivery: Delivery | null): string {
+  if (delivery === null) return "no delivery record";
+  if (delivery.inspection) return delivery.inspection.verdict;
+  if (delivery.outcome === "not-verified") return "not verified (worker's box could not run the check)";
+  return "not inspected (self-tested, no Inspector)";
+}
+
+/** Detail text for a non-green stamp - Inspector's own report, worth
+ * showing alongside the stamp itself; null when there's nothing more to
+ * say (green, or no Inspector involved at all). */
+export function inspectorReportDetail(delivery: Delivery | null): string | null {
+  if (delivery?.inspection && delivery.inspection.verdict !== "green") return delivery.inspection.report;
+  return null;
+}
+
+/** "The gate's state" (rule 9) as far as Fabrica's own record goes -
+ * the worker's own declared intent (`Delivery.gateChanges`), never
+ * anything Fabrica detected on its own (CONTRACT rule 9 is enforced by
+ * CI against the real pull request, not by Fabrica - see AGENTS.md).
+ * Empty string means the worker declared no change to the gate. */
+export function gateStateLabel(delivery: Delivery | null): string {
+  if (delivery === null) return "unknown";
+  const declared = delivery.gateChanges.trim();
+  return declared.length > 0 ? declared : "untouched";
 }
 
 /** Whichever event last carried `details.project` - mirrors
@@ -319,7 +380,34 @@ export function createRecordView(recordHome: string) {
     return followerFor(taskId).read().transcript;
   }
 
-  return { getState, getTask, getTranscript };
+  /** The phone review page's rows (issue #202) - every task currently
+   * "delivered" (awaiting the Client's verdict; the only state this page
+   * acts on), enriched with the one thing `buildTaskView` doesn't carry:
+   * the real `Delivery` (for Inspector's stamp and the gate's declared
+   * state). Reuses `getState`'s own task list and the same per-task
+   * follower cache `getState`/`getTask`/`getTranscript` already share,
+   * rather than re-reading the record a second, independent way. */
+  function getReviewRows(now: number = Date.now()): ReviewRow[] {
+    return getState(now)
+      .tasks.filter((task) => task.state === "delivered")
+      .map((task) => {
+        const delivery = deliveryOf(recordHome, task.id);
+        const message = finalMessageFor(task.writeup ?? undefined, task.title);
+        return {
+          id: task.id,
+          title: task.title,
+          writeupBody: message.body,
+          writeupOk: message.ok,
+          inspectorStamp: inspectorStampLabel(delivery),
+          inspectorDetail: inspectorReportDetail(delivery),
+          gateState: gateStateLabel(delivery),
+          prUrl: task.prUrl,
+          lastActivityMs: task.lastActivityMs,
+        };
+      });
+  }
+
+  return { getState, getTask, getTranscript, getReviewRows };
 }
 
 export type RecordView = ReturnType<typeof createRecordView>;

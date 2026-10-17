@@ -4,8 +4,27 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, appendTaskFile, registerTask } from "../../src/record/index.ts";
+import { fileURLToPath } from "node:url";
+import { appendEvent, appendTaskFile, readEventsForTask, registerTask } from "../../src/record/index.ts";
+import { createForeman } from "../../src/index.ts";
+import { fakeBrain } from "../../src/brain/helpers/fake-brain.ts";
+import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { startLiveView } from "./server.ts";
+
+const FAKE_VERDICT_FIX_ENTRY = fileURLToPath(new URL("../../src/cli/helpers/fake-verdict-fix-entry.ts", import.meta.url));
+/** A real connection carrying Tailscale's own identity header - this is
+ * what `tailscale serve` adds while proxying a request in from the
+ * tailnet (server.ts); a test fetch has to set it by hand since nothing
+ * here is actually proxied through Serve. */
+const IDENTITY_HEADERS = { "Tailscale-User-Login": "client@example.com" };
+
+async function deliveredTask(recordHome: string) {
+  return createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+}
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-live-view-server-test-"));
@@ -324,6 +343,173 @@ test("startLiveView: /tasks/<id> serves the task page for a real task id's shape
   }
 });
 
+test("startLiveView: /api/review lists a delivered task with its write-up, Inspector's stamp, and the gate's state", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.rows.length, 1);
+    assert.equal(body.rows[0].id, task.id);
+    assert.equal(typeof body.rows[0].writeupBody, "string");
+    assert.equal(typeof body.rows[0].inspectorStamp, "string");
+    assert.equal(typeof body.rows[0].gateState, "string");
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a verdict POST with no Tailscale identity header is refused, and records nothing", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+    assert.equal(res.status, 403);
+
+    const events = readEventsForTask(recordHome, task.id);
+    assert.ok(!events.some((e) => e.name === "verdict-recorded"));
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an empty Tailscale identity header is treated the same as a missing one", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Tailscale-User-Login": "   " },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a verdict POST with the identity header records accept exactly as fabrica verdict does, closing the task", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true, ruling: "accept" });
+
+    const mine = (await createForeman({ recordHome, inspector: fixtureInspector() }).status()).find((t) => t.id === task.id);
+    assert.equal(mine?.state, "closed");
+
+    // Closed - no longer waiting on anyone.
+    const review = await (await fetch(`http://127.0.0.1:${view.port}/api/review`)).json();
+    assert.deepEqual(review.rows, []);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a verdict POST for \"fix\" with no note is refused before anything is recorded", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "fix" }),
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.match(body.error, /note/);
+
+    const events = readEventsForTask(recordHome, task.id);
+    assert.ok(!events.some((e) => e.name === "verdict-recorded"));
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an unknown ruling is rejected with 400", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "maybe" }),
+    });
+    assert.equal(res.status, 400);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a verdict POST for an unknown task id is rejected, and one with the wrong shape never reaches the record at all", async () => {
+  const recordHome = tempRecordHome();
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+
+    const badShape = await fetch(`${base}/api/review/tasks/..%2f..%2fetc/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+    assert.equal(badShape.status, 400);
+
+    const unknown = await fetch(`${base}/api/review/tasks/20260101-nope-zz/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+    assert.equal(unknown.status, 400);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a verdict POST for \"fix\" hands the round to the detached process in the background, the same mechanism fabrica verdict fix uses", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0, fixEntryScript: FAKE_VERDICT_FIX_ENTRY });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "fix", note: "wrong button spot" }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true, ruling: "fix" });
+
+    // The response came back before the round itself finished - the
+    // same "returns immediately" contract issue #123 gave `fabrica
+    // verdict fix` on the command line.
+    const deadline = Date.now() + 10_000;
+    let delivered = 0;
+    while (Date.now() < deadline) {
+      delivered = readEventsForTask(recordHome, task.id).filter((e) => e.name === "delivered").length;
+      if (delivered >= 2) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(delivered, 2, "the fix round never delivered a second time in the background");
+  } finally {
+    await view.close();
+  }
+});
+
 test("startLiveView: no request, of any kind, ever changes a file on disk", async () => {
   const recordHome = tempRecordHome();
   const taskId = registerTask(recordHome, "do not touch me").id;
@@ -338,12 +524,15 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
     await Promise.all([
       fetch(`${base}/`),
       fetch(`${base}/history`),
+      fetch(`${base}/review`),
       fetch(`${base}/app.js`),
       fetch(`${base}/style.css`),
       fetch(`${base}/task.js`),
+      fetch(`${base}/review.js`),
       fetch(`${base}/tasks/${taskId}`),
       fetch(`${base}/api/state`),
       fetch(`${base}/api/history`),
+      fetch(`${base}/api/review`),
       fetch(`${base}/api/version`),
       fetch(`${base}/api/tasks/${taskId}`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),
@@ -351,6 +540,14 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
       fetch(`${base}/no-such-route`),
       fetch(`${base}/api/state`, { method: "POST" }),
       fetch(`${base}/api/tasks/..%2f..%2fetc/transcript`),
+      // No Tailscale identity header - refused before the body is even
+      // read, so this well-formed-looking verdict POST must write
+      // nothing either.
+      fetch(`${base}/api/review/tasks/${taskId}/verdict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ruling: "accept" }),
+      }),
     ]);
 
     assert.deepEqual(snapshotTree(recordHome), before);

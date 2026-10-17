@@ -10,6 +10,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDockerArgs } from "./docker-args.ts";
+import { caffeinated } from "./caffeinate.ts";
 import { ContainmentError } from "./errors.ts";
 import type { ContainedRunResult, ReadOnlyMount, RunContainedOptions } from "./types.ts";
 
@@ -134,7 +135,11 @@ export async function runContained(
     ];
 
     return await new Promise<ContainedRunResult>((resolve, reject) => {
-      const child = spawn("docker", dockerArgs);
+      // On macOS, every worker run (and the in-box check run, the same
+      // way) keeps the Mac awake for as long as it's running - see
+      // caffeinate.ts for why this is exit-code- and stdio-transparent.
+      const { command: spawnCommand, args: spawnArgs } = caffeinated("docker", dockerArgs);
+      const child = spawn(spawnCommand, spawnArgs);
       child.stdin.end();
       let stdout = "";
       let stderr = "";
