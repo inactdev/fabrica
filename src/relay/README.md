@@ -80,7 +80,7 @@ that belong to later issues.
 ## Two traffic shapes, handled differently on purpose
 
 - **Tunnel mode** (`CONNECT`): the relay checks the requested
-  `host:port` against a short, fixed allowlist (`allowlist.ts`) and, if
+  `host:port` against a short, fixed allowlist (`allowlist.mjs`) and, if
   it matches, pipes raw bytes between the worker and that host
   untouched. It cannot see or alter anything inside the tunnel - which
   also means it cannot swap a credential riding inside one. This is
@@ -113,7 +113,7 @@ is nowhere to send it, not because some host was turned away.
 
 CONTRACT rule 8 ("No favorite brain") means no brain, model, or vendor
 name may appear anywhere under `src/` outside `src/brain/adapters/`.
-This module is deliberately brain-agnostic as a result: `allowlist.ts`
+This module is deliberately brain-agnostic as a result: `allowlist.mjs`
 exports `GITHUB_HOSTS` (GitHub is a destination, not a brain, so it's
 fine here), but the model provider's own hostname is never a constant
 in this module - it is whatever host a caller's `GatewayTarget` names.
@@ -186,10 +186,18 @@ or a second idea about where to send a request.
 `container/launch.ts` doesn't build or maintain a bespoke relay image:
 it bind-mounts the running Fabrica checkout itself (read-only) into a
 stock, digest-pinned Node image and runs the relay straight from its
-own TypeScript source via `tsx`, the same way `fabrica` already runs
-itself (`src/cli/bin.mjs`) - see that file's own header for the full
-reasoning and why nothing here needs rebuilding when the relay's code
-changes. Neither side of the control plane (confirming the container is
+own source, so nothing needs rebuilding when the relay's code changes.
+Everything the container runs (`container/bootstrap.mjs`,
+`container/entrypoint.mjs`, `server.mjs`, `allowlist.mjs`,
+`errors.mjs`) is plain JavaScript importing only `node:` built-ins, so
+the stock image's `node` runs it as-is - no `tsx`, nothing from
+`node_modules`. Those files carry `// @ts-check` and JSDoc types (read
+from `types.ts`) so `npm run typecheck` still checks them;
+`container/runtime-imports.test.ts` proves they start with plain `node`
+from a folder holding nothing else. `server.mjs` writes its
+`"network-refused"` line to `<recordHome>/events.jsonl` itself rather
+than through `src/record/`'s `appendEvent`, for the same reason - same
+line shape, same single `O_APPEND` write. Neither side of the control plane (confirming the container is
 listening, reading its address on the isolated network) touches the
 network at all - both are read through the Docker CLI/API (`docker
 logs`, `docker inspect`), which works regardless of the same
@@ -228,10 +236,10 @@ means stating plainly rather than leaving implicit.
 | File | What it is |
 | --- | --- |
 | `types.ts` | `AllowedHost`, `CredentialSwap`, `GatewayTarget`, `RelayOptions`, `RelayHandle` - this module's own configuration shapes, not shared with `contract/surface.ts` except by `FabricaEventName` gaining `"network-refused"` there. |
-| `allowlist.ts` | `GITHUB_HOSTS` and `isAllowedTarget` - hostname matching (exact or one level of `*.` wildcard, optional port), used by tunnel mode. |
-| `server.ts` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `"network-refused"` event. Runs identically whether started in-process (this module's own fast tests) or inside `container/`'s own container. |
-| `errors.ts` | `RelayError` - `"invalid-config"` (a malformed `GatewayTarget`) and `"listen-failed"` (also used for a container that never starts or never confirms it's listening). |
-| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side), `entrypoint.ts` (runs inside the container), `bootstrap.mjs` (teaches that fresh `node` process TypeScript, the same way `src/cli/bin.mjs` does for `fabrica` itself). |
+| `allowlist.mjs` | `GITHUB_HOSTS` and `isAllowedTarget` - hostname matching (exact or one level of `*.` wildcard, optional port), used by tunnel mode. |
+| `server.mjs` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `"network-refused"` event. Runs identically whether started in-process (this module's own fast tests) or inside `container/`'s own container. |
+| `errors.mjs` | `RelayError` - `"invalid-config"` (a malformed `GatewayTarget`) and `"listen-failed"` (also used for a container that never starts or never confirms it's listening). |
+| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side), `entrypoint.mjs` (runs inside the container), `bootstrap.mjs` (the container's command), `runtime-imports.test.ts` (proves the container's files need nothing but plain `node`). |
 | `helpers/fake-provider.ts` | Test-only: a plain-HTTP stand-in for "the model provider," recording every request it receives so a test can assert on exactly what crossed the wire. |
 | `server.test.ts` | The fake-worker/fake-provider proof: gateway credential swap, tunnel allow/refuse, the refusal event, per-task event isolation. |
 | `docker-isolation.test.ts` | The containerized proof: a real worker box, on the isolated network, reaches the relay container and nothing else; the relay container itself reaches the real internet through its own egress network. |

@@ -15,14 +15,14 @@
 // Rather than build and maintain a bespoke relay image, this bind-
 // mounts the running Fabrica checkout itself (read-only) into a stock,
 // digest-pinned Node image and runs the relay straight from its own
-// TypeScript source via tsx - exactly how `fabrica` already runs itself
-// (src/cli/bin.mjs), so there is nothing new to build or go stale. This
-// works identically for a dev checkout and a global npm install: either
-// way, `import.meta.url` below resolves to a real directory on disk
-// holding this package's own `src/` and `node_modules/` (tsx is already
-// a runtime dependency - see AGENTS.md's "Installable from zero"), and
-// mounting that tree read-only costs nothing extra (a bind mount, not a
-// copy).
+// source, so there is nothing new to build or go stale. The files the
+// container runs (bootstrap.mjs and what it loads) are plain JavaScript
+// importing only `node:` built-ins, so the stock image's `node` runs
+// them as-is - nothing from node_modules, no tsx. This works
+// identically for a dev checkout and a global npm install: either way,
+// `import.meta.url` below resolves to a real directory on disk holding
+// this package's own `src/`, and mounting that tree read-only costs
+// nothing extra (a bind mount, not a copy).
 //
 // The host side of this (this file) never talks to the relay container
 // directly over the network either - same Docker-Desktop boundary as
@@ -38,7 +38,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RelayError } from "../errors.ts";
+import { RelayError } from "../errors.mjs";
 import { CONTAINER_RELAY_PORT } from "./types.ts";
 import type { ContainerizedRelayHandle, ContainerizedRelayOptions, RelayContainerConfig } from "./types.ts";
 
@@ -119,6 +119,7 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
   const config: RelayContainerConfig = {
     recordHome,
     taskId: opts.taskId,
+    port: CONTAINER_RELAY_PORT,
     tunnelAllowlist: opts.tunnelAllowlist,
     gateway: opts.gateway,
   };

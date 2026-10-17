@@ -1,5 +1,6 @@
 // Shapes shared between launch.ts (runs on the host, starts the
-// container) and entrypoint.ts (runs inside it). Nothing here is shared
+// container) and entrypoint.mjs (runs inside it, typed from here via
+// JSDoc). Nothing here is shared
 // with contract/surface.ts - same as src/relay/types.ts, this is
 // plumbing, not a promise to the Client.
 
@@ -17,10 +18,14 @@ export const CONTAINER_RELAY_PORT = 8090;
  * env var, JSON-encoded, delivered through a throwaway `--env-file` so a
  * real credential never appears in `docker run`'s own argv or in `ps` -
  * the same care `src/containment/run.ts` already takes for a worker's
- * env). entrypoint.ts reads exactly this shape back out. */
+ * env). entrypoint.mjs reads exactly this shape back out. */
 export interface RelayContainerConfig {
   recordHome: string;
   taskId: string;
+  /** Always `CONTAINER_RELAY_PORT` - carried in the config so
+   * entrypoint.mjs (plain JavaScript) never imports this TypeScript
+   * file at runtime. */
+  port: number;
   tunnelAllowlist: AllowedHost[];
   gateway?: GatewayTarget;
 }

@@ -11,7 +11,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readEventsForTask } from "../record/index.ts";
-import { startRelay } from "./server.ts";
+import { startRelay } from "./server.mjs";
 import { startFakeProvider } from "./helpers/fake-provider.ts";
 
 function freshRecordHome(): string {
