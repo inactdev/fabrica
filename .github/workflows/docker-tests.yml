@@ -58,9 +58,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The version comes from the repository's own `.node-version`
+      # file rather than a number typed here: this job used to pin
+      # a hardcoded 22 while every other Node pin in the project
+      # said 24 (.inspector.json, the worker/relay images, README), and
+      # that divergence is exactly how a Node-22-only test failure went
+      # unexplained for a round (see notes/20261017-fabrica-issue-106-
+      # as-written-a-github-ac-lf.md). `node-version-file` is a
+      # documented setup-node input and `.node-version` a documented
+      # value for it; it is resolved relative to GITHUB_WORKSPACE, so
+      # it has to come after the checkout step above, as it does. The
+      # same file is what nvm/fnm/asdf read in a contributor's shell,
+      # so there is one declaration for the runner and the developer.
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version-file: .node-version
 
       - name: Confirm Docker is actually available
         run: |
