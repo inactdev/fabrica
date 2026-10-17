@@ -104,6 +104,12 @@ and lock it down:
 `fabrica doctor` (below) checks for exactly this file and mode, and
 never prints the token itself.
 
+The token never reaches the Worker: its container sits on an isolated
+Docker network with no route out, and every call it makes goes through
+a relay Fabrica runs beside it, which swaps the throwaway placeholder
+the Worker holds for the real token on its way to the provider (see
+`src/relay/README.md`).
+
 ### `fabrica doctor`
 
     fabrica doctor
