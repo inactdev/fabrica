@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GITHUB_HOSTS, isAllowedTarget } from "./allowlist.ts";
+import { GITHUB_HOSTS, isAllowedTarget } from "./allowlist.mjs";
 
 test("isAllowedTarget matches an exact host, any port, when none is named", () => {
   assert.ok(isAllowedTarget("github.com", 443, GITHUB_HOSTS));

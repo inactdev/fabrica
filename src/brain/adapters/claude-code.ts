@@ -52,13 +52,10 @@ const HOST_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
 // gateway-routing support (the gateway-connect guide names only
 // ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY as credential variables), so the
 // container is handed ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL instead of
-// a placeholder-valued HOST_TOKEN_VAR. The one fact this adapter cannot
-// verify from documentation or on this machine (no Docker, no live
-// credential here) is that api.anthropic.com accepts a subscription
-// OAuth token - the same value CLAUDE_CODE_OAUTH_TOKEN would have
-// carried - as that Bearer value; it is the standard OAuth-bearer wire
-// format, but confirming it needs a real task run, which is this
-// change's own stated "done" condition.
+// a placeholder-valued HOST_TOKEN_VAR. Verified live on 2026-10-17:
+// api.anthropic.com accepts the subscription OAuth token (the value
+// CLAUDE_CODE_OAUTH_TOKEN carries) as that Bearer value, swapped in by
+// the relay.
 const ANTHROPIC_HOST = "api.anthropic.com";
 const ANTHROPIC_AUTH_HEADER = "authorization";
 
@@ -156,6 +153,13 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
       HTTPS_PROXY: `http://${relay.host}:${relay.port}`,
       http_proxy: `http://${relay.host}:${relay.port}`,
       https_proxy: `http://${relay.host}:${relay.port}`,
+      // The CLI honors HTTP_PROXY for its own API calls too, so without
+      // this it sends the gateway call to the relay in proxy form
+      // (`POST http://<relay>/v1/messages`) and the relay forwards that
+      // whole URL as the path - the provider answers 403. Observed live
+      // on 2026-10-17; with the relay excluded, the same call gets 200.
+      NO_PROXY: relay.host,
+      no_proxy: relay.host,
     },
     network: { isolatedNetwork: isolatedNetworkName },
     teardown: async () => {
