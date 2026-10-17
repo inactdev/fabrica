@@ -75,3 +75,34 @@ export function finalMessageFor(writeup: WorkerWriteup | undefined, fallbackTitl
 export function renderCommitMessage(message: FinalMessageForCommit): string {
   return `${message.title}\n\n${message.body}`;
 }
+
+/** Matches only when `taskText` opens with this exact prefix - naming the
+ * issue as the whole of the task's work, not merely mentioning one in
+ * passing ("the first half of #186" does not match). */
+const ISSUE_PREFIX = /^Issue #(\d+):/;
+
+/** The issue number a task's own text names as the whole of its work, or
+ * undefined when it doesn't. */
+export function issueNamedByTaskText(taskText: string): number | undefined {
+  const match = ISSUE_PREFIX.exec(taskText);
+  return match ? Number(match[1]) : undefined;
+}
+
+/** The issue a pull request for this task should close: whichever the
+ * chat agent named explicitly (`Foreman.do`'s `issue` option, persisted
+ * at registration - see src/foreman/ask.ts) takes priority, since it was
+ * stated outright; otherwise whatever `taskText` itself names per
+ * `issueNamedByTaskText`. Undefined either way means this task is not
+ * the whole of one issue's work, and nothing is closed. */
+export function closesIssueFor(taskText: string, explicitIssue: number | undefined): number | undefined {
+  return explicitIssue ?? issueNamedByTaskText(taskText);
+}
+
+/** The pull request body a reviewer sees - `body` with one trailing
+ * "Closes #N" line when `issue` is set, unchanged otherwise. Deliberately
+ * never applied to the commit message `body` also renders into
+ * (renderCommitMessage): GitHub closes an issue from a merged pull
+ * request's body, not from an intermediate attempt's own commit. */
+export function withClosesLine(body: string, issue: number | undefined): string {
+  return issue === undefined ? body : `${body}\n\nCloses #${issue}`;
+}

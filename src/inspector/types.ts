@@ -69,7 +69,10 @@ export interface FabricaEvent extends Omit<ContractFabricaEvent, "name"> {
 export interface Foreman {
   do(
     taskText: string,
-    opts: { project: string; attempts?: number; brain?: Brain }
+    /** `issue` mirrors contract/surface.ts's `Foreman.do` - the chat
+     * agent's explicit alternative to `taskText` starting with
+     * "Issue #N:" (src/foreman/pr-body.ts's `closesIssueFor`). */
+    opts: { project: string; attempts?: number; brain?: Brain; issue?: number }
   ): Promise<FabricaTask>;
   answer(taskId: string, text: string): Promise<FabricaTask>;
   deliveryOf(taskId: string): Promise<Delivery | null>;

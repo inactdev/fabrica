@@ -37,6 +37,12 @@ record as it runs.
   <task text>              What to do, in plain words. Quote it.
   --project <path-or-name> A project's own path, or a name already
                             registered in projects.toml.
+  --issue <N>              This task is the whole of GitHub issue N's
+                            work - the opened pull request's body will
+                            end with "Closes #N". Only for a task that
+                            IS the issue, not part of it; omit otherwise.
+                            The same applies automatically when <task
+                            text> itself starts with "Issue #N:".
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -61,7 +67,7 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
   try {
-    const { taskText, projectArg } = parseDoArgs(argv);
+    const { taskText, projectArg, issue } = parseDoArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
     const config = loadConfigOrDefault(recordHome);
     const projectPath = resolveProjectPath(config, projectArg);
@@ -70,6 +76,7 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
       recordHome,
       projectPath,
       taskText,
+      issue,
       entryScript: opts.entryScript,
       timeoutMs: opts.timeoutMs,
     });

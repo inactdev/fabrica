@@ -20,6 +20,7 @@ import type { Delivery } from "../inspector/types.ts";
 import { requireCheckCommand, resolveCheckCommand } from "./resolve-check.ts";
 import { ForemanError } from "./errors.ts";
 import { handToInspector } from "./inspection.ts";
+import { withClosesLine } from "./pr-body.ts";
 import type { FinalMessageForCommit } from "./pr-body.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 
@@ -72,7 +73,15 @@ export function inspectorJudge(
   taskId: string,
   line: ProductionLine,
   baseCommit: string,
-  inspector: Inspector
+  inspector: Inspector,
+  /** The issue number this task's pull request should close (issue
+   * "make every pull request it opens close its issue on merge"), or
+   * undefined when this task is not the whole of one issue's work.
+   * Resolved once per round by the caller (do.ts/verdict.ts) via
+   * pr-body.ts's `closesIssueFor` and applied only to the body Inspector
+   * is asked to open the pull request with - never to the commit
+   * message itself. */
+  closesIssue?: number
 ): Judge {
   return async (_attempt, _gateChanges, finalMessage) => {
     // attempts.ts has already committed this attempt with this same
@@ -81,7 +90,7 @@ export function inspectorJudge(
     // open never disagree about what this attempt calls itself.
     const inspection = (await handToInspector(recordHome, taskId, line, baseCommit, inspector, {
       prTitle: finalMessage.title,
-      prBody: finalMessage.body,
+      prBody: withClosesLine(finalMessage.body, closesIssue),
     }))!;
     if (inspection.verdict === "refused") return { kind: "refused", inspection };
     const gate: GateResult = {
@@ -128,7 +137,7 @@ export function prepareRound(
   taskId: string,
   line: ProductionLine,
   baseCommit: string,
-  opts: { inspector?: Inspector; checkBox?: CheckBox }
+  opts: { inspector?: Inspector; checkBox?: CheckBox; closesIssue?: number }
 ): { judge: Judge; mode: CheckMode } {
   const check = resolveCheckCommand(recordHome, line.project);
   const mode = chooseCheckMode(line, baseCommit, opts.inspector);
@@ -147,7 +156,7 @@ export function prepareRound(
 
   const judge =
     mode.mode === "inspector"
-      ? inspectorJudge(recordHome, taskId, line, baseCommit, mode.inspector)
+      ? inspectorJudge(recordHome, taskId, line, baseCommit, mode.inspector, opts.closesIssue)
       : selfTestJudge(recordHome, taskId, line, check, opts.checkBox ?? defaultCheckBox());
   return { judge, mode };
 }
