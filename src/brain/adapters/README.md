@@ -61,6 +61,11 @@ CLI family comes first - issue #6 built the first CLI adapter, listed
 below - and direct API adapters arrive later, behind that deliberate
 switch.
 
+That switch exists now (issue #200): `index.ts`'s `FABRICA_BRAIN` picks
+which written adapter `defaultBrainAdapter` builds, and the direct-API
+adapter it can select refuses to run at all without a per-task cap.
+Unset, nothing changes - the flat-rate CLI worker is still the brain.
+
 ## Guarding a fake against drift from the real thing
 
 Every CLI adapter's fast tests need a controllable fake standing in for
@@ -115,6 +120,25 @@ assumed to be handled.
   through the `claude` CLI's non-interactive mode. The first CLI
   adapter (issue #6). See [`claude-code.md`](./claude-code.md) for what
   was verified against the real binary and why each flag is there.
+- **`openai-compatible.ts`** - the first direct API adapter (issue
+  #200): any OpenAI-compatible chat-completions endpoint, with the agent
+  loop in [`openai-agent/`](./openai-agent/) running inside the worker's
+  box, aimed by default at a vendor serving open-weight models. It
+  refuses to run without a per-task spending cap, and its receipts are
+  real metered dollars taken from the provider's own per-call usage -
+  never from a price table in this repo, which is the one design
+  decision everything else there follows from. See
+  [`openai-compatible.md`](./openai-compatible.md) for the documents
+  each wire detail came from, the cap's exact semantics, and the three
+  things that still need the Client's own machine to verify.
+
+The drift guard above is written for the CLI family, where a fake binary
+can silently stop resembling a real one. A direct API adapter's
+equivalent exposure is the vendor's wire shape, so its own version of
+the pattern is: a fake *provider* for the fast tests, and one opt-in
+test that makes a real call to assert the single documented fact its
+receipts depend on - with the same loud `after()` banner when it did not
+run. `openai-compatible.test.ts` is that shape.
 
 ## Candidate CLI adapters
 

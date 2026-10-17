@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { credentialEnvFrom, defaultBrainAdapter } from "./index.ts";
+import { brainEnvValue, credentialEnvFrom, defaultBrainAdapter, selectedBrain } from "./index.ts";
 
 // Issue #85, and the worker-token half of the "a failed start is never
 // silent" ruling. `Brain` is name/model/work/ask - the `env` an adapter
@@ -106,4 +106,83 @@ test("defaultBrainAdapter returns a usable brain, and refuses at its first call 
   assert.equal(typeof brain.work, "function");
   assert.equal(typeof brain.ask, "function");
   await assert.rejects(() => brain.ask("anything"), /claude setup-token/);
+});
+
+// Issue #200: the per-token pipe is opened deliberately, with one
+// switch, and nothing changes for anyone who leaves it alone.
+
+test("with no FABRICA_BRAIN set, the flat-rate CLI worker is still the brain", () => {
+  const brain = selectedBrain({ CLAUDE_CODE_OAUTH_TOKEN: "fake" }, recordHome());
+  assert.equal(brain.name, "claude-code");
+});
+
+test("FABRICA_BRAIN selects the direct-API worker, pointed at the model named for it", () => {
+  const brain = selectedBrain({ FABRICA_BRAIN: "openai-compatible", FABRICA_MODEL: "some/open-weight-model" }, recordHome());
+  assert.equal(brain.name, "openai-compatible");
+  assert.equal(brain.model, "some/open-weight-model");
+});
+
+test("the direct-API worker refuses to be built with no model named, pointing at where to name one", () => {
+  const home = recordHome();
+  assert.throws(
+    () => selectedBrain({ FABRICA_BRAIN: "openai-compatible" }, home),
+    (err: Error) => err.message.includes("FABRICA_MODEL") && err.message.includes(join(home, "brain.env"))
+  );
+});
+
+test("a cost basis that is neither reported nor free is refused rather than guessed at", () => {
+  assert.throws(
+    () =>
+      selectedBrain(
+        { FABRICA_BRAIN: "openai-compatible", FABRICA_MODEL: "m", FABRICA_MODEL_COST: "cheap" },
+        recordHome()
+      ),
+    /must be "reported" or "free"/
+  );
+});
+
+test("every setting can live in brain.env instead of the environment", () => {
+  const home = recordHome({
+    content: [
+      "FABRICA_BRAIN=openai-compatible",
+      "export FABRICA_MODEL=from/the-file",
+      "OPENROUTER_API_KEY=fake-key-from-the-file",
+      "FABRICA_MODEL_BASE_URL=http://127.0.0.1:11434/v1",
+      "",
+    ].join("\n"),
+    mode: 0o600,
+  });
+
+  const brain = selectedBrain({}, home);
+  assert.equal(brain.name, "openai-compatible");
+  assert.equal(brain.model, "from/the-file");
+  assert.equal(brainEnvValue(home, "OPENROUTER_API_KEY"), "fake-key-from-the-file");
+  assert.equal(brainEnvValue(home, "NOT_IN_THE_FILE"), undefined);
+});
+
+test("brainEnvValue holds the same file-permission line credentialEnvFrom does", () => {
+  const home = recordHome({ content: "OPENROUTER_API_KEY=fake\n", mode: 0o644 });
+  assert.throws(() => brainEnvValue(home, "OPENROUTER_API_KEY"), (err: Error) => err.message.includes("chmod 600"));
+  assert.equal(brainEnvValue(recordHome(), "OPENROUTER_API_KEY"), undefined, "a missing file is simply not configured");
+});
+
+test("defaultBrainAdapter names the selected brain before its first call, and never throws while being built", () => {
+  const home = recordHome({ content: "FABRICA_BRAIN=openai-compatible\n", mode: 0o644 });
+  // A badly-permissioned brain.env is reported by the first real call,
+  // not by building the adapter - an `accept` verdict needs no worker.
+  assert.equal(defaultBrainAdapter(home).name, "claude-code");
+
+  const previous = { brain: process.env.FABRICA_BRAIN, model: process.env.FABRICA_MODEL };
+  process.env.FABRICA_BRAIN = "openai-compatible";
+  process.env.FABRICA_MODEL = "named/before-any-call";
+  try {
+    const brain = defaultBrainAdapter(recordHome());
+    assert.equal(brain.name, "openai-compatible");
+    assert.equal(brain.model, "named/before-any-call");
+  } finally {
+    if (previous.brain === undefined) delete process.env.FABRICA_BRAIN;
+    else process.env.FABRICA_BRAIN = previous.brain;
+    if (previous.model === undefined) delete process.env.FABRICA_MODEL;
+    else process.env.FABRICA_MODEL = previous.model;
+  }
 });
