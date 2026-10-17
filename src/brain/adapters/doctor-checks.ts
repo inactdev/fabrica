@@ -11,7 +11,11 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runContained } from "../../containment/index.ts";
 import { DEFAULT_IMAGE } from "./claude-code.ts";
-import { brainEnvPath, credentialEnvFrom } from "./index.ts";
+import { HOSTED_BASE_URL, HOSTED_CREDENTIAL_VAR } from "./openai-compatible.ts";
+import { chatCompletion } from "./openai-agent/client.mjs";
+import type { AgentJob } from "./openai-agent/types.ts";
+import { BRAIN_SELECTION_VAR, brainEnvPath, credentialEnvFrom, directBrainSettings, DIRECT_BRAIN_NAME, DIRECT_VARS } from "./index.ts";
+import type { DirectBrainSettings } from "./index.ts";
 
 export interface AdapterCheck {
   ok: boolean;
@@ -66,8 +70,40 @@ export function workerImageStatus(stamp: () => string | null = readStamp): Adapt
 
 const TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
 
+/** The direct-API worker's own version of the check below (issue #200):
+ * a different worker needs a different credential, and a Client who
+ * switched brains must not be told the brain they are not using is
+ * misconfigured. A credential is genuinely optional here - a local
+ * server needs none - so what this really checks is that the pipe is
+ * fully named: which model, at which endpoint. */
+function directWorkerCheck(settings: DirectBrainSettings, recordHome: string): AdapterCheck {
+  const label = "worker model";
+  const baseUrl = settings.baseUrl ?? HOSTED_BASE_URL;
+  if (settings.model === undefined) {
+    return {
+      ok: false,
+      label,
+      detail: `${BRAIN_SELECTION_VAR}=${DIRECT_BRAIN_NAME} is set, but no model is`,
+      fix: `set ${DIRECT_VARS.model} in the environment, or add a line ${DIRECT_VARS.model}=<model> to ${brainEnvPath(recordHome)}`,
+    };
+  }
+  const credential =
+    settings.apiKey === undefined
+      ? `no credential configured (a local server needs none; a hosted one needs ${HOSTED_CREDENTIAL_VAR})`
+      : `a credential is configured (${HOSTED_CREDENTIAL_VAR})`;
+  return { ok: true, label, detail: `${settings.model} at ${baseUrl} - ${credential}` };
+}
+
 export function workerTokenStatus(env: NodeJS.ProcessEnv, recordHome: string): AdapterCheck {
   const label = "worker token";
+  let direct: DirectBrainSettings | undefined;
+  try {
+    direct = directBrainSettings(env, recordHome);
+  } catch (err) {
+    return { ok: false, label, detail: "not usable", fix: err instanceof Error ? err.message : String(err) };
+  }
+  if (direct !== undefined) return directWorkerCheck(direct, recordHome);
+
   try {
     credentialEnvFrom(env, recordHome);
   } catch (err) {
@@ -100,8 +136,70 @@ const realRun: Run = async (env) => {
   }
 };
 
-export async function probeWorkerToken(env: NodeJS.ProcessEnv, recordHome: string, run: Run = realRun): Promise<AdapterCheck> {
+/** One real call to the configured API - the direct-API worker's own
+ * version of the live probe below (issue #200). It is made from the host,
+ * not from a box: the host already holds the credential (it is what
+ * hands the relay the real value), and this call does no work and
+ * touches no project. It confirms the two things a task depends on and
+ * nothing else can tell the Client in advance: that the credential and
+ * model are accepted, and that the provider really does report the
+ * call's cost - without which every receipt from this worker would be
+ * unmeasured, and rule 10 would stop all work until each was recorded by
+ * hand. */
+async function probeDirectWorker(
+  settings: DirectBrainSettings,
+  recordHome: string,
+  call: typeof chatCompletion
+): Promise<AdapterCheck> {
+  const label = "worker model (live)";
+  if (settings.model === undefined) {
+    const named = directWorkerCheck(settings, recordHome);
+    return { ...named, label, detail: `not checked: ${named.detail}` };
+  }
+  const target: Pick<AgentJob, "endpoint" | "apiKey" | "model"> = {
+    endpoint: settings.baseUrl ?? HOSTED_BASE_URL,
+    apiKey: settings.apiKey ?? null,
+    model: settings.model,
+  };
+  const fix =
+    `check ${DIRECT_VARS.model} and ${HOSTED_CREDENTIAL_VAR} (in the environment, or in ${brainEnvPath(recordHome)}), ` +
+    `and that the model is one ${target.endpoint} actually serves`;
+
+  let response: Record<string, unknown>;
+  try {
+    response = await call(target, { messages: [{ role: "user", content: "Reply with OK." }], max_tokens: 16 });
+  } catch (err) {
+    return { ok: false, label, detail: `dead - ${(err instanceof Error ? err.message : String(err)).split("\n")[0]}`, fix };
+  }
+
+  const cost = (response.usage as { cost?: unknown } | undefined)?.cost;
+  if (settings.cost !== "free" && typeof cost !== "number") {
+    return {
+      ok: false,
+      label,
+      detail: "alive, but the provider reported no cost for the call, so every receipt from it would be unmeasured",
+      fix: `if ${target.endpoint} genuinely bills nothing, set ${DIRECT_VARS.cost}=free; otherwise use a target that reports its own cost`,
+    };
+  }
+  const spent = typeof cost === "number" ? `, cost $${cost}` : " (this target bills nothing)";
+  return { ok: true, label, detail: `alive - ${settings.model} answered a real call${spent}` };
+}
+
+export async function probeWorkerToken(
+  env: NodeJS.ProcessEnv,
+  recordHome: string,
+  run: Run = realRun,
+  call: typeof chatCompletion = chatCompletion
+): Promise<AdapterCheck> {
   const label = "worker token (live)";
+  let direct: DirectBrainSettings | undefined;
+  try {
+    direct = directBrainSettings(env, recordHome);
+  } catch (err) {
+    return { ok: false, label, detail: "dead: no usable configuration", fix: err instanceof Error ? err.message : String(err) };
+  }
+  if (direct !== undefined) return probeDirectWorker(direct, recordHome, call);
+
   let credential: Record<string, string>;
   try {
     credential = credentialEnvFrom(env, recordHome).env ?? {};

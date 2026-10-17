@@ -1,13 +1,16 @@
-// The one place outside claude-code.ts itself allowed to name it (this
-// directory is exempt from rule8.no-favorite-brain's scan). Picks which
-// written adapter backs `defaultBrainAdapter()` - v1 has exactly one
-// (adapters/README.md's "v1 ordering"), so there is no real selection
-// logic yet, only a seam for src/brain/index.ts to re-export without
-// naming a vendor itself.
+// The one place outside the adapters themselves allowed to name them
+// (this directory is exempt from rule8.no-favorite-brain's scan). Picks
+// which written adapter backs `defaultBrainAdapter()`: the CLI adapter
+// built for the Client's own flat-rate subscription by default, or - when
+// the Client deliberately opens the per-token pipe (`FABRICA_BRAIN`, see
+// `selectedBrain` below) - the direct-API adapter issue #200 added, which
+// refuses to run without a spending cap.
 
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { claudeCodeAdapter, claudeCodeCheckBox, type ClaudeCodeAdapterOptions } from "./claude-code.ts";
+import { HOSTED_CREDENTIAL_VAR, openAiCompatibleAdapter } from "./openai-compatible.ts";
+import type { CostSource } from "./openai-agent/types.ts";
 import type { Brain } from "../types.ts";
 import type { CheckBox } from "../check-box.ts";
 
@@ -71,17 +74,146 @@ export function credentialEnvFrom(env: NodeJS.ProcessEnv, recordHome: string): C
   return { env: { [CREDENTIAL_VAR]: tokens[0] } };
 }
 
-/** The real worker. Its token is looked up at its first call, not here,
- * so building one costs nothing and never fails - an `accept` verdict, for
- * one, never needs a worker at all. A missing token then refuses that
- * first call (the clarifying step, before any worker starts), and the
- * Foreman records why. */
+/** Which brain the Client has chosen, and how it is configured. Every
+ * name below belongs to this directory, the only one rule 8 lets a brain
+ * be named in; the values are the Client's. `FABRICA_BRAIN` is the one
+ * switch: left unset, nothing changes and the flat-rate CLI worker runs,
+ * exactly as before. Each is read from Fabrica's own environment first,
+ * then from `<recordHome>/brain.env`, so a machine can keep all of it in
+ * the one 600-mode file it already keeps the credential in. */
+export const BRAIN_SELECTION_VAR = "FABRICA_BRAIN";
+export const DIRECT_BRAIN_NAME = "openai-compatible";
+export const DIRECT_VARS = {
+  /** The model id, e.g. an open-weight model's slug. No default: this
+   * adapter has no favourite model, and a slug guessed here would fail
+   * at the first call with the provider's own error instead of ours. */
+  model: "FABRICA_MODEL",
+  /** Optional - defaults to the adapter's own vendor. Point it at any
+   * OpenAI-compatible base URL, a local server included. */
+  baseUrl: "FABRICA_MODEL_BASE_URL",
+  /** Optional - `reported` or `free`; see `CostSource`. */
+  cost: "FABRICA_MODEL_COST",
+} as const;
+
+/** One variable out of `<recordHome>/brain.env`, or undefined when the
+ * file has no such line. Separate from `credentialEnvFrom` below on
+ * purpose: that function's job is to refuse a missing worker token with
+ * an instructive message, while a missing line here is an ordinary
+ * "not configured". The mode check is the same, because the file is the
+ * same file and it holds a credential. */
+export function brainEnvValue(recordHome: string, name: string): string | undefined {
+  const path = brainEnvPath(recordHome);
+  let mode: number;
+  try {
+    mode = statSync(path).mode;
+  } catch {
+    return undefined;
+  }
+  if ((mode & 0o077) !== 0) {
+    throw new Error(
+      `${path} can be read by other users on this machine (mode ${(mode & 0o777).toString(8)}), and it holds a ` +
+        `credential. Run \`chmod 600 ${path}\`, then try again.`
+    );
+  }
+  const line = new RegExp(`^(?:export\\s+)?${name}=(.*)$`);
+  const values = readFileSync(path, "utf8")
+    .split("\n")
+    .map((raw) => line.exec(raw.trim())?.[1])
+    .filter((value): value is string => value !== undefined && value.length > 0);
+  return values.length === 1 ? values[0] : undefined;
+}
+
+function setting(env: NodeJS.ProcessEnv, recordHome: string, name: string): string | undefined {
+  const fromEnv = env[name];
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+  return brainEnvValue(recordHome, name);
+}
+
+/** How the direct-API worker is configured, when it is the one selected
+ * - raw, unvalidated, so `fabrica doctor` can report what is missing
+ * rather than only refusing. Undefined means the Client has not opened
+ * that pipe at all, which is the default. */
+export interface DirectBrainSettings {
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  cost?: string;
+}
+
+export function directBrainSettings(env: NodeJS.ProcessEnv, recordHome: string): DirectBrainSettings | undefined {
+  if (setting(env, recordHome, BRAIN_SELECTION_VAR) !== DIRECT_BRAIN_NAME) return undefined;
+  return {
+    model: setting(env, recordHome, DIRECT_VARS.model),
+    baseUrl: setting(env, recordHome, DIRECT_VARS.baseUrl),
+    apiKey: setting(env, recordHome, HOSTED_CREDENTIAL_VAR),
+    cost: setting(env, recordHome, DIRECT_VARS.cost),
+  };
+}
+
+/** The brain `defaultBrainAdapter` builds, chosen from the settings
+ * above. Exported for its own test: the choice is invisible on the
+ * `Brain` it returns beyond `name`/`model`. */
+export function selectedBrain(env: NodeJS.ProcessEnv, recordHome: string): Brain {
+  const direct = directBrainSettings(env, recordHome);
+  if (direct === undefined) {
+    return claudeCodeAdapter(credentialEnvFrom(env, recordHome));
+  }
+
+  const { model, apiKey, baseUrl, cost } = direct;
+  if (model === undefined) {
+    throw new Error(
+      `${BRAIN_SELECTION_VAR}=${DIRECT_BRAIN_NAME} is set, but no model is: this worker has no favourite model, so ` +
+        `name one with ${DIRECT_VARS.model} (in the environment, or as a line in ${brainEnvPath(recordHome)}).`
+    );
+  }
+  if (cost !== undefined && cost !== "reported" && cost !== "free") {
+    throw new Error(`${DIRECT_VARS.cost} must be "reported" or "free" (it is "${cost}") - see the adapter's own doc for what each means.`);
+  }
+  return openAiCompatibleAdapter({
+    model,
+    // The file src/config/load.ts's projectsTomlPath names, spelled out
+    // here rather than imported: a brain adapter has no business
+    // depending on the config loader, and this is only ever a path
+    // printed in a refusal message.
+    capSetting: join(recordHome, "projects.toml"),
+    ...(apiKey === undefined ? {} : { apiKey }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(cost === undefined ? {} : { costSource: cost as CostSource }),
+  });
+}
+
+/** What to call the selected brain before it has been built - a plain
+ * look at the settings that never validates and never throws, so
+ * building a `defaultBrainAdapter` stays free (see below). */
+function brainLabels(env: NodeJS.ProcessEnv, recordHome: string): { name: string; model: string } {
+  try {
+    if (setting(env, recordHome, BRAIN_SELECTION_VAR) === DIRECT_BRAIN_NAME) {
+      return { name: DIRECT_BRAIN_NAME, model: setting(env, recordHome, DIRECT_VARS.model) ?? "unset" };
+    }
+  } catch {
+    // An unreadable or badly-permissioned brain.env is reported properly
+    // by the first real call, which is where a refusal belongs.
+  }
+  return { name: "claude-code", model: "default" };
+}
+
+/** The real worker. Which adapter it is, and its token, are both looked
+ * up at its first call, not here, so building one costs nothing and never
+ * fails - an `accept` verdict, for one, never needs a worker at all. A
+ * missing token or an unnamed model then refuses that first call (the
+ * clarifying step, before any worker starts), and the Foreman records
+ * why. */
 export function defaultBrainAdapter(recordHome: string): Brain {
   let inner: Brain | undefined;
-  const real = (): Brain => (inner ??= claudeCodeAdapter(credentialEnvFrom(process.env, recordHome)));
+  const real = (): Brain => (inner ??= selectedBrain(process.env, recordHome));
+  const labels = brainLabels(process.env, recordHome);
   return {
-    name: "claude-code",
-    model: "default",
+    get name() {
+      return inner?.name ?? labels.name;
+    },
+    get model() {
+      return inner?.model ?? labels.model;
+    },
     ask: async (brief) => real().ask(brief),
     work: async (brief, workdir, opts) => real().work(brief, workdir, opts),
   };
