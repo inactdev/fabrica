@@ -8,19 +8,20 @@ through" actually true rather than a convention a worker could ignore.
 
 ## What's in scope here, and what isn't
 
-This half builds and tests the mechanism on its own - the issue's own
+This half built and tested the mechanism on its own - the issue's own
 acceptance shape, "a fake worker and a fake provider" (`server.test.ts`,
-`helpers/fake-provider.ts`). It does **not** wire the reference CLI
-adapter (`src/brain/adapters/`) to actually run through it. Three
-things that wiring needs don't exist yet, each explicitly deferred
-to issue #186's second half rather than guessed at here: a real place to
-configure a real credential per project (`projects.toml`), a `fabrica
-doctor` check that the relay/isolated-network mechanism is actually
-healthy before a task starts, and the docs telling the Client about any
-of this. Shipping a "wired in" adapter today would mean inventing all
-three on the spot, which is exactly the scope this round was told to
-leave alone. What's here is a complete, independently correct
-mechanism, ready to be pointed at from that wiring once it exists.
+`helpers/fake-provider.ts`) - without wiring the reference CLI adapter to
+it. A later, scoped-down slice of issue #186's second half did that
+wiring: the reference adapter's own `prepareNetwork`/`connectThroughRelay`
+helpers (see its own doc, "Process containment") put every real
+`work()`/`ask()` call behind this relay and `isolated-network.ts`
+together. Deliberately still missing, and still deferred: a real place
+to configure a credential per *project* (`projects.toml` - the adapter's
+credential today is still the one `defaultBrainAdapter` already reads
+from the host or `brain.env`, just no longer forwarded into the
+container raw) and a `fabrica doctor` check that the mechanism is
+healthy before a task starts. Both stay open for whoever picks up the
+rest of #186's second half.
 
 ## Why not the third-party sandboxing/proxy tool the issue named
 
@@ -119,9 +120,9 @@ exports `GITHUB_HOSTS` (GitHub is a destination, not a brain, so it's
 fine here), but the model provider's own hostname is never a constant
 in this module - it is whatever host a caller's `GatewayTarget` names.
 The "short, fixed list" issue #186 asks for is therefore assembled at
-the call site (eventually `src/brain/adapters/`, once wired - see
-"What's in scope here, and what isn't" above), not inside `src/relay/`
-itself.
+the call site (the reference adapter's own provider-host constant, in
+`src/brain/adapters/` - see "What's in scope here, and what isn't"
+above), not inside `src/relay/` itself.
 
 ## The isolated network: `src/containment/isolated-network.ts`
 

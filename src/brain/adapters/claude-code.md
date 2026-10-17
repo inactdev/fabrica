@@ -158,11 +158,16 @@ doesn't yet.
 
 Every call runs inside a fresh, throwaway Docker container: the only
 writable mounts are `workdir` and this adapter's own per-task session
-home (below), the project's git history is mounted read-only, network
-deliberately allowed (this CLI needs it to reach its own API - see
+home (below), the project's git history is mounted read-only, and
+network reaches only what the call actually needs - this CLI has to
+reach its own API to do anything at all, so network is never `"denied"`
+outright, but (issue #186's second half, see below) a real call's own
+network is a fresh isolated Docker network with a relay as its only
+route out, not the open internet (`"allowed"` is still what a caller
+with nothing to protect, e.g. this file's own fast tests, gets). See
 `../../containment/README.md` for why filesystem is what's actually
 enforced here, and why Docker's own bind-mount model makes that
-guarantee stronger than a host-process sandbox's could be). This isn't
+guarantee stronger than a host-process sandbox's could be. This isn't
 a description of a mechanism - it's real and verified on the real
 machine; see that README for what was tried before (macOS's
 `sandbox-exec`, replaced), what broke, and what's actually proven.
@@ -226,25 +231,66 @@ failure was.
 The gap is closed (issue #85) by forwarding a credential from the host's
 environment, never by baking one into the image. `claude setup-token`
 mints a long-lived token meant for exactly this kind of headless use.
-`index.ts`'s `defaultBrainAdapter(recordHome)` forwards exactly one
-variable, `CLAUDE_CODE_OAUTH_TOKEN`, into `ClaudeCodeAdapterOptions.env`:
-from this process's environment when it is set there, otherwise from
-`<recordHome>/brain.env`, which Fabrica reads itself (Client ruling
-2026-10-10). No shell profile has to export it. That file must be mode
-600 (otherwise refused, naming `chmod 600`) and hold exactly one
-`CLAUDE_CODE_OAUTH_TOKEN=...` line, optionally written
-`export CLAUDE_CODE_OAUTH_TOKEN=...` so a shell can source the same file.
-Every other line is ignored, never forwarded; no token line, an empty
-one, or two of them is refused, naming the file. The token goes only into the
-container's env-file - never into Fabrica's own process environment,
-never into a log. Nothing else from the host environment crosses the
-container wall - that option is an explicit allowlist, not a
-pass-through. With neither source, the adapter's first call (the
-clarifying step, before any worker starts) refuses with a message naming
-`claude setup-token` and the file path, and the task records it as
-`ask-failed`. The token is looked up at that first call, not when the
-adapter is built, so a command that never needs a worker (an `accept`
-verdict) never needs a token.
+`index.ts`'s `defaultBrainAdapter(recordHome)` reads exactly one
+variable, `CLAUDE_CODE_OAUTH_TOKEN` (`HOST_TOKEN_VAR` in this file), into
+`ClaudeCodeAdapterOptions.env`: from this process's environment when it
+is set there, otherwise from `<recordHome>/brain.env`, which Fabrica
+reads itself (Client ruling 2026-10-10). No shell profile has to export
+it. That file must be mode 600 (otherwise refused, naming `chmod 600`)
+and hold exactly one `CLAUDE_CODE_OAUTH_TOKEN=...` line, optionally
+written `export CLAUDE_CODE_OAUTH_TOKEN=...` so a shell can source the
+same file. Every other line is ignored, never forwarded; no token line,
+an empty one, or two of them is refused, naming the file. Nothing else
+from the host environment crosses the container wall - that option is an
+explicit allowlist, not a pass-through. With neither source, the
+adapter's first call (the clarifying step, before any worker starts)
+refuses with a message naming `claude setup-token` and the file path,
+and the task records it as `ask-failed`. The token is looked up at that
+first call, not when the adapter is built, so a command that never needs
+a worker (an `accept` verdict) never needs a token.
+
+**The token stops there now - it never reaches the container itself.**
+Issue #186's second half (scoped down: no `projects.toml`, no `fabrica
+doctor`) put a relay between this credential and the box. `work()`/
+`ask()` both run every call's `env` through `prepareNetwork`: when
+`HOST_TOKEN_VAR` is present (every real call), `connectThroughRelay`
+spins up a fresh, internet-less Docker network
+(`../../containment/isolated-network.ts`'s `createIsolatedNetwork`,
+issue #186's own "the worker box having no direct network") and starts
+`../../relay/`'s relay bound to that network's own gateway address, with
+`tunnelAllowlist: GITHUB_HOSTS` and a `gateway` pointed at the real
+`ANTHROPIC_HOST`, credential-swapping a freshly minted, per-call
+placeholder for the real token. The container is then run with
+`network: { isolatedNetwork }` instead of `"allowed"`, and its env drops
+`CLAUDE_CODE_OAUTH_TOKEN` entirely in favor of `ANTHROPIC_BASE_URL`
+(pointed at the relay) and `ANTHROPIC_AUTH_TOKEN` (the placeholder) -
+verified against Claude Code's current documentation
+(`code.claude.com/docs/en/llm-gateway-connect`,
+`.../authentication#authentication-precedence`) as the officially
+supported gateway-routing pair: `ANTHROPIC_BASE_URL` overrides the API
+endpoint, and `ANTHROPIC_AUTH_TOKEN` is "sent as the `Authorization:
+Bearer` header... when routing through an LLM gateway or proxy that
+authenticates with bearer tokens" - `CLAUDE_CODE_OAUTH_TOKEN` itself has
+no documented gateway-routing support, so it is never the variable that
+reaches the box. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and both
+cases of `HTTP(S)_PROXY` are set alongside it (the first so Claude
+Code's own telemetry/version-check traffic, which bypasses
+`ANTHROPIC_BASE_URL` and would otherwise hang trying to reach a host this
+network has no route to, is turned off instead; the second so GitHub
+reachability survives for anything in the box that honors the ordinary
+proxy convention). The relay and network are torn down in the same
+`finally` that already cleans up each call's sanitized git config/
+scratch dirs - as throwaway as the container itself. **The one fact this
+file cannot verify from documentation or on this machine** (no Docker,
+no live credential, at the time this was written): that
+`api.anthropic.com` actually accepts a subscription OAuth token as a
+plain `Authorization: Bearer` value the same way it would via
+`CLAUDE_CODE_OAUTH_TOKEN`'s own code path. It is the standard OAuth-bearer
+wire format, but confirming it needs a real task to actually deliver -
+see `claude-code.test.ts`'s "never forwards the real worker token"
+tests for the mechanism proof (container never sees the real value,
+only a placeholder), and `../../relay/README.md` for the relay/network
+mechanism itself.
 
 Because the token arrives by environment rather than being baked in, the
 caveat on `claude-code.test.ts`'s capability-spike guard still holds as
