@@ -47,6 +47,12 @@ export interface ContainerizedRelayOptions {
   gateway?: GatewayTarget;
   /** Defaults to `RELAY_IMAGE` (launch.ts) - overridable for tests. */
   image?: string;
+  /** How long to wait for the container's own `FABRICA-RELAY-LISTENING`
+   * line before giving up with `RelayError("listen-failed")`; defaults to
+   * launch.ts's own 15s. Overridable so `launch.test.ts` can drive that
+   * timeout path (and the container removal on it) without a real
+   * 15-second wait in the fast suite. */
+  listenTimeoutMs?: number;
 }
 
 export interface ContainerizedRelayHandle {

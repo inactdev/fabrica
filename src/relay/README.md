@@ -204,6 +204,42 @@ logs`, `docker inspect`), which works regardless of the same
 Docker-Desktop host/VM boundary that broke the old design, since it's
 never network traffic in the first place.
 
+### A failed launch removes its container, it doesn't just stop it
+
+`container/launch.ts` takes `docker rm -f` to the relay container on
+*every* path that can throw once `docker run` has been attempted - the
+run itself failing, the container never reporting
+`FABRICA-RELAY-LISTENING` inside the timeout, no address on the isolated
+network, anything unexpected. It used to stop it instead, which is not
+the same thing: `--rm` only reaps a container that actually started and
+then exited, and `docker stop` returns before the daemon's own reap
+necessarily has, so a container could still be sitting in `docker ps -a`
+*attached to the isolated network* - and a network with a container
+attached refuses to be removed, so `src/brain/adapters/claude-code.ts`'s
+own teardown (`removeIsolatedNetwork`/`removeEgressNetwork`, run right
+after `relay.close()`) then failed too and leaked both. That is not
+hypothetical: after the 2026-10-17 proof runs the Client's machine was
+left with a `fabrica-relay-<id>` container and three
+`fabrica-worker-<id>`/`fabrica-relay-egress-<id>` networks. The
+`"listen-failed"` message still carries the last 500 characters of the
+container's own output, because `waitForListening` reads `docker logs`
+*before* it throws and the removal happens after - destroying the one
+account of why the relay never listened would trade one debugging
+problem for another. A removal that itself fails is swallowed, not
+reported: the error already on its way to the Client is the one worth
+seeing, and the container may legitimately be gone already.
+
+`container/launch.test.ts` proves both of those paths with no Docker
+daemon involved at all - `container/helpers/fake-docker.mjs` is copied
+onto a throwaway directory as `docker` and that directory put first on
+`PATH`, so `launch.ts`'s own `execFile("docker", ...)` calls reach the
+fake and a test can assert on the exact argv a real daemon would have
+got, in the exact order the calls arrived. Nothing in `launch.ts` was
+given a seam to make this testable; only `listenTimeoutMs`
+(`container/types.ts`) is new, so the timeout path doesn't cost the fast
+suite a real 15-second wait. This is the one test in this module that
+neither needs nor skips on Docker.
+
 ### What's verified, what isn't
 
 Every Docker-specific claim above is sourced from Docker's own current
@@ -239,7 +275,7 @@ means stating plainly rather than leaving implicit.
 | `allowlist.mjs` | `GITHUB_HOSTS` and `isAllowedTarget` - hostname matching (exact or one level of `*.` wildcard, optional port), used by tunnel mode. |
 | `server.mjs` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `"network-refused"` event. Runs identically whether started in-process (this module's own fast tests) or inside `container/`'s own container. |
 | `errors.mjs` | `RelayError` - `"invalid-config"` (a malformed `GatewayTarget`) and `"listen-failed"` (also used for a container that never starts or never confirms it's listening). |
-| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side), `entrypoint.mjs` (runs inside the container), `bootstrap.mjs` (the container's command), `runtime-imports.test.ts` (proves the container's files need nothing but plain `node`). |
+| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side), `entrypoint.mjs` (runs inside the container), `bootstrap.mjs` (the container's command), `runtime-imports.test.ts` (proves the container's files need nothing but plain `node`), `launch.test.ts` + `helpers/fake-docker.mjs` (the daemon-free failure-path proof - see "A failed launch removes its container" above). |
 | `helpers/fake-provider.ts` | Test-only: a plain-HTTP stand-in for "the model provider," recording every request it receives so a test can assert on exactly what crossed the wire. |
 | `server.test.ts` | The fake-worker/fake-provider proof: gateway credential swap, tunnel allow/refuse, the refusal event, per-task event isolation. |
 | `docker-isolation.test.ts` | The containerized proof: a real worker box, on the isolated network, reaches the relay container and nothing else; the relay container itself reaches the real internet through its own egress network. |
