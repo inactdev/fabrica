@@ -24,6 +24,7 @@
       "Bash(wget *)"
     ],
     "allow": [
+      "Bash(fabrica register *)",
       "Bash(fabrica do *)",
       "Bash(fabrica status *)",
       "Bash(fabrica log *)",

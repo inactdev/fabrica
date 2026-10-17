@@ -11,7 +11,7 @@
 // process has already exited, which is the whole point of detachment
 // (see the module README's "Why detached execution" section).
 
-import { ConfigError } from "../index.ts";
+import { ConfigError, inspectorConfiguredOnOrigin, notSetUpMessage } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { DO_USAGE, parseDoArgs } from "./do-args.ts";
@@ -36,7 +36,10 @@ record as it runs.
 
   <task text>              What to do, in plain words. Quote it.
   --project <path-or-name> A project's own path, or a name already
-                            registered in projects.toml.
+                            registered in projects.toml. A project whose
+                            base commit has no .inspector.json is refused
+                            here, before anything is registered - set it
+                            up first with \`fabrica register\`.
   --issue <N>              This task is the whole of GitHub issue N's
                             work - the opened pull request's body will
                             end with "Closes #N". Only for a task that
@@ -47,6 +50,26 @@ record as it runs.
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
 `;
+
+/**
+ * Refuses, before the task is registered, a project whose base commit
+ * carries no `.inspector.json` - there is nothing there saying how the
+ * work should be checked, so there is no verified work to be had, and a
+ * task that cannot be verified should cost nothing at all.
+ *
+ * "Base commit" means origin's default branch, which is where a task's
+ * branch is actually cut from (src/line/cut.ts) - never the Client's
+ * local checkout. `inspectorConfiguredOnOrigin` answering `null` means
+ * it could not find out (no origin, origin unreachable): deliberately
+ * not treated as "not set up", since telling someone whose network is
+ * down to run `fabrica register` would be both wrong and less use than
+ * the real git error the task itself then reports.
+ */
+function refusalForUnsetUpProject(projectPath: string): string | null {
+  return inspectorConfiguredOnOrigin(projectPath) === false
+    ? `fabrica do: ${notSetUpMessage(projectPath)}`
+    : null;
+}
 
 export interface RunDoCommandOptions {
   recordHome?: string;
@@ -59,6 +82,9 @@ export interface RunDoCommandOptions {
   askPollMs?: number;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+  /** Test-only seam for the "is this project set up for Fabrica"
+   * question, which otherwise fetches origin. */
+  setUpRefusal?: (projectPath: string) => string | null;
 }
 
 /** Returns the process exit code - never throws. */
@@ -71,6 +97,18 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
     const recordHome = opts.recordHome ?? resolveRecordHome();
     const config = loadConfigOrDefault(recordHome);
     const projectPath = resolveProjectPath(config, projectArg);
+
+    // Before registering anything: a project with no .inspector.json at
+    // its base commit cannot have its work independently checked, so
+    // there is no task worth starting on it yet. Refusing here - rather
+    // than letting the detached task reach a worker first - is what
+    // makes this cost nothing, and what lets the message name the
+    // command that fixes it.
+    const notSetUp = (opts.setUpRefusal ?? refusalForUnsetUpProject)(projectPath);
+    if (notSetUp !== null) {
+      stderr(notSetUp);
+      return 1;
+    }
 
     const { taskId, isRunning } = await spawnDetachedTask({
       recordHome,

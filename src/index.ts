@@ -64,6 +64,19 @@ export { loadConfig, projectsTomlPath, requireProject } from "./config/index.ts"
 export { ConfigError } from "./config/index.ts";
 export type { ConfigErrorCode, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
 
+// `fabrica register` (src/cli/register-command.ts): the one command
+// allowed to push, because it runs as the Client and only ever creates a
+// branch for him to merge. `inspectorConfiguredOnOrigin`/`notSetUpMessage`
+// are also what `fabrica do` refuses an unset-up project with, up front.
+export { registerProject, RegisterError, inspectorConfiguredOnOrigin, notSetUpMessage } from "./register/index.ts";
+export type {
+  RegisterErrorCode,
+  RegisterOptions,
+  RegisterRequest,
+  RegisterResult,
+  RegisterTools,
+} from "./register/index.ts";
+
 // Off-the-books nets (issue #13), prevention half: recordBlockedEditAttempt
 // is what `fabrica deny-and-log-edit` (src/cli/deny-and-log-edit-command.ts,
 // the command a harness's session config wires its file-editing hook to)

@@ -1,4 +1,5 @@
 export {
+  commandIsInstalled,
   defaultInspector,
   inspectorAdapter,
   inspectorConfigMatches,

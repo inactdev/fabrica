@@ -22,11 +22,18 @@ import { assertSafeId, describeGitError, requireRepoRoot } from "./safety.ts";
 
 /** Fetches `origin` and resolves its default branch by reading the
  * remote's own HEAD symref (`git ls-remote --symref`) - never assumed to
- * be "master". Returns the ref to cut a new line from (`origin/<branch>`).
- * Throws `LineError("fetch-failed")`, never silently falling back to the
- * project's local checkout, when the fetch fails, "origin" doesn't exist,
- * or the remote's HEAD symref can't be read. */
-function fetchOriginBase(project: string): string {
+ * be "master". Returns the bare branch name (e.g. "main"); the caller
+ * makes `origin/<branch>` of it. Throws `LineError("fetch-failed")`,
+ * never silently falling back to the project's local checkout, when the
+ * fetch fails, "origin" doesn't exist, or the remote's HEAD symref can't
+ * be read.
+ *
+ * Exported because this is the one place that answers "which branch does
+ * a task's base commit come from" - `fabrica register` and `fabrica do`'s
+ * own up-front "is this project set up" check (src/register/) need the
+ * same answer, and deriving it a second time is how the two sides come to
+ * disagree about what a task's base commit actually is. */
+export function fetchOriginDefaultBranch(project: string): string {
   try {
     execFileSync("git", ["fetch", "origin"], {
       cwd: project,
@@ -64,7 +71,7 @@ function fetchOriginBase(project: string): string {
     );
   }
 
-  return `origin/${match[1]}`;
+  return match[1];
 }
 
 export function createProductionLine(opts: { project: string; taskId: string; recordHome: string }): ProductionLine {
@@ -90,7 +97,7 @@ export function createProductionLine(opts: { project: string; taskId: string; re
   // Before creating the task's working folder at all: fetch origin and
   // resolve its default branch, so a failed fetch starts nothing rather
   // than silently cutting from the local checkout.
-  const base = fetchOriginBase(project);
+  const base = `origin/${fetchOriginDefaultBranch(project)}`;
 
   mkdirSync(join(recordHome, "tasks", opts.taskId), { recursive: true });
 

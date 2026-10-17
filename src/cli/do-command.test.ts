@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -347,6 +347,16 @@ test("runDoCommand: a daily-cap refusal exits non-zero with the numbers", async 
   assert.match(io.err.join("\n"), /\$0\.00/);
 });
 
+// This file's two self-tested cases below reach a failure that only
+// exists behind `fabrica do`'s own up-front "is this project set up for
+// Fabrica" gate - a project with no .inspector.json is now refused
+// before it is ever registered (see the gate's own tests further down).
+// They are about what the *detached task* reports once it has started,
+// so they say so explicitly rather than being rewritten into a
+// different failure: PAST_SETUP_GATE skips exactly that one check and
+// nothing else.
+const PAST_SETUP_GATE = { setUpRefusal: () => null };
+
 // #73, Client ruling 2026-10-10: a start that fails after registration is
 // never silent - fabrica do waits for the real outcome and, on a failure,
 // prints the message and exits 1, instead of timing out into "proceeding".
@@ -364,6 +374,7 @@ test("runDoCommand: a task that fails before any work starts prints why and exit
     recordHome,
     entryScript: FAKE_ENTRY,
     ...FAST_ASK_WAIT,
+    ...PAST_SETUP_GATE,
     ...io,
   });
 
@@ -383,7 +394,13 @@ test("runDoCommand: every cli.log line carries a timestamp and the task id", asy
   pushToOrigin(project);
   const io = captureIo();
 
-  await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...FAST_ASK_WAIT, ...io });
+  await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...PAST_SETUP_GATE,
+    ...io,
+  });
   const taskId = io.out[0];
   // The child writes its last line as it exits; give it a moment.
   await new Promise((r) => setTimeout(r, 500));
@@ -394,4 +411,69 @@ test("runDoCommand: every cli.log line carries a timestamp and the task id", asy
     assert.match(line, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z /, `no timestamp: ${line}`);
     assert.ok(line.includes(` ${taskId} `), `no task id: ${line}`);
   }
+});
+
+// The up-front setup gate: a project whose base commit carries no
+// .inspector.json has nothing saying how its work should be checked, so
+// a task on it could never be verified - and a task that cannot be
+// verified should cost nothing at all. Refused before registration, so
+// there is no task id, no record, and no detached process.
+test("runDoCommand: a project with no .inspector.json at its base commit is refused before anything is registered", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const io = captureIo();
+
+  const code = await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, [], "nothing was registered, so there is no task id to print");
+  assert.equal(
+    io.err.join("\n"),
+    `fabrica do: this project isn't set up for Fabrica yet: run fabrica register ${project} --check ... --image ...`
+  );
+  assert.equal(existsSync(join(recordHome, "events.jsonl")), false, "no event was recorded for a task never started");
+});
+
+// It is the *base* commit that decides, which is origin's default
+// branch - not whatever the Client's local checkout happens to hold.
+test("runDoCommand: .inspector.json only in the local checkout is not set up - the base commit is what counts", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  writeFileSync(join(project, ".inspector.json"), '{"check":"./check.sh","image":"alpine"}\n');
+  const io = captureIo();
+
+  const code = await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /isn't set up for Fabrica yet/);
+});
+
+// "Could not find out" is not "not set up": a project with no origin at
+// all gets the real downstream git error, which says far more than a
+// misdirected instruction to run `fabrica register` would.
+test("runDoCommand: a project whose setup state cannot be determined is not refused by the gate", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0", { inspector: false, origin: false });
+  const io = captureIo();
+
+  const code = await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1, "it still fails - just not with the gate's message");
+  assert.doesNotMatch(io.err.join("\n"), /isn't set up for Fabrica yet/);
+  assert.equal(io.out.length, 1, "it got as far as registering, so there is a task id and a record to read");
 });

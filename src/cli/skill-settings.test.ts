@@ -322,11 +322,22 @@ test("fabrica update is never auto-approved, including through a chained command
   }
 });
 
-test("fabrica do/status/log/watch run unprompted, bare and with arguments", () => {
+test("fabrica register/do/status/log/watch run unprompted, bare and with arguments", () => {
   const templates = harnessSettings();
   assert.ok(templates.length > 0, "no harness ships a settings.json to check");
 
+  // `register` is on the allow list despite being the one command that
+  // pushes. It records no judgment of the Client's and spawns no
+  // session: it sets a repository up so a task can be checked at all,
+  // refuses outright if the check it was given fails, and the only
+  // thing it ever puts on origin is a branch the Client still has to
+  // merge himself. HANDBOOK.md's case 8 is what stops it being run
+  // unasked - the agent turns `fabrica do`'s "isn't set up" refusal
+  // into a yes/no question first.
   const attempts = [
+    "fabrica register",
+    'fabrica register /repo --check "npm test" --image node:24',
+    'fabrica register /repo --check "npm test" --image node:24 --protected "*.test.ts" --name repo',
     "fabrica do",
     'fabrica do "fix the bug" --project /repo',
     "fabrica status",

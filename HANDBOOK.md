@@ -19,7 +19,7 @@ out case by case.
    says. When it is silent, say it is silent. A plausible guess is not an
    answer.
 
-If something comes up that isn't one of the seven cases below, resolve it
+If something comes up that isn't one of the eight cases below, resolve it
 by those two rules rather than improvising a workaround — and if it still
 doesn't resolve cleanly, say so to the Client rather than guess.
 
@@ -30,7 +30,7 @@ so even an assistant that ignored this file can't run them. That
 enforcement is a backstop, not a substitute: not every tool has one
 installed, and this file is what makes the right call either way.
 
-## The seven things the Client asks for
+## The eight things the Client asks for
 
 ### 1. "Have Fabrica do X"
 
@@ -97,6 +97,10 @@ all mean the same thing as an "Issue #N:" prefix would:
 Leave `--issue` off when the issue is named as only part of the task
 ("the first half of #186," "the Inspector side of #109") - closing it
 early would be wrong - or when more than one issue is named.
+
+If `fabrica do` refuses with "this project isn't set up for Fabrica
+yet," no task was started and nothing is wrong with his words - the
+project needs setting up first. That's case 8.
 
 ### 2. "How's it going"
 
@@ -173,6 +177,65 @@ Run `fabrica --help` or `fabrica <command> --help` before trusting
 anything above that a `--help` flag can check directly — this file can go
 stale; a `--help` flag can't. If the two disagree, the installed binary
 wins, and that's worth telling the Client, not silently papering over.
+
+### 8. `fabrica do` says the project isn't set up for Fabrica
+
+    fabrica do: this project isn't set up for Fabrica yet: run fabrica
+    register <path> --check ... --image ...
+
+No task was started. The project's base commit has no `.inspector.json`,
+so nothing there says how work on it should be checked.
+
+**Turn that into a yes/no question for the Client, and wait for his
+answer.** Not a statement you then act on - an actual question, because
+setting a project up pushes a branch to his repository and opens a pull
+request on it, under his own name. He may not want that right now, or
+want it on a different repository, or want to do it himself. Something
+like: "That project isn't set up for Fabrica yet - setting it up pushes
+a `fabrica/register` branch and opens a pull request for you to merge.
+Want me to?"
+
+**On yes**, read the check command and the image out of the repository's
+**own CI workflow** - `.github/workflows/*.yml`, or whatever that
+project uses - rather than inventing either one:
+
+- The **check** is the command that workflow actually runs to decide
+  green: the `npm test` / `make check` / `pytest` step. If it runs
+  several, the check is the one command that has to pass for all of
+  them - in this repository's own case, `npm test`. Don't substitute a
+  command you think is better.
+- The **image** is the environment that workflow runs in: an explicit
+  `container:` image if it names one, otherwise the one implied by its
+  language-version step (`actions/setup-node` with `node-version: 24`
+  means a Node 24 image). Pin a version; never leave it floating on
+  `latest`.
+- Add **`--network`** if that check installs anything of its own into
+  the project - `npm ci` against the registry, `pip install` into a
+  virtualenv. Without it the check later runs in a box with no network
+  and fails on the install step, not on the project. A check that
+  installs a *system* package (`apt-get install shellcheck`) is a
+  different matter: no network flag helps, because the box runs as your
+  own user and cannot write outside the project. Pick an `--image` that
+  already ships that tool instead.
+
+Then run it:
+
+    fabrica register <path> --check "<the command>" --image <the image>
+
+Report what it says. It refuses, having changed nothing, if the check
+fails inside that image, if `gh` isn't logged in, if Docker isn't
+running, or if the project is registered already - relay the refusal,
+don't work around it. On success it prints the pull request's URL; tell
+him it needs **his** merge before the original `fabrica do` will run,
+and don't merge it yourself.
+
+**If the CI workflow doesn't tell you the check or the image** - there
+is no workflow, or it's too indirect to read a single command out of -
+say so and ask him for them. Guessing a check command is guessing what
+"correct" means for every future task on that project.
+
+**On no**, that's the end of it. Don't run `fabrica register`, and don't
+retry the `fabrica do`.
 
 ## What this file deliberately does not cover
 

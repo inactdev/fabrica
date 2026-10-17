@@ -219,10 +219,20 @@ test("runWatchCommand: a live heartbeat that lands after catch-up still prints a
 
 test("runWatchCommand: a task mid-check streams its real elapsed time live, never a quiet alarm", async () => {
   const recordHome = tempRecordHome();
+  // Self-tested, so there is a "checking" state at all - and `fabrica do`
+  // now refuses a project with no .inspector.json before registering
+  // anything. This test is about what `fabrica watch` streams for a task
+  // that has started, so it skips exactly that one gate and nothing else
+  // (see do-command.test.ts for the gate's own tests).
   const project = makeFixtureRepo("sleep 2 && exit 0", { inspector: false });
 
   const doIo = { out: [] as string[], stdout: (l: string) => doIo.out.push(l), stderr: () => {} };
-  await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...doIo });
+  await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    setUpRefusal: () => null,
+    ...doIo,
+  });
   const taskId = doIo.out[0];
 
   const io = captureIo();
