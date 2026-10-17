@@ -46,6 +46,34 @@ test("inspectorConfigJson writes only keys this repository's own .inspector.json
   }
 });
 
+test("inspectorConfigJson: --network and --timeout are written only when asked for", () => {
+  const plain = JSON.parse(inspectorConfigJson({ image: "node:24", protectedPaths: [] }));
+  assert.equal(Object.hasOwn(plain, "network"), false, "off is the absence of the key, not network: false");
+  assert.equal(Object.hasOwn(plain, "timeoutSeconds"), false, "no --timeout leaves Inspector's own default");
+
+  const full = JSON.parse(
+    inspectorConfigJson({ image: "node:24", protectedPaths: [], network: true, timeoutSeconds: 1200 })
+  );
+  assert.equal(full.network, true);
+  assert.equal(full.timeoutSeconds, 1200);
+});
+
+// Same provenance rule as above, applied to the two keys those flags
+// write: this repository's own config is the only evidence of them.
+test("inspectorConfigJson: network and timeoutSeconds are keys this repository's own config uses", () => {
+  const ours = JSON.parse(readFileSync(join(repoRoot, ".inspector.json"), "utf8")) as Record<string, unknown>;
+  const full = JSON.parse(
+    inspectorConfigJson({ image: "node:24", protectedPaths: ["check.sh"], network: true, timeoutSeconds: 60 })
+  );
+
+  assert.deepEqual(Object.keys(full).sort(), ["check", "image", "network", "protectedPaths", "timeoutSeconds"]);
+  for (const key of Object.keys(full)) {
+    assert.ok(Object.hasOwn(ours, key), `${key} is not a key this repository's own .inspector.json uses`);
+  }
+  assert.equal(typeof ours.network, typeof full.network, "and the same type it uses it with");
+  assert.equal(typeof ours.timeoutSeconds, typeof full.timeoutSeconds);
+});
+
 test("inspectorConfigJson names ./check.sh as the check, whatever the command was", () => {
   const config = JSON.parse(inspectorConfigJson({ image: "node:24", protectedPaths: [] }));
   assert.equal(config.check, RECORDED_CHECK);

@@ -27,6 +27,16 @@ import { createProductionLine, destroyProductionLine } from "../line/index.ts";
 import { pullRequestUrlIn, realRegisterTools } from "./tools.ts";
 import { RECORDED_CHECK } from "./origin.ts";
 
+// Plain `alpine` - the image contract/helpers/fixture.ts's
+// FIXTURE_INSPECTOR_CONFIG names too, so the fixtures and this test
+// agree on one stock image. Deliberately not an image with its own
+// entrypoint: runContained passes the command straight after the image
+// name with no --entrypoint override, so `alpine/git` (whose entrypoint
+// IS git) would run `git sh -c ./check.sh` and fail for a reason that
+// has nothing to do with the check. src/line/worktree-git.test.ts can
+// use alpine/git because it passes git subcommands as the command.
+const CHECK_IMAGE = "alpine";
+
 function dockerAvailable(): boolean {
   try {
     execFileSync("docker", ["info"], { stdio: "ignore" });
@@ -74,7 +84,7 @@ test("realRegisterTools.runCheck runs the command inside the image, against the 
   try {
     const green = await realRegisterTools.runCheck({
       workdir: line.workdir,
-      image: "alpine/git",
+      image: CHECK_IMAGE,
       command: RECORDED_CHECK,
     });
     assert.equal(green.ran, true, `the box should have run the check: ${JSON.stringify(green)}`);
@@ -83,18 +93,21 @@ test("realRegisterTools.runCheck runs the command inside the image, against the 
     // The same box reports a red check as red, not as "could not run".
     const red = await realRegisterTools.runCheck({
       workdir: line.workdir,
-      image: "alpine/git",
+      image: CHECK_IMAGE,
       command: "exit 7",
     });
     assert.equal(red.ran, true);
     assert.equal(red.ran && red.exitCode, 7);
 
     // git works in there, through the read-only mounts - a real project's
-    // check often shells out to it.
+    // check often shells out to it. Installed first, rather than run from
+    // an image that ships it: `runCheck` allows the network for exactly
+    // this reason (a real check installs what it needs), and this is that
+    // case in miniature.
     const gitWorks = await realRegisterTools.runCheck({
       workdir: line.workdir,
-      image: "alpine/git",
-      command: "git log --oneline",
+      image: CHECK_IMAGE,
+      command: "apk add -q git && git status",
     });
     assert.equal(gitWorks.ran, true);
     assert.equal(gitWorks.ran && gitWorks.exitCode, 0, `git should work inside the box: ${JSON.stringify(gitWorks)}`);
@@ -142,7 +155,7 @@ test("realRegisterTools.runCheck reports an unresolvable workdir as not run, wit
 
   const result = await realRegisterTools.runCheck({
     workdir: notAWorktree,
-    image: "alpine/git",
+    image: CHECK_IMAGE,
     command: RECORDED_CHECK,
   });
 

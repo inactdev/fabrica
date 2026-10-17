@@ -90,8 +90,9 @@ registers anything, but only the second is a statement about the check.
 
 ## `.inspector.json`'s schema, and where it came from
 
-Three keys, and only three: `check` (always `./check.sh`), `image`, and
-`protectedPaths`.
+Up to five keys: `check` (always `./check.sh`), `image`,
+`protectedPaths`, and — only when asked for — `network` and
+`timeoutSeconds`.
 
 Inspector's own documentation was **not reachable** when this was
 written, so the schema was taken from the only authoritative evidence
@@ -100,13 +101,50 @@ real Inspector acts on in this repo's CI, plus
 `contract/helpers/fixture.ts`'s `FIXTURE_INSPECTOR_CONFIG`, which
 proves the minimal `check` + `image` form is valid.
 `scaffold.test.ts` pins that provenance — it fails if a key is written
-that this repository's own config doesn't use. A fourth key should not
+that this repository's own config doesn't use. A sixth key should not
 be added here on a guess; read Inspector's docs first.
 
 `check.sh` and `.inspector.json` are **always** in `protectedPaths`,
 with `--protected` adding to them rather than replacing them: a setup
 that protected the check but not the file naming the check would
 protect nothing, which is CONTRACT rule 9's whole subject.
+
+## `--network` and `--timeout`
+
+Both describe the box **Inspector** will run the check in later, and
+both only ever land in `.inspector.json`:
+
+- `--network` writes `network: true`. A check that installs its own
+  tools — `apt-get install shellcheck`, `apk add`, `pip install` —
+  cannot pass in a box with no network, and that is a common enough
+  shape (a dotfiles repository's shellcheck run, for one) to need a
+  flag rather than a hand-edit after the fact.
+- `--timeout <seconds>` writes `timeoutSeconds`.
+
+"Off" is the **absence** of the key, not `network: false` or
+`timeoutSeconds: 0`. Neither of those spellings appears in any live
+config in reach, and the rule above — only write keys and values some
+working config actually shows — applies to values as much as to names.
+Leaving a key out leaves Inspector's own default in place, which is
+what "default off" means here.
+
+Neither flag changes the one proving run `register` itself does.
+`tools.ts`'s `realRunCheck` has always passed `network: "allowed"`, for
+the same reason a worker's own check box does: a real check installs
+dependencies. Gating that run behind `--network` would make a check
+that is about to be green on Inspector refuse here as **red**, which is
+the one outcome this command must never produce. `--timeout` has
+nothing to bind to on this side at all — `RunContainedOptions` has no
+timeout.
+
+The honest cost of that choice, stated rather than hidden: a check that
+needs the network and was registered *without* `--network` passes here
+and fails later, under Inspector. The alternative trade — refusing a
+good check because this run denied it something Inspector would have
+allowed — is worse, since it blocks setup outright instead of producing
+a red first task with a legible reason. HANDBOOK.md's case 8 tells the
+chat agent to pass `--network` whenever the CI check it copied installs
+anything of its own, which is where the choice is actually made.
 
 ## One source of truth for the check
 
@@ -174,3 +212,16 @@ repository" convention `src/line`'s own tests use.
 The fake's `runCheck` reads the `check.sh` register just wrote and
 honors what it says, so `--check "exit 3"` is genuinely red and
 `--check "exit 0"` genuinely green, with no container involved.
+
+`tools.test.ts` is the other half: the real containerized run, skipping
+(never failing) without a Docker daemon, and genuinely executed by
+`.github/workflows/docker-tests.yml`. Its image is plain `alpine`, and
+that matters — `runContained` passes the command straight after the
+image name with no `--entrypoint` override, so an image whose
+entrypoint is a program (`alpine/git`'s is `git`) would run
+`git sh -c ./check.sh` and fail for a reason that has nothing to do
+with the check. `src/line/worktree-git.test.ts` can use `alpine/git`
+because it passes git *subcommands* as the command. Where that test
+needs git, it installs it (`apk add -q git && git status`) rather than
+switching images — which is also the `--network` case above, in
+miniature.

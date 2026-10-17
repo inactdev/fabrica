@@ -38,6 +38,48 @@ asking. Any failure to answer it (no origin, origin unreachable) is
 treated as "unknown" and lets the existing downstream error speak, rather
 than mislabelling an unreachable remote as an unregistered project.
 
+## The follow-up round's decision, written before the change
+
+Two things: a Docker-gated test that failed on CI for a reason that had
+nothing to do with what it was testing, and two new `.inspector.json`
+knobs (`--network`, `--timeout`).
+
+**Chosen for the test: swap the image to plain `alpine`, and install git
+inside the container for the one assertion that needs git.** Safest,
+because it changes only the test — `runContained` passes the caller's
+command straight after the image name with no `--entrypoint` override, so
+`alpine/git` (whose entrypoint *is* `git`) turned
+`sh -c ./check.sh` into `git sh -c ./check.sh`. `alpine` is also the image
+`contract/helpers/fixture.ts`'s `FIXTURE_INSPECTOR_CONFIG` already names,
+so the test and the fixtures agree on one stock image.
+
+**Rejected: adding an `--entrypoint ""` override to `runContained`** (or
+to `realRunCheck`). It would have made every entrypoint-bearing image
+usable as a check image, which sounds like an improvement — but it
+changes the container every *worker's* check already runs in, for a
+reason that arose in a test, and an image's entrypoint is part of how its
+author intends it to be run. A project whose check image has an
+entrypoint is a real question for a later ruling, not something to decide
+sideways here.
+
+**Chosen for the flags: both are written into `.inspector.json` only; the
+one proving run `register` itself does keeps allowing the network
+unconditionally.** `realRunCheck` has always passed `network: "allowed"`,
+for the same reason a worker's own check box does — a real check installs
+dependencies. Gating that proving run behind `--network` would make a
+check that is about to be green on Inspector read as *red* here, which is
+the one outcome this command must never produce. There is no timeout in
+`RunContainedOptions` at all, so `--timeout` has nothing to bind to on
+this side either.
+
+**Rejected: `--network <allowed|denied>` as a value flag**, matching
+`src/containment`'s own vocabulary. It reads better next to the rest of
+the codebase, but the Client asked for a default-off switch, the
+`.inspector.json` key is a boolean, and a value flag would invite
+`--network false` — a spelling no live config shows. Off is therefore the
+*absence* of the key, not `false`: `register` only ever writes values
+that have been seen in a working config.
+
 ## Facts worth keeping
 
 - **`.inspector.json`'s schema was taken from this repository's own

@@ -3,9 +3,9 @@
 // `.inspector.json`'s schema is taken from this repository's own working
 // copy of it plus contract/helpers/fixture.ts's FIXTURE_INSPECTOR_CONFIG
 // (which proves the minimal `check` + `image` form is valid) - never from
-// a key neither of those shows. Only three keys are ever written, and
-// `check` is always `./check.sh`, so .inspector.json, check.sh and
-// projects.toml cannot disagree about what has to pass.
+// a key neither of those shows. `check` is always `./check.sh`, so
+// .inspector.json, check.sh and projects.toml cannot disagree about what
+// has to pass.
 
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK } from "./origin.ts";
 
@@ -25,12 +25,30 @@ export function protectedPathsFor(extra: readonly string[]): string[] {
 }
 
 /** `.inspector.json`'s contents, pretty-printed with a trailing newline -
- * a file a human reads and edits later, not a blob. */
-export function inspectorConfigJson(opts: { image: string; protectedPaths: readonly string[] }): string {
+ * a file a human reads and edits later, not a blob. Key order follows
+ * this repository's own .inspector.json, the one live example of the
+ * schema in reach. */
+export function inspectorConfigJson(opts: {
+  image: string;
+  protectedPaths: readonly string[];
+  /** `--network`: writes `network: true`, so the check box can reach the
+   * network - what a check that installs its own tools needs. */
+  network?: boolean;
+  /** `--timeout <seconds>`: writes `timeoutSeconds`. */
+  timeoutSeconds?: number;
+}): string {
   return `${JSON.stringify(
     {
       check: RECORDED_CHECK,
       image: opts.image,
+      // Each of these is written only when asked for. "Off" is the
+      // absence of the key, never `network: false` or `timeoutSeconds:
+      // 0`: no live config shows either of those spellings, and a value
+      // nothing has been seen to accept is not one to write on a guess
+      // (the same rule that keeps this file to keys this repository's
+      // own config uses).
+      ...(opts.network === true ? { network: true } : {}),
+      ...(opts.timeoutSeconds !== undefined ? { timeoutSeconds: opts.timeoutSeconds } : {}),
       protectedPaths: [...opts.protectedPaths],
     },
     null,

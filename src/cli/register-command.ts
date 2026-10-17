@@ -26,6 +26,13 @@ once per project, before the first \`fabrica do\` against it.
   --image <docker image>   The image that command runs inside, here and
                             for every later task. Fabrica never runs a
                             project's check on your machine.
+  --network                Lets the check reach the network when it runs
+                            later - what a check that installs its own
+                            tools (apt, apk, pip) needs. Off unless you
+                            pass this.
+  --timeout <seconds>      How long the check may take before it counts
+                            as failed. Left to Inspector's own default
+                            unless you pass this.
   --protected <glob,...>   Extra paths a worker may never quietly change,
                             on top of check.sh and .inspector.json, which
                             are always protected.
@@ -42,8 +49,11 @@ anything is created:
      exactly what is missing, having changed nothing.
   2. Creates a temporary worktree of origin's default branch - never
      your own checkout, which is only ever read.
-  3. Writes .inspector.json and check.sh there, and runs check.sh
-     inside --image. A failing check refuses here: nothing is pushed.
+  3. Writes .inspector.json (--image, plus --network and --timeout when
+     given) and check.sh there, and runs check.sh inside --image. A
+     failing check refuses here: nothing is pushed. This one proving
+     run always has the network, whether or not --network was passed -
+     otherwise a check that is about to be green would read as red.
   4. Commits, pushes the fabrica/register branch with your own git
      credentials, and opens a pull request with \`gh pr create\`.
   5. Appends [projects.<name>] to projects.toml.
@@ -114,6 +124,8 @@ export async function runRegisterCommand(argv: string[], opts: RunRegisterComman
         ...(args.image !== undefined ? { image: args.image } : {}),
         protectedPaths: args.protectedPaths,
         ...(args.name !== undefined ? { name: args.name } : {}),
+        ...(args.network !== undefined ? { network: args.network } : {}),
+        ...(args.timeoutSeconds !== undefined ? { timeoutSeconds: args.timeoutSeconds } : {}),
       },
       {
         ...(opts.tools !== undefined ? { tools: opts.tools } : {}),

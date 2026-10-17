@@ -96,6 +96,44 @@ test("register: writes the two files, runs the check in the image, pushes a bran
   assert.ok(readFileSync(projectsTomlPath(recordHome), "utf8").includes(result.tomlEntry.trim()));
 });
 
+// The two knobs describe the box Inspector will use later, so they have
+// to reach the committed file - and nothing else may appear in it when
+// they are left out.
+test("register: --network and --timeout land in the pushed .inspector.json, and nothing does without them", async () => {
+  const recordHome = tempHome();
+  const withFlags = project({ inspector: false });
+  const tools = fakeRegisterTools();
+
+  await registerProject(
+    {
+      recordHome,
+      path: withFlags,
+      check: "exit 0",
+      image: "cimg/node:24.18.0",
+      network: true,
+      timeoutSeconds: 1200,
+      name: "with-flags",
+    },
+    { tools }
+  );
+
+  const config = JSON.parse(fileOnOriginBranch(withFlags, REGISTER_BRANCH, INSPECTOR_CONFIG));
+  assert.equal(config.network, true);
+  assert.equal(config.timeoutSeconds, 1200);
+  const [pr] = tools.pullRequestCalls;
+  assert.ok(pr.body.includes("network access"), "the reviewer should read it, not only diff it");
+  assert.ok(pr.body.includes("1200 seconds"));
+
+  const plain = project({ inspector: false });
+  await registerProject(
+    { recordHome, path: plain, check: "exit 0", image: "cimg/node:24.18.0", name: "plain" },
+    { tools: fakeRegisterTools() }
+  );
+  const plainConfig = JSON.parse(fileOnOriginBranch(plain, REGISTER_BRANCH, INSPECTOR_CONFIG));
+  assert.equal(Object.hasOwn(plainConfig, "network"), false, "off is the absence of the key");
+  assert.equal(Object.hasOwn(plainConfig, "timeoutSeconds"), false);
+});
+
 test("register: the name defaults to origin's repository name, and --name overrides it", async () => {
   const recordHome = tempHome();
   const dir = project({ inspector: false });

@@ -55,6 +55,14 @@ from an argument parser would be the wrong place for it.
 `src/register/register.ts` requires them at the point it knows, and
 says why.
 
+`--network` (a bare flag, off by default) and `--timeout <seconds>`
+describe the box Inspector will run the check in later, and only ever
+land in `.inspector.json`. Off is the *absence* of the key, never
+`network: false`; `register`'s own one proving run always allows the
+network regardless, since a check that is about to be green must not
+read as red here. See `src/register/README.md`'s "`--network` and
+`--timeout`".
+
 Progress goes to **stderr** and the summary to stdout: this command
 pulls images, pushes, and calls GitHub, so saying nothing for a minute
 reads as a hang - but stdout stays worth reading from a script.

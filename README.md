@@ -170,6 +170,12 @@ with its output - nothing is pushed. It needs `gh` (logged in) and
 Docker; `--protected <glob,...>` adds paths a Worker may never quietly
 change, on top of `check.sh` and `.inspector.json`, which always are.
 
+Two more flags describe the box the check runs in later, and go into
+`.inspector.json`: `--network`, if the check installs its own tools
+(`apt-get install shellcheck`, `apk add`, `pip install`) and so cannot
+pass without a network, and `--timeout <seconds>`, if it needs longer
+than Inspector's own default. Both are off unless you pass them.
+
 This is the one Fabrica command that pushes, and it is allowed to
 because of what it is: it runs as you, on your machine, with your own
 credentials, and the only thing it ever puts on origin is a branch you

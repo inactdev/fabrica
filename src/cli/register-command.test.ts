@@ -68,6 +68,23 @@ test("runRegisterCommand: --protected reaches .inspector.json, and --name the re
   assert.deepEqual(config.protectedPaths, ["check.sh", ".inspector.json", "*.test.ts", "docs/**"]);
 });
 
+test("runRegisterCommand: --network and --timeout reach .inspector.json", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+
+  const code = await runRegisterCommand(
+    [dir, "--check", "exit 0", "--image", "node:24", "--network", "--timeout", "900"],
+    { recordHome, tools: fakeRegisterTools(), ...captureIo() }
+  );
+
+  assert.equal(code, 0);
+  const config = JSON.parse(
+    execFileSync("git", ["show", "fabrica/register:.inspector.json"], { cwd: dir, encoding: "utf8" })
+  );
+  assert.equal(config.network, true);
+  assert.equal(config.timeoutSeconds, 900);
+});
+
 // `fabrica register .` has to mean this directory, and the registry has
 // to record it absolutely - a relative path there would mean something
 // different to every later caller.
@@ -132,6 +149,10 @@ test("main: `fabrica register --help` prints its usage and exits 0", async () =>
   assert.equal(await main(["register", "--help"], io), 0);
   assert.ok(io.out.join("\n").includes("fabrica register <path>"));
   assert.ok(io.out.join("\n").includes("the one Fabrica command that pushes"));
+  // Every flag it accepts has to be findable from its own help.
+  for (const flag of ["--check", "--image", "--network", "--timeout", "--protected", "--name"]) {
+    assert.ok(io.out.join("\n").includes(flag), `${flag} should be documented in the help`);
+  }
 });
 
 test("main: `fabrica --help` lists register", async () => {

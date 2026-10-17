@@ -209,6 +209,10 @@ project uses - rather than inventing either one:
   language-version step (`actions/setup-node` with `node-version: 24`
   means a Node 24 image). Pin a version; never leave it floating on
   `latest`.
+- Add **`--network`** if that check installs anything of its own -
+  `apt-get install`, `apk add`, `pip install`, `npm ci` against the
+  registry. Without it the check later runs in a box with no network and
+  fails on the install step, not on the project.
 
 Then run it:
 

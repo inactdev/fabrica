@@ -1,5 +1,5 @@
 // Parses the arguments after `fabrica register`. One positional (the
-// repository's path) and four flags; every wrong shape refuses with
+// repository's path) and six flags; every wrong shape refuses with
 // exact instructions, matching do-args.ts's style.
 //
 // --check and --image are deliberately not required here even though the
@@ -12,7 +12,8 @@
 import { CliError } from "./errors.ts";
 
 export const REGISTER_USAGE =
-  'fabrica register <path> --check "<command>" --image <docker image> [--protected <glob,...>] [--name <name>]';
+  'fabrica register <path> --check "<command>" --image <docker image> [--network] ' +
+  "[--timeout <seconds>] [--protected <glob,...>] [--name <name>]";
 
 export interface RegisterArgs {
   path: string;
@@ -22,17 +23,41 @@ export interface RegisterArgs {
    * dropped. */
   protectedPaths: string[];
   name?: string;
+  /** Present only when --network was passed: off is the absence of the
+   * flag, and of the .inspector.json key it writes. */
+  network?: boolean;
+  timeoutSeconds?: number;
 }
 
-const VALUE_FLAGS = ["--check", "--image", "--protected", "--name"] as const;
+const VALUE_FLAGS = ["--check", "--image", "--protected", "--name", "--timeout"] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
+
+/** Flags that take no value at all. */
+const BARE_FLAGS = ["--network"] as const;
 
 export function parseRegisterArgs(argv: string[]): RegisterArgs {
   const values: Partial<Record<ValueFlag, string>> = {};
   const positionals: string[] = [];
+  let network = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    const bare = BARE_FLAGS.find((flag) => arg === flag);
+    if (bare !== undefined) {
+      network = true;
+      continue;
+    }
+    // Caught separately from "unknown flag", because `--network=true` is
+    // a reasonable guess at a flag that genuinely takes no value, and
+    // there is no spelling of "off" to offer in its place.
+    const bareWithValue = BARE_FLAGS.find((flag) => arg.startsWith(`${flag}=`));
+    if (bareWithValue !== undefined) {
+      throw new CliError(
+        "bad-usage",
+        `fabrica register: ${bareWithValue} takes no value - pass it to allow the check network access, or ` +
+          `leave it out to deny it. Usage: ${REGISTER_USAGE}`
+      );
+    }
     const matched = VALUE_FLAGS.find((flag) => arg === flag || arg.startsWith(`${flag}=`));
     if (matched !== undefined) {
       if (arg === matched) {
@@ -69,6 +94,22 @@ export function parseRegisterArgs(argv: string[]): RegisterArgs {
     }
   }
 
+  // A whole number of seconds, and a real one: `--timeout 0` would be a
+  // check given no time to run, and `--timeout 10m` is a spelling
+  // .inspector.json's own `timeoutSeconds` has no way to carry.
+  const rawTimeout = values["--timeout"];
+  let timeoutSeconds: number | undefined;
+  if (rawTimeout !== undefined) {
+    if (!/^\d+$/.test(rawTimeout.trim()) || Number(rawTimeout.trim()) === 0) {
+      throw new CliError(
+        "bad-usage",
+        `fabrica register: --timeout takes a whole number of seconds greater than zero, not "${rawTimeout}". ` +
+          `Usage: ${REGISTER_USAGE}`
+      );
+    }
+    timeoutSeconds = Number(rawTimeout.trim());
+  }
+
   const protectedPaths = (values["--protected"] ?? "")
     .split(",")
     .map((glob) => glob.trim())
@@ -80,5 +121,7 @@ export function parseRegisterArgs(argv: string[]): RegisterArgs {
     ...(values["--image"] !== undefined ? { image: values["--image"] } : {}),
     protectedPaths,
     ...(values["--name"] !== undefined ? { name: values["--name"] } : {}),
+    ...(network ? { network: true } : {}),
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
   };
 }

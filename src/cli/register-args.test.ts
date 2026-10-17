@@ -31,7 +31,7 @@ test("parseRegisterArgs: --name overrides the default project name", () => {
   assert.equal(parseRegisterArgs(["/repo", "--name", "spending-app"]).name, "spending-app");
 });
 
-test("parseRegisterArgs: every flag also accepts the --flag=value form", () => {
+test("parseRegisterArgs: every value flag also accepts the --flag=value form", () => {
   const args = parseRegisterArgs([
     "--check=npm test",
     "--image=node:24",
@@ -73,13 +73,47 @@ test("parseRegisterArgs: two positionals refuses rather than guessing which is t
 
 test("parseRegisterArgs: an unknown flag refuses, naming it", () => {
   assert.throws(
-    () => parseRegisterArgs(["/repo", "--network", "allowed"]),
-    (err: unknown) => err instanceof CliError && err.message.includes("--network")
+    () => parseRegisterArgs(["/repo", "--force", "yes"]),
+    (err: unknown) => err instanceof CliError && err.message.includes("--force")
   );
 });
 
+test("parseRegisterArgs: --network is off unless passed, and is a bare flag when it is", () => {
+  assert.equal(parseRegisterArgs(["/repo"]).network, undefined, "absent means off - there is no `false` to write");
+  assert.equal(parseRegisterArgs(["/repo", "--network"]).network, true);
+  assert.equal(parseRegisterArgs(["--network", "/repo"]).network, true);
+});
+
+// --network=true is a reasonable guess at a flag that takes no value, so
+// it gets its own message rather than "unknown flag --network=true".
+test("parseRegisterArgs: --network with a value refuses, saying it takes none", () => {
+  assert.throws(
+    () => parseRegisterArgs(["/repo", "--network=true"]),
+    (err: unknown) => err instanceof CliError && err.message.includes("--network takes no value")
+  );
+});
+
+test("parseRegisterArgs: --timeout takes a whole number of seconds", () => {
+  assert.equal(parseRegisterArgs(["/repo", "--timeout", "1200"]).timeoutSeconds, 1200);
+  assert.equal(parseRegisterArgs(["/repo", "--timeout=600"]).timeoutSeconds, 600);
+  assert.equal(parseRegisterArgs(["/repo"]).timeoutSeconds, undefined, "absent leaves Inspector's own default");
+});
+
+// A timeout written into .inspector.json has to be a number of seconds -
+// "0" is a check given no time at all, and "10m" is a spelling the key
+// cannot carry.
+test("parseRegisterArgs: a --timeout that is not a positive whole number refuses", () => {
+  for (const bad of ["0", "10m", "-5", "1.5", "lots", "  "]) {
+    assert.throws(
+      () => parseRegisterArgs(["/repo", "--timeout", bad]),
+      (err: unknown) => err instanceof CliError && err.message.includes("whole number of seconds"),
+      `--timeout ${bad} should refuse`
+    );
+  }
+});
+
 test("parseRegisterArgs: a flag with no value refuses", () => {
-  for (const flag of ["--check", "--image", "--protected", "--name"]) {
+  for (const flag of ["--check", "--image", "--protected", "--name", "--timeout"]) {
     assert.throws(
       () => parseRegisterArgs(["/repo", flag]),
       (err: unknown) => err instanceof CliError && err.message.includes(`${flag} needs a value`),

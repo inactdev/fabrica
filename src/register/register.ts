@@ -64,6 +64,17 @@ export interface RegisterRequest {
   /** Extra globs for .inspector.json's protectedPaths, on top of
    * check.sh and .inspector.json themselves. */
   protectedPaths?: readonly string[];
+  /** `--network`: writes `network: true` into .inspector.json, so the
+   * box Inspector later runs the check in can reach the network - what a
+   * check that installs its own tools (apt, apk, pip) needs. Off by
+   * default. It does not change this command's own one proving run,
+   * which always allows the network: see src/register/README.md's
+   * "--network and --timeout". */
+  network?: boolean;
+  /** `--timeout <seconds>`: writes `timeoutSeconds` into
+   * .inspector.json. Omitted entirely when not given, leaving whatever
+   * Inspector's own default is. */
+  timeoutSeconds?: number;
   /** Overrides the default name (origin's repository name). */
   name?: string;
 }
@@ -146,7 +157,23 @@ export function commitMessageFor(name: string, command: string): string {
   );
 }
 
-export function pullRequestBodyFor(name: string, command: string, image: string): string {
+export function pullRequestBodyFor(
+  name: string,
+  command: string,
+  image: string,
+  /** Whatever --network/--timeout put in the config, so the reviewer
+   * reads the same facts the file states rather than only the diff. */
+  box: { network?: boolean; timeoutSeconds?: number } = {}
+): string {
+  const boxNotes = [
+    ...(box.network === true
+      ? [`The check is given network access, so it can install what it needs.`]
+      : []),
+    ...(box.timeoutSeconds !== undefined
+      ? [`It is given at most ${box.timeoutSeconds} seconds to finish.`]
+      : []),
+  ];
+
   return (
     `## What\n` +
     `\n` +
@@ -158,6 +185,7 @@ export function pullRequestBodyFor(name: string, command: string, image: string)
     `\n` +
     `      ${command}\n` +
     `\n` +
+    (boxNotes.length > 0 ? `${boxNotes.join(" ")}\n\n` : ``) +
     `## Why\n` +
     `\n` +
     `Until this merges, Fabrica refuses tasks on ${name}: a task's base commit\n` +
@@ -387,7 +415,15 @@ export async function registerProject(
     }
 
     const protectedPaths = protectedPathsFor(request.protectedPaths ?? []);
-    writeFileSync(join(worktree, INSPECTOR_CONFIG), inspectorConfigJson({ image, protectedPaths }));
+    writeFileSync(
+      join(worktree, INSPECTOR_CONFIG),
+      inspectorConfigJson({
+        image,
+        protectedPaths,
+        ...(request.network === true ? { network: true } : {}),
+        ...(request.timeoutSeconds !== undefined ? { timeoutSeconds: request.timeoutSeconds } : {}),
+      })
+    );
     writeFileSync(join(worktree, CHECK_SCRIPT), checkScript(check));
     chmodSync(join(worktree, CHECK_SCRIPT), 0o755);
 
@@ -443,7 +479,10 @@ export async function registerProject(
       base: defaultBranch,
       head: REGISTER_BRANCH,
       title: `Set ${name} up for Fabrica`,
-      body: pullRequestBodyFor(name, check, image),
+      body: pullRequestBodyFor(name, check, image, {
+        ...(request.network === true ? { network: true } : {}),
+        ...(request.timeoutSeconds !== undefined ? { timeoutSeconds: request.timeoutSeconds } : {}),
+      }),
     });
     if (pr.url === null) {
       throw new RegisterError(
