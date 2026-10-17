@@ -7,18 +7,16 @@
 // real-binary test for the live proof and claude-code.md for what
 // each discovery means.
 
-import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
 import { WRITEUP_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
-import { ContainmentError, createIsolatedNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
+import { ContainmentError, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
-import { GITHUB_HOSTS, RelayError, startRelay } from "../../relay/index.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
 
@@ -30,137 +28,6 @@ export class ClaudeCodeError extends Error {
     this.name = "ClaudeCodeError";
     this.code = code;
   }
-}
-
-// The host environment variable `defaultBrainAdapter` forwards the real
-// worker token under (adapters/index.ts's CREDENTIAL_VAR). Named again
-// here, in the one directory CONTRACT rule 8 lets a brain be named in,
-// so this file can tell "the real token arrived from the host" apart
-// from "nothing to protect" (a test's own fake env, which never sets
-// this) without the Brain interface needing to say so explicitly.
-const HOST_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
-
-// The real model provider's own host - CONTRACT rule 8 permits naming it
-// only here. This is where ANTHROPIC_BASE_URL points by default; the
-// relay's gateway (below) forwards to it with the real credential
-// substituted in, verified against Claude Code's current documentation
-// (code.claude.com/docs/en/llm-gateway-connect and .../authentication):
-// ANTHROPIC_BASE_URL overrides the API endpoint, and ANTHROPIC_AUTH_TOKEN
-// is "sent as the Authorization: Bearer header... when routing through
-// an LLM gateway or proxy that authenticates with bearer tokens" - which
-// is exactly this relay. CLAUDE_CODE_OAUTH_TOKEN itself has no documented
-// gateway-routing support (the gateway-connect guide names only
-// ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY as credential variables), so the
-// container is handed ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL instead of
-// a placeholder-valued HOST_TOKEN_VAR. The one fact this adapter cannot
-// verify from documentation or on this machine (no Docker, no live
-// credential here) is that api.anthropic.com accepts a subscription
-// OAuth token - the same value CLAUDE_CODE_OAUTH_TOKEN would have
-// carried - as that Bearer value; it is the standard OAuth-bearer wire
-// format, but confirming it needs a real task run, which is this
-// change's own stated "done" condition.
-const ANTHROPIC_HOST = "api.anthropic.com";
-const ANTHROPIC_AUTH_HEADER = "authorization";
-
-/** What `connectThroughRelay` hands back to `ask()`/`work()`: the extra
- * env to merge over the caller's own (with `HOST_TOKEN_VAR` already
- * removed), the container network to run on, and a teardown to run once
- * the call is done - every bit of it (the network, the relay, the
- * placeholder) is as throwaway as the container itself. */
-interface RelayedNetwork {
-  env: Record<string, string>;
-  network: { isolatedNetwork: string };
-  teardown: () => Promise<void>;
-}
-
-/** Issue #186's second half, scoped down (no `projects.toml`, no
- * `fabrica doctor` - just the wiring): every worker box joins a fresh
- * isolated network (`../../containment/isolated-network.ts`) with no
- * route anywhere except the relay this starts on that network's own
- * gateway address. The container never sees `realToken` - only a
- * freshly minted, per-call placeholder in `ANTHROPIC_AUTH_TOKEN` - while
- * `ANTHROPIC_BASE_URL` points at the relay. GitHub is reachable through
- * the relay's CONNECT tunnel (`GITHUB_HOSTS`); every other tunnel target
- * is refused. Every other request (model calls, since `ANTHROPIC_BASE_URL`
- * redirects them here) is forwarded to the real `ANTHROPIC_HOST`, with
- * the placeholder swapped back out for `realToken` on the way - the one
- * place both values ever meet. */
-async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
-  const id = randomUUID().replace(/-/g, "");
-  const networkName = `fabrica-worker-${id}`;
-  const placeholder = `fabrica-placeholder-${id}`;
-
-  // The relay's own "network-refused" bookkeeping (src/relay/types.ts's
-  // RelayOptions) wants a record home and task id, neither of which this
-  // seam has: Brain.ask/work take no taskId at all (CONTRACT rule 8's
-  // socket is brief/workdir/opts only), so there is no real task record
-  // to attribute a refusal to here. A throwaway scratch location stands
-  // in instead, the same spirit as ask()'s own throwaway scratch
-  // directory and homeDir above - a refused tunnel target from this
-  // relay therefore doesn't reach the Client's real task record today;
-  // a stated gap, not a silent one.
-  const scratchRecordHome = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-relay-record-"));
-
-  const network = await createIsolatedNetwork(networkName);
-  const relay = await startRelay({
-    recordHome: scratchRecordHome,
-    taskId: "worker",
-    bindAddress: network.gatewayIp,
-    tunnelAllowlist: [...GITHUB_HOSTS],
-    gateway: {
-      host: ANTHROPIC_HOST,
-      credential: { header: ANTHROPIC_AUTH_HEADER, fakeValue: placeholder, realValue: `Bearer ${realToken}` },
-    },
-  });
-
-  return {
-    env: {
-      ANTHROPIC_BASE_URL: `http://${network.gatewayIp}:${relay.port}`,
-      ANTHROPIC_AUTH_TOKEN: placeholder,
-      // Documented fix (code.claude.com/docs/en/llm-gateway-connect,
-      // "Turn off traffic outside the gateway path") for exactly this
-      // network's own shape: version checks, telemetry, and similar
-      // nonessential calls bypass ANTHROPIC_BASE_URL and go straight to
-      // Anthropic's own hosts, which this isolated network has no route
-      // to at all - left unset, they would not fail cleanly, they would
-      // hang until they time out.
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-      // GitHub reachability for anything inside the box that speaks the
-      // ordinary HTTP_PROXY/HTTPS_PROXY convention (git itself needs
-      // none - its network access to the project's history is already
-      // read-only bind mounts, never live - but a Worker's own shell
-      // commands, e.g. the `gh` CLI, do). Both cases since different
-      // tools read different ones.
-      HTTP_PROXY: `http://${network.gatewayIp}:${relay.port}`,
-      HTTPS_PROXY: `http://${network.gatewayIp}:${relay.port}`,
-      http_proxy: `http://${network.gatewayIp}:${relay.port}`,
-      https_proxy: `http://${network.gatewayIp}:${relay.port}`,
-    },
-    network: { isolatedNetwork: networkName },
-    teardown: async () => {
-      await relay.close();
-      await removeIsolatedNetwork(networkName);
-      rmSync(scratchRecordHome, { recursive: true, force: true });
-    },
-  };
-}
-
-/** What to actually hand `runContained`: either the unchanged `"allowed"`
- * network and env (nothing in `env` carries the real worker token - a
- * test's own fake env, most of this file's fast tests), or - whenever
- * `HOST_TOKEN_VAR` is present, which it always is for a real worker
- * (`defaultBrainAdapter` forwards it before any call) - the relay-backed
- * replacement from `connectThroughRelay` above, with `HOST_TOKEN_VAR`
- * itself stripped out of what reaches the container. */
-async function prepareNetwork(
-  env: Record<string, string> | undefined
-): Promise<{ network: "allowed" | { isolatedNetwork: string }; env?: Record<string, string>; teardown: () => Promise<void> }> {
-  const realToken = env?.[HOST_TOKEN_VAR];
-  if (!realToken) return { network: "allowed", env, teardown: async () => {} };
-
-  const relayed = await connectThroughRelay(realToken);
-  const { [HOST_TOKEN_VAR]: _dropped, ...rest } = env;
-  return { network: relayed.network, env: { ...rest, ...relayed.env }, teardown: relayed.teardown };
 }
 
 // Built from src/brain/adapters/docker/Dockerfile (the build command,
@@ -206,16 +73,9 @@ export interface ClaudeCodeAdapterOptions {
    * image (e.g. one with Node, to run a fake CLI script). */
   image?: string;
   /** The exact environment variables the contained process receives,
-   * passed through to `runContained`'s allowlist - mostly unchanged.
-   * Omitted means the container gets only what its own image defines -
-   * nothing from this process's own environment (API keys, tokens) leaks
-   * in. The one key treated specially is `HOST_TOKEN_VAR`
-   * (`CLAUDE_CODE_OAUTH_TOKEN`, what `defaultBrainAdapter` forwards the
-   * real worker token under): when present, it never reaches the
-   * container as-is - `prepareNetwork` strips it and substitutes a
-   * relay-backed `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` pair instead
-   * (see `connectThroughRelay`), so the box only ever holds a per-call
-   * placeholder for its credential. */
+   * passed straight through to `runContained`'s allowlist. Omitted means
+   * the container gets only what its own image defines - nothing from
+   * this process's own environment (API keys, tokens) leaks in. */
   env?: Record<string, string>;
   /** ask()'s scratch workdir override - same purpose as `binPath` above:
    * lets a test seed a directory with the fake CLI script before calling
@@ -489,22 +349,16 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       let stdout: string;
       let stderr: string;
       let exitCode: number | null;
-      // Whenever opts.env carries the real worker token (every real
-      // call - defaultBrainAdapter forwards it before this runs), this
-      // box joins a fresh isolated network instead of the open one, and
-      // the token never reaches it: see prepareNetwork/connectThroughRelay.
-      let prepared: Awaited<ReturnType<typeof prepareNetwork>> | undefined;
       try {
-        prepared = await prepareNetwork(opts.env);
         ({ stdout, stderr, exitCode } = await runContained(bin, args, {
           workdir: scratchDir,
-          network: prepared.network,
+          network: "allowed",
           image,
-          env: prepared.env,
+          env: opts.env,
           homeDir,
         }));
       } catch (err) {
-        if (err instanceof ContainmentError || err instanceof RelayError) {
+        if (err instanceof ContainmentError) {
           throw new ClaudeCodeError(
             "spawn-failed",
             `could not run "${bin}" contained (image ${image}) to assess ambiguity: ${err.message}`
@@ -514,7 +368,6 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       } finally {
         if (ownScratchDir) rmSync(scratchDir, { recursive: true, force: true });
         rmSync(homeDir, { recursive: true, force: true });
-        await prepared?.teardown();
       }
 
       const lines = parseLines(stdout);
@@ -589,27 +442,22 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       let stdout: string;
       let stderr: string;
       let exitCode: number | null;
-      // Network was unconditionally "allowed" before issue #186's second
-      // half: the CLI has to reach its own API to do anything at all.
-      // Now, whenever opts.env carries the real worker token (every real
-      // call), that reach is narrowed to a fresh isolated network with a
-      // relay as its only route out - see prepareNetwork/connectThroughRelay.
-      // A caller with no real token to protect (this file's own fast
-      // tests, which pass a fake env) keeps the old "allowed" network.
-      let prepared: Awaited<ReturnType<typeof prepareNetwork>> | undefined;
       try {
-        prepared = await prepareNetwork(opts.env);
+        // Network is deliberately allowed - not left open by accident -
+        // because the CLI has to reach its own API to do anything at
+        // all; workdir is what's actually confined, plus read-only git
+        // access to the real project's history via readOnlyMounts.
         ({ stdout, stderr, exitCode } = await runContained(bin, args, {
           workdir,
-          network: prepared.network,
+          network: "allowed",
           image,
-          env: prepared.env,
+          env: opts.env,
           readOnlyMounts,
           homeDir: sessionDir,
           onStdout,
         }));
       } catch (err) {
-        if (err instanceof ContainmentError || err instanceof RelayError) {
+        if (err instanceof ContainmentError) {
           throw new ClaudeCodeError(
             "spawn-failed",
             `could not run "${bin}" contained (image ${image}) in ${workdir}: ${err.message}`
@@ -618,7 +466,6 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         throw err;
       } finally {
         rmSync(sanitizedConfigDir, { recursive: true, force: true });
-        await prepared?.teardown();
       }
 
       const lines = parseLines(stdout);
