@@ -23,7 +23,9 @@ Expected today: **every contract test green**. `npm test` runs the
 contract suite together with the tool's own tests; a red contract test
 is a real regression, not an unbuilt part. Run the command yourself for
 the exact tally, since the tool's own test count still moves with every
-issue closed.
+issue closed. This project is itself registered with Inspector, so every
+task Fabrica runs against it hands that same suite to Inspector, which
+runs it in its own container before any work is delivered.
 
 Phase 1 has exactly one definition of done: every contract test turns green.
 
