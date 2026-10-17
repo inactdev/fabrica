@@ -16,6 +16,13 @@
 // Every fixture below runs through `getReviewRows` too, not just a
 // hand-picked few, so a state this file didn't anticipate can't silently
 // diverge between the two.
+//
+// One row kind is deliberately not a verdict at all: a task stopped on
+// its clarifying questions is waiting on the Client's words, which the
+// review page can now take (the answer route, server.ts). Its agreement
+// is with `fabrica await`'s own "answer with fabrica answer <id>" notice
+// and with the recorded questions themselves, not with a status line
+// that state has never carried - see the "asking" branch below.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -48,7 +55,7 @@ interface Fixture {
   /** Which kind of review row this fixture should produce, or null when
    * it isn't waiting on the Client at all (still open, or already
    * closed) and so must not appear on the review page. */
-  reviewRowKind: "delivered" | "refused" | "failed" | null;
+  reviewRowKind: "delivered" | "refused" | "failed" | "asking" | null;
   build: (recordHome: string, id: string) => void;
 }
 
@@ -58,7 +65,7 @@ const FIXTURES: Fixture[] = [
     state: "asking",
     liveViewState: "asked a question",
     awaitNotice: (id) => `${id} asked a question - answer with fabrica answer ${id}`,
-    reviewRowKind: null,
+    reviewRowKind: "asking",
     build: (recordHome, id) => {
       appendEvent(recordHome, { taskId: id, name: "questions-asked", details: { questions: ["q?"] } });
     },
@@ -262,6 +269,22 @@ for (const fixture of FIXTURES) {
     assert.ok(row, "the review page must show this task - fabrica status flags it as waiting on a verdict");
     assert.equal(row!.kind, fixture.reviewRowKind);
     assert.ok(statusLine, "fabrica status must still list a task the review page shows");
+
+    if (fixture.reviewRowKind === "asking") {
+      // The one row kind that isn't waiting on a verdict at all - it is
+      // waiting on the Client's words, so the surface it has to agree
+      // with is `fabrica await`'s own "answer with fabrica answer <id>"
+      // notice (asserted above from the same fixture), not
+      // `fabrica status`'s AWAITING-YOUR-VERDICT line, which this state
+      // has never had. What the row must carry is the questions
+      // themselves, exactly as the record holds them - the same list
+      // `fabrica answer` files the Client's reply against.
+      assert.ok("questions" in row!, "an asking row carries the worker's own questions");
+      const asked = events.filter((e) => e.name === "questions-asked").at(-1)!.details as { questions: string[] };
+      assert.deepEqual((row as { questions: string[] }).questions, asked.questions);
+      assert.doesNotMatch(statusLine!, /AWAITING YOUR VERDICT|wrong` closes it/, "an unanswered question is not a verdict");
+      return;
+    }
 
     if (fixture.reviewRowKind === "delivered") {
       assert.match(statusLine!, /AWAITING YOUR VERDICT/);

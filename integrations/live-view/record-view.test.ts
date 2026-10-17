@@ -4,7 +4,17 @@ import { mkdtempSync, appendFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEvent, recordPath, registerTask } from "../../src/record/index.ts";
-import { createRecordView, displayState, gateStateLabel, inspectorReportDetail, inspectorStampLabel, isFinished, taskTitle } from "./record-view.ts";
+import {
+  createRecordView,
+  displayState,
+  gateStateLabel,
+  inspectorReportDetail,
+  inspectorStampLabel,
+  isFinished,
+  questionsFromEvents,
+  taskTitle,
+} from "./record-view.ts";
+import type { FabricaEvent } from "../../src/index.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-live-view-test-"));
@@ -289,6 +299,54 @@ test("createRecordView: getReviewRows shows only delivered tasks, with the real 
   assert.match(row.writeupBody, /What:\ndid the thing/);
   assert.match(row.writeupBody, /Why:\nbecause/);
   assert.match(row.writeupBody, /How:\ncarefully/);
+});
+
+test("questionsFromEvents: the latest questions-asked wins, and a details shape that isn't a list of questions reads as none", () => {
+  const event = (name: string, details: unknown): FabricaEvent =>
+    ({ taskId: "t", name, occurredAt: "2026-10-17T00:00:00.000Z", details } as unknown as FabricaEvent);
+
+  assert.deepEqual(questionsFromEvents([]), []);
+  assert.deepEqual(questionsFromEvents([event("work-started", { project: "/p" })]), []);
+  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: ["one?", "two?"] })]), ["one?", "two?"]);
+  // A second round of questions (a resumed task that asked again) - the
+  // latest is the one waiting on an answer.
+  assert.deepEqual(
+    questionsFromEvents([
+      event("questions-asked", { questions: ["old?"] }),
+      event("answers-given", { answer: "yes" }),
+      event("questions-asked", { questions: ["new?"] }),
+    ]),
+    ["new?"]
+  );
+  // Defensive: this is a viewer, so a malformed event reads as no
+  // questions rather than taking the page down.
+  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: "one?" })]), []);
+  assert.deepEqual(questionsFromEvents([event("questions-asked", undefined)]), []);
+  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: ["ok?", 7] })]), ["ok?"]);
+});
+
+test("createRecordView: getReviewRows shows a task waiting on an answer, with its questions, and drops it once answered", () => {
+  const recordHome = tempRecordHome();
+  const view = createRecordView(recordHome);
+
+  const asking = registerTask(recordHome, "build the thing").id;
+  appendEvent(recordHome, {
+    taskId: asking,
+    name: "questions-asked",
+    details: { questions: ["which database?", "ship behind a flag?"], project: "/p", totalAttempts: 2, explicitAttempts: false },
+  });
+
+  const rows = view.getReviewRows();
+  assert.deepEqual(rows.map((r) => r.id), [asking]);
+  const row = rows[0];
+  assert.equal(row.kind, "asking");
+  if (row.kind !== "asking") throw new Error("unreachable");
+  assert.equal(row.title, "build the thing");
+  assert.deepEqual(row.questions, ["which database?", "ship behind a flag?"]);
+
+  // Answered: back to working, so nothing is waiting on the Client.
+  appendEvent(recordHome, { taskId: asking, name: "answers-given", details: { answer: "postgres, no flag" } });
+  assert.deepEqual(view.getReviewRows(), []);
 });
 
 test("createRecordView: never writes to the record home", () => {
