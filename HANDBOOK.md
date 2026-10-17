@@ -87,13 +87,16 @@ When this task **is** one GitHub issue's whole of work - not part of it,
 not several issues at once - the pull request it opens should close that
 issue on merge. If the Client's own words already open with "Issue #N:"
 (verbatim, nothing paraphrased), that happens automatically. Otherwise,
-when you already know the number some other way, pass it explicitly
-instead of editing his words to fit the prefix:
+attach `--issue <N>` yourself whenever his sentence names exactly one
+issue as the whole of the task, in any wording - "look at issue #203 and
+make a pull request to close it," "do #203," and "fix the bug in #203"
+all mean the same thing as an "Issue #N:" prefix would:
 
     fabrica do "<task text>" --project <path-or-name> --issue <N>
 
-Leave `--issue` off when the task is only part of an issue ("the first
-half of #186") - closing it early would be wrong.
+Leave `--issue` off when the issue is named as only part of the task
+("the first half of #186," "the Inspector side of #109") - closing it
+early would be wrong - or when more than one issue is named.
 
 ### 2. "How's it going"
 

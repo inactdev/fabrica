@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CliError } from "./errors.ts";
 import { parseDoArgs } from "./do-args.ts";
 
@@ -85,4 +88,31 @@ test("parseDoArgs: an unknown flag refuses", () => {
     () => parseDoArgs(["fix it", "--project", "spending-app", "--attempts", "3"]),
     (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--attempts")
   );
+});
+
+// Deciding *when* the chat agent should pass --issue itself is a
+// judgment call written down in HANDBOOK.md's case 1, not something
+// Fabrica's own code enforces - there's nothing under src/ that chooses
+// it for the agent (see pr-body.ts's issueNamedByTaskText, which only
+// ever matches the literal "Issue #N:" prefix). These read the
+// handbook's own prose directly, the same way rule9-gate.contract-paths
+// .test.ts proves CI wording with no Fabrica code behind it to unit-test.
+const here = dirname(fileURLToPath(import.meta.url));
+const handbook = readFileSync(join(here, "..", "..", "HANDBOOK.md"), "utf8");
+
+test("HANDBOOK.md: --issue is attached when the sentence names exactly one issue as the whole of the task, in any wording", () => {
+  assert.match(handbook, /look at issue #203 and\s+make a pull request to close it/);
+  assert.match(handbook, /"?do #203"?/);
+  assert.match(handbook, /fix the bug in #203/);
+});
+
+test("HANDBOOK.md: --issue stays off when the issue is only part of the task, or more than one is named", () => {
+  assert.match(handbook, /the first half of #186/);
+  assert.match(handbook, /the Inspector side of #109/);
+  assert.match(handbook, /more than one issue is named/);
+});
+
+test("HANDBOOK.md: the \"Issue #N:\" prefix still works automatically, with no flag needed", () => {
+  assert.match(handbook, /already open with "Issue #N:"/);
+  assert.match(handbook, /that happens automatically/);
 });
