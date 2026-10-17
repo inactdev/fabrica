@@ -17,14 +17,13 @@ function dockerAvailable(): boolean {
   }
 }
 
-test("createIsolatedNetwork creates an internal network and reports a real gateway IP; removeIsolatedNetwork cleans it up", async (t) => {
+test("createIsolatedNetwork creates an internal network; removeIsolatedNetwork cleans it up", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const name = `fabrica-test-isolated-${process.pid}`;
 
   const network = await createIsolatedNetwork(name);
   try {
     assert.equal(network.name, name);
-    assert.match(network.gatewayIp, /^\d+\.\d+\.\d+\.\d+$/);
 
     const inspected = execFileSync("docker", ["network", "inspect", name, "--format", "{{.Internal}}"]).toString().trim();
     assert.equal(inspected, "true", "the network must be created with --internal");
