@@ -1,0 +1,74 @@
+# docker-tests (issue #106): a standard GitHub-hosted runner already has
+# a real Docker daemon (ubuntu-latest ships one preinstalled), which is
+# exactly what src/containment, src/relay, and the worker-box/git-mount
+# tests under src/line and src/brain/adapters need to prove anything -
+# every one of them is written to skip (never fail) when Docker isn't
+# available, see each file's own "Skips (never fails) when Docker isn't
+# available" header comment. Inspector's own check box can't run nested
+# Docker, so before this workflow the only place those tests ever
+# actually ran - rather than silently skipping - was a contributor's own
+# machine with Docker installed, checked by hand. This job is the
+# automatic second judge that replaces that: it runs the exact same
+# `npm test` every contributor already runs locally, on a runner where
+# Docker is real, so the Docker-gated tests execute for real instead of
+# skipping.
+#
+# Deliberately the whole `npm test`, not a hand-maintained list of "the
+# Docker test files": that list would be a second source of truth for
+# "what's Docker-dependent" that can silently drift the moment a new
+# Docker-gated test is added elsewhere and nobody remembers to add it
+# here - the opposite of this project's own `find`-based test discovery
+# (see package.json / CLAUDE.md, "discovery is a find, not a shell glob,
+# so a nested test file is never silently skipped"). Running the whole
+# suite costs a little more time but can never silently miss a new
+# Docker test.
+#
+# The "Confirm Docker is actually available" step below exists because a
+# green `npm test` run proves nothing about Docker if every Docker-gated
+# test quietly skipped - exactly the trap this job exists to close. It
+# fails loudly instead of letting a Docker-less runner report a hollow
+# pass.
+#
+# Runs on the ordinary `pull_request` trigger, not `pull_request_target`:
+# this job's whole purpose is to execute the pull request's own proposed
+# code, and it touches no secrets, so none of `pull_request_target`'s
+# "never check out the PR's code" hazard (see rule9-gate.yml's own
+# comments) applies here.
+#
+# `npm ci` rather than README's human-facing `npm install`: same
+# dependencies, but reproducible from package-lock.json and never writes
+# to it - the standard choice for CI, not a different test run.
+#
+# The job id below (`docker-tests`) is the string that needs adding to
+# this repository's required-status-check settings by hand, the same way
+# `block-protected-path-change` and `inspector stamp` already are - this
+# workflow cannot do that for you.
+name: docker-tests
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  docker-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Confirm Docker is actually available
+        run: |
+          if ! docker info > /dev/null 2>&1; then
+            echo "::error::Docker is not available on this runner. This job exists specifically to run Fabrica's Docker-dependent tests for real instead of letting them skip - a runner without Docker makes it a hollow pass, so failing loudly instead of reporting one."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - run: npm test

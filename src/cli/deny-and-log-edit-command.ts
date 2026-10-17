@@ -53,7 +53,6 @@ async function readStdin(stream: NodeJS.ReadableStream, timeoutMs: number): Prom
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<"timed-out">((resolve) => {
     timer = setTimeout(() => resolve("timed-out"), timeoutMs);
-    timer.unref?.();
   });
 
   const outcome = await Promise.race([read, deadline]);
