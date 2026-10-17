@@ -1,10 +1,11 @@
 // The failure-path proof for startContainerizedRelay: every way it can
 // throw once `docker run` has been attempted must leave no container
 // behind, because a container still attached to the isolated network
-// makes that network's own removal (src/brain/adapters/claude-code.ts's
-// teardown) fail too - exactly what leaked a `fabrica-relay-<id>`
-// container and three `fabrica-worker-<id>`/`fabrica-relay-egress-<id>`
-// networks on the Client's machine after the 2026-10-17 proof runs.
+// makes that network's own removal (the caller's teardown - see
+// src/brain/adapters/'s reference adapter) fail too - exactly what left
+// a `fabrica-relay-<id>` container and three `fabrica-worker-<id>` /
+// `fabrica-relay-egress-<id>` networks behind on the Client's machine
+// after the 2026-10-17 proof runs.
 //
 // Runs everywhere, Docker or not, and never touches a real daemon:
 // helpers/fake-docker.mjs goes on PATH as `docker` instead (see that

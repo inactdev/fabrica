@@ -215,10 +215,11 @@ the same thing: `--rm` only reaps a container that actually started and
 then exited, and `docker stop` returns before the daemon's own reap
 necessarily has, so a container could still be sitting in `docker ps -a`
 *attached to the isolated network* - and a network with a container
-attached refuses to be removed, so `src/brain/adapters/claude-code.ts`'s
-own teardown (`removeIsolatedNetwork`/`removeEgressNetwork`, run right
-after `relay.close()`) then failed too and leaked both. That is not
-hypothetical: after the 2026-10-17 proof runs the Client's machine was
+attached refuses to be removed, so the caller's own teardown then failed
+too and leaked both (`src/brain/adapters/`'s reference adapter runs
+`removeIsolatedNetwork`/`removeEgressNetwork` right after
+`relay.close()`). That is not hypothetical: after the 2026-10-17 proof
+runs the Client's machine was
 left with a `fabrica-relay-<id>` container and three
 `fabrica-worker-<id>`/`fabrica-relay-egress-<id>` networks. The
 `"listen-failed"` message still carries the last 500 characters of the

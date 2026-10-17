@@ -65,12 +65,12 @@ function errorMessage(err: unknown): string {
 // returns before the daemon's own reap of it necessarily has. Either
 // way the container can still be sitting in `docker ps -a` attached to
 // the isolated network, and a network with a container attached to it
-// refuses to be removed - so src/brain/adapters/claude-code.ts's
-// teardown (`removeIsolatedNetwork`, right after `relay.close()`) failed
-// too, leaking both. Observed on the Client's machine after the
-// 2026-10-17 proof runs: a leftover `fabrica-relay-<id>` container
-// alongside three undeleted `fabrica-worker-<id>` /
-// `fabrica-relay-egress-<id>` networks.
+// refuses to be removed - so the caller's own teardown failed too,
+// leaking both (src/brain/adapters/'s reference adapter calls
+// `removeIsolatedNetwork` right after `relay.close()`). Observed on the
+// Client's machine after the 2026-10-17 proof runs: a leftover
+// `fabrica-relay-<id>` container alongside three undeleted
+// `fabrica-worker-<id>` / `fabrica-relay-egress-<id>` networks.
 //
 // `-f` so whichever state the container got to - created but never
 // started, running, exited but not yet reaped - doesn't decide whether
