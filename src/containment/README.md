@@ -343,6 +343,30 @@ nothing yet deletes that directory when a task's `ProductionLine` is
 torn down, since `destroyProductionLine` doesn't know this sibling
 exists. A real, non-urgent, documented cleanup gap - not a silent one.
 
+## Keeping the Mac awake: `caffeinate`
+
+Every `runContained` call is wrapped with `caffeinate.ts`'s `caffeinated`
+on macOS only (issue #202): `docker ...` becomes `caffeinate -i -s
+docker ...`, so the Mac can't idle- or AC-power-sleep out from under a
+worker run or an in-box check run. This is orthogonal to "Docker is the
+only mechanism this module implements" above - that's about the
+*containment* approach, not about a power-management wrapper around the
+docker invocation it already decided on, and it changes nothing about
+what's isolated or how.
+
+Verified against Apple's own source
+(apple-oss-distributions/PowerManagement's `caffeinate.c`), not assumed:
+`caffeinate` forks, and the *original* process - the exact pid
+`spawn()` is tracking - `execvp`s straight into the wrapped utility, so
+that pid becomes `docker` itself; a separate, independent child holds
+the sleep-prevention assertion and exits once that pid is gone. So the
+wrap is exit-code- and stdio-transparent - `child.on("close")` still
+sees docker's own real exit code, nothing else in `run.ts` had to
+change - and is gated to `darwin` for an ordinary reason: the binary
+doesn't exist anywhere else, and this project's own tests and CI run on
+Linux, where spawning a nonexistent `caffeinate` unconditionally would
+turn every contained run into a spawn failure.
+
 ## Errors: `ContainmentError`
 
 - **`invalid-path`** - `workdir`, a `readOnlyMounts` entry, or `homeDir`

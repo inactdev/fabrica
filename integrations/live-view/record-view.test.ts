@@ -4,7 +4,7 @@ import { mkdtempSync, appendFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEvent, recordPath, registerTask } from "../../src/record/index.ts";
-import { createRecordView, displayState, isFinished, taskTitle } from "./record-view.ts";
+import { createRecordView, displayState, gateStateLabel, inspectorReportDetail, inspectorStampLabel, isFinished, taskTitle } from "./record-view.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-live-view-test-"));
@@ -192,6 +192,101 @@ test("createRecordView: getTask returns the same view getState would, for one ta
 test("createRecordView: getTask reads as null for a task id this record home has never heard of", () => {
   const view = createRecordView(tempRecordHome());
   assert.equal(view.getTask("20260101-ghost-zz"), null);
+});
+
+function fakeDelivery(overrides: Partial<Parameters<typeof inspectorStampLabel>[0] & Record<string, unknown>> = {}) {
+  return {
+    outcome: "done",
+    confidence: 80,
+    summary: "s",
+    evidence: "e",
+    assumptions: "a",
+    gaps: "g",
+    branch: "fabrica/t1",
+    files: [],
+    gateChanges: "",
+    ...overrides,
+  } as NonNullable<Parameters<typeof inspectorStampLabel>[0]>;
+}
+
+test("inspectorStampLabel: no delivery record at all", () => {
+  assert.equal(inspectorStampLabel(null), "no delivery record");
+});
+
+test("inspectorStampLabel: Inspector's own verdict wins when this delivery went through Inspector", () => {
+  assert.equal(inspectorStampLabel(fakeDelivery({ inspection: { verdict: "green", report: "ok" } })), "green");
+  assert.equal(inspectorStampLabel(fakeDelivery({ inspection: { verdict: "red", report: "broke it" } })), "red");
+  assert.equal(inspectorStampLabel(fakeDelivery({ inspection: { verdict: "refused", report: "no token" } })), "refused");
+});
+
+test("inspectorStampLabel: no Inspector involved - self-tested wording, distinct from 'not-verified'", () => {
+  assert.equal(inspectorStampLabel(fakeDelivery({ outcome: "done" })), "not inspected (self-tested, no Inspector)");
+  assert.equal(inspectorStampLabel(fakeDelivery({ outcome: "not-verified" })), "not verified (worker's box could not run the check)");
+});
+
+test("inspectorReportDetail: null for green or for no Inspector at all, Inspector's own text for red/refused", () => {
+  assert.equal(inspectorReportDetail(null), null);
+  assert.equal(inspectorReportDetail(fakeDelivery({ inspection: { verdict: "green", report: "ok" } })), null);
+  assert.equal(inspectorReportDetail(fakeDelivery({ outcome: "done" })), null);
+  assert.equal(inspectorReportDetail(fakeDelivery({ inspection: { verdict: "red", report: "the check failed" } })), "the check failed");
+  assert.equal(inspectorReportDetail(fakeDelivery({ inspection: { verdict: "refused", report: "GITHUB_TOKEN is missing" } })), "GITHUB_TOKEN is missing");
+});
+
+test("gateStateLabel: no delivery record, empty declaration, and a real declared change", () => {
+  assert.equal(gateStateLabel(null), "unknown");
+  assert.equal(gateStateLabel(fakeDelivery({ gateChanges: "" })), "untouched");
+  assert.equal(gateStateLabel(fakeDelivery({ gateChanges: "  " })), "untouched");
+  assert.equal(gateStateLabel(fakeDelivery({ gateChanges: "loosened the check's timeout" })), "loosened the check's timeout");
+});
+
+test("createRecordView: getReviewRows shows only delivered tasks, with the real pull request write-up, Inspector's stamp, and the gate's state", () => {
+  const recordHome = tempRecordHome();
+  const view = createRecordView(recordHome);
+
+  const working = registerTask(recordHome, "still going").id;
+  appendEvent(recordHome, { taskId: working, name: "work-started", details: { project: "/p" } });
+
+  const delivered = registerTask(recordHome, "ship the thing").id;
+  appendEvent(recordHome, { taskId: delivered, name: "work-started", details: { project: "/p" } });
+  const writeup = {
+    title: "Ship the thing",
+    what: "did the thing",
+    why: "because",
+    how: "carefully",
+    confidence: 90,
+    assumptions: "none",
+    expectedOutcomes: "it ships",
+    deviations: "None.",
+  };
+  appendEvent(recordHome, {
+    taskId: delivered,
+    name: "delivered",
+    details: {
+      outcome: "done",
+      writeup,
+      delivery: fakeDelivery({ gateChanges: "", inspection: { verdict: "green", report: "all good" } }),
+    },
+  });
+  appendEvent(recordHome, { taskId: delivered, name: "pr-opened", details: { url: "https://github.com/x/y/pull/1" } });
+
+  const closed = registerTask(recordHome, "already ruled on").id;
+  appendEvent(recordHome, { taskId: closed, name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, { taskId: closed, name: "delivered", details: { outcome: "done", delivery: fakeDelivery() } });
+  appendEvent(recordHome, { taskId: closed, name: "verdict-recorded", details: { ruling: "accept" } });
+
+  const rows = view.getReviewRows();
+  assert.deepEqual(rows.map((r) => r.id), [delivered]);
+
+  const row = rows[0];
+  assert.equal(row.title, "Ship the thing");
+  assert.equal(row.inspectorStamp, "green");
+  assert.equal(row.inspectorDetail, null);
+  assert.equal(row.gateState, "untouched");
+  assert.equal(row.prUrl, "https://github.com/x/y/pull/1");
+  assert.equal(row.writeupOk, true);
+  assert.match(row.writeupBody, /What:\ndid the thing/);
+  assert.match(row.writeupBody, /Why:\nbecause/);
+  assert.match(row.writeupBody, /How:\ncarefully/);
 });
 
 test("createRecordView: never writes to the record home", () => {
