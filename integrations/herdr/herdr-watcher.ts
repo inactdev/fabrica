@@ -320,27 +320,103 @@ function pidFilePath(recordHome: string): string {
   return join(recordHome, PID_FILE_NAME);
 }
 
+/** The one process state that means "this pid exists but the process
+ * behind it is finished" - a zombie: exited, not yet reaped by its
+ * parent. Linux's `/proc` reports it as a bare `Z`; a BSD/macOS `ps`
+ * may append modifier characters (`Z+`), so it's matched as a prefix,
+ * never compared whole. */
+const ZOMBIE_STATE_PREFIX = "Z";
+
+/** Exported for `herdr-watcher.test.ts` only. Pulls the state field out
+ * of a `/proc/<pid>/stat` line, or null if it doesn't parse. The second
+ * field (`comm`) is parenthesised and may itself contain spaces and
+ * parentheses, so the state field is found after the LAST `)`, never by
+ * splitting the line on whitespace from the left. */
+export function parseProcStatState(stat: string): string | null {
+  const closing = stat.lastIndexOf(")");
+  if (closing === -1) return null;
+  const state = stat.slice(closing + 1).trim().split(/\s+/)[0];
+  return state ? state : null;
+}
+
+/** This pid's process state as the OS reports it, or null when it can't
+ * be read here - a platform with neither `/proc` nor a POSIX `ps`, a
+ * `ps` that fails or hangs, or a process that vanished mid-read. Null
+ * means "couldn't tell", never "not running": the one caller below only
+ * ever acts on a state it positively read.
+ *
+ * Linux (including the BusyBox-based container this project's own tests
+ * run in, whose `ps` knows neither `-o state` nor `-p`) is read straight
+ * from the kernel via `/proc/<pid>/stat` - no subprocess at all. Only
+ * when that isn't there (macOS) does this shell out, and then to the one
+ * shape POSIX itself specifies for `ps`: `-o format` with the `state`
+ * keyword (header suppressed with `=`) and `-p proclist`. A `ps` that
+ * doesn't understand that exits nonzero, which lands on the same null -
+ * it can't quietly report the wrong column. */
+function processState(pid: number): string | null {
+  try {
+    return parseProcStatState(readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    // No /proc on this platform, or this pid is already gone - try `ps`.
+  }
+  try {
+    const out = execFileSync("ps", ["-o", "state=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000,
+    });
+    // POSIX: only `comm` and `args` may contain blanks, so the state
+    // field is one whitespace-free token - the first one printed.
+    const state = out.trim().split(/\s+/)[0];
+    return state ? state : null;
+  } catch {
+    return null;
+  }
+}
+
 function isProcessAlive(pid: number): boolean {
+  let exists: boolean;
   try {
     // Signal 0 sends nothing - it only reports whether a process with
     // this pid exists (ESRCH if not), the standard liveness check this
     // has no safer alternative to (see up-hook.ts's own reasoning).
     process.kill(pid, 0);
-    return true;
+    exists = true;
   } catch (err) {
     // EPERM means a process with this pid exists but isn't ours to
     // signal - still alive, just not killable by us.
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    exists = (err as NodeJS.ErrnoException).code === "EPERM";
   }
+  if (!exists) return false;
+
+  // Existing is not the same as running. A watcher that has finished but
+  // whose parent hasn't reaped it yet (`fabrica up` spawns it detached
+  // and then blocks in the foreground harness, so its event loop never
+  // runs again to collect the exit status) stays a zombie for as long as
+  // that `fabrica up` lives - days, in the case this fixes - and answers
+  // signal 0 the whole time. Read the real state and treat a zombie as
+  // exited, so `fabrica up` starts a fresh watcher instead of trusting a
+  // pid that can never poll the record again.
+  //
+  // Deliberately one-directional: only a state positively read as a
+  // zombie overturns what signal 0 said. A state that can't be read at
+  // all (`null`) keeps the old answer, because the opposite default - a
+  // pid we can't inspect reported as exited - would have `fabrica up`
+  // start a second watcher alongside a healthy one and duplicate every
+  // Herdr tab, a worse failure than the one being fixed.
+  const state = processState(pid);
+  return state === null || !state.startsWith(ZOMBIE_STATE_PREFIX);
 }
 
 export type HerdrWatcherStatus = "running" | "exited" | "never-started";
 
 /** Reads the pid file `main()` writes on startup and checks it for real
  * liveness rather than trusting it at face value - a watcher that was
- * killed outright (not through its own exit) would otherwise leave a
- * stale file claiming forever that one is already running. A stale file
- * is removed so the next start writes a fresh one. Distinguishes "never
+ * killed outright (not through its own exit), or one that exited and is
+ * still sitting unreaped as a zombie, would otherwise leave a stale file
+ * claiming forever that one is already running (see `isProcessAlive`
+ * above for the zombie case, which signal 0 alone cannot see). A stale
+ * file is removed so the next start writes a fresh one. Distinguishes "never
  * started" from "exited" so a caller (fabrica up's hook) can say so only
  * when there really was a prior watcher that's gone, not on every first
  * start. */
