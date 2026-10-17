@@ -134,10 +134,51 @@ is a separate Go tool, not an npm package:
     go install github.com/inactdev/inspector/cmd/inspector@latest
 
 This needs **Go 1.22+**, and puts `inspector` wherever `go install`
-puts binaries on your machine (make sure that's on `PATH`). Skip this
-step entirely if none of your registered projects carry an
-`.inspector.json` - Fabrica self-tests those in the Worker's own box
-instead. See `src/inspector/README.md` for the publishing boundary.
+puts binaries on your machine (make sure that's on `PATH`). Without it
+installed, a project that carries an `.inspector.json` is self-tested
+in the Worker's own box instead - but `fabrica register` writes that
+file into every project it sets up, and `fabrica do` refuses a project
+whose base commit has none, so in practice this step is worth doing.
+See `src/inspector/README.md` for the publishing boundary.
+
+## Registering a project
+
+Once per project, before its first task:
+
+    fabrica register <path> --check "<command>" --image <docker image>
+
+`<path>` is the repository's own root, and it needs an `origin`. The
+command is the one thing that must pass for work on that project to be
+green; the image is what it runs inside, here and for every later task
+(Fabrica never runs a project's check on your machine).
+
+It writes a `check.sh` holding that command and an `.inspector.json`
+naming it, runs the check once inside the image, and - only if it
+passes - commits, pushes a `fabrica/register` branch with your own git
+credentials, and opens a pull request with `gh pr create` for **you**
+to merge. Then it appends the project to `~/.fabrica/projects.toml`:
+
+    [projects.spending-app]
+    path = "/Users/you/inkling-umbrella/spending-app"
+    check = "./check.sh"
+
+Everything that can refuse refuses before anything is created: a path
+that isn't a repository, a missing `origin`, a `gh` that isn't logged
+in, a stopped Docker daemon, a `fabrica/register` branch that already
+exists, or a project already registered. A failing check refuses too,
+with its output - nothing is pushed. It needs `gh` (logged in) and
+Docker; `--protected <glob,...>` adds paths a Worker may never quietly
+change, on top of `check.sh` and `.inspector.json`, which always are.
+
+This is the one Fabrica command that pushes, and it is allowed to
+because of what it is: it runs as you, on your machine, with your own
+credentials, and the only thing it ever puts on origin is a branch you
+still have to merge. It never merges, never force-pushes, never touches
+an existing branch, and never runs inside a Worker.
+
+If the repository already has `.inspector.json` on origin's default
+branch, it is set up already - only the `projects.toml` entry is added,
+and `--check`/`--image` aren't needed.
 
 ## Running a task
 
@@ -146,11 +187,19 @@ instead. See `src/inspector/README.md` for the publishing boundary.
 Prints the new task's id and returns immediately; the work continues in
 the background (`src/cli/README.md` has the full design). `--project`
 takes either a plain filesystem path, or the name of a project already
-registered in `~/.fabrica/projects.toml`:
+registered in `~/.fabrica/projects.toml` (see "Registering a project"
+above).
 
-    [projects.spending-app]
-    path  = "~/inkling-umbrella/spending-app"
-    check = "bin/ci"
+A project whose base commit - origin's default branch, which is where
+every task's branch is cut from - carries no `.inspector.json` is
+refused right here, before the task is registered at all:
+
+    this project isn't set up for Fabrica yet: run fabrica register
+    <path> --check ... --image ...
+
+There is nothing in that commit saying how the work should be checked,
+so there is no verified work to be had; refusing before anything starts
+is what makes that cost nothing.
 
 If the task is ambiguous enough that the answer would change what gets
 built, nothing is started: you get numbered questions instead, and one

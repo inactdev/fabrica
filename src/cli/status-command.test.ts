@@ -160,11 +160,21 @@ async function statusUntil(recordHome: string, wanted: RegExp, timeoutMs = 20_00
 
 test("runStatusCommand: a task mid-check says so plainly, with real elapsed time, never quiet", async () => {
   const recordHome = tempRecordHome();
-  // Self-tested: "checking" is the worker's box running the check.
+  // Self-tested: "checking" is the worker's box running the check, which
+  // only happens for a project with no .inspector.json - and `fabrica do`
+  // now refuses one of those up front, before registering anything. This
+  // test is about what `fabrica status` shows a task that has started, so
+  // it skips exactly that one gate (`setUpRefusal`) and nothing else; the
+  // gate has its own tests in do-command.test.ts.
   const project = makeFixtureRepo("sleep 2 && exit 0", { inspector: false });
 
   const doIo = { out: [] as string[], err: [] as string[], stdout: (l: string) => doIo.out.push(l), stderr: () => {} };
-  await runDoCommand(["small change", "--project", project], { recordHome, entryScript: FAKE_ENTRY, ...doIo });
+  await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    setUpRefusal: () => null,
+    ...doIo,
+  });
   const taskId = doIo.out[0];
 
   const out = taskRows(await statusUntil(recordHome, /checking/));

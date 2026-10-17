@@ -40,6 +40,32 @@ developer-only install: every command breaks the moment this checkout
 is mid-edit or mid-merge, which the global install above exists to
 avoid for anyone who isn't actively changing this repo's code.
 
+## `fabrica register <path> --check "<command>" --image <image>`
+
+Sets a repository up for Fabrica and registers it - run once per
+project, before its first task. `register-args.ts` parses, and
+`register-command.ts` calls `registerProject` (through `src/index.ts`,
+like every other command here) and prints the summary.
+
+`--check` and `--image` are deliberately **not** required by the
+parser, even though the usage line names them: whether they are needed
+depends on something only the repository can answer (does origin's
+default branch already carry `.inspector.json`?), and asking git that
+from an argument parser would be the wrong place for it.
+`src/register/register.ts` requires them at the point it knows, and
+says why.
+
+Progress goes to **stderr** and the summary to stdout: this command
+pulls images, pushes, and calls GitHub, so saying nothing for a minute
+reads as a hang - but stdout stays worth reading from a script.
+
+The mechanism, the step order and the reasoning - including why this is
+the one command in Fabrica allowed to push - live in
+`src/register/README.md`. It is on every shipped harness's Bash allow
+list (`skill-settings.test.ts`); HANDBOOK.md's case 8 is what stops the
+chat agent running it unasked, by turning `fabrica do`'s refusal below
+into a yes/no question for the Client first.
+
 ## `fabrica do "<task text>" --project <path-or-name> [--issue <N>]`
 
 The one command this issue builds. What it does, in order:
@@ -69,9 +95,29 @@ The one command this issue builds. What it does, in order:
    directory, and must exist as a directory or this refuses too. This is
    the "-or-name" half `foreman/README.md` calls out as explicitly a
    CLI-layer concern - `doTask` itself only ever sees a resolved path.
-4. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
+4. **Refuses a project that isn't set up for Fabrica**, before anything
+   is registered: origin's default branch - the commit a task's branch
+   is actually cut from (`src/line/cut.ts`) - carries no
+   `.inspector.json`, so nothing there says how the work should be
+   checked, and work that cannot be verified should cost nothing at all.
+   The message is `src/register/`'s own `notSetUpMessage`, so the
+   command that reports the problem and the command that fixes it can't
+   drift apart in how they name it. There is no task id, no record, and
+   no detached process in this case - exit 1 with the message on stderr
+   and stdout empty.
+
+   "Could not find out" is not "not set up":
+   `inspectorConfiguredOnOrigin` returns `null` for a project with no
+   origin or an unreachable one, and that is deliberately **not**
+   refused here. Telling someone whose network is down to run `fabrica
+   register` would be wrong, and the real git error the task then
+   reports says far more. `setUpRefusal` is the test-only seam for this
+   one check - `do-command.test.ts`, `status-command.test.ts` and
+   `watch-command.test.ts` use it where they are deliberately exercising
+   the self-tested path that only exists behind this gate.
+5. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
    new task's id the moment it's registered (`watch-for-task-id.ts`).
-5. **Waits, bounded, to see whether the task asks, proceeds, or fails**
+6. **Waits, bounded, to see whether the task asks, proceeds, or fails**
    (`wait-for-ask-outcome.ts`, issue #8): the detached process is still
    running `doTask` (`src/foreman/do.ts`), which now does register ->
    ask -> maybe isolate/work in one call (SPEC.md step 2, "Clarify-or-
@@ -669,8 +715,10 @@ calls `runTask`.
 | `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh, via `pathToFileURL` - except a `?` in the entry's path, refused outright rather than attempted (see above). |
 | `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand adds one more branch here, the way `answer` (#8) and `status`/`log`/`watch` (#12) each did - and one more decision: `skill-settings.test.ts` reads this dispatch and fails until every command in it is either auto-approved by each shipped harness's `settings.json` or listed as deciding/hook-only there (issue #76). |
 | `help.ts` | Top-level help text and the list of known commands. |
+| `register-args.ts` | Parses `fabrica register`'s arguments. `--check`/`--image` are not required here on purpose - only the repository can say whether they are needed (see above). |
+| `register-command.ts` | `fabrica register`: resolves the record home and the path (absolute, so `fabrica register .` works), calls `registerProject`, and prints `registerSummary`. Progress to stderr, summary to stdout. The mechanism is `src/register/`; `REGISTER_HELP` is `register --help`'s text. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
-| `do-command.ts` | Ties config, project resolution, the detached spawn, and the ask-outcome wait together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
+| `do-command.ts` | Ties config, project resolution, the "is this project set up for Fabrica" refusal (`refusalForUnsetUpProject`, overridable in tests via `setUpRefusal`), the detached spawn, and the ask-outcome wait together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
 | `answer-args.ts` | Parses `fabrica answer`'s arguments. |
 | `answer-command.ts` | Resolves the record home, calls `recordAnswerDecision` synchronously, then hands the resumed round to a detached process (issue #123); `ANSWER_HELP` is `answer --help`'s text. |
 | `answer-entry.ts` | The detached answer round's real entry point: picks the default adapter, calls `runRecordedAnswer`. |

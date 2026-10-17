@@ -1,4 +1,5 @@
-export { createProductionLine } from "./cut.ts";
+export { createProductionLine, fetchOriginDefaultBranch } from "./cut.ts";
+export { requireRepoRoot } from "./safety.ts";
 export { reopenProductionLine } from "./resume.ts";
 export { destroyProductionLine } from "./teardown.ts";
 export type { TeardownResult } from "./teardown.ts";
