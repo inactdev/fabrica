@@ -55,7 +55,7 @@ function isProcessAlive(pid: number): boolean {
  * `ps` (this project's own CI sandbox) doesn't know `-w` at all and
  * exits nonzero on it, so that attempt is retried once without it
  * rather than giving up on every process list. */
-function listProcesses(): { pid: number; args: string }[] {
+export function listProcesses(): { pid: number; args: string }[] {
   const raw = psOutput();
   const lines = raw.split("\n").slice(1); // drop the "PID COMMAND" header
   const result: { pid: number; args: string }[] = [];
@@ -107,14 +107,20 @@ function commandLineMatches(args: string): boolean {
  *    though its pid file lives elsewhere.
  *
  * Returns null, touching nothing else, if neither step identifies one -
- * that is the signal to report an error instead of stopping anything. */
-export function findLiveViewProcess(recordHome: string): { pid: number } | null {
+ * that is the signal to report an error instead of stopping anything.
+ * `opts.listProcesses` replaces the real process table - tests use it to
+ * hide a live view already running on the machine. */
+export function findLiveViewProcess(
+  recordHome: string,
+  opts: { listProcesses?: () => { pid: number; args: string }[] } = {},
+): { pid: number } | null {
+  const list = opts.listProcesses ?? listProcesses;
   const path = pidFilePath(recordHome);
   if (existsSync(path)) {
     const pid = Number(readFileSync(path, "utf8").trim());
     if (Number.isInteger(pid) && pid > 0) {
       if (isProcessAlive(pid)) {
-        const match = listProcesses().find((p) => p.pid === pid);
+        const match = list().find((p) => p.pid === pid);
         if (match && commandLineMatches(match.args)) return { pid };
       } else {
         try {
@@ -127,7 +133,7 @@ export function findLiveViewProcess(recordHome: string): { pid: number } | null 
     }
   }
 
-  const found = listProcesses().find((p) => commandLineMatches(p.args));
+  const found = list().find((p) => commandLineMatches(p.args));
   return found ? { pid: found.pid } : null;
 }
 

@@ -10,6 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findLiveViewProcess, LIVE_VIEW_COMMAND_MARKER, stopLiveViewProcess, writeLiveViewPidFile } from "./live-view-process.ts";
+import { ownProcessesOnly } from "./helpers/own-processes-only.ts";
 
 function makeRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-live-view-process-"));
@@ -54,7 +55,7 @@ test("findLiveViewProcess: finds it via the record home's own pid file, verified
     assert.ok(typeof child.pid === "number");
     writeFileSync(join(recordHome, "live-view.pid"), String(child.pid), "utf8");
 
-    const found = findLiveViewProcess(recordHome);
+    const found = findLiveViewProcess(recordHome, ownProcessesOnly);
     assert.deepEqual(found, { pid: child.pid });
   } finally {
     child.kill("SIGKILL");
@@ -70,7 +71,7 @@ test("findLiveViewProcess: a pid file naming a dead process is treated as stale,
   const pidFile = join(recordHome, "live-view.pid");
   writeFileSync(pidFile, String(deadPid), "utf8");
 
-  assert.equal(findLiveViewProcess(recordHome), null);
+  assert.equal(findLiveViewProcess(recordHome, ownProcessesOnly), null);
   assert.equal(existsSync(pidFile), false, "a stale pid file should be cleaned up");
 });
 
@@ -83,7 +84,7 @@ test("findLiveViewProcess: a pid file naming a real, alive but unrelated process
     // No real live view anywhere else either, so this must find nothing
     // at all - never falling back to trusting the pid file just
     // because the process it names happens to be alive.
-    assert.equal(findLiveViewProcess(recordHome), null);
+    assert.equal(findLiveViewProcess(recordHome, ownProcessesOnly), null);
   } finally {
     unrelated.kill("SIGKILL");
   }
@@ -93,7 +94,7 @@ test("findLiveViewProcess: with no pid file for this record home, falls back to 
   const recordHome = makeRecordHome(); // deliberately: no live-view.pid written here at all
   const child = spawnFakeLiveView();
   try {
-    const found = findLiveViewProcess(recordHome);
+    const found = findLiveViewProcess(recordHome, ownProcessesOnly);
     assert.deepEqual(found, { pid: child.pid });
   } finally {
     child.kill("SIGKILL");
@@ -102,7 +103,7 @@ test("findLiveViewProcess: with no pid file for this record home, falls back to 
 
 test("findLiveViewProcess: finds nothing, touches nothing, when no pid file and no matching process exist", () => {
   const recordHome = makeRecordHome();
-  assert.equal(findLiveViewProcess(recordHome), null);
+  assert.equal(findLiveViewProcess(recordHome, ownProcessesOnly), null);
 });
 
 test("stopLiveViewProcess: sends SIGTERM to exactly the pid it's given, and the real process exits", async () => {

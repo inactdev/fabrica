@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import type { DoctorCheck, DoctorProbes } from "./doctor-command.ts";
 import { runUpCommand } from "./up-command.ts";
+import { findLiveViewProcess } from "./live-view-process.ts";
+import { ownProcessesOnly } from "./helpers/own-processes-only.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-up-home-"));
@@ -353,11 +355,11 @@ test("runUpCommand: a real listener on the probed port that isn't the live view 
   // its own timeout, and would then make this server's own close()
   // hang forever afterward waiting for that still-open connection to
   // end - net.Server.close() only resolves once every connection it
-  // ever accepted has ended). Nothing here overrides findLiveViewProcess
-  // either, so this also exercises the real pid-file-or-command-line
-  // lookup (live-view-process.ts) against this very test process's own
-  // process table - it must find nothing to blame for holding this
-  // port, since nothing resembling the live view is running.
+  // ever accepted has ended). findLiveViewProcess is the real
+  // pid-file-or-command-line lookup (live-view-process.ts) against the
+  // real process table, minus any live view already running on this
+  // machine before the tests started - it must find nothing to blame
+  // for holding this port.
   const server = createServer();
   server.on("connection", (socket) => socket.destroy());
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -372,6 +374,7 @@ test("runUpCommand: a real listener on the probed port that isn't the live view 
       liveViewPort: port,
       startLiveView: neverStarted(),
       openBrowser: neverOpened(),
+      findLiveViewProcess: (home) => findLiveViewProcess(home, ownProcessesOnly),
       stopLiveViewProcess: () => {
         throw new Error("must never stop a process that was never identified as the live view");
       },
