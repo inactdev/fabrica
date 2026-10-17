@@ -16,6 +16,7 @@ import {
   daySpend,
   deliveryOf,
   describeTaskCost,
+  earlyStopKindOf,
   finalMessageFor,
   followTask,
   formatUsd,
@@ -132,13 +133,18 @@ export interface LiveViewState {
   tasks: TaskView[];
 }
 
-/** One row of the phone review page (issue #202) - everything a tap on
- * accept/fix/wrong needs to show before deciding, for one task sitting
- * in "delivered" (the only state this page shows: it's the one state
- * that is actually waiting on a verdict). */
-export interface ReviewRow {
+/** One row of the phone review page (issue #202, extended by the
+ * "show every task waiting on me" follow-up) - everything a tap on
+ * accept/fix/wrong (or, for the two narrower kinds below, just wrong)
+ * needs to show before deciding. Every task this page shows is one
+ * `earlyStopKindOf`/`state === "delivered"` says is actually waiting on
+ * the Client, nothing else. */
+export type ReviewRow = DeliveredReviewRow | EarlyStopReviewRow;
+
+export interface DeliveredReviewRow {
   id: string;
   title: string;
+  kind: "delivered";
   /** The pull request's own body, rendered through the exact same
    * `finalMessageFor` that built it (src/foreman/pr-body.ts) - never a
    * second hand-written copy of the four-section shape, so this page
@@ -154,6 +160,20 @@ export interface ReviewRow {
   inspectorDetail: string | null;
   gateState: string;
   prUrl: string | null;
+  lastActivityMs: number;
+}
+
+/** A task that never reached a delivery but is still waiting on a "wrong"
+ * verdict to close it - Inspector's own refusal (`kind: "refused"`) or
+ * whatever killed the task first, a crash/cap refusal/unplugged project
+ * among them (`kind: "failed"`). `reason` is `earlyStopKindOf`'s own text
+ * verbatim - the exact same string `fabrica status` shows for this same
+ * task (src/cli/status-command.ts), so the two can never disagree. */
+export interface EarlyStopReviewRow {
+  id: string;
+  title: string;
+  kind: "refused" | "failed";
+  reason: string;
   lastActivityMs: number;
 }
 
@@ -380,31 +400,51 @@ export function createRecordView(recordHome: string) {
     return followerFor(taskId).read().transcript;
   }
 
-  /** The phone review page's rows (issue #202) - every task currently
-   * "delivered" (awaiting the Client's verdict; the only state this page
-   * acts on), enriched with the one thing `buildTaskView` doesn't carry:
-   * the real `Delivery` (for Inspector's stamp and the gate's declared
-   * state). Reuses `getState`'s own task list and the same per-task
-   * follower cache `getState`/`getTask`/`getTranscript` already share,
-   * rather than re-reading the record a second, independent way. */
+  /** The phone review page's rows (issue #202, extended to show every
+   * task waiting on the Client, not only delivered ones) - a "delivered"
+   * task gets its full card (the pull request's write-up, Inspector's
+   * stamp, the gate's declared state), while a task Inspector refused or
+   * that failed before any work started gets a narrower card naming the
+   * one reason and the one verdict ("wrong") that closes it -
+   * `earlyStopKindOf` (src/foreman/queries.ts) decides which, the exact
+   * same function `fabrica status` calls for the same task, so the two
+   * surfaces can never show a task the other doesn't, or a different
+   * reason for the one they agree on. Reads each task's own events
+   * through the same per-task follower cache `getState`/`getTask`/
+   * `getTranscript` already share, rather than re-reading the record a
+   * second, independent way. */
   function getReviewRows(now: number = Date.now()): ReviewRow[] {
-    return getState(now)
-      .tasks.filter((task) => task.state === "delivered")
-      .map((task) => {
-        const delivery = deliveryOf(recordHome, task.id);
+    const caps = loadCapsOrDefault(recordHome);
+    const rows: ReviewRow[] = discoverTaskIds(recordHome).flatMap((id): ReviewRow[] => {
+      const { events } = followerFor(id).read();
+      const task = buildTaskView(id, events, caps);
+
+      if (task.state === "delivered") {
+        const delivery = deliveryOf(recordHome, id);
         const message = finalMessageFor(task.writeup ?? undefined, task.title);
-        return {
-          id: task.id,
-          title: task.title,
-          writeupBody: message.body,
-          writeupOk: message.ok,
-          inspectorStamp: inspectorStampLabel(delivery),
-          inspectorDetail: inspectorReportDetail(delivery),
-          gateState: gateStateLabel(delivery),
-          prUrl: task.prUrl,
-          lastActivityMs: task.lastActivityMs,
-        };
-      });
+        return [
+          {
+            id,
+            title: task.title,
+            kind: "delivered",
+            writeupBody: message.body,
+            writeupOk: message.ok,
+            inspectorStamp: inspectorStampLabel(delivery),
+            inspectorDetail: inspectorReportDetail(delivery),
+            gateState: gateStateLabel(delivery),
+            prUrl: task.prUrl,
+            lastActivityMs: task.lastActivityMs,
+          },
+        ];
+      }
+
+      const stop = earlyStopKindOf(events);
+      if (!stop) return [];
+      return [{ id, title: task.title, kind: stop.kind, reason: stop.reason, lastActivityMs: task.lastActivityMs }];
+    });
+
+    rows.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
+    return rows;
   }
 
   return { getState, getTask, getTranscript, getReviewRows };

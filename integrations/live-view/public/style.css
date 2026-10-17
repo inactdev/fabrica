@@ -359,3 +359,10 @@ body.review-page main {
   margin-top: 0.5rem;
   min-height: 1.2em;
 }
+
+/* A task Inspector refused or that failed before any work started
+ * (record-view.ts's EarlyStopReviewRow) - no write-up to show, so the
+ * reason is the whole point of the card. */
+.review-reason {
+  color: var(--text);
+}

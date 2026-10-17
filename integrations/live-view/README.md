@@ -114,29 +114,52 @@ regardless of where the view currently is.
 
 A third page (issue #202), deliberately narrow (phone-width, large touch
 targets) rather than matching the two desktop list pages above. It shows
-only tasks sitting in "delivered" - the one state that's actually
-waiting on the Client's verdict - one card per task: its title, the
-pull request's own write-up (rendered through the exact same
-`finalMessageFor` that built the real pull request body, never a second
-hand-written copy of it), Inspector's stamp, and the gate's declared
-state (`record-view.ts`'s `getReviewRows`/`inspectorStampLabel`/
-`gateStateLabel` - see their own doc comments for exactly what each
-label means and where it comes from). "Inspector's stamp" and "the
-gate's state" here are both read from Fabrica's own record - the real
-`Delivery.inspection`/`Delivery.gateChanges` Fabrica already has, never
-a live call out to GitHub's API: that would mean this read-only viewer
-needing its own GitHub credential and network egress for a page whose
-whole point is reviewing a handful of deliveries already sitting in
-front of it.
+every task actually waiting on the Client, which is not only "delivered"
+any more (follow-up to issue #202, "show every task waiting on me"):
 
-Each card has three buttons - accept, fix (with a one-line note,
-required), wrong (with a one-line note, optional) - and a tap records
-the verdict through the *exact same* `recordVerdictDecision` -
-`spawnDetachedResume` pair `fabrica verdict` itself calls
-(`src/cli/verdict-command.ts`): a bad ruling fails the same way here as
-on the command line, and a "fix" hands the round to the same detached
-background process, returning immediately rather than waiting for it
-(issue #123).
+- **Delivered** - the full card: its title, the pull request's own
+  write-up (rendered through the exact same `finalMessageFor` that built
+  the real pull request body, never a second hand-written copy of it),
+  Inspector's stamp, and the gate's declared state
+  (`record-view.ts`'s `getReviewRows`/`inspectorStampLabel`/
+  `gateStateLabel` - see their own doc comments for exactly what each
+  label means and where it comes from). "Inspector's stamp" and "the
+  gate's state" here are both read from Fabrica's own record - the real
+  `Delivery.inspection`/`Delivery.gateChanges` Fabrica already has, never
+  a live call out to GitHub's API: that would mean this read-only viewer
+  needing its own GitHub credential and network egress for a page whose
+  whole point is reviewing a handful of deliveries already sitting in
+  front of it. This card has three buttons - accept, fix (with a
+  one-line note, required), wrong (with a one-line note, optional).
+- **Inspector refused it, with no delivery behind the refusal** - a
+  narrower card: just the title and Inspector's own report in plain
+  words (never the generic "Inspector reached no verdict" placeholder
+  `fabrica status` falls back to elsewhere - the actual reason matters
+  here), with one button, wrong.
+- **Failed before any work started** - a crash, a cap refusal, or a
+  project that was never plugged in, all before a worker ever ran - the
+  same narrow card, naming the exact recorded error, with one button,
+  wrong.
+
+All three are what `src/foreman/queries.ts`'s `earlyStopKindOf` (plus
+`state === "delivered"`) says is waiting on the Client - the exact same
+function `fabrica status` calls for its own "awaiting your verdict"
+lines, so the two surfaces can never show a task the other doesn't, or a
+different reason for the one they agree on
+(`integrations/live-view/state-agreement.test.ts` proves this by running
+every fixture through both). "Accept"/"fix" have nothing to act on for
+the two narrower kinds (no delivery to accept, no warm worker or line to
+reopen for a fix) - `wrong` alone closes either, a Client ruling from
+before this page existed (issue #143). When nothing is waiting on the
+Client at all, the page says so in words ("Nothing waiting on you.")
+rather than showing an empty list.
+
+Whichever button a tap is on, it records the verdict through the *exact
+same* `recordVerdictDecision` - `spawnDetachedResume` pair `fabrica
+verdict` itself calls (`src/cli/verdict-command.ts`): a bad ruling fails
+the same way here as on the command line, and a "fix" hands the round to
+the same detached background process, returning immediately rather than
+waiting for it (issue #123).
 
 ### This is the one write anywhere in this directory
 

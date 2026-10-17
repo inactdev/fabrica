@@ -62,9 +62,57 @@ async function postVerdict(taskId, ruling, note) {
   return body;
 }
 
-// One row's whole DOM, plus a reference to its action buttons so they
-// can be disabled while a verdict is in flight.
+// A label for the one-line reason shown on a "refused"/"failed" row -
+// mirrors record-view.ts's own EarlyStopReviewRow doc comment: Inspector's
+// own report for a refusal, whatever killed the task first for a failure.
+function reasonLabel(kind) {
+  return kind === "refused" ? "Inspector refused" : "Failed before any work started";
+}
+
+// A row sitting in "delivered" gets its full card - the write-up,
+// Inspector's stamp, the gate's state, and all three buttons. A row
+// Inspector refused or that failed before any work started (never
+// reaching a delivery at all - record-view.ts's `earlyStopKindOf`) gets a
+// narrower card: just the reason in plain words and the one verdict
+// ("wrong") that can still close it - "accept"/"fix" have nothing to act
+// on for either (no delivery to accept, no warm worker or line to fix).
 function buildRow(row) {
+  if (row.kind === "refused" || row.kind === "failed") return buildEarlyStopRow(row);
+  return buildDeliveredRow(row);
+}
+
+function buildEarlyStopRow(row) {
+  const title = el("div", { className: "review-title" }, [row.title]);
+  const reasonLine = el("div", { className: "review-line review-reason" }, [`${reasonLabel(row.kind)}: ${row.reason}`]);
+
+  const statusEl = el("div", { className: "review-status" }, [""]);
+  const wrongBtn = el("button", { className: "review-btn btn-wrong" }, ["Wrong"]);
+
+  async function act(ruling, note) {
+    wrongBtn.disabled = true;
+    statusEl.textContent = "";
+    try {
+      await postVerdict(row.id, ruling, note);
+      cardEl.remove();
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      wrongBtn.disabled = false;
+    }
+  }
+
+  wrongBtn.addEventListener("click", () => {
+    if (!confirm("Mark this wrong and close the task?")) return;
+    const note = prompt("One-line note (optional):", "");
+    if (note === null) return;
+    act("wrong", note.trim().length > 0 ? note.trim() : undefined);
+  });
+
+  const actions = el("div", { className: "review-actions" }, [wrongBtn]);
+  const cardEl = el("div", { className: "review-card" }, [title, reasonLine, actions, statusEl]);
+  return cardEl;
+}
+
+function buildDeliveredRow(row) {
   const title = el("div", { className: "review-title" }, [row.title]);
   const writeup = el("div", { className: "review-writeup" }, [row.writeupBody]);
   const stampLine = el("div", { className: "review-line" }, [

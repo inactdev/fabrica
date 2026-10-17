@@ -20,7 +20,7 @@ export { fixRoundOf } from "./foreman/index.ts";
 export { recordAnswerDecision, runRecordedAnswer } from "./foreman/index.ts";
 export { recordVerdictDecision, runRecordedFix } from "./foreman/index.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
-export { readTranscript, eventsByTask, stateOf, deliveryOf } from "./foreman/index.ts";
+export { readTranscript, eventsByTask, stateOf, deliveryOf, earlyStopKindOf } from "./foreman/index.ts";
 export { followTask } from "./foreman/index.ts";
 // Rule 10's ledger, for `fabrica status` and `fabrica cost` (issue #11).
 export {

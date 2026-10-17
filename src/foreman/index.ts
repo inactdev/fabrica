@@ -16,7 +16,7 @@ export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./attempts.ts";
 export { readTranscript } from "./transcript.ts";
 export { followTask } from "./follow.ts";
 export type { TaskFollower, TaskProgress } from "./follow.ts";
-export { fixRoundOf, eventsByTask, stateOf, deliveryOf } from "./queries.ts";
+export { fixRoundOf, eventsByTask, stateOf, deliveryOf, earlyStopKindOf } from "./queries.ts";
 export { capsActive } from "./caps.ts";
 export {
   daySpend,

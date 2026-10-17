@@ -9,6 +9,7 @@ import {
   daySpend,
   describeTaskCost,
   describeUnmeasured,
+  earlyStopKindOf,
   eventsByTask,
   formatUsd,
   hasAttempts,
@@ -17,7 +18,6 @@ import {
   taskSpend,
   unmeasuredSpend,
 } from "../index.ts";
-import type { FabricaEvent } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { resolveRecordHome } from "./record-home.ts";
@@ -68,7 +68,9 @@ path back and never will again; it stays listed - marked "FAILED,
 UNRESOLVABLE" and sorted after the entries still actually moving - rather
 than vanishing or blending in with ordinary open work. An Inspector
 refusal also sorts after live work, but says Inspector reached no verdict:
-it is neither a failure nor a quiet task.
+it is neither a failure nor a quiet task. Both of these are still waiting
+on you, same as a delivered task - \`fabrica verdict <id> wrong\` closes
+either one, named right on its own line.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -163,10 +165,24 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
         const liveness = describeLiveness(task.state, events, now);
 
         const cost = describeTaskCost(taskSpend(events, task.id), hasAttempts(events, task.id));
-        const failedBecause = refusedByCap(events)
-          ? "a spending cap refused it before any work started"
-          : taskFailedMessage(events);
-        stdout(formatStatusLine(task, { project, ageMs, liveness, hasDelivery, cost, failedBecause, prUrl: prUrlFromEvents(events) }));
+        // The exact same reason the phone review page shows for this same
+        // task (record-view.ts's getReviewRows) - both read it from this
+        // one function so they can never disagree (issue #202 follow-up).
+        const stop = earlyStopKindOf(events);
+        const failedBecause = stop?.kind === "failed" ? stop.reason : undefined;
+        const refusalReason = stop?.kind === "refused" ? stop.reason : undefined;
+        stdout(
+          formatStatusLine(task, {
+            project,
+            ageMs,
+            liveness,
+            hasDelivery,
+            cost,
+            failedBecause,
+            refusalReason,
+            prUrl: prUrlFromEvents(events),
+          })
+        );
       }
     }
 
@@ -202,13 +218,3 @@ function formatDaySpendLine(spend: { meteredUsd: number; subscriptionUsd: number
     : base;
 }
 
-function refusedByCap(events: FabricaEvent[]): boolean {
-  return events.some((e) => e.name === "cap-refused") && !events.some((e) => e.name === "work-started");
-}
-
-/** #73: the reason a task failed before any delivery, as recorded. */
-function taskFailedMessage(events: FabricaEvent[]): string | undefined {
-  const failed = events.filter((e) => e.name === "task-failed").at(-1);
-  const message = (failed?.details as { message?: string } | undefined)?.message;
-  return message === undefined ? undefined : `the task failed: ${message.split("\n")[0]}`;
-}
