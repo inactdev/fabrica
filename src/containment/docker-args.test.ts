@@ -37,6 +37,17 @@ test("buildDockerArgs adds --network none when denied, omits it when allowed", (
   assert.ok(!allowed.includes("--network"));
 });
 
+test("buildDockerArgs attaches to a named isolated network instead of none/the default bridge", () => {
+  const isolated = buildDockerArgs({ workdir: "/w", network: { isolatedNetwork: "fabrica-relay-t1" }, image: "alpine" });
+  const denied = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine" });
+  const allowed = buildDockerArgs({ workdir: "/w", network: "allowed", image: "alpine" });
+
+  assert.equal(isolated[isolated.indexOf("--network") + 1], "fabrica-relay-t1");
+  assert.ok(!isolated.includes("none"));
+  assert.ok(denied.includes("none"));
+  assert.ok(!allowed.includes("--network"));
+});
+
 test("buildDockerArgs passes envFile as --env-file, with no key or value ever in argv", () => {
   const args = buildDockerArgs({
     workdir: "/w",

@@ -2,7 +2,7 @@
 // for callers that need to branch on it, and a `message` written to be
 // shown to the Client verbatim.
 
-export type ContainmentErrorCode = "invalid-path" | "spawn-failed";
+export type ContainmentErrorCode = "invalid-path" | "spawn-failed" | "network-create-failed" | "network-remove-failed";
 
 export class ContainmentError extends Error {
   readonly code: ContainmentErrorCode;
