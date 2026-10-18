@@ -135,7 +135,13 @@ export function checkoutCheck(copy: CopyInfo, remoteMasterCommit: string | null)
     : { ok: false, label, detail: `${detail}, not master`, fix: `git -C ${copy.root} checkout master && git -C ${copy.root} pull` };
 }
 
-function pinnedNodeVersion(): string | null {
+/** The exact Node version .inspector.json's image tag names, or `null`
+ * if that file is unreadable or its tag carries no version. Exported
+ * for the same reason `short` and `git` are: node-version-pins.test.ts
+ * proves this repo's four Node declarations agree, and it has to read
+ * .inspector.json's tag through the one reader doctor itself refuses
+ * on, not a second regex that could be right while doctor is wrong. */
+export function pinnedNodeVersion(): string | null {
   try {
     const image = (JSON.parse(readFileSync(join(CHECKOUT, ".inspector.json"), "utf8")) as { image?: string }).image ?? "";
     return /node:(\d+\.\d+\.\d+)/.exec(image)?.[1] ?? null;
