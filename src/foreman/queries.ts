@@ -5,7 +5,7 @@
 // superseded it, while receipts come from the latest event carrying them.
 
 import { readEvents, readEventsForTask } from "../record/index.ts";
-import type { FabricaEvent } from "../record/index.ts";
+import type { FabricaEvent, FabricaEventName } from "../record/index.ts";
 import type { Receipt } from "../../contract/surface.ts";
 import type { Delivery, FabricaTask } from "../inspector/types.ts";
 import { deliveredState } from "./delivery.ts";
@@ -135,6 +135,32 @@ export function statusOf(recordHome: string): FabricaTask[] {
   return Array.from(eventsByTask(recordHome), ([id, events]) => ({ id, state: stateOf(events) }));
 }
 
+/** The only events that take a task back out of a failure the record
+ * already carries (`stateOf`'s `failed` flag, below) - everything else
+ * is ignored until one of these lands.
+ *
+ * The first two are the Client's own two ways of restarting a task, and
+ * both are safe to trust for this because of issue #123's split: a
+ * resume and a fix round each record their decision in the FOREGROUND
+ * (`recordAnswerDecision` / `recordVerdictDecision`) before the round
+ * itself is handed to a detached process, so one of these always lands
+ * on the record ahead of that round's own `work-started`. A genuine
+ * restart therefore always gets through, while a straggler from a round
+ * that already died never does.
+ *
+ * "delivered" is here for a different reason: a round that delivers has
+ * not thrown, so a "delivered" event can never be a dying round's
+ * trailing append - and two rounds can hold one task id at once (the
+ * live view's /review page and `fabrica verdict` call the same
+ * record-then-spawn pair, so a double submit is enough). If one of them
+ * fails while the other goes on to deliver, that delivery is still the
+ * Client's to rule on and must not be swallowed. */
+const CLEARS_FAILURE: ReadonlySet<FabricaEventName> = new Set<FabricaEventName>([
+  "verdict-recorded",
+  "answers-given",
+  "delivered",
+]);
+
 /** Where a task stands, derived from its own events alone - so a caller
  * already holding them (`fabrica watch`, polling one task) never re-reads
  * the whole record just to ask. A single forward pass, letting each event
@@ -150,12 +176,14 @@ export function statusOf(recordHome: string): FabricaTask[] {
  * rule9-gate CI check treats as a protected path the Client merges by
  * hand - not something this ordinary status/log/watch work needs to touch.
  *
- * One state is absorbing rather than overwritable: "stopped" (issue
- * #203, the Client's own stop). See the loop's first lines for why. */
+ * Two states are absorbing rather than overwritable: "stopped" (issue
+ * #203, the Client's own stop) and a recorded failure (see
+ * `CLEARS_FAILURE` below). See the loop's first lines for both. */
 export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
   let state: FabricaTask["state"] = "working";
   let begun = false;
   let stoppedByOwner = false;
+  let failed = false;
 
   for (const event of events) {
     // Issue #203: once the Client has stopped the task, that is the
@@ -167,6 +195,23 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
     // can - "accept"/"wrong" close it, exactly as for any other task.
     if (stoppedByOwner && event.name !== "verdict-recorded") continue;
 
+    // A failure the record already carries is the fact, until something
+    // deliberately takes the task back out of it. A round appends
+    // "task-failed" from the top of its own stack (task-failure.ts's
+    // `recordingFailure`), with both heartbeat intervals already
+    // cleared, so nothing it does itself can land afterwards: whatever
+    // does land came from a second process holding the same task id, or
+    // from a round on its way down, and neither is evidence of a live
+    // worker. Without this, any of them - a straggling heartbeat is
+    // harmless, but a late "check-run", "inspector-called" or
+    // "work-started" is not - put the task back to reading "working" in
+    // `fabrica status` and the live view while nothing was running.
+    // Same reasoning as "stopped" above, which issue #203 settled first.
+    if (failed) {
+      if (!CLEARS_FAILURE.has(event.name)) continue;
+      failed = false;
+    }
+
     switch (event.name) {
       case "stopped-by-owner":
         state = "stopped";
@@ -177,7 +222,10 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
         // never will (a new `fabrica do` is a new task). A refused resume
         // or fix leaves the state as it was: that task can still be
         // answered or fixed once there is room.
-        if (!begun) state = "failed";
+        if (!begun) {
+          state = "failed";
+          failed = true;
+        }
         break;
       case "task-received":
         break;
@@ -194,12 +242,14 @@ export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
       case "task-failed":
         // #73: any error after task-received and before a delivery.
         state = "failed";
+        failed = true;
         break;
       case "ask-failed":
         // brain.ask() itself threw (issue #8 follow-up, Client ruling) -
         // the task never got past its own first step, so it's failed,
         // not still "working" or silently invisible.
         state = "failed";
+        failed = true;
         break;
       case "work-started":
         state = "working";
