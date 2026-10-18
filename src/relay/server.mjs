@@ -23,52 +23,63 @@
 //
 // Plain JavaScript importing only `node:` built-ins and sibling .mjs
 // files: the relay container runs this with a stock `node` and nothing
-// from node_modules (see container/bootstrap.mjs). That is also why the
-// refusal event is written here directly rather than through
-// src/record/'s appendEvent (TypeScript) - same file, same one-line
-// O_APPEND write, same short-write refusal.
+// from node_modules (see container/bootstrap.mjs).
+//
+// NOTHING IN THIS FILE MAY THROW ON A REQUEST PATH. Every handler below
+// runs on an event callback, never on a path anyone awaits, so a throw
+// here is an uncaught exception that exits the process - and a relay
+// that exits has not failed one request, it has silently cut the network
+// out from under a worker that goes on running for minutes before it
+// notices (observed on 2026-10-18: a refused `registry.npmjs.org`
+// tunnel, then four minutes of heartbeats, then the worker's own
+// `ConnectionRefused`). Two independent faults did exactly that - a
+// refused CONNECT whose client reset the socket before any `error`
+// listener was attached to it, and a record append that threw straight
+// out of the same handler. Hence: an `error` listener on every socket
+// before anything is written to it, both top-level handlers wrapped, a
+// permanent `error` listener on the server itself, and - because
+// recording was one of the two faults - no file path and no record
+// writing anywhere in here at all. Refusals leave through `onRefusal`
+// (container/entrypoint.mjs prints them on stdout; container/launch.ts
+// appends the event on the host, where a failure is harmless), and a
+// reporting failure is logged and dropped: serving never depends on
+// recording.
 
 import * as http from "node:http";
 import * as https from "node:https";
 import * as net from "node:net";
-import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
-import { join } from "node:path";
 import { isAllowedTarget } from "./allowlist.mjs";
 import { DEFAULT_MAX_CALLS_PER_TASK, DEFAULT_MAX_REQUEST_BYTES } from "./limits.mjs";
 import { RelayError } from "./errors.mjs";
 
 /** @typedef {import("./types.ts").RelayOptions} RelayOptions */
 /** @typedef {import("./types.ts").RelayHandle} RelayHandle */
-/** @typedef {import("../record/types.ts").FabricaEvent} FabricaEvent */
 
-/**
- * Appends one `"network-refused"` event to `<recordHome>/events.jsonl`,
- * the same line shape src/record/append.ts writes. `details` always
- * names the host and port the worker box was trying to reach; a refusal
- * caused by one of the limits (limits.mjs) additionally names which.
- * @param {string} recordHome
- * @param {string} taskId
- * @param {Record<string, unknown>} details
- */
-function appendRefusal(recordHome, taskId, details) {
-  /** @type {FabricaEvent} */
-  const record = { occurredAt: new Date().toISOString(), taskId, name: "network-refused", details };
-  const line = Buffer.from(`${JSON.stringify(record)}\n`, "utf8");
-  const path = join(recordHome, "events.jsonl");
-
-  mkdirSync(recordHome, { recursive: true });
-  const fd = openSync(path, "a");
+/** One line on the relay's own log - its stderr, which `docker logs`
+ * carries out of the container. The only reporting channel that is
+ * allowed to be the last resort, so it is itself guarded: a closed or
+ * full stderr must not become the thing that kills the relay either.
+ * @param {string} message */
+function logProblem(message) {
   try {
-    const written = writeSync(fd, line);
-    if (written !== line.byteLength) {
-      throw new Error(
-        `The record at ${path} accepted only ${written} of ${line.byteLength} bytes for this event (is the disk full?). ` +
-          `The event was not fully written.`,
-      );
-    }
-  } finally {
-    closeSync(fd);
+    console.error(`fabrica-relay: ${message}`);
+  } catch {
+    // Nothing left to report with - drop it and keep serving.
   }
+}
+
+/** @param {unknown} err */
+function describe(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Makes a socket safe to write to and forget: an `error` with no
+ * listener is an uncaught exception, and a socket this relay has already
+ * answered (a 403'd CONNECT, say) is routinely reset by the client that
+ * asked. Attached before the first byte is written, on every path.
+ * @param {net.Socket} socket */
+function ignoreErrorsOn(socket) {
+  socket.on("error", () => {});
 }
 
 /**
@@ -103,13 +114,20 @@ export async function startRelay(opts) {
   const maxRequestBytes = opts.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
   const maxCallsPerTask = opts.maxCallsPerTask ?? DEFAULT_MAX_CALLS_PER_TASK;
 
-  /**
+  /** Hands one refusal to whoever is listening - never writes it
+   * anywhere itself. A throwing listener is logged and dropped: a
+   * refusal that cannot be reported costs the record one line, while a
+   * relay that exits over it costs the task everything.
    * @param {string} host
    * @param {number} port
    * @param {Record<string, unknown>} [extra]
    */
-  const recordRefusal = (host, port, extra) => {
-    appendRefusal(opts.recordHome, opts.taskId, { host, port, ...extra });
+  const reportRefusal = (host, port, extra) => {
+    try {
+      opts.onRefusal?.({ host, port, ...extra });
+    } catch (err) {
+      logProblem(`could not report the refusal of ${host}:${port}: ${describe(err)}`);
+    }
   };
 
   // One call is one gateway request, or one CONNECT tunnel. Counted per
@@ -133,12 +151,27 @@ export async function startRelay(opts) {
     if (calls <= maxCallsPerTask) return false;
     if (!callLimitRecorded) {
       callLimitRecorded = true;
-      recordRefusal(host, port, { limit: "calls-per-task", maxCallsPerTask, calls });
+      reportRefusal(host, port, { limit: "calls-per-task", maxCallsPerTask, calls });
     }
     return true;
   };
 
-  const server = http.createServer((req, res) => {
+  /** @param {http.IncomingMessage} req
+   * @param {http.ServerResponse} res */
+  const handleGatewayRequest = (req, res) => {
+    // Both ends of this one request, before anything is written to
+    // either: a worker that abandons a request mid-body (its own process
+    // exiting, the CLI timing out) otherwise surfaces as an unhandled
+    // `error` on one of these. Per-request objects, deliberately not
+    // `req.socket` - a keep-alive connection serves many requests, so a
+    // listener per request on the shared socket would pile up (Node
+    // warns past ten), and the http server already owns its sockets'
+    // errors itself. A CONNECT socket is the opposite case: that one is
+    // handed to the listener outright, which is why handleTunnel below
+    // has to guard it.
+    req.on("error", () => {});
+    res.on("error", () => {});
+
     const gateway = opts.gateway;
     if (gateway === undefined) {
       res.writeHead(501, { "content-type": "text/plain" }).end("no gateway configured for this relay");
@@ -158,7 +191,7 @@ export async function startRelay(opts) {
     // nothing (chunked) is counted as it streams instead, below.
     const declaredLength = Number(req.headers["content-length"]);
     if (Number.isFinite(declaredLength) && declaredLength > maxRequestBytes) {
-      recordRefusal(gateway.host, gatewayPort, { limit: "request-size", maxRequestBytes, requestBytes: declaredLength });
+      reportRefusal(gateway.host, gatewayPort, { limit: "request-size", maxRequestBytes, requestBytes: declaredLength });
       res
         .writeHead(413, { "content-type": "text/plain" })
         .end(`relay: request of ${declaredLength} bytes is over this task's ${maxRequestBytes}-byte limit`);
@@ -177,6 +210,7 @@ export async function startRelay(opts) {
     const upstreamReq = transport.request(
       { host: gateway.host, port: gateway.port ?? 443, method: req.method, path: req.url, headers },
       (upstreamRes) => {
+        upstreamRes.on("error", () => {});
         res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
         upstreamRes.pipe(res);
       }
@@ -196,7 +230,7 @@ export async function startRelay(opts) {
       forwarded += chunk.length;
       if (forwarded <= maxRequestBytes) return;
       refusedMidStream = true;
-      recordRefusal(gateway.host, gatewayPort, { limit: "request-size", maxRequestBytes, requestBytes: forwarded });
+      reportRefusal(gateway.host, gatewayPort, { limit: "request-size", maxRequestBytes, requestBytes: forwarded });
       req.unpipe(upstreamReq);
       upstreamReq.destroy();
       if (!res.headersSent) {
@@ -215,9 +249,22 @@ export async function startRelay(opts) {
       res.end("relay: upstream gateway request failed");
     });
     req.pipe(upstreamReq);
-  });
+  };
 
-  server.on("connect", (req, /** @type {net.Socket} */ clientSocket, /** @type {Buffer} */ head) => {
+  /** @param {http.IncomingMessage} req
+   * @param {net.Socket} clientSocket
+   * @param {Buffer} head */
+  const handleTunnel = (req, clientSocket, head) => {
+    // FIRST, before any branch below can write to this socket: a refused
+    // CONNECT is routinely answered by the client resetting the
+    // connection, and an `error` with no listener here exits the relay
+    // (reproduced 2026-10-18 - this one line is the crash the whole
+    // incident came down to). The allowed path below adds a second
+    // listener that also tears the upstream leg down; both run, and
+    // what matters here is that at least one is attached on every path,
+    // including the ones that answer and return immediately.
+    ignoreErrorsOn(clientSocket);
+
     const target = req.url !== undefined ? parseConnectTarget(req.url) : undefined;
     if (target === undefined) {
       clientSocket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
@@ -230,7 +277,7 @@ export async function startRelay(opts) {
     }
 
     if (!isAllowedTarget(target.host, target.port, opts.tunnelAllowlist)) {
-      recordRefusal(target.host, target.port);
+      reportRefusal(target.host, target.port);
       clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
       return;
     }
@@ -243,6 +290,39 @@ export async function startRelay(opts) {
     });
     upstreamSocket.on("error", () => clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n"));
     clientSocket.on("error", () => upstreamSocket.destroy());
+  };
+
+  // Both handlers are wrapped rather than registered directly: whatever
+  // unanticipated thing throws inside one of them costs that single
+  // call, never the listener every later call depends on. The relay has
+  // already been killed twice by a throw on a refusal path; this is the
+  // backstop that makes a third one impossible rather than merely
+  // unlikely.
+  const server = http.createServer((req, res) => {
+    try {
+      handleGatewayRequest(req, res);
+    } catch (err) {
+      logProblem(`gateway request ${req.method ?? "?"} ${req.url ?? "?"} failed inside the relay: ${describe(err)}`);
+      try {
+        if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain" });
+        res.end("relay: internal error");
+      } catch {
+        // The response is already gone - nothing to answer with.
+      }
+    }
+  });
+
+  server.on("connect", (req, /** @type {net.Socket} */ clientSocket, /** @type {Buffer} */ head) => {
+    try {
+      handleTunnel(req, clientSocket, head);
+    } catch (err) {
+      logProblem(`CONNECT ${req.url ?? "?"} failed inside the relay: ${describe(err)}`);
+      try {
+        clientSocket.end("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+      } catch {
+        // Same - the socket is already unusable.
+      }
+    }
   });
 
   await /** @type {Promise<void>} */ (
@@ -251,6 +331,13 @@ export async function startRelay(opts) {
       server.listen(opts.port ?? 0, opts.bindAddress ?? "127.0.0.1", () => resolve());
     })
   );
+
+  // The bind-time listener above is a `once`, consumed by now. A server
+  // `error` past that point (an accept failing, a socket error Node
+  // routes here) would otherwise be an uncaught exception, which for
+  // this process means the worker it serves loses the network without
+  // being told.
+  server.on("error", (err) => logProblem(`listener error: ${describe(err)}`));
 
   const address = server.address();
   if (address === null || typeof address === "string") {

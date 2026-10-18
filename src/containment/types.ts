@@ -87,6 +87,25 @@ export interface RunContainedOptions {
    * transcript live, issue #70) do so without waiting for `close`.
    * Omitted, nothing extra happens; `stdout` is unaffected either way. */
   onStdout?: (chunk: string) => void;
+  /** Names the container (`docker run --name`), which is what makes it
+   * stoppable from outside this call - see `stopSignal`. Must be unique
+   * per concurrent run; omitted, docker names it itself and nothing can
+   * single it out afterwards. */
+  containerName?: string;
+  /** Aborting this stops the run: the container is force-removed
+   * (`docker rm -f`, the same way `src/relay/container/launch.ts`
+   * removes its own) and this call settles with whatever the docker
+   * client reported on its way out, rather than waiting for a command
+   * that cannot finish.
+   *
+   * Exists for one case (2026-10-18): a worker box whose task's relay
+   * container has died has no network left and will spend minutes
+   * failing before it exits by itself. Stopping it keeps the caller's
+   * own teardown - the throwaway networks, the relay container - on the
+   * ordinary path instead of being abandoned mid-call. Requires
+   * `containerName`: without one there is nothing to name to docker, and
+   * aborting then does nothing. */
+  stopSignal?: AbortSignal;
 }
 
 export interface ContainedRunResult {

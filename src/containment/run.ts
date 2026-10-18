@@ -5,7 +5,7 @@
 // stdout/stderr/exitCode shape - so an adapter can switch to it without
 // reshaping how it reads the result.
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -129,6 +129,7 @@ export async function runContained(
         cpus: opts.cpus,
         pidsLimit: opts.pidsLimit,
         homeDir,
+        containerName: opts.containerName,
       }),
       command,
       ...args,
@@ -159,6 +160,20 @@ export async function runContained(
         );
       });
       child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
+
+      // Stopping the container, not killing the docker client: the
+      // client's own signal handling is not something this depends on,
+      // and a force-remove is the shape this project already uses on a
+      // container it needs gone (src/relay/container/launch.ts). The
+      // attached client exits on its own once the container is gone,
+      // which settles this promise through `close` above. A failure is
+      // swallowed: the container may already have exited, and the
+      // reason the caller aborted is what matters, not this.
+      if (opts.stopSignal !== undefined && opts.containerName !== undefined) {
+        const stop = () => void execFile("docker", ["rm", "-f", opts.containerName!], () => {});
+        if (opts.stopSignal.aborted) stop();
+        else opts.stopSignal.addEventListener("abort", stop, { once: true });
+      }
     });
   } finally {
     if (envFileDir !== undefined) rmSync(envFileDir, { recursive: true, force: true });

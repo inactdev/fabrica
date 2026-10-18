@@ -6,7 +6,7 @@
 // run in full regardless of how early a check goes green: a number given
 // is a number honored, not a ceiling the code is free to cut short.
 
-import { registerLiveTranscriptListener } from "../brain/index.ts";
+import { probeRelayHealth, registerLiveTranscriptListener } from "../brain/index.ts";
 import type { Brain, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../brain/index.ts";
 import type { GateResult, Receipt } from "../../contract/surface.ts";
 import type { Judge, Judgement } from "./judge.ts";
@@ -106,6 +106,10 @@ export async function runAttempts(opts: {
   /** Test-only override of DEFAULT_HEARTBEAT_INTERVAL_MS - a short value
    * lets a test observe a heartbeat without waiting 15 real seconds. */
   heartbeatIntervalMs?: number;
+  /** Test-only override of DEPENDENCY_GONE_GRACE_MS - how long an
+   * attempt waits for a `work()` call to end by itself after the
+   * heartbeat has established that this box's network relay is gone. */
+  relayGoneGraceMs?: number;
   /** Omitted, nothing about money stops the loop. */
   spendLimits?: AttemptSpendLimits;
   /** Fires with each attempt's receipt the moment it exists, so its
@@ -139,6 +143,7 @@ export async function runAttempts(opts: {
     onTranscriptEntry,
     onHeartbeat,
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
+    relayGoneGraceMs,
     spendLimits,
     onReceipt,
     beforeCommit,
@@ -195,8 +200,18 @@ export async function runAttempts(opts: {
     });
     let workResult: BrainWorkResult;
     try {
-      workResult = await withHeartbeat(onHeartbeat && (() => onHeartbeat(attempt)), heartbeatIntervalMs, () =>
-        brain.work(thisBrief, workdir, Object.keys(workOpts).length > 0 ? workOpts : undefined)
+      workResult = await withHeartbeat(
+        onHeartbeat && (() => onHeartbeat(attempt)),
+        heartbeatIntervalMs,
+        () => brain.work(thisBrief, workdir, Object.keys(workOpts).length > 0 ? workOpts : undefined),
+        // Every tick also asks whether this box's own network is still
+        // there (src/brain/relay-health.ts). A worker whose relay died
+        // keeps running for minutes against an address with nothing
+        // listening, reporting heartbeats the whole way, and then fails
+        // with a bare "ConnectionRefused" of its own - observed
+        // 2026-10-18. This fails the attempt on the next tick instead,
+        // with what the relay watcher said.
+        { probe: () => probeRelayHealth(workdir), ...(relayGoneGraceMs === undefined ? {} : { graceMs: relayGoneGraceMs }) }
       );
     } finally {
       unregisterLiveTranscript();
@@ -340,6 +355,13 @@ export function gateForRecord(gate: GateResult): GateResult {
   };
 }
 
+/** How long `withHeartbeat` keeps waiting for `fn` after its probe has
+ * reported that what the call depends on is gone. The reference adapter
+ * stops its worker box the moment its own probe says so, which ends the
+ * call in about a second; this is the ceiling for a brain that does not,
+ * so "the relay died" can never again mean minutes of silence. */
+export const DEPENDENCY_GONE_GRACE_MS = 30_000;
+
 /** Runs `fn`, calling `tick` on an interval for as long as it's pending.
  * The interval is cleared the instant `fn` settles, success or failure -
  * a heartbeat only ever means "still waiting," never "just finished."
@@ -351,24 +373,63 @@ export function gateForRecord(gate: GateResult): GateResult {
  * "delivered"/"failed" event and the ProductionLine's worktree orphaned.
  * The real trigger is unexceptional: `appendEvent` throws on a short
  * write, ENOSPC, or EACCES. A missed heartbeat costs nothing more than a
- * `fabrica status` reading "quiet"; a lost task costs the work. */
+ * `fabrica status` reading "quiet"; a lost task costs the work.
+ *
+ * `opts.probe` runs on the same tick and asks whether what this call
+ * depends on - the task's own network relay (src/brain/relay-health.ts)
+ * - is still there. A sentence back means it is not: the heartbeat stops
+ * (a call known to be doomed must not keep reporting "still going"), and
+ * if `fn` has not settled within `opts.graceMs` this rejects with that
+ * sentence rather than waiting for a worker to discover its own broken
+ * network minutes later. */
 export async function withHeartbeat<T>(
   tick: (() => void) | undefined,
   intervalMs: number,
-  fn: () => Promise<T>
+  fn: () => Promise<T>,
+  opts: { probe?: () => string | undefined; graceMs?: number } = {}
 ): Promise<T> {
-  if (!tick) return fn();
-  const timer = setInterval(() => {
-    try {
-      tick();
-    } catch {
-      // deliberately ignored - see above
-    }
-  }, intervalMs);
+  const { probe, graceMs = DEPENDENCY_GONE_GRACE_MS } = opts;
+  if (!tick && !probe) return fn();
+
+  let timer: NodeJS.Timeout | undefined;
+  let graceTimer: NodeJS.Timeout | undefined;
+  const stopTimers = () => {
+    if (timer !== undefined) clearInterval(timer);
+    if (graceTimer !== undefined) clearTimeout(graceTimer);
+  };
+
+  const gone = new Promise<never>((_resolve, reject) => {
+    timer = setInterval(() => {
+      let problem: string | undefined;
+      try {
+        problem = probe?.();
+      } catch {
+        // A probe that cannot answer is not evidence of anything.
+      }
+      if (problem !== undefined) {
+        // Stop ticking: the one honest thing left to report about this
+        // call is the failure below, not another "still waiting".
+        clearInterval(timer!);
+        // Deliberately not `unref`'d: this timer is the only thing left
+        // that will ever report why this attempt failed, so it is worth
+        // holding the process open for - the alternative is an event
+        // loop that empties and a task that just stops, with nothing on
+        // the record saying why.
+        graceTimer = setTimeout(() => reject(new ForemanError("worker-network-gone", problem!)), graceMs);
+        return;
+      }
+      try {
+        tick?.();
+      } catch {
+        // deliberately ignored - see above
+      }
+    }, intervalMs);
+  });
+
   try {
-    return await fn();
+    return await Promise.race([fn(), gone]);
   } finally {
-    clearInterval(timer);
+    stopTimers();
   }
 }
 

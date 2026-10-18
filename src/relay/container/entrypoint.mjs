@@ -8,6 +8,7 @@
 // src/containment/run.ts already takes for a worker's own env.
 
 import { startRelay } from "../server.mjs";
+import { LISTENING_MARKER, REFUSAL_MARKER } from "./protocol.mjs";
 
 const raw = process.env.FABRICA_RELAY_CONFIG;
 if (raw === undefined) {
@@ -19,8 +20,15 @@ if (raw === undefined) {
 const config = JSON.parse(raw);
 
 const relay = await startRelay({
-  recordHome: config.recordHome,
-  taskId: config.taskId,
+  // This container's whole report of a refusal: one line on stdout, read
+  // back on the host by launch.ts's watcher, which appends the
+  // `"network-refused"` event there. Nothing in here touches the record
+  // or knows where it is - a refusal that could not be written used to
+  // throw out of a request handler and kill the relay, taking the
+  // worker's network with it (see server.mjs's header). A failing write
+  // here costs one refusal on the record and nothing else: startRelay
+  // catches it and logs it.
+  onRefusal: (details) => console.log(`${REFUSAL_MARKER} ${JSON.stringify(details)}`),
   // 0.0.0.0, not 127.0.0.1 (startRelay's own default): the worker
   // reaching this relay is a *different* container on the isolated
   // network, never this one's own loopback.
@@ -37,7 +45,7 @@ const relay = await startRelay({
 // though nothing on a Docker-Desktop host can otherwise reach this
 // container directly (see launch.ts's own doc for why that's the
 // mechanism, not a TCP probe).
-console.log(`FABRICA-RELAY-LISTENING ${relay.port}`);
+console.log(`${LISTENING_MARKER} ${relay.port}`);
 
 async function shutdown() {
   await relay.close();

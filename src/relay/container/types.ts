@@ -18,10 +18,18 @@ export const CONTAINER_RELAY_PORT = 8090;
  * env var, JSON-encoded, delivered through a throwaway `--env-file` so a
  * real credential never appears in `docker run`'s own argv or in `ps` -
  * the same care `src/containment/run.ts` already takes for a worker's
- * env). entrypoint.mjs reads exactly this shape back out. */
+ * env). entrypoint.mjs reads exactly this shape back out.
+ *
+ * Deliberately carries no `recordHome` and no `taskId` (2026-10-18):
+ * the relay used to append its own `"network-refused"` events inside
+ * this container, against a host path bind-mounted in for the purpose,
+ * and a write that failed threw out of a request handler and exited the
+ * relay - which silently cut the network out from under a worker that
+ * ran on for minutes before noticing. Refusals now leave on stdout
+ * (`protocol.mjs`'s `REFUSAL_MARKER`) and launch.ts appends them on the
+ * host, so no host path is reachable from in here at all and the record
+ * home is not mounted into this container. */
 export interface RelayContainerConfig {
-  recordHome: string;
-  taskId: string;
   /** Always `CONTAINER_RELAY_PORT` - carried in the config so
    * entrypoint.mjs (plain JavaScript) never imports this TypeScript
    * file at runtime. */
@@ -37,6 +45,9 @@ export interface RelayContainerConfig {
 }
 
 export interface ContainerizedRelayOptions {
+  /** Where this relay's refusals are appended - on the host side, by
+   * launch.ts's own watcher, never from inside the container (see
+   * `RelayContainerConfig` above). */
   recordHome: string;
   taskId: string;
   /** Name of an already-created `--internal` network (`src/containment/
@@ -63,6 +74,11 @@ export interface ContainerizedRelayOptions {
    * timeout path (and the container removal on it) without a real
    * 15-second wait in the fast suite. */
   listenTimeoutMs?: number;
+  /** How often the host-side watcher reads the relay container's log -
+   * for new refusals to append, and for the container having gone away
+   * entirely. Defaults to launch.ts's own `DEFAULT_WATCH_INTERVAL_MS`;
+   * a test shortens it rather than waiting a real second per poll. */
+  watchIntervalMs?: number;
 }
 
 export interface ContainerizedRelayHandle {
@@ -75,5 +91,19 @@ export interface ContainerizedRelayHandle {
    * network - which is exactly what the worker is. */
   host: string;
   port: number;
+  /** Why this relay is no longer serving, once the host-side watcher has
+   * established that it isn't - a sentence naming the relay container,
+   * written to be shown to the Client as the reason an attempt failed.
+   * `undefined` for as long as it is serving (and after `close()`, which
+   * is an expected ending, not a failure).
+   *
+   * Nothing restarts a dead relay: a replacement container would get a
+   * new address on the isolated network while the worker's own
+   * configuration still names the old one. The caller fails the attempt
+   * with this instead - `src/foreman/attempts.ts`'s heartbeat is what
+   * reads it, so a relay that dies costs one heartbeat interval rather
+   * than the minutes a worker takes to notice its own
+   * `ConnectionRefused` (observed 2026-10-18: four of them). */
+  failure(): string | undefined;
   close(): Promise<void>;
 }

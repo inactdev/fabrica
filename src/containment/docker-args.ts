@@ -28,6 +28,7 @@ export function buildDockerArgs(opts: {
   cpus?: string;
   pidsLimit?: number;
   homeDir?: string;
+  containerName?: string;
 }): string[] {
   // The long `--mount` form, not `-v`: its key=value fields don't split
   // on a ':' appearing in the workdir path the way the short form does.
@@ -39,6 +40,13 @@ export function buildDockerArgs(opts: {
     "-w",
     CONTAINER_WORKDIR,
   ];
+
+  // A name only when the caller asked for one - it is what lets this
+  // container be force-removed from outside the call that started it
+  // (see `stopSignal` in types.ts). Unnamed otherwise, exactly as
+  // before, so nothing that never needs stopping gains a name docker
+  // would have to keep unique.
+  if (opts.containerName !== undefined) args.push("--name", opts.containerName);
 
   // Each extra path is mounted read-only at its own resolved path, not
   // remapped - a git worktree's .git pointer file names the project's

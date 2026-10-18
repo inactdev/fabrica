@@ -175,6 +175,15 @@ other destination is refused.
 A target with no credential still goes through the relay (there is just
 nothing to swap), so egress stays confined either way.
 
+`runAgent` also registers this box's relay-health probe
+(`../relay-health.ts`) and names the box's container so it can be
+stopped. If the relay container dies mid-call, the Foreman's heartbeat
+asks on its next tick, the box is removed, and the call throws
+`OpenAiCompatibleError("worker-network-gone")` carrying the sentence
+that names the relay - instead of a box spending minutes failing
+against an address with nothing listening (observed on the reference
+adapter, 2026-10-18).
+
 ## Warm sessions on an API that has none
 
 CONTRACT rule 6's `fix` resumes the same worker rather than starting

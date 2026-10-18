@@ -18,6 +18,7 @@ import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
+import { registerRelayHealthProbe } from "../relay-health.ts";
 import { currentTaskNetwork } from "../task-network.ts";
 import { GITHUB_HOSTS, RelayError, relayLimitsFor, startContainerizedRelay, tunnelAllowlistFor } from "../../relay/index.ts";
 
@@ -69,6 +70,14 @@ const ANTHROPIC_AUTH_HEADER = "authorization";
 interface RelayedNetwork {
   env: Record<string, string>;
   network: { isolatedNetwork: string };
+  /** Why this box's network is gone, once the relay watcher has
+   * established that it is (`../../relay/container/launch.ts`) -
+   * `undefined` while it is serving. `work()` below hands this to the
+   * Foreman's heartbeat through `../relay-health.ts`, so a dead relay
+   * costs one heartbeat interval instead of the minutes the box itself
+   * takes to notice. Absent on an unrelayed run: there is no relay to
+   * lose. */
+  relayFailure?: () => string | undefined;
   teardown: () => Promise<void>;
 }
 
@@ -181,6 +190,7 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
       no_proxy: relay.host,
     },
     network: { isolatedNetwork: isolatedNetworkName },
+    relayFailure: relay.failure,
     teardown: async () => {
       // Order matters: the relay container must be stopped (detaching
       // it from the isolated network) before that network can be
@@ -201,15 +211,23 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
  * (`defaultBrainAdapter` forwards it before any call) - the relay-backed
  * replacement from `connectThroughRelay` above, with `HOST_TOKEN_VAR`
  * itself stripped out of what reaches the container. */
-async function prepareNetwork(
-  env: Record<string, string> | undefined
-): Promise<{ network: "allowed" | { isolatedNetwork: string }; env?: Record<string, string>; teardown: () => Promise<void> }> {
+async function prepareNetwork(env: Record<string, string> | undefined): Promise<{
+  network: "allowed" | { isolatedNetwork: string };
+  env?: Record<string, string>;
+  relayFailure?: () => string | undefined;
+  teardown: () => Promise<void>;
+}> {
   const realToken = env?.[HOST_TOKEN_VAR];
   if (!realToken) return { network: "allowed", env, teardown: async () => {} };
 
   const relayed = await connectThroughRelay(realToken);
   const { [HOST_TOKEN_VAR]: _dropped, ...rest } = env;
-  return { network: relayed.network, env: { ...rest, ...relayed.env }, teardown: relayed.teardown };
+  return {
+    network: relayed.network,
+    env: { ...rest, ...relayed.env },
+    relayFailure: relayed.relayFailure,
+    teardown: relayed.teardown,
+  };
 }
 
 // Built from src/brain/adapters/docker/Dockerfile (the build command,
@@ -652,8 +670,36 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       // to protect (this file's own fast tests, which pass a fake env)
       // keeps the old "allowed" network.
       let prepared: Awaited<ReturnType<typeof prepareNetwork>> | undefined;
+      // Set when this box's own relay died mid-call (2026-10-18): the
+      // box is then stopped rather than left to spend minutes failing
+      // against an address with nothing listening, and this is what
+      // work() reports instead of the box's own bare
+      // "ConnectionRefused" - see the probe below.
+      let relayGone: string | undefined;
+      let unregisterProbe = () => {};
       try {
         prepared = await prepareNetwork(opts.env);
+        // Named only so it can be stopped from outside this call, which
+        // is the whole point of the probe below.
+        const boxName = `fabrica-worker-box-${randomUUID().replace(/-/g, "")}`;
+        const stopBox = new AbortController();
+        const relayFailure = prepared.relayFailure;
+        if (relayFailure !== undefined) {
+          // The Foreman's heartbeat calls this every tick while this
+          // call is in flight (../relay-health.ts). Answering is only
+          // half of it: a box whose relay is gone cannot finish, so it
+          // is stopped here too, which ends this runContained call in
+          // about a second with every teardown below still on its
+          // ordinary path.
+          unregisterProbe = registerRelayHealthProbe(workdir, () => {
+            const problem = relayFailure();
+            if (problem !== undefined && relayGone === undefined) {
+              relayGone = problem;
+              stopBox.abort();
+            }
+            return problem;
+          });
+        }
         ({ stdout, stderr, exitCode } = await runContained(bin, args, {
           workdir,
           network: prepared.network,
@@ -662,6 +708,8 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
           readOnlyMounts,
           homeDir: sessionDir,
           onStdout,
+          containerName: boxName,
+          stopSignal: stopBox.signal,
         }));
       } catch (err) {
         if (err instanceof ContainmentError || err instanceof RelayError) {
@@ -672,9 +720,16 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         }
         throw err;
       } finally {
+        unregisterProbe();
         rmSync(sanitizedConfigDir, { recursive: true, force: true });
         await prepared?.teardown();
       }
+
+      // A box stopped because its relay died has whatever partial output
+      // it managed before that, and no honest result in it - its own
+      // error, if it reached one at all, would say "ConnectionRefused"
+      // and name nothing. Report the relay instead.
+      if (relayGone !== undefined) throw new ClaudeCodeError("cli-error", relayGone);
 
       const lines = parseLines(stdout);
       const result = [...lines].reverse().find((l) => l.type === "result");

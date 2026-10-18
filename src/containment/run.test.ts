@@ -70,6 +70,38 @@ test("runContained: writes land inside workdir, and nowhere outside it", async (
   assert.equal(existsSync(join(outsideDir, "hack.txt")), false, "a write outside workdir must never land");
 });
 
+test("runContained: aborting stopSignal stops the container instead of waiting the command out", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+
+  // A worker box whose relay has died is exactly this shape: a command
+  // that will not finish on its own anywhere near soon enough
+  // (2026-10-18: the real one spent four minutes failing).
+  const name = `fabrica-test-stop-${process.pid}`;
+  const stop = new AbortController();
+  const startedAt = Date.now();
+  setTimeout(() => stop.abort(), 500);
+
+  const result = await runContained("sh", ["-c", "sleep 600"], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    containerName: name,
+    stopSignal: stop.signal,
+  });
+
+  const elapsed = Date.now() - startedAt;
+  assert.ok(elapsed < 60_000, `the run should end on the abort, not run its course - took ${elapsed}ms`);
+  assert.notEqual(result.exitCode, 0, "a container removed under it is not a successful run");
+
+  // Removed, not merely detached from: a container left behind keeps its
+  // networks undeletable (src/relay/container/launch.ts's own note).
+  const listed = execFileSync("docker", ["ps", "-a", "--filter", `name=${name}`, "--format", "{{.Names}}"], {
+    encoding: "utf8",
+  });
+  assert.equal(listed.trim(), "", `the box must be gone, got: ${listed}`);
+});
+
 test("runContained: onStdout delivers the first chunk while the process is still running, not batched at close", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const { workdir } = makeFixture();

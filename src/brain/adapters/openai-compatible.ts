@@ -48,6 +48,7 @@ import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MA
 import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgressNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
+import { registerRelayHealthProbe } from "../relay-health.ts";
 import { GITHUB_HOSTS, RelayError, startContainerizedRelay } from "../../relay/index.ts";
 import type { GatewayTarget } from "../../relay/index.ts";
 // The reference adapter's own proven recipe for making git work inside a
@@ -69,7 +70,12 @@ export type OpenAiCompatibleErrorCode =
   | "unparseable-output"
   /** The agent reported a failure before it ever reached the model - a
    * rejected credential, an unknown model, an unreachable endpoint. */
-  | "api-unreachable";
+  | "api-unreachable"
+  /** This box's own relay stopped serving mid-call (2026-10-18), so the
+   * box was stopped: it had no network left and nothing it could still
+   * report would be true. Carries what the relay watcher said, which
+   * names the relay. */
+  | "worker-network-gone";
 
 export class OpenAiCompatibleError extends Error {
   readonly code: OpenAiCompatibleErrorCode;
@@ -180,6 +186,13 @@ interface PreparedNetwork {
   apiKey: string | null;
   env: Record<string, string>;
   network: { isolatedNetwork: string };
+  /** Why this box's network is gone, once the relay watcher has
+   * established that it is (../../relay/container/launch.ts) -
+   * `undefined` while it is serving. The box is stopped on it rather
+   * than left failing against an address with nothing listening, and
+   * the Foreman's heartbeat reads it through ../relay-health.ts (the
+   * reference adapter does exactly the same). */
+  relayFailure: () => string | undefined;
   teardown: () => Promise<void>;
 }
 
@@ -271,6 +284,7 @@ async function connectThroughRelay(opts: { baseUrl: string; apiKey?: string }): 
       no_proxy: relay.host,
     },
     network: { isolatedNetwork: isolatedNetworkName },
+    relayFailure: relay.failure,
     teardown: async () => {
       // Order matters: a network with a container still attached refuses
       // to be removed.
@@ -455,7 +469,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
   async function runAgent(
     job: Omit<AgentJob, "endpoint" | "apiKey">,
     box: { workdir: string; homeDir: string; readOnlyMounts: ReadOnlyMount[]; onLine?: (line: AgentLine) => void }
-  ): Promise<{ lines: AgentLine[]; stderr: string; exitCode: number | null }> {
+  ): Promise<{ lines: AgentLine[]; stderr: string; exitCode: number | null; relayGone?: string }> {
     let prepared: PreparedNetwork;
     try {
       prepared = await connectThroughRelay({ baseUrl, ...(opts.apiKey === undefined ? {} : { apiKey: opts.apiKey }) });
@@ -493,6 +507,24 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
       box.onLine?.(parsed);
     });
 
+    // A box whose relay has died has no network left and would spend
+    // minutes failing before it exited by itself, with the Foreman
+    // reporting heartbeats the whole way (observed 2026-10-18). The
+    // Foreman's heartbeat asks this every tick; answering also stops
+    // the box, so this call ends at once with its teardown below still
+    // on the ordinary path.
+    let relayGone: string | undefined;
+    const boxName = `fabrica-worker-box-${randomUUID().replace(/-/g, "")}`;
+    const stopBox = new AbortController();
+    const unregisterProbe = registerRelayHealthProbe(box.workdir, () => {
+      const problem = prepared.relayFailure();
+      if (problem !== undefined && relayGone === undefined) {
+        relayGone = problem;
+        stopBox.abort();
+      }
+      return problem;
+    });
+
     try {
       const { stderr, exitCode } = await runContained(
         "node",
@@ -505,9 +537,11 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
           readOnlyMounts: [...box.readOnlyMounts, { source: staged.dir, target: CONTAINER_AGENT_DIR }],
           homeDir: box.homeDir,
           onStdout,
+          containerName: boxName,
+          stopSignal: stopBox.signal,
         }
       );
-      return { lines, stderr, exitCode };
+      return { lines, stderr, exitCode, ...(relayGone === undefined ? {} : { relayGone }) };
     } catch (err) {
       if (err instanceof ContainmentError || err instanceof RelayError) {
         throw new OpenAiCompatibleError(
@@ -517,6 +551,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
       }
       throw err;
     } finally {
+      unregisterProbe();
       rmSync(staged.dir, { recursive: true, force: true });
       await prepared.teardown();
     }
@@ -549,7 +584,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
       const homeDir = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-ask-home-"));
 
       try {
-        const { lines, stderr, exitCode } = await runAgent(
+        const { lines, stderr, exitCode, relayGone } = await runAgent(
           {
             ...jobBase,
             mode: "ask",
@@ -560,6 +595,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
           },
           { workdir: scratchDir, homeDir, readOnlyMounts: [] }
         );
+        if (relayGone !== undefined) throw new OpenAiCompatibleError("worker-network-gone", relayGone);
         const result = resultFrom(lines, stderr, exitCode);
         if (!result.ok) {
           // Nothing was asked and nothing was done - the Foreman records
@@ -608,7 +644,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
 
       const transcript: TranscriptEntry[] = [];
       try {
-        const { lines, stderr, exitCode } = await runAgent(
+        const { lines, stderr, exitCode, relayGone } = await runAgent(
           {
             ...jobBase,
             mode: "work",
@@ -630,6 +666,11 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
             },
           }
         );
+
+        // A box stopped because its relay died has no honest result in
+        // it - whatever it managed to print stops mid-flight. Report
+        // the relay, which the box's own error would never name.
+        if (relayGone !== undefined) throw new OpenAiCompatibleError("worker-network-gone", relayGone);
 
         const result = resultFrom(lines, stderr, exitCode);
 

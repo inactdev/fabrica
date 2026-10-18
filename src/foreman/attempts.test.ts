@@ -4,9 +4,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runAttempts, gateForRecord, MAX_RECEIPT_CHECK_OUTPUT_BYTES } from "./attempts.ts";
+import { runAttempts, gateForRecord, withHeartbeat, MAX_RECEIPT_CHECK_OUTPUT_BYTES } from "./attempts.ts";
+import { ForemanError } from "./errors.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { emitLiveTranscriptEntry } from "../brain/live-transcript.ts";
+import { registerRelayHealthProbe } from "../brain/relay-health.ts";
 import type { Brain } from "../brain/index.ts";
 import type { Judge } from "./judge.ts";
 
@@ -130,6 +132,22 @@ function slowBrain(delayMs: number): Brain {
   };
 }
 
+/** A worker whose `work()` never settles - no timer, so it holds nothing
+ * open once the test that abandoned it is over. Stands in for a box
+ * running against a network that is no longer there. */
+function stuckBrain(): Brain {
+  return {
+    name: "stuck",
+    model: "none",
+    async work() {
+      return new Promise<never>(() => {});
+    },
+    async ask() {
+      return {};
+    },
+  };
+}
+
 test("runAttempts: onHeartbeat fires repeatedly while brain.work is in flight", async () => {
   const beats: number[] = [];
 
@@ -211,6 +229,108 @@ test("runAttempts: no onHeartbeat given, no timer runs (no crash, no leak)", asy
   });
 
   assert.equal(result.receipts.length, 1);
+});
+
+// The 2026-10-18 incident's second half: the relay a worker box reaches
+// the network through died mid-attempt, and nothing noticed. Heartbeats
+// went on being recorded for four minutes, until the box itself reported
+// "Unable to connect to API (ConnectionRefused)" - a message that names
+// no relay and tells the Client nothing about what actually broke. The
+// heartbeat now asks, every tick, whether that relay is still there.
+test("runAttempts: a relay that is gone fails the attempt at once, naming the relay", async () => {
+  const workdir = scratchWorkdir();
+  const beats: number[] = [];
+  // Stands in for the relay watcher's verdict (src/relay/container/
+  // launch.ts): healthy, then gone.
+  let gone = false;
+  const unregister = registerRelayHealthProbe(workdir, () =>
+    gone ? 'the task\'s network relay (container "fabrica-relay-abc") is no longer running' : undefined
+  );
+  setTimeout(() => (gone = true), 30);
+
+  try {
+    await assert.rejects(
+      runAttempts({
+        // A worker that never comes back on its own - the real one took
+        // four minutes, and the point is that nothing waits for it.
+        brain: stuckBrain(),
+        brief: "do it",
+        workdir,
+        taskId: "t1",
+        judge: greenJudge,
+        totalAttempts: 1,
+        stopEarlyOnGreen: true,
+        heartbeatIntervalMs: 5,
+        onHeartbeat: (attempt) => beats.push(attempt),
+        relayGoneGraceMs: 20,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof ForemanError, `expected a ForemanError, got ${String(err)}`);
+        assert.equal(err.code, "worker-network-gone");
+        assert.match(err.message, /relay/);
+        assert.match(err.message, /fabrica-relay-abc/);
+        return true;
+      }
+    );
+
+    const beatsWhenItFailed = beats.length;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(
+      beats.length,
+      beatsWhenItFailed,
+      "a worker known to have lost its network must stop reporting that it is still going"
+    );
+  } finally {
+    unregister();
+  }
+});
+
+test("runAttempts: a probe that reports nothing leaves the attempt alone", async () => {
+  const workdir = scratchWorkdir();
+  let asked = 0;
+  const unregister = registerRelayHealthProbe(workdir, () => {
+    asked += 1;
+    return undefined;
+  });
+
+  try {
+    const result = await runAttempts({
+      brain: slowBrain(40),
+      brief: "do it",
+      workdir,
+      taskId: "t1",
+      judge: greenJudge,
+      totalAttempts: 1,
+      stopEarlyOnGreen: true,
+      heartbeatIntervalMs: 5,
+    });
+
+    assert.ok(asked >= 2, `the probe should be asked on every tick, got ${asked}`);
+    assert.equal(result.receipts.length, 1);
+    assert.equal(result.lastGate?.green, true);
+  } finally {
+    unregister();
+  }
+});
+
+test("withHeartbeat: a probe that throws is not evidence of anything", async () => {
+  let beats = 0;
+  const result = await withHeartbeat(
+    () => beats++,
+    5,
+    async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return "finished";
+    },
+    {
+      probe: () => {
+        throw new Error("docker is busy");
+      },
+    }
+  );
+
+  assert.equal(result, "finished", "a probe that cannot answer must never fail the call");
+  assert.ok(beats >= 2, "and the heartbeat must carry on");
 });
 
 // Issue #70: src/brain/live-transcript.ts is the one piece the reference
