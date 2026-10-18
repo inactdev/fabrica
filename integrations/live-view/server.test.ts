@@ -5,7 +5,7 @@ import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendEvent, appendTaskFile, readEventsForTask, registerTask } from "../../src/record/index.ts";
+import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, registerTask } from "../../src/record/index.ts";
 import { createForeman } from "../../src/index.ts";
 import { fakeBrain } from "../../src/brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
@@ -13,6 +13,7 @@ import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { startLiveView } from "./server.ts";
 
 const FAKE_VERDICT_FIX_ENTRY = fileURLToPath(new URL("../../src/cli/helpers/fake-verdict-fix-entry.ts", import.meta.url));
+const FAKE_ANSWER_ENTRY = fileURLToPath(new URL("../../src/cli/helpers/fake-answer-entry.ts", import.meta.url));
 /** A real connection carrying Tailscale's own identity header - this is
  * what `tailscale serve` adds while proxying a request in from the
  * tailnet (server.ts); a test fetch has to set it by hand since nothing
@@ -24,6 +25,20 @@ async function deliveredTask(recordHome: string) {
     project: makeFixtureRepo("exit 0"),
     brain: fakeBrain(),
   });
+}
+
+/** A real task stopped on its clarifying questions (SPEC.md step 2) -
+ * driven through the same `do()` a real one is, so the record carries
+ * the real `"questions-asked"` event (project and attempt count
+ * included) a later answer round re-derives everything from, not a
+ * hand-appended imitation of it. */
+async function askingTask(recordHome: string) {
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain({ askQuestions: ["What database should this use?", "Behind a flag?"] }),
+  });
+  assert.equal(task.state, "asking");
+  return task;
 }
 
 function tempRecordHome(): string {
@@ -545,6 +560,165 @@ test("startLiveView: a verdict POST for \"fix\" hands the round to the detached 
   }
 });
 
+test("startLiveView: /api/review lists a task waiting on an answer, with the worker's own questions", async () => {
+  const recordHome = tempRecordHome();
+  const task = await askingTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.rows.length, 1);
+    assert.equal(body.rows[0].id, task.id);
+    assert.equal(body.rows[0].kind, "asking");
+    assert.deepEqual(body.rows[0].questions, ["What database should this use?", "Behind a flag?"]);
+    // Nothing to rule on yet - an asking row carries no delivery fields.
+    assert.equal(body.rows[0].writeupBody, undefined);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an answer POST with no Tailscale identity header is refused, and records nothing", async () => {
+  const recordHome = tempRecordHome();
+  const task = await askingTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answer: "Postgres." }),
+    });
+    assert.equal(res.status, 403);
+
+    const events = readEventsForTask(recordHome, task.id);
+    assert.ok(!events.some((e) => e.name === "answers-given"));
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an empty Tailscale identity header is treated the same as a missing one on the answer route too", async () => {
+  const recordHome = tempRecordHome();
+  const task = await askingTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Tailscale-User-Login": "   " },
+      body: JSON.stringify({ answer: "Postgres." }),
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an answer POST with the identity header records the answer exactly as fabrica answer does, and hands the round to the detached process", async () => {
+  const recordHome = tempRecordHome();
+  const task = await askingTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0, answerEntryScript: FAKE_ANSWER_ENTRY });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ answer: "Use Postgres, no flag." }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+
+    // Recorded synchronously, in the foreground - exactly what `fabrica
+    // answer` itself records before handing off (issue #123).
+    const events = readEventsForTask(recordHome, task.id);
+    const answered = events.find((e) => e.name === "answers-given");
+    assert.ok(answered, "the answer must be on the record before this request answered");
+    assert.equal((answered!.details as { answer?: string }).answer, "Use Postgres, no flag.");
+    // The Client's words reach the worker's brief, the same way the CLI
+    // path builds it (recordAnswerDecision, src/foreman/answer.ts).
+    assert.match(readTaskFile(recordHome, task.id, "brief.md") ?? "", /Use Postgres, no flag\./);
+
+    // ...and the round itself ran in the background, not inside this
+    // request.
+    const deadline = Date.now() + 10_000;
+    let delivered = false;
+    while (Date.now() < deadline) {
+      if (readEventsForTask(recordHome, task.id).some((e) => e.name === "delivered")) {
+        delivered = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(delivered, "the answered round never delivered in the background");
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an answer POST with no text, or the wrong shape, is refused with the same words fabrica answer uses, before anything is recorded", async () => {
+  const recordHome = tempRecordHome();
+  const task = await askingTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+
+    const empty = await fetch(`${base}/api/review/tasks/${task.id}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ answer: "   " }),
+    });
+    assert.equal(empty.status, 400);
+    assert.match((await empty.json()).error, /an answer needs actual text/);
+
+    const wrongShape = await fetch(`${base}/api/review/tasks/${task.id}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ note: "wrong field" }),
+    });
+    assert.equal(wrongShape.status, 400);
+
+    assert.ok(!readEventsForTask(recordHome, task.id).some((e) => e.name === "answers-given"));
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an answer POST for a task with no question pending, an unknown id, or a malformed id is refused", async () => {
+  const recordHome = tempRecordHome();
+  const delivered = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+
+    // A real task, but one that never asked anything - the same refusal
+    // `fabrica answer` gives.
+    const nothingPending = await fetch(`${base}/api/review/tasks/${delivered.id}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ answer: "nothing to answer" }),
+    });
+    assert.equal(nothingPending.status, 400);
+    assert.match((await nothingPending.json()).error, /never asked a clarifying question/);
+
+    const badShape = await fetch(`${base}/api/review/tasks/..%2f..%2fetc/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ answer: "hi" }),
+    });
+    assert.equal(badShape.status, 400);
+
+    const unknown = await fetch(`${base}/api/review/tasks/20260101-nope-zz/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ answer: "hi" }),
+    });
+    assert.equal(unknown.status, 400);
+
+    assert.ok(!readEventsForTask(recordHome, delivered.id).some((e) => e.name === "answers-given"));
+  } finally {
+    await view.close();
+  }
+});
+
 test("startLiveView: no request, of any kind, ever changes a file on disk", async () => {
   const recordHome = tempRecordHome();
   const taskId = registerTask(recordHome, "do not touch me").id;
@@ -576,12 +750,17 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
       fetch(`${base}/api/state`, { method: "POST" }),
       fetch(`${base}/api/tasks/..%2f..%2fetc/transcript`),
       // No Tailscale identity header - refused before the body is even
-      // read, so this well-formed-looking verdict POST must write
-      // nothing either.
+      // read, so these two well-formed-looking POSTs (the server's only
+      // two write routes) must write nothing either.
       fetch(`${base}/api/review/tasks/${taskId}/verdict`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ruling: "accept" }),
+      }),
+      fetch(`${base}/api/review/tasks/${taskId}/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer: "nope" }),
       }),
     ]);
 

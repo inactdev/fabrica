@@ -1,15 +1,17 @@
 // Plain JavaScript, no framework, no build step - same as app.js/task.js.
 // The one page in this directory that writes anything: a tap on accept/
-// fix/wrong POSTs to /api/review/tasks/<id>/verdict, the server's one
-// non-GET route (server.ts). Everything else here only ever polls
-// /api/review, same 2-second cadence as the other list pages.
+// fix/wrong POSTs to /api/review/tasks/<id>/verdict, and sending an
+// answer to a worker's clarifying questions POSTs to
+// /api/review/tasks/<id>/answer - the server's only two non-GET routes
+// (server.ts). Everything else here only ever polls /api/review, same
+// 2-second cadence as the other list pages.
 //
 // `fetch` never sets a Tailscale identity header itself - a real one can
 // only come from `tailscale serve` adding it while proxying this
 // request in from the tailnet. Reached directly (e.g. from this same
-// machine, bypassing Serve), every verdict POST below gets back a 403
-// and the page shows the server's own explanation - there is nothing
-// this script can do about that, by design (server.ts).
+// machine, bypassing Serve), every POST below gets back a 403 and the
+// page shows the server's own explanation - there is nothing this
+// script can do about that, by design (server.ts).
 
 const POLL_MS = 2000;
 
@@ -62,6 +64,19 @@ async function postVerdict(taskId, ruling, note) {
   return body;
 }
 
+async function postAnswer(taskId, answer) {
+  const res = await fetch(`/api/review/tasks/${encodeURIComponent(taskId)}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `the server answered ${res.status}`);
+  }
+  return body;
+}
+
 // A label for the one-line reason shown on a "refused"/"failed" row -
 // mirrors record-view.ts's own EarlyStopReviewRow doc comment: Inspector's
 // own report for a refusal, whatever killed the task first for a failure.
@@ -77,8 +92,57 @@ function reasonLabel(kind) {
 // ("wrong") that can still close it - "accept"/"fix" have nothing to act
 // on for either (no delivery to accept, no warm worker or line to fix).
 function buildRow(row) {
+  if (row.kind === "asking") return buildAskingRow(row);
   if (row.kind === "refused" || row.kind === "failed") return buildEarlyStopRow(row);
   return buildDeliveredRow(row);
+}
+
+// A task waiting on the Client's own words, not on a ruling: its
+// questions as the worker asked them, numbered the same way `fabrica
+// answer` numbers them in answers.md, and one box to answer all of them
+// at once - which is exactly what `fabrica answer <id> -m "<text>"`
+// takes too (one answer per round, not one per question).
+function buildAskingRow(row) {
+  const title = el("div", { className: "review-title" }, [row.title]);
+  const questions = el(
+    "ol",
+    { className: "review-questions" },
+    row.questions.map((question) => el("li", {}, [question]))
+  );
+
+  const box = el("textarea", {
+    className: "review-answer",
+    rows: "4",
+    placeholder: "Your answer…",
+    "aria-label": "Your answer",
+  }, []);
+  const statusEl = el("div", { className: "review-status" }, [""]);
+  const sendBtn = el("button", { className: "review-btn btn-accept" }, ["Send answer"]);
+
+  sendBtn.addEventListener("click", async () => {
+    const answer = box.value.trim();
+    if (answer.length === 0) {
+      statusEl.textContent = "an answer needs actual text - it becomes part of the brief the worker receives";
+      return;
+    }
+    sendBtn.disabled = true;
+    box.disabled = true;
+    statusEl.textContent = "";
+    try {
+      await postAnswer(row.id, answer);
+      // Optimistic, same as a recorded verdict below: this task is now
+      // running again, not waiting on anyone.
+      cardEl.remove();
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      sendBtn.disabled = false;
+      box.disabled = false;
+    }
+  });
+
+  const actions = el("div", { className: "review-actions" }, [sendBtn]);
+  const cardEl = el("div", { className: "review-card" }, [title, questions, box, actions, statusEl]);
+  return cardEl;
 }
 
 function buildEarlyStopRow(row) {

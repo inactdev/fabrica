@@ -1,10 +1,11 @@
 // A tiny HTTP server for watching what the factory is doing (issue #26),
 // now with one deliberate exception (issue #202): every handler still
 // only ever reads (`readFileSync`/`readdirSync`, directly or through
-// src/index.ts) EXCEPT the one POST route below that records the
-// Client's verdict from the phone review page - see "Recording a verdict
-// from the phone" lower in this file, and this module's README, for why
-// that one write is safe to allow here.
+// src/index.ts) EXCEPT the two POST routes below that record the
+// Client's own decisions from the phone review page - his verdict on a
+// delivery, and his answer to a worker's clarifying questions. See
+// "Recording a decision from the phone" lower in this file, and this
+// module's README, for why those writes are safe to allow here.
 //
 // It never binds anywhere but the loopback interface - HOST below is not
 // a parameter anywhere, so there is no way to ask this server for
@@ -19,7 +20,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { recordVerdictDecision, TASK_ID_PATTERN } from "../../src/index.ts";
+import { recordAnswerDecision, recordVerdictDecision, TASK_ID_PATTERN } from "../../src/index.ts";
 import { runningCopyCommit } from "../../src/cli/doctor-command.ts";
 import { loadConfigOrDefault } from "../../src/cli/load-config.ts";
 import { spawnDetachedResume } from "../../src/cli/spawn-detached.ts";
@@ -53,14 +54,16 @@ const TASK_API_PATH = /^\/api\/tasks\/([^/]+)$/;
  * own). Matched against `TASK_ID_PATTERN` itself, not just `[^/]+`, so
  * nothing but a real task id ever reaches `task.html`. */
 const TASK_PAGE_PATH = new RegExp(`^/tasks/(${TASK_ID_PATTERN.source.slice(1, -1)})$`);
-/** The phone review page's one write (issue #202) - a loose capture, the
- * same shape as TASK_API_PATH/TRANSCRIPT_PATH above, not TASK_ID_PATTERN
- * embedded directly: the handler below decodes first and validates
- * against TASK_ID_PATTERN after, so a malformed id (e.g. a percent-
- * encoded path-traversal attempt) gets the same "Not a task id." 400
- * those routes give rather than falling through to this route not
- * matching at all and reporting a generic 405. */
+/** The phone review page's two writes (issue #202, plus answering a
+ * worker's questions) - a loose capture, the same shape as
+ * TASK_API_PATH/TRANSCRIPT_PATH above, not TASK_ID_PATTERN embedded
+ * directly: the handler below decodes first and validates against
+ * TASK_ID_PATTERN after, so a malformed id (e.g. a percent-encoded
+ * path-traversal attempt) gets the same "Not a task id." 400 those
+ * routes give rather than falling through to this route not matching at
+ * all and reporting a generic 405. */
 const REVIEW_VERDICT_PATH = /^\/api\/review\/tasks\/([^/]+)\/verdict$/;
+const REVIEW_ANSWER_PATH = /^\/api\/review\/tasks\/([^/]+)\/answer$/;
 /** Serve adds this to a proxied request's headers for the authenticated
  * tailnet user, and strips it from anything a client tried to send
  * itself (Tailscale's own docs: "to avoid header spoofing") - so its
@@ -100,11 +103,18 @@ export function startLiveView(opts: {
    * real brain adapter. Omitted, the real default fix-entry script runs,
    * exactly as a real `fabrica verdict <id> fix -m "..."` would. */
   fixEntryScript?: string;
+  /** Test-only, the answer route's equivalent of `fixEntryScript` above -
+   * the same override `fabrica answer`'s own
+   * RunAnswerCommandOptions.entryScript provides. Omitted, the real
+   * default answer-entry script runs, exactly as a real
+   * `fabrica answer <id> -m "..."` would. */
+  answerEntryScript?: string;
 }): Promise<LiveView> {
   const view = createRecordView(opts.recordHome);
   const commit = opts.commit ?? (() => runningCopyCommit(CHECKOUT));
+  const entryScripts = { fix: opts.fixEntryScript, answer: opts.answerEntryScript };
   const server = createServer((req, res) => {
-    handleRequest(req, res, view, commit, opts.recordHome, opts.fixEntryScript).catch((err) => {
+    handleRequest(req, res, view, commit, opts.recordHome, entryScripts).catch((err) => {
       if (res.headersSent) return;
       send(res, 500, "text/plain; charset=utf-8", `fabrica live: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -124,33 +134,36 @@ export function startLiveView(opts: {
   });
 }
 
+/** The two test-only entry-script overrides, one per detached round this
+ * server can hand off (see startLiveView's own options). */
+interface EntryScripts {
+  fix: string | undefined;
+  answer: string | undefined;
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
   view: ReturnType<typeof createRecordView>,
   commit: () => string | null,
   recordHome: string,
-  fixEntryScript: string | undefined
+  entryScripts: EntryScripts
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${HOST}`);
 
-  // The one route that isn't a GET - everything else below this still
-  // only ever reads. Checked before the blanket "only GET" rejection so
-  // this single POST isn't caught by it.
+  // The only two routes that aren't GETs - everything else below this
+  // still only ever reads. Checked before the blanket "only GET"
+  // rejection so these two POSTs aren't caught by it.
   const verdictMatch = REVIEW_VERDICT_PATH.exec(url.pathname);
-  if (req.method === "POST" && verdictMatch) {
-    let taskId: string;
-    try {
-      taskId = decodeURIComponent(verdictMatch[1]);
-    } catch {
+  const answerMatch = REVIEW_ANSWER_PATH.exec(url.pathname);
+  if (req.method === "POST" && (verdictMatch || answerMatch)) {
+    const taskId = decodeTaskId((verdictMatch ?? answerMatch)![1]);
+    if (taskId === null) {
       send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
       return;
     }
-    if (!TASK_ID_PATTERN.test(taskId)) {
-      send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
-      return;
-    }
-    await handleRecordVerdict(req, res, recordHome, taskId, fixEntryScript);
+    if (verdictMatch) await handleRecordVerdict(req, res, recordHome, taskId, entryScripts.fix);
+    else await handleRecordAnswer(req, res, recordHome, taskId, entryScripts.answer);
     return;
   }
 
@@ -228,14 +241,8 @@ async function handleRequest(
 
   const taskMatch = TASK_API_PATH.exec(url.pathname);
   if (taskMatch) {
-    let taskId: string;
-    try {
-      taskId = decodeURIComponent(taskMatch[1]);
-    } catch {
-      send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
-      return;
-    }
-    if (!TASK_ID_PATTERN.test(taskId)) {
+    const taskId = decodeTaskId(taskMatch[1]);
+    if (taskId === null) {
       send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
       return;
     }
@@ -256,16 +263,8 @@ async function handleRequest(
 
   const transcriptMatch = TRANSCRIPT_PATH.exec(url.pathname);
   if (transcriptMatch) {
-    let taskId: string;
-    try {
-      taskId = decodeURIComponent(transcriptMatch[1]);
-    } catch {
-      // Malformed percent-encoding (e.g. a lone "%") - decodeURIComponent
-      // itself throws on this; not a task id either way.
-      send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
-      return;
-    }
-    if (!TASK_ID_PATTERN.test(taskId)) {
+    const taskId = decodeTaskId(transcriptMatch[1]);
+    if (taskId === null) {
       send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
       return;
     }
@@ -287,6 +286,22 @@ async function handleRequest(
   send(res, 404, "text/plain; charset=utf-8", "Not found.");
 }
 
+/** The task id a `([^/]+)` capture stands for, or null when it isn't one
+ * - every route that takes a task id decodes and validates it the same
+ * way: `decodeURIComponent` itself throws on malformed percent-encoding
+ * (e.g. a lone "%"), and anything that decodes but isn't shaped like a
+ * real task id (a percent-encoded path-traversal attempt, say) is just
+ * as much "not a task id" as that is. */
+function decodeTaskId(raw: string): string | null {
+  let taskId: string;
+  try {
+    taskId = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  return TASK_ID_PATTERN.test(taskId) ? taskId : null;
+}
+
 /** The one shape both record-backed endpoints answer with when building
  * their response throws: still 200 (the server did its job; the record
  * read is what failed), carrying the exact sentence the Client asked for
@@ -296,14 +311,13 @@ function sendRecordError(res: ServerResponse, err: unknown): void {
   send(res, 200, "application/json", JSON.stringify({ error: `could not read the record: ${message}` }));
 }
 
-/** Recording a verdict from the phone (issue #202). This is the one
- * write this server ever performs, and it is held to the same two
- * things CONTRACT rule 6 / `fabrica verdict` already are: identity and
- * an actual decision.
+/** Recording a decision from the phone - the identity half, shared by
+ * both of this server's writes (issue #202's verdict, and answering a
+ * worker's questions).
  *
- * Identity: a request carrying no `Tailscale-User-Login` header is
- * refused outright (403), before anything about its body is even read.
- * This server still only ever binds to loopback (HOST, above) - the one
+ * A request carrying no `Tailscale-User-Login` header is refused
+ * outright (403), before anything about its body is even read. This
+ * server still only ever binds to loopback (HOST, above) - the one
  * legitimate way a real header lands here is a locally-running
  * `tailscale serve` adding it while proxying from the tailnet, per
  * Tailscale's own documented best practice ("it's best practice to only
@@ -312,6 +326,27 @@ function sendRecordError(res: ServerResponse, err: unknown): void {
  * for these headers"). Nothing else about who is asking is checked -
  * which login it is, specifically - since v1's one Client is the only
  * identity this ever needs to recognize at all.
+ *
+ * `what` names the decision in the refusal's own words ("a verdict", "an
+ * answer"); true means the request may proceed. */
+function refuseWithoutIdentity(req: IncomingMessage, res: ServerResponse, what: string): boolean {
+  const identity = req.headers[TAILSCALE_IDENTITY_HEADER];
+  if (typeof identity === "string" && identity.trim().length > 0) return false;
+  send(
+    res,
+    403,
+    "application/json",
+    JSON.stringify({
+      error: `no Tailscale identity on this request - ${what} can only be recorded through a connection carrying one.`,
+    })
+  );
+  return true;
+}
+
+/** Recording a verdict from the phone (issue #202). One of this
+ * server's two writes, held to the same two things CONTRACT rule 6 /
+ * `fabrica verdict` already are: identity (above) and an actual
+ * decision.
  *
  * Decision: calls the exact same `recordVerdictDecision` -
  * `spawnDetachedResume` pair `src/cli/verdict-command.ts` calls for
@@ -326,18 +361,7 @@ async function handleRecordVerdict(
   taskId: string,
   fixEntryScript: string | undefined
 ): Promise<void> {
-  const identity = req.headers[TAILSCALE_IDENTITY_HEADER];
-  if (typeof identity !== "string" || identity.trim().length === 0) {
-    send(
-      res,
-      403,
-      "application/json",
-      JSON.stringify({
-        error: "no Tailscale identity on this request - a verdict can only be recorded through a connection carrying one.",
-      })
-    );
-    return;
-  }
+  if (refuseWithoutIdentity(req, res, "a verdict")) return;
 
   let body: unknown;
   try {
@@ -362,6 +386,63 @@ async function handleRecordVerdict(
     recordVerdictDecision(recordHome, taskId, ruling as "accept" | "fix" | "wrong", note, { caps });
     if (ruling === "fix") spawnDetachedResume({ recordHome, taskId, kind: "fix", entryScript: fixEntryScript });
     send(res, 200, "application/json", JSON.stringify({ ok: true, ruling }));
+  } catch (err) {
+    send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
+/** Answering a worker's clarifying questions from the phone - this
+ * server's second write, and the only one that isn't a verdict at all:
+ * a task in the "asking" state is waiting on the Client's own words
+ * (SPEC.md step 2, issue #8), which is exactly what a phone is good for.
+ *
+ * Identity: the same `Tailscale-User-Login` gate as the verdict route
+ * above, for the same reasons and with the same 403 - an answer becomes
+ * part of the brief a worker is handed and spends real money resuming
+ * the task, so it is every bit as much a decision as a ruling is.
+ *
+ * Decision: calls the exact same `recordAnswerDecision` -
+ * `spawnDetachedResume({ kind: "answer" })` pair
+ * `src/cli/answer-command.ts` calls for `fabrica answer` itself. A bad
+ * answer (unknown task, nothing pending to answer, a clarification
+ * round already spent, a cap refusal, empty text) fails here with the
+ * identical message it would print on the command line, before anything
+ * is handed off; a good one records the round synchronously and leaves
+ * the work itself to the same detached background process (issue #123),
+ * so this responds immediately rather than holding the phone's
+ * connection open for a whole production round. */
+async function handleRecordAnswer(
+  req: IncomingMessage,
+  res: ServerResponse,
+  recordHome: string,
+  taskId: string,
+  answerEntryScript: string | undefined
+): Promise<void> {
+  if (refuseWithoutIdentity(req, res, "an answer")) return;
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+    return;
+  }
+
+  // Only the shape is checked here; whether the text is actually usable
+  // is `recordAnswerDecision`'s own call, so an empty answer is refused
+  // in exactly the words `fabrica answer` would use rather than a second
+  // wording invented here.
+  const { answer } = (typeof body === "object" && body !== null ? body : {}) as { answer?: unknown };
+  if (typeof answer !== "string") {
+    send(res, 400, "application/json", JSON.stringify({ error: "an answer needs text - send {\"answer\": \"<your words>\"}." }));
+    return;
+  }
+
+  try {
+    const caps = loadConfigOrDefault(recordHome).caps;
+    recordAnswerDecision(recordHome, taskId, answer, { caps });
+    spawnDetachedResume({ recordHome, taskId, kind: "answer", entryScript: answerEntryScript });
+    send(res, 200, "application/json", JSON.stringify({ ok: true }));
   } catch (err) {
     send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }

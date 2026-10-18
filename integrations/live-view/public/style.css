@@ -366,3 +366,37 @@ body.review-page main {
 .review-reason {
   color: var(--text);
 }
+
+/* A task waiting on an answer (record-view.ts's AskingReviewRow): the
+   worker's questions, then one box to answer all of them. The box is
+   sized for a thumb, same reasoning as .review-btn's 44px minimum, and
+   inherits the page's own colors rather than the browser's default
+   white-on-white form styling. */
+.review-questions {
+  margin: 0 0 0.6rem 0;
+  padding-left: 1.4rem;
+}
+
+.review-questions li {
+  margin-bottom: 0.3rem;
+  word-break: break-word;
+}
+
+.review-answer {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  appearance: none;
+  border: 1px solid var(--hairline);
+  border-radius: 0;
+  background: var(--accent-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1rem;
+  padding: 0.5rem;
+  resize: vertical;
+}
+
+.review-answer:disabled {
+  opacity: 0.5;
+}

@@ -140,32 +140,47 @@ any more (follow-up to issue #202, "show every task waiting on me"):
   project that was never plugged in, all before a worker ever ran - the
   same narrow card, naming the exact recorded error, with one button,
   wrong.
+- **Asked a clarifying question** - a task that stopped on SPEC.md step
+  2 and is waiting on the Client's own words rather than on a ruling.
+  Its card has no write-up, no stamp and no verdict buttons at all: the
+  worker's questions, numbered the way `fabrica answer` numbers them in
+  `answers.md`, one box to answer all of them at once (which is what
+  `fabrica answer <id> -m "<text>"` takes too - one answer per round,
+  not one per question), and one button, send. This is what lets a
+  phone - and, later, Amy - unblock a worker without a terminal.
 
-All three are what `src/foreman/queries.ts`'s `earlyStopKindOf` (plus
-`state === "delivered"`) says is waiting on the Client - the exact same
-function `fabrica status` calls for its own "awaiting your verdict"
+The first three are what `src/foreman/queries.ts`'s `earlyStopKindOf`
+(plus `state === "delivered"`) says is waiting on the Client - the exact
+same function `fabrica status` calls for its own "awaiting your verdict"
 lines, so the two surfaces can never show a task the other doesn't, or a
 different reason for the one they agree on
 (`integrations/live-view/state-agreement.test.ts` proves this by running
 every fixture through both). "Accept"/"fix" have nothing to act on for
 the two narrower kinds (no delivery to accept, no warm worker or line to
 reopen for a fix) - `wrong` alone closes either, a Client ruling from
-before this page existed (issue #143). When nothing is waiting on the
-Client at all, the page says so in words ("Nothing waiting on you.")
-rather than showing an empty list.
+before this page existed (issue #143). The fourth, the asking card, is
+the one row that isn't a verdict at all, so the surface it agrees with
+is `fabrica await`'s own "answer with fabrica answer `<id>`" notice (and
+the recorded questions themselves), not a status line that state has
+never carried. When nothing is waiting on the Client at all, the page
+says so in words ("Nothing waiting on you.") rather than showing an
+empty list.
 
-Whichever button a tap is on, it records the verdict through the *exact
-same* `recordVerdictDecision` - `spawnDetachedResume` pair `fabrica
-verdict` itself calls (`src/cli/verdict-command.ts`): a bad ruling fails
-the same way here as on the command line, and a "fix" hands the round to
-the same detached background process, returning immediately rather than
-waiting for it (issue #123).
+Whichever button a tap is on, it records the Client's decision through
+the *exact same* pair of functions the command line calls:
+`recordVerdictDecision` - `spawnDetachedResume` for a verdict
+(`src/cli/verdict-command.ts`), `recordAnswerDecision` -
+`spawnDetachedResume({ kind: "answer" })` for an answer
+(`src/cli/answer-command.ts`). A bad ruling or a bad answer fails the
+same way here as on the command line, with the identical message, and a
+"fix" or a resumed round hands the work to the same detached background
+process, returning immediately rather than waiting for it (issue #123).
 
-### This is the one write anywhere in this directory
+### These are the only writes anywhere in this directory
 
 Everything else in this module only ever reads. `POST /api/review/tasks/
-<id>/verdict` is the sole exception, and it's held to two checks GET
-never needs:
+<id>/verdict` and `POST /api/review/tasks/<id>/answer` are the two
+exceptions, and both are held to the same two checks GET never needs:
 
 - **Identity.** A request carrying no `Tailscale-User-Login` header is
   refused (403) before its body is even read. This server still only
@@ -184,10 +199,17 @@ never needs:
   tailnet address directly, say) would both break Serve's proxy contract
   and make the header meaningless - anyone who could reach the port
   directly could forge it.
-- **A real decision.** The same validation `fabrica verdict` already
-  does (unknown task, already closed, a "fix" with no note, an unknown
-  ruling) runs before anything is recorded, by calling the identical
-  function.
+- **A real decision.** The same validation `fabrica verdict`/`fabrica
+  answer` already do (unknown task, already closed, a "fix" with no
+  note, an unknown ruling; no question pending, a clarification round
+  already spent, an empty answer, a cap refusal) runs before anything is
+  recorded, by calling the identical function. An answer is held to the
+  identity check for the same reason a verdict is: it becomes part of
+  the brief a worker is handed and spends real money resuming the task,
+  so it is every bit as much a decision as a ruling. The one thing
+  checked here rather than there is the request's own shape - a body
+  without a string `answer` is a 400 - because `recordAnswerDecision`
+  takes words, not JSON.
 
 **What's deliberately NOT here (the "dotfiles half" of issue #202):**
 actually running `tailscale serve` to publish this port onto the
@@ -228,3 +250,11 @@ background process `fabrica verdict fix` uses) - reached the same way
 from `src/cli/` rather than through `src/index.ts`, the one established
 exception to the "integrations reach Fabrica only through `src/index.ts`"
 rule.
+
+The answer route added nothing to that list: `recordAnswerDecision` has
+been on `src/index.ts` since issue #123 split the CLI's answer command
+into "record now, run detached," and `spawnDetachedResume` - already
+imported here for a "fix" - takes `kind: "answer"` for this round. The
+questions it shows come off the task's own `"questions-asked"` event,
+read through the same follower cache every other row already uses, so
+there is no new reader either.
