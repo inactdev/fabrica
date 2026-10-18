@@ -78,6 +78,26 @@ export function meterFill(costUsd: number, capUsd: number | undefined): { fracti
   return { fraction, level: fraction >= 1 ? "full" : fraction >= 0.8 ? "high" : "" };
 }
 
+/** What the review page actually sends as a verdict's note, given
+ * whatever is in that card's note box.
+ *
+ * `undefined` means "send no note at all" - the POST leaves the `note`
+ * key off entirely, which is the identical request a note-less accept
+ * has always sent, and lands on the record exactly as `fabrica verdict
+ * <id> accept` with no `-m` does (Client ruling: an empty box is as if
+ * `-m` were never passed, not an empty note recorded). Whitespace-only
+ * counts as empty, since a stray space is not a reaction.
+ *
+ * Trimmed when there is text, for the same reason `fabrica verdict`'s
+ * own note is: it goes verbatim into the task's `verdict` file and the
+ * `verdict-recorded` event. Pure, so the rule can be unit tested here
+ * rather than only in a browser (review.js keeps a hand-duplicated
+ * copy, same as every other function in this file). */
+export function noteToSend(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 /** Whether a scrollable area is at (or within `thresholdPx` of) its own
  * bottom - pure arithmetic so the "only auto-scroll when already at the
  * bottom" rule can be unit tested without a real DOM/browser. */

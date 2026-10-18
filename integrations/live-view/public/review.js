@@ -40,6 +40,42 @@ function stampClass(stamp) {
   return "stamp-gray";
 }
 
+// Mirrors display.ts's noteToSend - duplicated here for the same reason
+// stampClass above is. `undefined` means the POST leaves the `note` key
+// off entirely, which is exactly what `fabrica verdict <id> accept` with
+// no `-m` records.
+function noteToSend(raw) {
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+// The one note box a card's verdict buttons all read (Client ruling):
+// visible up front rather than revealed by a tap, optional for accept
+// and wrong, required for fix - so one tap still records a verdict, with
+// whatever happens to be typed attached as the note. Deliberately one
+// box per card and not one per button: a second input would mean text
+// typed in the visible box could be silently dropped by whichever button
+// was tapped, on the one page in this directory that records decisions.
+//
+// `label` says which of those two it is for the buttons this card
+// actually has. The id ties the label to the box for a screen reader;
+// task ids are unique per page, so it can't collide.
+function buildNoteBox(taskId, label) {
+  const id = `note-${taskId}`;
+  const labelEl = el("label", { className: "review-line", for: id }, [label]);
+  const box = el(
+    "textarea",
+    {
+      className: "review-note-box",
+      id,
+      rows: "2",
+      placeholder: "Your note…",
+    },
+    []
+  );
+  return { labelEl, box };
+}
+
 function showError(message) {
   const errorEl = document.getElementById("error");
   errorEl.textContent = message;
@@ -178,12 +214,13 @@ function reasonLabel(kind) {
 }
 
 // A row sitting in "delivered" gets its full card - the write-up,
-// Inspector's stamp, the gate's state, and all three buttons. A row
-// Inspector refused or that failed before any work started (never
-// reaching a delivery at all - record-view.ts's `earlyStopKindOf`) gets a
-// narrower card: just the reason in plain words and the one verdict
-// ("wrong") that can still close it - "accept"/"fix" have nothing to act
-// on for either (no delivery to accept, no warm worker or line to fix).
+// Inspector's stamp, the gate's state, one note box and all three
+// buttons. A row Inspector refused or that failed before any work started
+// (never reaching a delivery at all - record-view.ts's `earlyStopKindOf`)
+// gets a narrower card: the reason in plain words, the same note box, and
+// the one verdict ("wrong") that can still close it - "accept"/"fix" have
+// nothing to act on for either (no delivery to accept, no warm worker or
+// line to fix).
 function buildRow(row) {
   if (row.kind === "asking") return buildAskingRow(row);
   if (row.kind === "refused" || row.kind === "failed") return buildEarlyStopRow(row);
@@ -241,12 +278,16 @@ function buildAskingRow(row) {
 function buildEarlyStopRow(row) {
   const title = el("div", { className: "review-title" }, [row.title]);
   const reasonLine = el("div", { className: "review-line review-reason" }, [`${reasonLabel(row.kind)}: ${row.reason}`]);
+  // "wrong" is the only ruling this card offers, so the note is simply
+  // optional here - nothing on it can ever require one.
+  const { labelEl, box } = buildNoteBox(row.id, "Note (optional)");
 
   const statusEl = el("div", { className: "review-status" }, [""]);
   const wrongBtn = el("button", { className: "review-btn btn-wrong" }, ["Wrong"]);
 
   async function act(ruling, note) {
     wrongBtn.disabled = true;
+    box.disabled = true;
     statusEl.textContent = "";
     try {
       await postVerdict(row.id, ruling, note);
@@ -254,18 +295,17 @@ function buildEarlyStopRow(row) {
     } catch (err) {
       statusEl.textContent = err instanceof Error ? err.message : String(err);
       wrongBtn.disabled = false;
+      box.disabled = false;
     }
   }
 
   wrongBtn.addEventListener("click", () => {
     if (!confirm("Mark this wrong and close the task?")) return;
-    const note = prompt("One-line note (optional):", "");
-    if (note === null) return;
-    act("wrong", note.trim().length > 0 ? note.trim() : undefined);
+    act("wrong", noteToSend(box.value));
   });
 
   const actions = el("div", { className: "review-actions" }, [wrongBtn]);
-  const cardEl = el("div", { className: "review-card" }, [title, reasonLine, actions, statusEl]);
+  const cardEl = el("div", { className: "review-card" }, [title, reasonLine, labelEl, box, actions, statusEl]);
   return cardEl;
 }
 
@@ -282,15 +322,20 @@ function buildDeliveredRow(row) {
     ? el("div", { className: "review-line" }, [el("a", { href: row.prUrl, target: "_blank", rel: "noopener" }, [row.prUrl])])
     : null;
 
+  // One box, read by all three buttons below - optional for accept and
+  // wrong, required for fix (see buildNoteBox).
+  const { labelEl, box } = buildNoteBox(row.id, "Note (optional, required for a fix)");
+
   const statusEl = el("div", { className: "review-status" }, [""]);
 
   const acceptBtn = el("button", { className: "review-btn btn-accept" }, ["Accept"]);
-  const fixBtn = el("button", { className: "review-btn btn-fix" }, ["Fix…"]);
+  const fixBtn = el("button", { className: "review-btn btn-fix" }, ["Fix"]);
   const wrongBtn = el("button", { className: "review-btn btn-wrong" }, ["Wrong"]);
   const buttons = [acceptBtn, fixBtn, wrongBtn];
 
   function setBusy(busy) {
     for (const btn of buttons) btn.disabled = busy;
+    box.disabled = busy;
   }
 
   async function act(ruling, note) {
@@ -310,28 +355,33 @@ function buildDeliveredRow(row) {
 
   acceptBtn.addEventListener("click", () => {
     if (!confirm("Accept this delivery and close the task?")) return;
-    act("accept");
+    act("accept", noteToSend(box.value));
   });
   wrongBtn.addEventListener("click", () => {
     if (!confirm("Mark this wrong and close the task?")) return;
-    const note = prompt("One-line note (optional):", "");
-    if (note === null) return;
-    act("wrong", note.trim().length > 0 ? note.trim() : undefined);
+    act("wrong", noteToSend(box.value));
   });
   fixBtn.addEventListener("click", () => {
-    const note = prompt("What should the worker fix? (required, one line):", "");
-    if (note === null) return;
-    if (note.trim().length === 0) {
+    const note = noteToSend(box.value);
+    if (note === undefined) {
+      // The same thing `fabrica verdict <id> fix` with no `-m` says, and
+      // the same thing this page's own POST would come back with - said
+      // here so an empty fix never costs a round trip.
       statusEl.textContent = 'a "fix" needs a note saying what to change';
+      box.focus();
       return;
     }
-    act("fix", note.trim());
+    // A fix keeps a confirmation step, as it had when the note itself
+    // arrived through a dialog: it reopens the line and spends real
+    // money, so a mis-tap should not start a round.
+    if (!confirm("Send this back for a fix with that note?")) return;
+    act("fix", note);
   });
 
   const actions = el("div", { className: "review-actions" }, [acceptBtn, fixBtn, wrongBtn]);
   const body = [title, writeup, stampLine, gateLine];
   if (prLine) body.push(prLine);
-  body.push(actions, statusEl);
+  body.push(labelEl, box, actions, statusEl);
   const cardEl = el("div", { className: "review-card" }, body);
   return cardEl;
 }

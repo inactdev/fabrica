@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isScrolledToBottom, meterFill, projectName, rowEmphasis, stateSymbol } from "./display.ts";
+import { isScrolledToBottom, meterFill, noteToSend, projectName, rowEmphasis, stateSymbol } from "./display.ts";
 import type { DisplayState } from "./record-view.ts";
 
 const ALL_DISPLAY_STATES: DisplayState[] = [
@@ -90,4 +90,20 @@ test("meterFill: the fraction of the cap spent, clamped at both ends, with its o
   // Defensive: a negative figure can't exist on a receipt, but it must
   // not produce a negative width if one ever did.
   assert.deepEqual(meterFill(-1, 4), { fraction: 0, level: "" });
+});
+
+test("noteToSend: an empty note box sends no note at all, exactly as `fabrica verdict` with no -m (Client ruling)", () => {
+  assert.equal(noteToSend(""), undefined);
+  // Whitespace-only is empty too - a stray space a thumb left behind is
+  // not the Client's reaction to anything.
+  assert.equal(noteToSend("   "), undefined);
+  assert.equal(noteToSend("\n\t "), undefined);
+});
+
+test("noteToSend: real text is sent trimmed, the same note `fabrica verdict -m` would record", () => {
+  assert.equal(noteToSend("ship it"), "ship it");
+  assert.equal(noteToSend("  ship it  "), "ship it");
+  // Only the ends are trimmed - the Client's own wording, including any
+  // punctuation and inner spacing, reaches the record verbatim.
+  assert.equal(noteToSend("\nthe button is on the wrong side.  twice.\n"), "the button is on the wrong side.  twice.");
 });

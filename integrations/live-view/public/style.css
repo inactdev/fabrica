@@ -596,7 +596,10 @@ body.review-page main {
    worker's questions, then one box to answer all of them. The box is
    sized for a thumb, same reasoning as .review-btn's 44px minimum, and
    inherits the page's own colors rather than the browser's default
-   white-on-white form styling. */
+   white-on-white form styling. A verdict card's own note box
+   (.review-note-box) wears the identical styling and shares these two
+   rules - one typed-into box on this page should never look like a
+   different kind of control from another. */
 .review-questions {
   margin: 0 0 0.6rem 0;
   padding-left: 1.4rem;
@@ -607,7 +610,8 @@ body.review-page main {
   word-break: break-word;
 }
 
-.review-answer {
+.review-answer,
+.review-note-box {
   display: block;
   width: 100%;
   box-sizing: border-box;
@@ -622,6 +626,16 @@ body.review-page main {
   resize: vertical;
 }
 
-.review-answer:disabled {
+.review-answer:disabled,
+.review-note-box:disabled {
   opacity: 0.5;
+}
+
+/* The note box's own label sits directly above it, so it keeps
+   .review-line's dim color but loses that rule's bottom margin - the gap
+   belongs between the box and the buttons, not between the label and the
+   box it names. */
+label.review-line {
+  display: block;
+  margin-bottom: 0.15rem;
 }
