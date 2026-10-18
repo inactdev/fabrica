@@ -5,12 +5,19 @@
 // fires per entry, not once per attempt - see AGENTS.md and
 // src/brain/live-transcript.ts, issue #70). The sharp edge this whole command
 // exists to get right: stopping the watch must never stop the work. This
-// process only ever reads the record (events.jsonl, transcript.log) - it
-// never spawns, signals, or otherwise touches the detached process
-// `fabrica do` started (src/cli/spawn-detached.ts). Ctrl-C here can only
-// ever end this process's own polling; there is nothing in this file that
-// could reach the worker even if it wanted to. See watch-command.test.ts
-// and the PR's own end-to-end proof for that shown, not just asserted.
+// process never signals, kills, waits on, or otherwise touches the
+// detached process `fabrica do` started (src/cli/spawn-detached.ts).
+// Ctrl-C here can only ever end this process's own polling. See
+// watch-command.test.ts and the PR's own end-to-end proof for that
+// shown, not just asserted.
+//
+// Issue #99 is the one thing it now does beyond reading the record
+// (events.jsonl, transcript.log): it LOOKS at whether the worker's
+// process is still alive - the task's own pid file, verified against a
+// real `ps` listing - so a silent stretch can be reported as a dead
+// worker instead of as an unreadable silence. Looking is not touching:
+// of task-process.ts's exports this file imports the probe only, never
+// `stopTaskProcess`, and nothing here may ever change that.
 
 import { followTask, stateOf } from "../index.ts";
 import { CliError } from "./errors.ts";
@@ -21,12 +28,15 @@ import {
   QUIET_THRESHOLD_MS,
   checkStartedAt,
   describeLiveness,
+  expectsWorkerProcess,
   formatTerminalNotice,
   formatTranscriptLine,
   isDeadEnd,
   isQuietTooLong,
   summarizeHeartbeatRun,
 } from "./render.ts";
+import { WORKER_PROBE_INTERVAL_MS, probeTaskWorker } from "./task-process.ts";
+import type { WorkerPresence } from "./task-process.ts";
 import type { FabricaTask, TaskFollower } from "../index.ts";
 
 export const WATCH_HELP = `Usage: ${WATCH_USAGE}
@@ -45,6 +55,15 @@ claims a heartbeat that a check never emits. The same idea covers the
 window before a task's worker has even started (\`fabrica do\` waiting on
 its brain to finish clarifying): that has its own, much shorter ceiling,
 since a real answer arrives in well under a minute.
+
+A silence that is not a silence at all gets named for what it is: while
+a task's round should have a process running it, that process is really
+looked for - its own pid file, verified against what is actually
+running - and if nothing is running the task, the watch says "worker
+process not found" once and keeps following the record anyway, in case
+the task's own failure still lands on it. A round that started before
+Fabrica recorded worker pids says its liveness is unknown rather than
+claiming either way.
 
 Stopping this (Ctrl-C) only stops watching. The task itself runs in a
 separate, already-detached process (\`fabrica do\` starts it that way) that
@@ -69,6 +88,17 @@ export interface RunWatchCommandOptions {
    * without sending the test runner's own process a signal. Real CLI use
    * always leaves this true. */
   installSigintHandler?: boolean;
+  /** Replaces the real process table behind the worker-liveness check
+   * (issue #99), the same seam `fabrica status` takes - a test can
+   * describe what is running instead of needing a real detached worker
+   * on the machine running it. */
+  listProcesses?: () => { pid: number; args: string }[];
+  /** Test-only: how long a probe of the worker's process stays good for
+   * before the loop asks the operating system again. Real use leaves
+   * this at `WORKER_PROBE_INTERVAL_MS`; a test with a 10ms poll
+   * interval sets it to 0 so the second poll re-probes rather than
+   * waiting out a real 15 seconds. */
+  probeIntervalMs?: number;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -114,11 +144,14 @@ export async function runWatchCommand(argv: string[], opts: RunWatchCommandOptio
 
     try {
       await streamTranscript({
+        recordHome,
         taskId,
         follower,
         stdout,
         signal: controller.signal,
         pollIntervalMs: opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+        listProcesses: opts.listProcesses,
+        probeIntervalMs: opts.probeIntervalMs ?? WORKER_PROBE_INTERVAL_MS,
       });
     } finally {
       if (installSigint) process.off("SIGINT", onSigint);
@@ -133,18 +166,34 @@ export async function runWatchCommand(argv: string[], opts: RunWatchCommandOptio
 }
 
 async function streamTranscript(ctx: {
+  recordHome: string;
   taskId: string;
   follower: TaskFollower;
   stdout: (line: string) => void;
   signal: AbortSignal;
   pollIntervalMs: number;
+  listProcesses?: () => { pid: number; args: string }[];
+  probeIntervalMs: number;
 }): Promise<void> {
-  const { taskId, follower, stdout, signal, pollIntervalMs } = ctx;
+  const { recordHome, taskId, follower, stdout, signal, pollIntervalMs, probeIntervalMs } = ctx;
   let printedTranscript = 0;
   let printedHeartbeats = 0;
   let wasQuiet = false;
+  // Whether a quiet notice was actually printed, as opposed to merely
+  // reached - "signal resumed" is a reply to one, and must not answer a
+  // notice this stream suppressed (see the quiet branch below).
+  let announcedQuiet = false;
   let wasChecking = false;
   let lastCheckingPace = -1;
+  // Issue #99's three pieces of state: the last reading of the worker's
+  // own process, when it was taken (so a 2Hz poll loop doesn't spawn a
+  // `ps` twice a second), and whether its "not found" has already been
+  // said. The notice is printed once per death, not once per poll
+  // (Client ruling) - and the latch clears if a later round brings a
+  // real process back, so a second death is reported too.
+  let workerPresence: WorkerPresence | null = null;
+  let probedAt: number | null = null;
+  let saidWorkerGone = false;
   // Which state the last terminal notice was issued for, not merely
   // "whether one was" - a `fix` verdict moves a delivered task back to
   // "working" and then reaches a new delivery or refusal, and that new
@@ -188,6 +237,38 @@ async function streamTranscript(ctx: {
 
     const now = Date.now();
 
+    // Issue #99: while this task's round should have a process running
+    // it, really look - but at most once per probe interval, since each
+    // probe spawns a `ps` and this loop runs twice a second for as long
+    // as the Client watches (the same discipline the follower above
+    // applies to re-reading the record). A state with no process to look
+    // for drops the reading entirely and resets the clock, so the next
+    // round's first poll probes straight away rather than inheriting
+    // this one's timer.
+    if (expectsWorkerProcess(state, events)) {
+      if (probedAt === null || now - probedAt >= probeIntervalMs) {
+        workerPresence = probeTaskWorker(recordHome, taskId, { listProcesses: ctx.listProcesses });
+        probedAt = now;
+      }
+    } else {
+      workerPresence = null;
+      probedAt = null;
+    }
+
+    // Said once per death, not once per poll (Client ruling): the record
+    // may still gain the task's own failure, so the watch keeps
+    // following either way. WHAT it says comes from `describeLiveness`,
+    // like every other line here - this is only the decision of when.
+    if (workerPresence === "not-found") {
+      if (!saidWorkerGone) {
+        const gone = describeLiveness(state, events, now, workerPresence);
+        if (gone) stdout(gone);
+        saidWorkerGone = true;
+      }
+    } else {
+      saidWorkerGone = false;
+    }
+
     // isQuietTooLong is computed first: below CHECKING_QUIET_CEILING_MS,
     // a check has a real, recorded start time, so a task mid-check says
     // so plainly instead of getting the quiet alarm - but past that
@@ -202,14 +283,23 @@ async function streamTranscript(ctx: {
     // render.ts, and the two had already drifted apart once).
     const quiet = isQuietTooLong(state, events, now);
 
+    // Issue #99: once the worker's process has been looked for and is
+    // gone, the record's own readings are about a wait that has already
+    // ended - "checking, 2m so far" and "quiet 3m, not known to be
+    // stuck, not known to be fine" would both walk back the definite
+    // thing just said. The bookkeeping below still runs, so a `fix`
+    // round that brings a real process back picks up cleanly (a
+    // "signal resumed" when its first event lands).
+    const sayRecordLiveness = workerPresence !== "not-found";
+
     const checking = state === "checking" && !quiet;
     if (checking) {
       const startedAt = checkStartedAt(events);
       const elapsedMs = startedAt ? now - startedAt.getTime() : 0;
       const pace = Math.floor(elapsedMs / QUIET_THRESHOLD_MS);
       if (!wasChecking || pace > lastCheckingPace) {
-        const notice = describeLiveness(state, events, now);
-        if (notice) stdout(notice);
+        const notice = describeLiveness(state, events, now, workerPresence);
+        if (notice && sayRecordLiveness) stdout(notice);
         lastCheckingPace = pace;
       }
     } else {
@@ -218,7 +308,7 @@ async function streamTranscript(ctx: {
     wasChecking = checking;
 
     if (quiet !== wasQuiet) {
-      if (quiet) {
+      if (quiet && sayRecordLiveness) {
         // The `??` arm is defensive only, not a second wording competing
         // with render.ts's: every case describeLiveness returns null for
         // is one isQuietTooLong already answered false, so `quiet` being
@@ -226,11 +316,17 @@ async function streamTranscript(ctx: {
         // divergence between the two prints something honest rather than
         // swallowing the transition (it once printed "signal resumed").
         stdout(
-          describeLiveness(state, events, now) ??
+          describeLiveness(state, events, now, workerPresence) ??
             "quiet, nothing recorded for a while - not known to be stuck, not known to be fine",
         );
-      } else {
+        announcedQuiet = true;
+      } else if (!quiet && announcedQuiet) {
+        // Only ever a reply to a quiet notice this stream actually
+        // printed (issue #99): a suppressed one - the worker was already
+        // known to be gone - must not be answered with "signal resumed"
+        // when the task's own failure finally lands.
         stdout("signal resumed");
+        announcedQuiet = false;
       }
     }
     wasQuiet = quiet;

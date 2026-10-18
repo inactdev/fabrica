@@ -113,6 +113,12 @@ Run it fresh every time this is asked. Don't reuse what an earlier
 have delivered, failed, or gone quiet since. Every claim about a task's
 state must come from a command you just ran this turn.
 
+A row marked "worker process not found" is not working, whatever its
+state column says: nothing is running it any more (a reboot, an
+out-of-memory kill, a stopped machine), and it will not move again on
+its own. Say that plainly — it's the one thing on that listing he can't
+infer from the rest of the line.
+
 ### 3. A worker asks a question
 
 A task that's materially ambiguous stops before any work starts and

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman, daySpend, formatUsd, readEvents, recordBlockedEditAttempt } from "../index.ts";
-import { appendEvent, recordPath } from "../record/index.ts";
+import { appendEvent, recordPath, registerTask, writeTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runDoCommand } from "./do-command.ts";
@@ -267,6 +267,108 @@ test("runStatusCommand: a red delivery shows failed, not delivered, and carries 
   assert.match(rows[0], new RegExp(`^${task.id}\\s`));
   assert.match(rows[0], /failed/);
   assert.doesNotMatch(rows[0], /AWAITING YOUR VERDICT/);
+});
+
+// Issue #99: liveness read from the worker's own process, not inferred
+// from the record. Every test below hands the command a process table of
+// its own making (`listProcesses`) and writes the pid file by hand, so
+// none of them depends on a real detached worker existing on whatever
+// machine runs them.
+function startedTask(recordHome: string, text = "small change"): string {
+  const { id } = registerTask(recordHome, text);
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, { taskId: id, name: "heartbeat", details: { attempt: 1 } });
+  return id;
+}
+
+/** A process table claiming this very test process is the task's own
+ * detached runner - using our own pid is what makes the liveness half of
+ * the check pass for real instead of being stubbed. */
+function tableClaimingRunner(): () => { pid: number; args: string }[] {
+  return () => [{ pid: process.pid, args: "node bootstrap.mjs /checkout/src/cli/run-task-entry.ts /home/.fabrica /proj task" }];
+}
+
+test("runStatusCommand: a working task whose worker process is gone says so, in place of any quiet notice", async () => {
+  const recordHome = tempRecordHome();
+  const id = startedTask(recordHome);
+  // Above every documented pid_max, so this names nothing that could be
+  // running - the record, meanwhile, says "working" and looks fine.
+  writeTaskFile(recordHome, id, "worker.pid", "4194304");
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, listProcesses: tableClaimingRunner(), ...io });
+
+  // Client ruling: status reports it and nothing more - exit code
+  // unchanged, and nothing written back to the record.
+  assert.equal(code, 0);
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1);
+  assert.match(rows[0], /worker process not found/);
+  assert.equal(readEvents(recordHome).filter((e) => e.taskId === id).length, 3, "status must never write to the record");
+});
+
+test("runStatusCommand: a working task whose worker process is really there reads exactly as it did before", async () => {
+  const recordHome = tempRecordHome();
+  const id = startedTask(recordHome);
+  writeTaskFile(recordHome, id, "worker.pid", String(process.pid));
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, listProcesses: tableClaimingRunner(), ...io });
+
+  assert.equal(code, 0);
+  const rows = taskRows(io.out);
+  assert.match(rows[0], /working/);
+  assert.doesNotMatch(rows[0], /worker process not found|liveness unknown/);
+});
+
+test("runStatusCommand: a task that never wrote a pid file says its liveness is unknown, never that its worker is gone", async () => {
+  const recordHome = tempRecordHome();
+  startedTask(recordHome);
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, listProcesses: tableClaimingRunner(), ...io });
+
+  assert.equal(code, 0);
+  assert.match(taskRows(io.out)[0], /liveness unknown \(started before pid files\)/);
+});
+
+test("runStatusCommand: a delivered task's exited worker is never reported as missing - its round is simply over", async () => {
+  const recordHome = tempRecordHome();
+  const id = startedTask(recordHome, "already done");
+  appendEvent(recordHome, {
+    taskId: id,
+    name: "delivered",
+    details: { outcome: "done", delivery: { confidence: 90, summary: "done", branch: `fabrica/${id}` } },
+  });
+  writeTaskFile(recordHome, id, "worker.pid", "4194304");
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, listProcesses: tableClaimingRunner(), ...io });
+
+  assert.equal(code, 0);
+  assert.match(taskRows(io.out)[0], /AWAITING YOUR VERDICT/);
+  assert.doesNotMatch(taskRows(io.out)[0], /worker process not found/);
+});
+
+test("runStatusCommand: a just-ruled `fix` isn't called dead while its own round is still being spawned", async () => {
+  const recordHome = tempRecordHome();
+  const id = startedTask(recordHome, "needs a fix");
+  appendEvent(recordHome, {
+    taskId: id,
+    name: "delivered",
+    details: { outcome: "done", delivery: { confidence: 90, summary: "done", branch: `fabrica/${id}` } },
+  });
+  appendEvent(recordHome, { taskId: id, name: "verdict-recorded", details: { ruling: "fix", note: "use staging" } });
+  // The previous round's pid file is still sitting there, naming a
+  // process that exited long ago - exactly what must not be read as
+  // this round's worker having died.
+  writeTaskFile(recordHome, id, "worker.pid", "4194304");
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, listProcesses: tableClaimingRunner(), ...io });
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(taskRows(io.out)[0], /worker process not found/);
 });
 
 test("runStatusCommand: an Inspector refusal sorts after live work and says no verdict was reached", async () => {

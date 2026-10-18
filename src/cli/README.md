@@ -484,7 +484,10 @@ them can reach a running worker.
   "FAILED, UNRESOLVABLE" and sorted after tasks still genuinely open, so
   it neither vanishes nor is mistaken for work still in progress. An
   Inspector refusal means no verdict was reached: it is a dead end for the
-  current round, named separately, and never raises a quiet alarm. It
+  current round, named separately, and never raises a quiet alarm. For a
+  task whose round should have a process running it, liveness is not
+  inferred from the record at all - see "Is the worker actually alive?"
+  below. It
   takes no arguments at all, and refuses any it is given
   (`parseStatusArgs`) instead of ignoring them.
 - **`log <id>`** prints one task's event history in order, each event
@@ -514,10 +517,84 @@ them can reach a running worker.
   delivery or Fabrica retry path. Every other terminal state keeps
   polling, and the notice re-fires whenever the state genuinely changes,
   so a second delivery after a `fix` still announces itself. **Stopping
-  the watch never stops the work**: this command only ever *reads* `events.jsonl` and
-  `transcript.log`, so Ctrl-C ends the polling loop and nothing else.
-  Never add anything here that reaches toward the detached process
-  `fabrica do` spawned.
+  the watch never stops the work**: this command never signals, kills or
+  waits on the detached process `fabrica do` spawned, so Ctrl-C ends the
+  polling loop and nothing else. It does *look* at whether that process
+  is alive (see below), which is reading, not reaching: of
+  `task-process.ts`'s exports it imports the probe only, never
+  `stopTaskProcess`, and nothing here may ever change that.
+
+### Is the worker actually alive?
+
+Issue #99. Before it, both commands could only describe the record:
+"quiet 3m, no signal since last heartbeat - not known to be stuck, not
+known to be fine". That sentence is honest, and it is also the end of
+what the record can say - a worker killed by a reboot, an OOM, or a
+`kill -9` leaves exactly the same silence as one thinking hard, forever.
+
+So while a task's round should have a process running it, the process is
+really looked for: `probeTaskWorker` (`task-process.ts`) reads the task's
+own `worker.pid` and trusts it only once that pid is both alive and still
+running one of the three detached runners - issue #203's verification,
+reused rather than re-implemented, so a command that only *reports* can
+never be more trusting than the one that *signals*. Its answer is three
+values, not a boolean:
+
+| reading | what `status`/`watch` say |
+| --- | --- |
+| `alive` | nothing new - the line reads exactly as it did before issue #99 |
+| `not-found` | `worker process not found - nothing is running this task and nothing has been recorded for 3m; it cannot move again on its own`, in place of any quiet or mid-check notice |
+| `unknown` | the record's own notice, plus the caveat `liveness unknown (started before pid files)` |
+
+`unknown` is deliberately not folded into `not-found`: no pid file at all
+(a round already in flight when issue #203 landed) and no usable process
+table (`listProcesses` degrades to `[]` when there is no `ps` it can
+run - an empty table is never the truth, since the asking process is in
+it) are both "can't tell", and reporting either as a dead worker would be
+the same inference-from-nothing this change exists to remove, just with a
+more confident voice. The worker-gone wording names no command to run,
+unlike every other notice here, because there is none the tool would
+accept: a "working" task has no delivery, so `fabrica verdict <id> wrong`
+would be refused as `not-delivered`.
+
+Which tasks get looked at is one definition, `expectsWorkerProcess`
+(`render.ts`): the state must be `working` or `checking`, **and** this
+round's `work-started` must be the last round-boundary event on the
+record. A `verdict-recorded` (the Client's `fix`) or `answers-given`
+after it means the next round has been decided but its detached process
+may not have started yet - and the pid file still names the previous
+round's long-exited one, so that window would otherwise report a false
+death on every `fabrica verdict <id> fix`. A task before its first
+`work-started` is not judged at all (Client ruling), and no state where
+the round has ended - `delivered`, `closed`, `asking`, `failed`,
+`refused`, `stopped` - is either; their pid files all name processes that
+exited for perfectly ordinary reasons.
+
+What the reading is allowed to do is deliberately narrow (Client ruling):
+
+- **It is reported, never reconciled.** Neither command writes to the
+  record - not a `task-failed` event, not a state change, nothing. These
+  are the Client's eyes, the same rule the live view follows.
+- **`status` still exits 0.** The listing is a report, not a check; a
+  script that wants an exit code has `fabrica await`.
+- **`watch` says it once and keeps polling.** The record can still gain
+  the task's own failure, so the stream stays open; the notice is latched
+  per death, and the latch clears if a later round brings a real process
+  back, so a second death is reported too.
+- **The reading, once taken, outranks the record.** `watch` suppresses
+  the quiet and mid-check lines while the worker is gone: "checking, 2m
+  so far" and "not known to be stuck, not known to be fine" would both
+  walk back the definite thing just said.
+
+Cost discipline, since both commands run often: the sentence itself comes
+from `describeLiveness` like every other line here (`status` and `watch`
+must read identically - that file's own history is of exactly this
+drifting), while each command decides only when to look. `status` reads
+one process table for the whole listing (`cachedProcessTable`) instead of
+spawning a `ps` per open task, and `watch` - which polls twice a second -
+probes at most once per `WORKER_PROBE_INTERVAL_MS`, the heartbeat
+interval, since checking a worker's process more often than that worker
+reports in cannot tell the Client anything new.
 
 `render.ts` is why all three agree on wording: age (`formatAge`), the
 quiet sentences (`formatQuietNotice` for an ordinary working task,
@@ -777,19 +854,19 @@ already recorded, and the response says `signaled: false`.
 | `cost-command.ts` | `fabrica cost <taskId> <usd>` (issue #11): parses the figure strictly and calls `Foreman.recordCost`; `COST_HELP` is `cost --help`'s text. |
 | `load-config.ts` | `loadConfigOrDefault` - `projects.toml`, or no projects and no caps when there is none yet. Shared by every command that needs caps. |
 | `doctor-command.ts` | `fabrica doctor`: runs the checks above as injectable `DoctorProbes` (tests never touch this machine's Docker, tokens or PATH) plus the per-project, caps and spend checks; `DOCTOR_HELP` is `doctor --help`'s text. |
-| `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. |
+| `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. One `cachedProcessTable` per run backs the worker-liveness reading (issue #99), so a whole listing costs one `ps`, not one per open task. |
 | `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
-| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its three exit-by-itself states (`closed`, a `failed` task that never delivered, and an Inspector refusal with no verdict), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
-| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `describeLiveness`, `isQuietTooLong`, `isDeadEnd`, `checkStartedAt`, `formatCheckingQuietNotice`, `QUIET_THRESHOLD_MS`, `CHECKING_QUIET_CEILING_MS`, and `PRE_WORK_QUIET_CEILING_MS`. |
+| `watch-command.ts` | The read-only poll loop behind `fabrica watch`, its terminal notices and its three exit-by-itself states (`closed`, a `failed` task that never delivered, and an Inspector refusal with no verdict), the once-per-death worker-liveness notice and its probe throttle (issue #99), and the SIGINT handling that stops only the watching; `WATCH_HELP` is `watch --help`'s text. |
+| `render.ts` | The one definition of every line `status`/`log`/`watch` print - including per-event-name prose and heartbeat-run collapsing (`summarizeHeartbeatRun`, shared by `log`'s history and `watch`'s catch-up) - plus `formatAge`, `formatTerminalNotice`, `describeLiveness`, `isQuietTooLong`, `isDeadEnd`, `checkStartedAt`, `formatCheckingQuietNotice`, `expectsWorkerProcess`, `formatWorkerGoneNotice`, `WORKER_LIVENESS_UNKNOWN_NOTICE`, `QUIET_THRESHOLD_MS`, `CHECKING_QUIET_CEILING_MS`, and `PRE_WORK_QUIET_CEILING_MS`. |
 | `delay.ts` | An abortable `setTimeout` for `watch`'s poll interval; removes its own abort listener each tick, so a long watch can't accumulate them on one signal. |
 | `deny-and-log-edit-command.ts` | Reads a `PreToolUse` payload from stdin, denies it, and records `edit-attempt-blocked` - what a harness's session config runs, not something typed by hand (issue #13's prevention half; see that harness's own README under `skill/`). Deliberately the one command that does *not* refuse stray arguments: it promises to always deny and always exit 0 whatever it is handed, and a refusal would turn that fail-closed guarantee into a non-zero exit `PreToolUse` doesn't block on. |
 | `verify-hook-command.ts` | `fabrica verify-hook`: proves a session config actually denies-and-logs by running a real attempt, instead of assuming it. Takes no arguments and refuses any it is given (`parseVerifyHookArgs`, the same convention as `parseStatusArgs`) rather than ignoring them. Loads its harness-specific spawn by scanning `skill/` at runtime (never a hardcoded import - see `AGENTS.md`'s rule 8 note), reporting a `verify.ts` that throws or exports only half a verifier by name instead of skipping it silently. |
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
-| `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). |
+| `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). Issue #99 adds the reporting side on top of that same verification, for `status`/`watch`: `probeTaskWorker` (`alive`/`not-found`/`unknown`), `cachedProcessTable`, and `WORKER_PROBE_INTERVAL_MS`. |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
 | `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); calls `up-command.ts`'s `refreshStaleLiveView` afterward rather than a second stale-live-view check. `UPDATE_HELP` is `update --help`'s text. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |

@@ -4,8 +4,10 @@ import {
   CHECKING_QUIET_CEILING_MS,
   PRE_WORK_QUIET_CEILING_MS,
   QUIET_THRESHOLD_MS,
+  WORKER_LIVENESS_UNKNOWN_NOTICE,
   checkStartedAt,
   describeLiveness,
+  expectsWorkerProcess,
   formatAge,
   formatCheckingQuietNotice,
   formatEventLine,
@@ -364,6 +366,177 @@ test("describeLiveness: an Inspector refusal says no verdict was reached, never 
 
   assert.equal(describeLiveness("refused", events, start + PRE_WORK_QUIET_CEILING_MS * 10), "Inspector reached no verdict");
   assert.equal(isQuietTooLong("refused", events, start + PRE_WORK_QUIET_CEILING_MS * 10), false);
+});
+
+// Issue #99: which tasks `status`/`watch` may go looking for a process
+// for. The expensive mistake in both directions - never looking (the
+// record-only guessing this issue removes) and looking at a task whose
+// worker exited for a perfectly good reason (a confident false alarm on
+// every finished task) - is decided here, once.
+
+test("expectsWorkerProcess: a working task whose work has started has a process to look for", () => {
+  const events: FabricaEvent[] = [
+    { occurredAt: "t0", taskId: "t1", name: "task-received" },
+    { occurredAt: "t1", taskId: "t1", name: "work-started" },
+    { occurredAt: "t2", taskId: "t1", name: "heartbeat" },
+  ];
+  assert.equal(expectsWorkerProcess("working", events), true);
+});
+
+test("expectsWorkerProcess: a checking task has one too - the check runs inside that same process's round", () => {
+  const events: FabricaEvent[] = [
+    { occurredAt: "t0", taskId: "t1", name: "work-started" },
+    { occurredAt: "t1", taskId: "t1", name: "check-run", details: { attempt: 1, phase: "started" } },
+  ];
+  assert.equal(expectsWorkerProcess("checking", events), true);
+});
+
+test("expectsWorkerProcess: a task before work-started is not judged at all", () => {
+  // Client ruling: the pre-work window (brain.ask(), then cutting the
+  // line) has its own quiet ceiling and no process reading to add.
+  const events: FabricaEvent[] = [{ occurredAt: "t0", taskId: "t1", name: "task-received" }];
+  assert.equal(expectsWorkerProcess("working", events), false);
+});
+
+test("expectsWorkerProcess: no state where the round has ended or stopped is judged", () => {
+  const events: FabricaEvent[] = [
+    { occurredAt: "t0", taskId: "t1", name: "work-started" },
+    { occurredAt: "t1", taskId: "t1", name: "delivered" },
+  ];
+  for (const state of ["delivered", "closed", "asking", "failed", "refused", "stopped"] as const) {
+    assert.equal(expectsWorkerProcess(state, events), false, `${state} has no worker process to expect`);
+  }
+});
+
+test("expectsWorkerProcess: false in the window between a `fix` verdict and its round's work-started", () => {
+  // The exact false alarm this guard exists for: `fabrica verdict <id>
+  // fix` records the ruling in the foreground and hands the round to a
+  // detached process, so for a moment the task reads as "working" while
+  // the pid file still names the PREVIOUS round's long-exited process.
+  const events: FabricaEvent[] = [
+    { occurredAt: "t0", taskId: "t1", name: "work-started" },
+    { occurredAt: "t1", taskId: "t1", name: "delivered" },
+    { occurredAt: "t2", taskId: "t1", name: "verdict-recorded", details: { ruling: "fix", note: "use staging" } },
+  ];
+  assert.equal(expectsWorkerProcess("working", events), false);
+
+  // ...and true again the moment that round really starts.
+  const started: FabricaEvent[] = [...events, { occurredAt: "t3", taskId: "t1", name: "work-started" }];
+  assert.equal(expectsWorkerProcess("working", started), true);
+});
+
+test("expectsWorkerProcess: false in the same window after `fabrica answer`, before the resumed round starts", () => {
+  const events: FabricaEvent[] = [
+    { occurredAt: "t0", taskId: "t1", name: "task-received" },
+    { occurredAt: "t1", taskId: "t1", name: "questions-asked", details: { questions: ["which database?"] } },
+    { occurredAt: "t2", taskId: "t1", name: "answers-given", details: { answer: "postgres" } },
+  ];
+  assert.equal(expectsWorkerProcess("working", events), false);
+});
+
+// Issue #99's whole point: a verified reading of the worker's own
+// process replaces the record-only sentence that cannot tell a slow
+// worker from a dead one.
+
+test("describeLiveness: a worker that isn't running says so plainly, in place of the quiet notice", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" },
+    { occurredAt: new Date(start + 1_000).toISOString(), taskId: "t1", name: "heartbeat" },
+  ];
+
+  const notice = describeLiveness("working", events, start + 1_000 + QUIET_THRESHOLD_MS + 1, "not-found");
+
+  assert.match(notice!, /^worker process not found/);
+  assert.doesNotMatch(notice!, /not known to be stuck/, "there is nothing left unknown about this one");
+});
+
+test("describeLiveness: a worker that isn't running is reported before any quiet threshold is reached", () => {
+  // A dead worker is a fact the moment it is observed - waiting out
+  // QUIET_THRESHOLD_MS first would be the record-only guessing again.
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" },
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "heartbeat" },
+  ];
+
+  const notice = describeLiveness("working", events, start + 1_000, "not-found");
+
+  assert.match(notice!, /^worker process not found/);
+  assert.equal(isQuietTooLong("working", events, start + 1_000), false, "nothing about the record looks wrong yet");
+});
+
+test("describeLiveness: a dead worker mid-check never claims the check finished, and never says it's still running", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" },
+    {
+      occurredAt: new Date(start + 1_000).toISOString(),
+      taskId: "t1",
+      name: "check-run",
+      details: { attempt: 1, phase: "started" },
+    },
+  ];
+
+  const notice = describeLiveness("checking", events, start + 120_000, "not-found");
+
+  assert.match(notice!, /^worker process not found/);
+  assert.doesNotMatch(notice!, /so far/, "the check is not running - nothing is");
+  assert.doesNotMatch(notice!, /check finished/, "and it never finished either");
+});
+
+test("describeLiveness: an unverifiable worker caveats the record's own account rather than replacing it", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" },
+    { occurredAt: new Date(start + 1_000).toISOString(), taskId: "t1", name: "heartbeat" },
+  ];
+
+  const notice = describeLiveness("working", events, start + 1_000 + QUIET_THRESHOLD_MS + 1, "unknown");
+
+  assert.match(notice!, /^quiet /, "the record is still the best account available");
+  assert.ok(notice!.endsWith(WORKER_LIVENESS_UNKNOWN_NOTICE), `expected the unknown caveat, got: ${notice}`);
+});
+
+test("describeLiveness: an unverifiable worker with nothing else to report is the caveat alone", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" },
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "heartbeat" },
+  ];
+
+  assert.equal(describeLiveness("working", events, start + 1_000, "unknown"), WORKER_LIVENESS_UNKNOWN_NOTICE);
+});
+
+test("describeLiveness: a confirmed-alive worker adds nothing - a healthy task's line stays as it was", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "work-started" },
+    { occurredAt: new Date(start).toISOString(), taskId: "t1", name: "heartbeat" },
+  ];
+
+  assert.equal(describeLiveness("working", events, start + 1_000, "alive"), null);
+  assert.equal(
+    describeLiveness("working", events, start + QUIET_THRESHOLD_MS + 1, "alive"),
+    describeLiveness("working", events, start + QUIET_THRESHOLD_MS + 1),
+    "a live worker gone quiet still gets the record's own quiet notice, unchanged"
+  );
+});
+
+test("describeLiveness: an Inspector refusal is unmoved by any process reading - its round really is over", () => {
+  const start = 1_000_000;
+  const events: FabricaEvent[] = [
+    {
+      occurredAt: new Date(start).toISOString(),
+      taskId: "t1",
+      name: "inspection-finished",
+      details: { verdict: "refused", report: "container runtime unavailable" },
+    },
+  ];
+
+  for (const worker of ["alive", "not-found", "unknown"] as const) {
+    assert.equal(describeLiveness("refused", events, start + QUIET_THRESHOLD_MS * 10, worker), "Inspector reached no verdict");
+  }
 });
 
 test("isDeadEnd: a failed task with no delivery is a dead end", () => {

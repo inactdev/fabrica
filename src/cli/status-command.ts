@@ -21,7 +21,15 @@ import {
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { describeLiveness, formatStatusLine, isDeadEnd, projectFromEvents, prUrlFromEvents } from "./render.ts";
+import {
+  describeLiveness,
+  expectsWorkerProcess,
+  formatStatusLine,
+  isDeadEnd,
+  projectFromEvents,
+  prUrlFromEvents,
+} from "./render.ts";
+import { cachedProcessTable, probeTaskWorker } from "./task-process.ts";
 
 export const STATUS_USAGE = "fabrica status";
 
@@ -40,6 +48,15 @@ worker has even started (its own, much shorter ceiling, since a real
 answer from the brain arrives in well under a minute). A closed task
 (verdict recorded) drops off this list - see \`fabrica log <id>\` for its
 history.
+
+For a task whose round should have a process running it, that process
+is really looked for - its own pid file, verified against what is
+actually running - instead of liveness being read off the record alone.
+A task nothing is running says so plainly, "worker process not found",
+in place of any quiet notice; one whose round started before Fabrica
+recorded worker pids says "liveness unknown (started before pid files)"
+rather than claiming either way. Nothing here is written back to the
+record, and neither reading changes this command's exit code.
 
 This listing opens with the same number the daily cap check itself
 uses - "spent in the last 24 hours: $X of $Y" when [caps].perDayUsd is
@@ -79,6 +96,10 @@ Environment:
 export interface RunStatusCommandOptions {
   recordHome?: string;
   now?: number;
+  /** Replaces the real process table behind the worker-liveness check
+   * (issue #99) - tests hand this a table of their own making instead
+   * of needing a real detached worker on the machine running them. */
+  listProcesses?: () => { pid: number; args: string }[];
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -168,11 +189,27 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
         return aDeadEnd === bDeadEnd ? 0 : aDeadEnd ? 1 : -1;
       });
 
+      // Issue #99: one process table for the whole listing, read lazily
+      // and at most once - `probeTaskWorker` would otherwise spawn a real
+      // `ps -A` per open task, and a record home with a dozen open tasks
+      // would pay for a dozen of them on every `fabrica status`.
+      const processTable = cachedProcessTable(opts.listProcesses);
+
       for (const { task, events, hasDelivery } of sorted) {
         const project = projectFromEvents(events);
         const firstEvent = events[0];
         const ageMs = firstEvent ? now - new Date(firstEvent.occurredAt).getTime() : 0;
-        const liveness = describeLiveness(task.state, events, now);
+        // Issue #99: for a task whose round should have a process
+        // running it, say what a real look at that process found, rather
+        // than leaving the Client with a quiet notice that cannot tell a
+        // slow worker from a dead one. Reporting only - nothing here
+        // writes to the record, and a task whose worker is gone still
+        // leaves this command's exit code at 0 (Client ruling), since
+        // the listing is a report, not a check.
+        const worker = expectsWorkerProcess(task.state, events)
+          ? probeTaskWorker(recordHome, task.id, { listProcesses: processTable })
+          : null;
+        const liveness = describeLiveness(task.state, events, now, worker);
 
         const cost = describeTaskCost(taskSpend(events, task.id), hasAttempts(events, task.id));
         // The exact same reason the phone review page shows for this same
