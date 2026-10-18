@@ -45,6 +45,21 @@ export const FINAL_MESSAGE_FORMAT_NOTICE =
   "entirely if there is nothing). Every field except couldNotVerify is required and must not be empty. Do not " +
   "type the write-up out as text; an attempt without a valid structured write-up is not accepted as done.";
 
+/** A bug is rarely a one-off: the same shape - the same missing guard,
+ * the same mis-ordered pair of calls, the same copy-pasted branch - is
+ * usually sitting in two or three other places nobody has tripped over
+ * yet, and a worker fixing one of them is the cheapest moment anyone
+ * will ever have to find the rest (issue #147). Stated here rather than
+ * left to the project's own agent-memory file for the same reason the
+ * standing question is: Fabrica's own code puts it in front of every
+ * worker, instead of hoping the file gets read. It asks for the list in
+ * the write-up because that is the one channel a worker has to the
+ * reviewer - so a twin left alone is a known, reviewable decision
+ * rather than an omission nobody sees. */
+export const SAME_SHAPE_NOTICE =
+  "When you fix something, look for every other place in the code with the same shape and list them in your " +
+  "write-up - whether or not you also fixed them, so the ones left standing are known rather than missed.";
+
 /** A project-intrinsic fact a worker discovers (build/test/release/
  * architecture, a sharp edge) belongs in the project's root agent-memory
  * file, but not as a bullet appended straight into its shared body: two
@@ -60,12 +75,17 @@ export const DURABLE_NOTES_NOTICE =
   "file's shared body directly - that is what causes parallel tasks' pull requests to conflict on the same " +
   "spot, every time.";
 
-const STANDING_PREFIX = `${STANDING_QUESTION}\n\n${FINAL_MESSAGE_FORMAT_NOTICE}\n\n${DURABLE_NOTES_NOTICE}`;
+const STANDING_PREFIX = [
+  STANDING_QUESTION,
+  FINAL_MESSAGE_FORMAT_NOTICE,
+  SAME_SHAPE_NOTICE,
+  DURABLE_NOTES_NOTICE,
+].join("\n\n");
 
-/** `brief`, beginning with the standing question and the write-up
- * notice exactly once - applied by every brief builder and again
- * where the brief is handed over, so a builder nested inside another
- * never doubles it. */
+/** `brief`, beginning with the standing question, the write-up notice,
+ * the same-shape notice and the durable-notes notice exactly once -
+ * applied by every brief builder and again where the brief is handed
+ * over, so a builder nested inside another never doubles it. */
 export function withStandingQuestion(brief: string): string {
   return brief.startsWith(STANDING_PREFIX) ? brief : `${STANDING_PREFIX}\n\n${brief}`;
 }
