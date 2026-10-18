@@ -20,7 +20,13 @@
 # correct on both arm64 and amd64. Resolves to Node v24.18.0 on Alpine
 # 3.24.1, verified on the real machine at the time this was pinned - the
 # same Node the project pins (.inspector.json's cimg/node:24.18.0), so a
-# Worker's check runs on the Node the check was written for. The CLI below is pinned to an
+# Worker's check runs on the Node the check was written for. A digest
+# names no version, so that `node:<x.y.z>-alpine` tag just above is the
+# only record of which Node this is: src/cli/node-version-pins.test.ts
+# reads it from this file and fails unless .node-version,
+# package.json's engines.node and .inspector.json's tag all say the
+# same, so keep that spelling when rewording, and move every Node
+# version this file names together. The CLI below is pinned to an
 # exact version for the same reason: claude-code.md's behavior notes
 # (flag semantics, stream-json shape) were verified against 2.1.222, so
 # a rebuild must not silently install a different one.

@@ -47,8 +47,14 @@ somewhere is mid-edit. `npm unlink -g fabrica` undoes it.
 
 ## Installing the command
 
-Prerequisites: **Node 24**, **git**, and **Docker** (Docker is only
-needed to actually run a task - not for this install step itself).
+Prerequisites: **Node 24.18.0**, **git**, and **Docker** (Docker is only
+needed to actually run a task - not for this install step itself). That
+Node version is exact, not a floor: it is what `.node-version` holds, so
+`fnm install`/`nvm install` in a checkout picks it up on their own, and
+`package.json` declares it strictly enough that npm refuses to install
+on a different one. It is the same version the check box and the Worker
+container run, which is the point - `fabrica doctor` reports a mismatch
+as a FAIL.
 
     npm install -g github:inactdev/fabrica
 
