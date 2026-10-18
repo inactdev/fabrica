@@ -11,7 +11,8 @@
 // process has already exited, which is the whole point of detachment
 // (see the module README's "Why detached execution" section).
 
-import { ConfigError, inspectorConfiguredOnOrigin, notSetUpMessage } from "../index.ts";
+import { ConfigError, notSetUpMessage, originSetup, resolveReviewer } from "../index.ts";
+import type { FabricaConfig } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { DO_USAGE, parseDoArgs } from "./do-args.ts";
@@ -52,23 +53,53 @@ Environment:
 `;
 
 /**
- * Refuses, before the task is registered, a project whose base commit
- * carries no `.inspector.json` - there is nothing there saying how the
- * work should be checked, so there is no verified work to be had, and a
- * task that cannot be verified should cost nothing at all.
+ * Refuses, before the task is registered, a project that cannot have
+ * its work properly judged - on either of two grounds, both read from
+ * the same single look at origin.
+ *
+ * First: a base commit carrying no `.inspector.json` at all. There is
+ * nothing there saying how the work should be checked, so there is no
+ * verified work to be had, and a task that cannot be verified should
+ * cost nothing at all.
+ *
+ * Second: a base commit whose `.inspector.json` declares `testPaths` -
+ * asking for its test changes to be judged by a model - while no
+ * reviewer is configured, or one is configured that cannot work (no
+ * key, or the worker's own vendor). Refused here, up front, for exactly
+ * the reason the first case is: a task nothing can properly judge
+ * should never reach a worker or spend a cent.
  *
  * "Base commit" means origin's default branch, which is where a task's
  * branch is actually cut from (src/line/cut.ts) - never the Client's
- * local checkout. `inspectorConfiguredOnOrigin` answering `null` means
- * it could not find out (no origin, origin unreachable): deliberately
- * not treated as "not set up", since telling someone whose network is
- * down to run `fabrica register` would be both wrong and less use than
- * the real git error the task itself then reports.
+ * local checkout. `originSetup` answering `null` means it could not
+ * find out (no origin, origin unreachable): deliberately not treated as
+ * "not set up", since telling someone whose network is down to run
+ * `fabrica register` would be both wrong and less use than the real git
+ * error the task itself then reports. Neither is a missing reviewer
+ * then assumed - with no answer about `testPaths`, there is no basis to
+ * demand one.
  */
-function refusalForUnsetUpProject(projectPath: string): string | null {
-  return inspectorConfiguredOnOrigin(projectPath) === false
-    ? `fabrica do: ${notSetUpMessage(projectPath)}`
-    : null;
+function refusalForUnsetUpProject(
+  projectPath: string,
+  recordHome: string,
+  config: FabricaConfig,
+  projectArg: string
+): string | null {
+  const setup = originSetup(projectPath);
+  if (setup === null) return null;
+  if (!setup.inspectorConfigured) return `fabrica do: ${notSetUpMessage(projectPath)}`;
+
+  const reviewer = resolveReviewer({
+    recordHome,
+    config,
+    projectPath,
+    // The Client's own word for this project when he gave one, so the
+    // message names what he typed rather than a path he did not.
+    projectLabel: Object.hasOwn(config.projects, projectArg) ? projectArg : projectPath,
+    declaresTestPaths: setup.declaresTestPaths,
+    env: process.env,
+  });
+  return reviewer.kind === "refused" ? `fabrica do: ${reviewer.message}` : null;
 }
 
 export interface RunDoCommandOptions {
@@ -82,9 +113,14 @@ export interface RunDoCommandOptions {
   askPollMs?: number;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
-  /** Test-only seam for the "is this project set up for Fabrica"
-   * question, which otherwise fetches origin. */
-  setUpRefusal?: (projectPath: string) => string | null;
+  /** Test-only seam for the "can this project's work be properly
+   * judged" question, which otherwise fetches origin. */
+  setUpRefusal?: (
+    projectPath: string,
+    recordHome: string,
+    config: FabricaConfig,
+    projectArg: string
+  ) => string | null;
 }
 
 /** Returns the process exit code - never throws. */
@@ -99,12 +135,13 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
     const projectPath = resolveProjectPath(config, projectArg);
 
     // Before registering anything: a project with no .inspector.json at
-    // its base commit cannot have its work independently checked, so
-    // there is no task worth starting on it yet. Refusing here - rather
-    // than letting the detached task reach a worker first - is what
-    // makes this cost nothing, and what lets the message name the
-    // command that fixes it.
-    const notSetUp = (opts.setUpRefusal ?? refusalForUnsetUpProject)(projectPath);
+    // its base commit cannot have its work independently checked, and
+    // one that asks for its test changes to be judged without a usable
+    // reviewer cannot either - so there is no task worth starting on it
+    // yet. Refusing here - rather than letting the detached task reach a
+    // worker first - is what makes this cost nothing, and what lets the
+    // message name exactly what to add.
+    const notSetUp = (opts.setUpRefusal ?? refusalForUnsetUpProject)(projectPath, recordHome, config, projectArg);
     if (notSetUp !== null) {
       stderr(notSetUp);
       return 1;

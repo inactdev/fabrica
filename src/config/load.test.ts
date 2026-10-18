@@ -484,6 +484,75 @@ test("loadConfig: a pause threshold outside 0-100 is refused as malformed", () =
   }
 });
 
+test("loadConfig: a global [reviewer] table loads", () => {
+  const recordHome = makeTestHome(`
+    [reviewer]
+    vendor = "reviewing-vendor"
+    model = "reviewing-model"
+
+    [projects.spending-app]
+    path = "~/app"
+    check = "bin/ci"
+  `);
+
+  const config = loadConfig(recordHome);
+
+  assert.deepEqual(config.reviewer, { vendor: "reviewing-vendor", model: "reviewing-model" });
+  assert.equal(config.projects["spending-app"].reviewer, undefined, "a project inherits rather than copies");
+});
+
+test("loadConfig: no [reviewer] table at all is not an error", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/app"
+    check = "bin/ci"
+  `);
+
+  assert.equal(loadConfig(recordHome).reviewer, undefined);
+});
+
+test("loadConfig: a project may carry its own reviewer alongside the global one", () => {
+  const recordHome = makeTestHome(`
+    [reviewer]
+    vendor = "global-vendor"
+    model = "global-model"
+
+    [projects.spending-app]
+    path = "~/app"
+    check = "bin/ci"
+
+    [projects.spending-app.reviewer]
+    vendor = "project-vendor"
+    model = "project-model"
+  `);
+
+  const config = loadConfig(recordHome);
+
+  assert.deepEqual(config.reviewer, { vendor: "global-vendor", model: "global-model" });
+  assert.deepEqual(config.projects["spending-app"].reviewer, { vendor: "project-vendor", model: "project-model" });
+  assert.equal(config.projects["spending-app"].check, "bin/ci", "the rest of the entry still parses");
+});
+
+test("loadConfig: half a reviewer is refused rather than quietly ignored", () => {
+  for (const table of [`vendor = "v"`, `model = "m"`, `vendor = "v"\n    model = ""`, `vendor = 7\n    model = "m"`]) {
+    const recordHome = makeTestHome(`
+    [reviewer]
+    ${table}
+  `);
+
+    assert.throws(
+      () => loadConfig(recordHome),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /\[reviewer\]\.(vendor|model)/);
+        return true;
+      },
+      `${table} should have been refused`
+    );
+  }
+});
+
 test("loadConfig: a stop threshold below the refuse threshold is refused - it could only be a mistake", () => {
   assert.throws(
     () => loadConfig(makeTestHome(`[pause]\nsevenDayRefusePercent = 80\nsevenDayStopPercent = 60\n`)),
@@ -495,12 +564,51 @@ test("loadConfig: a stop threshold below the refuse threshold is refused - it co
   );
 });
 
+test("loadConfig: an unknown reviewer field is refused, and the refusal names where it was", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/app"
+
+    [projects.spending-app.reviewer]
+    vendor = "v"
+    model = "m"
+    apiKey = "never-here"
+  `);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.match(err.message, /\[projects\.spending-app\.reviewer\]/);
+      assert.match(err.message, /apiKey/);
+      return true;
+    }
+  );
+});
+
 test("loadConfig: an unknown [pause] field names every field that is recognized", () => {
   assert.throws(
     () => loadConfig(makeTestHome(`[pause]\nsevenDayPercent = 70\n`)),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       assert.match(err.message, /sevenDayRefusePercent, sevenDayStopPercent and fiveHourRefusePercent/);
+      return true;
+    }
+  );
+});
+
+test("loadConfig: the unknown-top-level-table message points at [reviewer] as a global too", () => {
+  const recordHome = makeTestHome(`
+    [spending-app]
+    path = "~/app"
+  `);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /\[reviewer\]/);
       return true;
     }
   );

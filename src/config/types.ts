@@ -7,6 +7,19 @@ import type { Caps } from "../../contract/surface.ts";
 // Foreman. The shape is the contract's own.
 export type { Caps };
 
+/** Who reviews a project's test changes: the model Inspector is handed
+ * for that half of its run (`-vendor`/`-model`). Both fields are
+ * required together — a vendor with no model, or a model with no
+ * vendor, is not a reviewer Inspector could be given.
+ *
+ * The standing ruling: a reviewer must never be the Worker's own
+ * vendor. That is enforced in code (src/reviewer/resolve.ts), not
+ * left to whoever writes projects.toml. */
+export interface ReviewerConfig {
+  vendor: string;
+  model: string;
+}
+
 /** One entry in projects.toml. `check` is optional at load time — a
  * project may be registered before its check command is decided — but
  * required before any task on it is allowed to proceed (rule 2). */
@@ -33,6 +46,10 @@ export interface ProjectConfig {
    * make through it (src/relay/limits.mjs's
    * DEFAULT_MAX_CALLS_PER_TASK). */
   maxCallsPerTask?: number;
+  /** `[projects.<name>.reviewer]` — this project's own reviewer,
+   * overriding the global `[reviewer]` table outright (not field by
+   * field: a project that names one names both fields). */
+  reviewer?: ReviewerConfig;
 }
 
 /** The pause rule (issue #189): how full the provider's own
@@ -64,4 +81,9 @@ export interface FabricaConfig {
    * absence means `DEFAULT_PAUSE_RULE`, not "no pause rule". */
   pause: PauseRule;
   projects: Record<string, ProjectConfig>;
+  /** `[reviewer]` — the reviewer every project uses unless its own
+   * entry overrides it. Absent means no reviewer is configured, which
+   * only becomes a refusal for a project whose `.inspector.json`
+   * declares `testPaths` (src/reviewer/resolve.ts). */
+  reviewer?: ReviewerConfig;
 }

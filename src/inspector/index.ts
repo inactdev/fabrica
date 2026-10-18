@@ -1,5 +1,6 @@
 export {
   commandIsInstalled,
+  declaresTestPaths,
   defaultInspector,
   inspectorAdapter,
   inspectorConfigMatches,
@@ -8,5 +9,6 @@ export {
   MAX_INSPECTION_REPORT_BYTES,
   reportForRecord,
 } from "./run.ts";
+export type { InspectorAdapterOptions } from "./run.ts";
 export type { Inspection, Inspector } from "./types.ts";
 export { githubTokenStatus, inspectorBranchStatus } from "./doctor-checks.ts";

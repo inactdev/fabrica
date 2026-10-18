@@ -120,15 +120,25 @@ The one command this issue builds. What it does, in order:
    no detached process in this case - exit 1 with the message on stderr
    and stdout empty.
 
-   "Could not find out" is not "not set up":
-   `inspectorConfiguredOnOrigin` returns `null` for a project with no
-   origin or an unreachable one, and that is deliberately **not**
-   refused here. Telling someone whose network is down to run `fabrica
-   register` would be wrong, and the real git error the task then
-   reports says far more. `setUpRefusal` is the test-only seam for this
-   one check - `do-command.test.ts`, `status-command.test.ts` and
-   `watch-command.test.ts` use it where they are deliberately exercising
-   the self-tested path that only exists behind this gate.
+   "Could not find out" is not "not set up": `originSetup` returns
+   `null` for a project with no origin or an unreachable one, and that
+   is deliberately **not** refused here. Telling someone whose network
+   is down to run `fabrica register` would be wrong, and the real git
+   error the task then reports says far more. `setUpRefusal` is the
+   test-only seam for this one check - `do-command.test.ts`,
+   `status-command.test.ts` and `watch-command.test.ts` use it where
+   they are deliberately exercising the self-tested path that only
+   exists behind this gate.
+
+   The same gate, same place, same single look at origin, also refuses
+   a project that **asks for its test changes to be judged and has no
+   reviewer to judge them**: an `.inspector.json` declaring `testPaths`
+   while `projects.toml` carries no usable `[reviewer]` table. The three
+   grounds and their exact wording are `src/reviewer/resolve.ts`'s; the
+   reason they belong here rather than downstream is the one above -
+   work nothing can properly judge should never reach a worker or spend
+   a cent. `originSetup` answers both halves at once so the fetch
+   happens once, not twice.
 5. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
    new task's id the moment it's registered (`watch-for-task-id.ts`).
 6. **Waits, bounded, to see whether the task asks, proceeds, or fails**

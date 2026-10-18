@@ -10,7 +10,7 @@
 
 import { execFileSync } from "node:child_process";
 import { fetchOriginDefaultBranch } from "../line/index.ts";
-import { INSPECTOR_CONFIG, inspectorIsConfigured } from "../inspector/index.ts";
+import { declaresTestPaths, INSPECTOR_CONFIG, inspectorIsConfigured } from "../inspector/index.ts";
 
 /** Inspector's own config file - the one file whose presence at a task's
  * base commit decides whether the project is set up at all. Re-exported
@@ -127,14 +127,40 @@ export function branchExistsLocally(project: string, branch: string): boolean {
  * past fetch happened to leave behind, or nothing at all.
  */
 export function inspectorConfiguredOnOrigin(project: string): boolean | null {
+  const setup = originSetup(project);
+  return setup === null ? null : setup.inspectorConfigured;
+}
+
+/** What origin's default branch says about a project, read in one fetch
+ * because `fabrica do` wants both answers before it registers anything
+ * and fetching twice to get them would be the same question asked twice
+ * at network cost. */
+export interface OriginSetup {
+  /** Whether the commit a task would be cut from carries
+   * `.inspector.json` at all - "is this project set up for Fabrica". */
+  inspectorConfigured: boolean;
+  /** Whether that config declares `testPaths`, which turns on
+   * Inspector's model-judged half and so makes a reviewer mandatory
+   * (src/reviewer/resolve.ts). */
+  declaresTestPaths: boolean;
+}
+
+/** `null` means the question could not be answered at all - see
+ * `inspectorConfiguredOnOrigin` above for why that is never folded into
+ * a "no". */
+export function originSetup(project: string): OriginSetup | null {
   let branch: string;
   try {
     branch = fetchOriginDefaultBranch(project);
   } catch {
     return null;
   }
+  const revision = `origin/${branch}`;
   try {
-    return inspectorIsConfigured(project, `origin/${branch}`);
+    return {
+      inspectorConfigured: inspectorIsConfigured(project, revision),
+      declaresTestPaths: declaresTestPaths(project, revision),
+    };
   } catch {
     return null;
   }

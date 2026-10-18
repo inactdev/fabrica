@@ -3,7 +3,18 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { brainEnvValue, credentialEnvFrom, defaultBrainAdapter, selectedBrain } from "./index.ts";
+import {
+  BRAIN_SELECTION_VAR,
+  brainEnvValue,
+  CLI_WORKER_VENDOR,
+  credentialEnvFrom,
+  defaultBrainAdapter,
+  DIRECT_BRAIN_NAME,
+  DIRECT_VARS,
+  DIRECT_WORKER_VENDOR,
+  selectedBrain,
+  workerVendor,
+} from "./index.ts";
 
 // Issue #85, and the worker-token half of the "a failed start is never
 // silent" ruling. `Brain` is name/model/work/ask - the `env` an adapter
@@ -185,4 +196,33 @@ test("defaultBrainAdapter names the selected brain before its first call, and ne
     if (previous.model === undefined) delete process.env.FABRICA_MODEL;
     else process.env.FABRICA_MODEL = previous.model;
   }
+});
+
+// The reviewer seam (src/reviewer/resolve.ts): "which vendor is the
+// worker" has to be answerable, and this is the only directory allowed
+// to answer it (CONTRACT rule 8). Asserted here against the literal
+// names, because here is the one place those names may be written.
+test("workerVendor names the vendor behind whichever worker is selected", () => {
+  assert.equal(workerVendor({}, recordHome()), CLI_WORKER_VENDOR, "the flat-rate CLI worker is the default");
+
+  const direct = recordHome({
+    content: `${BRAIN_SELECTION_VAR}=${DIRECT_BRAIN_NAME}\n${DIRECT_VARS.model}=some/model\n`,
+    mode: 0o600,
+  });
+  assert.equal(workerVendor({}, direct), DIRECT_WORKER_VENDOR);
+  assert.equal(
+    workerVendor({ [BRAIN_SELECTION_VAR]: DIRECT_BRAIN_NAME }, recordHome()),
+    DIRECT_WORKER_VENDOR,
+    "the environment selects a worker the same way brain.env does"
+  );
+});
+
+test("workerVendor never throws on an unreadable brain.env - the first real call reports that", () => {
+  const home = recordHome({ content: `${BRAIN_SELECTION_VAR}=${DIRECT_BRAIN_NAME}\n`, mode: 0o644 });
+
+  assert.equal(workerVendor({}, home), CLI_WORKER_VENDOR);
+});
+
+test("the reviewer's vendor and the worker's are different strings, so a collision is detectable", () => {
+  assert.notEqual(CLI_WORKER_VENDOR, DIRECT_WORKER_VENDOR);
 });

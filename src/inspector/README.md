@@ -4,6 +4,30 @@
 
 The handoff is trigger-driven: after each attempt's work is committed, the Foreman invokes Inspector directly and waits for that process. Fabrica runs no check of its own (issue #64); Inspector's run is the verdict, and a red report becomes the next attempt's correction brief. The call is `inspector -repo <worktree> -branch fabrica/<taskId>`: Inspector requires `-branch`, the one branch it may publish to after a green result. Neither module polls for an Inspector result. Exit 0 is `green`, exit 1 is `red`, and exit 2 is `refused`; every unexpected exit is also a refusal, never a red verdict. The Foreman records the call and report in `events.jsonl`; this module only knows how to make the call. Streamed output is kept as a bounded tail while Inspector runs, and its stored report is capped at 16 KiB with the true total byte count, retaining the end where command-line tools normally print the diagnosis.
 
+## The reviewer (`-vendor`/`-model`)
+
+Inspector judges a change's *test* edits with a model of its own. When a
+reviewer is configured, Fabrica names it on every call: `-vendor <v>
+-model <m>`, with that vendor's `<VENDOR>_API_KEY` (and
+`<VENDOR>_BASE_URL`, when set) placed on the Inspector child's
+environment only - never in argv, which every process on the machine can
+read out of the process table, and never in Fabrica's own environment.
+Both flag names are ratified in `consumer-contract.json`, so renaming
+one here without carrying it there fails `run.test.ts`, and the sync job
+carries the change to Inspector's own copy.
+
+The flags go on the call whenever a reviewer is configured, not only for
+a project whose `.inspector.json` declares `testPaths`: `testPaths` is
+what makes a reviewer *required*, not what makes one usable, and
+Inspector ignores a reviewer it has nothing to judge.
+
+Who the reviewer is, how it is configured, and the standing ruling that
+it must never be the Worker's own vendor all live in
+`src/reviewer/README.md`. That module is deliberately separate from this
+one: settling a reviewer needs to know which vendor the Worker is, and
+this module has no business depending on brains. It takes only the
+`ResolvedReviewer` type from there, erased at compile time.
+
 ## The GitHub token (issue #103)
 
 Inspector needs `GITHUB_TOKEN` to publish a green result. If Fabrica's own environment has it, it passes through. If not, the adapter runs `gh auth token` once and sets `GITHUB_TOKEN` in the inspector child's environment only. It never touches Fabrica's own process environment or the worker's box, and never prints or logs the token. If `gh` is missing or not logged in, `prepare()` throws, and the Foreman refuses the task (`inspector-not-ready`) before any worker starts, naming `gh auth login`. A new machine needs only "install, log in to GitHub, go" - no hand-added profile line.
