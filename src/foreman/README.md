@@ -760,6 +760,99 @@ whether a task is `"closed"`.
   to `defaultBrainAdapter()`, the same real adapter `do()` already uses
   by default via the CLI.
 
+### A fix round starts by rebasing onto origin's default branch (issue #235)
+
+A `fix` is often ruled days after the task ran. Without this, that round
+reopens a branch forked from a commit the project has long since moved
+past, and hands Inspector (and a reviewer) a pull request whose diff
+makes no sense against today's default branch. So before anything else a
+fix round does — before `prepareRound`, before any worker — the task's
+branch is brought up to origin's *current* default branch.
+
+`src/line/rebase.ts` is the git (see its own section in
+`src/line/README.md`); `fix-rebase.ts` is the policy. Two properties
+hold by construction and must keep holding:
+
+- **Host side, git only, never in a worker.** A worker's git mounts are
+  read-only by design (`src/containment`), so it could not commit a
+  rebase even if asked; and rewriting a branch's history is not a
+  judgement call to hand a model. `no-host-check.test.ts` already proves
+  nothing under `src/foreman` spawns anything but `git`, which covers
+  this too.
+- **Nothing is ever pushed.** Inspector owns push-inspect-publish; the
+  rebased branch stays local exactly like every other commit Fabrica
+  makes.
+
+**Before every fix round, skipped when there is nothing to do.** It runs
+each round, not only the first — origin moves between rounds too — and
+does nothing at all when the branch already contains origin's tip, so a
+reviewer's shas are never churned for no gain.
+
+**A conflict is the Client's to rule on, and he sees it before a worker
+does.** The first conflict a task hits is aborted straight back to the
+branch's own last commit and delivered as `inspection-red`, with every
+conflicted file and its marker hunks as the delivery's `evidence`
+(capped — see `src/line/README.md`). No worker runs in that round and
+nothing is spent. `inspection-red` rather than a failure report because
+`deliveredState` puts it in front of him, which is the point: this is
+work waiting on his judgment, not the machine failing at something it
+could retry. The delivery deliberately carries **no** `inspection`
+field: that field means "this branch was handed to Inspector"
+(`src/inspector/types.ts`), and this branch never was.
+
+**The round he rules next hands the stopped rebase to the worker.** That
+round re-attempts the rebase and, if it conflicts again, leaves it
+*stopped* with the markers in the working tree. The worker gets his note
+plus the conflicted file list and resolves the markers in place; once it
+returns, the host stages everything and continues the rebase itself. Two
+consequences of doing it that way, both deliberate:
+
+- The rebase's own commits keep their original messages — the host does
+  not commit this round's work separately, because `git rebase
+  --continue` already made the commit. The worker's write-up still
+  becomes the pull request's title and body (`inspectorJudge` uses this
+  round's `finalMessage`), which is where a reviewer reads it.
+- Any *other* edit the worker made in that round is folded into the
+  replayed commit by the same `git add -A`. That is the honest outcome of
+  "the host stages everything", and the brief tells the worker plainly
+  that resolving the conflict is the job.
+
+Markers still left behind, or a later commit of the same rebase
+conflicting afresh, aborts and delivers `inspection-red` again with the
+remaining markers — differently worded, since "give a fix verdict with
+instructions" is no longer news at that point.
+
+**How a round knows which of the two it is.** The delivery the Client
+just ruled on carries `rebaseConflict` (`queries.ts`'s
+`DeliveredDetails`) exactly when it *was* a conflict report. That is
+precisely "he has seen these markers and this note answers them", and it
+goes stale on its own: the next ordinary delivery carries no such field,
+so a fresh conflict in some later round is reported to him first rather
+than handed to a worker with an unrelated note. A `"rebase-conflicted"`
+event (`src/inspector/types.ts`) lands for every conflict, but purely as
+the record saying what the host did — no decision reads it.
+
+**The seam this needed in `attempts.ts`.** Finishing the rebase has to
+happen after `work()` returns and *before* the attempt's own commit,
+which assumes a branch the rebase has stopped moving. `runAttempts`
+therefore takes an optional `beforeCommit(attempt)`: return a `Judgement`
+and that IS the attempt's judgement — nothing is committed and nothing is
+judged — the same shape an invalid write-up already has. The judgement
+kind is `"rebase-conflicted"`, and `round.ts` handles it before the cap
+and `"unchanged"` branches, unlike those two: a conflict is the fact
+about the branch the Client has to rule on either way, and a cap-stopped
+report would tell him to raise a cap when the real blocker is a conflict.
+A cap stop in the same round still lands on the record as its own event,
+so rule 10 loses nothing.
+
+**What `baseCommit` means from then on.** After a successful rebase,
+origin's tip *is* the branch's fork point, so that is what the round's
+delivery records and what `diffFiles` is pinned to — against the old base
+the `files` list would name everything origin itself changed as this
+task's work. An `already-current` round keeps the base it had (still an
+ancestor of the branch), and a round that aborted its rebase puts the old
+base back.
+
 ## Rule 10: spending caps (issue #11)
 
 **Where cost comes from.** A brain reports what one `work()` call cost on

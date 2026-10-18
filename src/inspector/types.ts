@@ -77,7 +77,16 @@ export type FabricaEventName =
    * #203). Details: `src/foreman/stop.ts`'s `StoppedByOwnerDetails` -
    * who stopped it (the Tailscale login), and the worker's last
    * recorded activity at that moment. */
-  | "stopped-by-owner";
+  | "stopped-by-owner"
+  /** The host-side rebase a fix round starts with (issue #235) hit a
+   * conflict. Details: `{ base, baseCommit, files, left }` - origin's
+   * default branch and the commit it pointed at, the conflicted paths,
+   * and whether the rebase was aborted back to the branch's own last
+   * commit or left stopped for a worker to resolve in place. Purely the
+   * record saying what the host did; no decision reads it (the one that
+   * needs this reads the delivery's own `rebaseConflict` - see
+   * `src/foreman/queries.ts`'s `DeliveredDetails`). */
+  | "rebase-conflicted";
 
 export interface FabricaEvent extends Omit<ContractFabricaEvent, "name"> {
   name: FabricaEventName;

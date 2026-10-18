@@ -35,8 +35,20 @@ export interface DeliveredDetails {
   totalAttempts?: number;
   /** The fork point `diffFiles` pins to (src/delivery/diff-files.ts) —
    * carried forward so a fix round's delivery still reports the full
-   * cumulative diff since the task's first attempt, not just its own. */
+   * cumulative diff since the task's first attempt, not just its own.
+   * A fix round that rebased the branch onto origin's current tip
+   * (issue #235) records that tip here instead, since it is the branch's
+   * fork point from then on. */
   baseCommit?: string;
+  /** Present exactly when this delivery IS a rebase conflict report
+   * (issue #235) - the host could not bring the branch up to origin's
+   * default branch, so there is a conflict only the Client can rule on.
+   * This is the one thing the next fix round branches on: a `fix` ruled
+   * on a delivery carrying this means the Client has already seen the
+   * markers and his note is instructions for resolving them, so that
+   * round re-attempts the rebase and hands it to the worker stopped
+   * rather than aborting and reporting the same conflict again. */
+  rebaseConflict?: { base: string; files: string[] };
 }
 
 export function deliveryOf(recordHome: string, taskId: string): Delivery | null {

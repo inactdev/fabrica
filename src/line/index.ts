@@ -2,6 +2,8 @@ export { createProductionLine, fetchOriginDefaultBranch } from "./cut.ts";
 export { requireRepoRoot } from "./safety.ts";
 export { reopenProductionLine } from "./resume.ts";
 export { destroyProductionLine } from "./teardown.ts";
+export { abortRebase, finishRebase, rebaseInProgress, rebaseOntoOriginDefault } from "./rebase.ts";
+export type { RebaseConflict } from "./rebase.ts";
 export type { TeardownResult } from "./teardown.ts";
 export { LineError } from "./errors.ts";
 export type { LineErrorCode } from "./errors.ts";

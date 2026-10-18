@@ -111,6 +111,108 @@ record home, already has a `"line-cut"` event - proof a line was
 genuinely cut for it once) - a claim only that task's own round can make
 true, unlike a branch's mere existence in the project.
 
+## `rebaseOntoOriginDefault(line, { onConflict })` (issue #235)
+
+Replays `line`'s own commits on top of origin's *current* default branch,
+in `line`'s own worktree, with git and nothing else. A fix round ruled
+days after the task ran would otherwise hand Inspector (and a reviewer) a
+branch forked from a commit the project has long since moved past; this
+is what keeps it current. `src/foreman/fix-rebase.ts` owns the policy
+around it — when it runs, which conflict is reported and which is handed
+to a worker — and `src/foreman/README.md`'s own section is where that
+lives. This section is the git.
+
+**Why it lives here, next to `cut.ts`.** `fetchOriginDefaultBranch` is
+already the one place that answers "which branch does a task's base
+commit come from", read straight from the remote and never assumed to be
+`master`; asking that question a second way is how the two sides come to
+disagree about what a task is forked from. And a rebase rewrites commits,
+so this module's standing rule — never act on a path without first
+proving through git itself that it is the exact throwaway worktree
+expected — matters more here than anywhere else in it: a wrong path
+costs a history, not a file.
+
+**Three results, no fourth.** A conflict is a *result*, not a
+`LineError`: the caller turns it into a delivery the Client rules on.
+Only a rebase that failed for some other reason throws
+(`rebase-failed`), and that is told apart from a conflict by asking git —
+a rebase is in progress *and* has unmerged paths — never by reading its
+wording.
+
+- `already-current` — the branch already contains origin's tip
+  (`git merge-base --is-ancestor`), so nothing is replayed. Skipped
+  rather than done-for-nothing on purpose: rewriting the branch's commits
+  would change every sha a reviewer has already looked at.
+- `rebased` — the branch now sits on origin's tip, and `baseCommit` is
+  that tip. The caller must pin a delivery's `files` diff to it; against
+  the old base, the diff would list everything origin itself changed as
+  this task's work.
+- `conflicted` — carries every conflicted path git named, those files'
+  marker hunks (capped, below), and `left`:
+  - `"aborted"` (`onConflict: "abort"`) — `git rebase --abort`, so the
+    branch is back at its own last commit and nothing is in flight.
+  - `"stopped"` (`onConflict: "stop"`) — the rebase stays in progress
+    with the markers in the working tree, for a worker that has been
+    given instructions to resolve them in place.
+
+**What is forced onto every history-writing call**, beyond what
+`src/foreman/commit.ts` already forces for the same reasons (a throwaway
+worktree has no claim on the Client's git identity or signing key, and a
+project hook expecting installed dependencies would abort the rebase):
+`rebase.autoStash=false`, so a Client who turned autostash on in his own
+config does not get a worker's uncommitted work stashed into an entry
+nothing here reads back; and `rerere.enabled=false`, so a conflict the
+Client was never shown cannot be resolved on his behalf out of his own
+recorded resolutions — the whole point of the conflict path is that he
+sees the markers. `GIT_EDITOR`/`GIT_SEQUENCE_EDITOR` are pinned to `true`
+as well: no step here is interactive, and a git that nonetheless reached
+for an editor would hang the detached worker process forever instead of
+failing.
+
+### `finishRebase(workdir)`
+
+Finishes a rebase left stopped: stages everything in the working tree and
+continues, commit by commit, until it is done. The staging is deliberately
+the host's job — a worker's git mounts are read-only by design
+(`src/containment`), so a worker can resolve the markers in the files and
+nothing more.
+
+It refuses to stage anything while a conflict marker is still in the
+working tree (`markers-remain`): committing `<<<<<<<` onto the branch
+would hand Inspector and the Client something strictly worse than an
+honest report that the conflict is unresolved. A later commit of the same
+rebase can also conflict on its own, which no worker has been shown yet
+(`new-conflict`). Either way the caller aborts and reports.
+
+Two details worth knowing before changing it:
+
+- **The marker check reads the working tree, not git's unmerged list.**
+  A worker that deletes one marker line and leaves the other has resolved
+  nothing, and git stops calling the file unmerged the moment it is
+  staged — so the check is "does any line of this file open or close a
+  conflict marker", over the file's own content.
+- **`=======` on its own is deliberately not treated as a marker.** Git
+  only ever writes it between the other two, while a row of exactly seven
+  `=` is ordinary content (a markdown heading underline, a rule in a
+  comment). Counting it would call genuinely resolved files unresolved,
+  which costs the Client a round for nothing.
+- **An empty resolution is skipped, not failed.** "Take the upstream side
+  wholesale" is a legitimate resolution, and it leaves the replayed commit
+  with nothing to record; `git rebase --continue` refuses that, so the
+  index is compared against `HEAD` directly and `--skip` is used instead.
+  Asked of the index, never inferred from git's own error text.
+
+### How much of a conflict a report carries
+
+`MAX_CONFLICT_LINES_PER_FILE` (200) and `MAX_CONFLICT_LINES_TOTAL` (2000),
+per the Client's own ruling on issue #235 — and the rendering says so
+wherever a cap cut something, naming how many marker lines of a file, or
+how many whole files, were left out. The *file list* is never capped: the
+Client always learns every path that conflicted, even when the quoted
+hunks stop. A binary file, a file too large to quote, and a delete
+conflict with no file in the working tree are each named with why rather
+than quoted.
+
 ## `destroyProductionLine(line)`
 
 Returns a `TeardownResult`: `{ status: "destroyed" }` when it actually
