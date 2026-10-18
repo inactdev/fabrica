@@ -68,6 +68,80 @@ export function workerImageStatus(stamp: () => string | null = readStamp): Adapt
   return { ok: true, label, detail: `${DEFAULT_IMAGE} is built and current` };
 }
 
+/** The CLI the worker image installs, and the `RUN` line that pins its
+ * version (the Dockerfile's own comment says why it is pinned at all:
+ * claude-code.md's behavior notes were verified against one exact
+ * version, so a rebuild must not silently install another). */
+const CLI_PACKAGE = "@anthropic-ai/claude-code";
+
+/** The version the Dockerfile pins, or null when it pins none (`@latest`,
+ * or no version at all) - in which case there is nothing for an
+ * installed version to disagree with. */
+export function pinnedCliVersion(dockerfile: () => string = () => readFileSync(DOCKERFILE, "utf8")): string | null {
+  const pin = new RegExp(`npm install -g ${CLI_PACKAGE.replace("/", "\\/")}@(\\S+)`).exec(dockerfile());
+  const version = pin?.[1];
+  return version === undefined || version === "latest" ? null : version;
+}
+
+function imagePresent(image: string): boolean {
+  try {
+    execFileSync("docker", ["image", "inspect", image], { stdio: "ignore", timeout: 20_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** What is actually installed inside the worker image, asked of the CLI
+ * itself rather than inferred from the build - `claude --version` prints
+ * `2.1.222 (Claude Code)` (verified against the real binary), so the
+ * leading version is what's read back. `--network none` because a
+ * version needs none, and this runs inside a preflight that must not
+ * reach anything. Null when the image isn't built (checked first, so
+ * `docker run` is never left trying to pull a local-only image) or the
+ * CLI can't answer. */
+function installedCliVersion(): string | null {
+  if (!imagePresent(DEFAULT_IMAGE)) return null;
+  try {
+    const out = execFileSync("docker", ["run", "--rm", "--network", "none", DEFAULT_IMAGE, "claude", "--version"], {
+      encoding: "utf8",
+      timeout: 60_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return /\d+\.\d+\.\d+[^\s]*/.exec(out.trim())?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** `fabrica doctor`'s "worker CLI" line (issue #186, second half):
+ * which version of the worker's own CLI is installed in the image,
+ * against the version the Dockerfile pins. Fails only when a pin exists
+ * and the two differ (Client ruling) - an image that can't be asked is
+ * reported honestly but never fails here, because the "worker image"
+ * line above it already owns that failure and would say the same thing
+ * twice. */
+export function workerCliVersionStatus(
+  installed: () => string | null = installedCliVersion,
+  pinned: () => string | null = () => pinnedCliVersion()
+): AdapterCheck {
+  const label = "worker CLI";
+  const have = installed();
+  const want = pinned();
+  const pin = want === null ? "the Dockerfile pins no version" : `the Dockerfile pins ${want}`;
+
+  if (have === null) return { ok: true, label, detail: `could not be read from ${DEFAULT_IMAGE} - ${pin}` };
+  if (want === null) return { ok: true, label, detail: `${have} installed in ${DEFAULT_IMAGE} - ${pin}` };
+  return have === want
+    ? { ok: true, label, detail: `${have} installed in ${DEFAULT_IMAGE}, the version the Dockerfile pins` }
+    : {
+        ok: false,
+        label,
+        detail: `${DEFAULT_IMAGE} has ${have} installed, but ${pin}`,
+        fix: buildCommand(),
+      };
+}
+
 const TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /** The direct-API worker's own version of the check below (issue #200):

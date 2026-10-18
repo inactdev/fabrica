@@ -15,6 +15,24 @@ export interface ProjectConfig {
    * already expanded to the home directory. */
   path: string;
   check?: string;
+  /** Extra hosts a Worker on this project may reach through the relay
+   * (issue #186), e.g. `["registry.npmjs.org"]` for a project whose
+   * check installs its own dependencies. **Additive**: the model host
+   * and GitHub are always allowed, and these are added to them — a
+   * project that declares none gets exactly those two (Client ruling,
+   * issue #186). Each entry is a hostname, optionally `host:port`; a
+   * leading `*.` matches one level of subdomain. Matching lives in
+   * src/relay/allowlist.mjs, which is also where the syntax is
+   * defined. */
+  hosts?: string[];
+  /** Overrides the relay's default limit on the size of a single
+   * request a Worker may send through it (src/relay/limits.mjs's
+   * DEFAULT_MAX_REQUEST_BYTES). */
+  maxRequestBytes?: number;
+  /** Overrides the relay's default limit on how many calls one task may
+   * make through it (src/relay/limits.mjs's
+   * DEFAULT_MAX_CALLS_PER_TASK). */
+  maxCallsPerTask?: number;
 }
 
 export interface FabricaConfig {

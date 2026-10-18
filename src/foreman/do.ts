@@ -9,6 +9,7 @@
 
 import { appendEvent, appendTaskFile, readTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine, reopenProductionLine } from "../line/index.ts";
+import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { prepareRound } from "./judge.ts";
 import { runAttempts } from "./attempts.ts";
@@ -17,6 +18,7 @@ import { recordRoundResult } from "./round.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
+import { networkPolicyFor } from "./network-policy.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { recordReceipt, spendLimitsFor } from "./caps.ts";
 import type { Caps } from "../../contract/surface.ts";
@@ -210,26 +212,34 @@ async function productionRound(
     // open task without waiting for delivery.
     appendEvent(recordHome, { taskId, name: "work-started", details: { project: line.project } });
 
-    const attemptsResult = await runAttempts({
-      brain,
-      brief,
-      workdir: line.workdir,
-      taskId,
-      judge,
-      totalAttempts,
-      stopEarlyOnGreen: !explicitAttempts,
-      spendLimits: spendLimitsFor(recordHome, taskId, caps),
-      onReceipt: (receipt) => recordReceipt(recordHome, receipt),
-      onHeartbeat: (attempt) => {
-        appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
-      },
-      // Issue #70: fires as each entry is known, not once per attempt -
-      // see runAttempts' own onTranscriptEntry doc for why every entry
-      // lands here exactly once either way.
-      onTranscriptEntry: (entry) => {
-        appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
-      },
-    });
+    // Issue #186: every call this round makes runs under the project's
+    // own network policy - the hosts it declared in projects.toml, the
+    // relay's limits, and this task's record for a refusal to land on.
+    // Wrapped around the whole loop rather than each attempt: one
+    // policy holds for the task, and every attempt's relay is started
+    // from inside this call (src/brain/task-network.ts).
+    const attemptsResult = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), () =>
+      runAttempts({
+        brain,
+        brief,
+        workdir: line.workdir,
+        taskId,
+        judge,
+        totalAttempts,
+        stopEarlyOnGreen: !explicitAttempts,
+        spendLimits: spendLimitsFor(recordHome, taskId, caps),
+        onReceipt: (receipt) => recordReceipt(recordHome, receipt),
+        onHeartbeat: (attempt) => {
+          appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
+        },
+        // Issue #70: fires as each entry is known, not once per attempt -
+        // see runAttempts' own onTranscriptEntry doc for why every entry
+        // lands here exactly once either way.
+        onTranscriptEntry: (entry) => {
+          appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
+        },
+      })
+    );
 
     // judge-commit-outcome-deliver-record: one shared tail (issue #182),
     // round.ts's recordRoundResult, also used by verdict.ts's fix round.

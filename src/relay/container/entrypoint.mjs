@@ -28,6 +28,8 @@ const relay = await startRelay({
   port: config.port,
   tunnelAllowlist: config.tunnelAllowlist,
   gateway: config.gateway,
+  maxRequestBytes: config.maxRequestBytes,
+  maxCallsPerTask: config.maxCallsPerTask,
 });
 
 // launch.ts's waitForListening() watches for this exact line through

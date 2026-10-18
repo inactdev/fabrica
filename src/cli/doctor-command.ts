@@ -17,6 +17,8 @@ import {
   readEvents,
   requireGitRoot,
   unmeasuredSpend,
+  relayImageStatus,
+  workerCliVersionStatus,
   workerImageStatus,
   workerTokenStatus,
 } from "../index.ts";
@@ -31,10 +33,11 @@ export const DOCTOR_HELP = `Usage: ${DOCTOR_USAGE}
 Checks, without spending anything, that this machine can run tasks: Node,
 the copy of fabrica actually running - a developer checkout (branch,
 commit) or an installed copy (version, commit), either way compared
-against origin/master - Docker, the worker image, the worker token, the
-GitHub token Inspector needs, Inspector itself, every registered project,
-the caps, and any SPEND UNKNOWN block. One line per check - OK, or FAIL
-with the exact fix. Exits non-zero if anything fails.
+against origin/master - Docker, the worker image, the worker CLI version
+installed in it, the relay image every task's network goes through, the
+worker token, the GitHub token Inspector needs, Inspector itself, every
+registered project, the caps, and any SPEND UNKNOWN block. One line per
+check - OK, or FAIL with the exact fix. Exits non-zero if anything fails.
 
   --live  Also make one minimal real call with the worker token (a few
           cents) and report whether it is alive or dead.
@@ -57,6 +60,12 @@ export interface DoctorProbes {
   checkout(): DoctorCheck;
   docker(): DoctorCheck;
   workerImage(): DoctorCheck;
+  /** The CLI version actually installed in the worker image, against
+   * the version its Dockerfile pins (issue #186). */
+  workerCli(): DoctorCheck;
+  /** The image every task's relay container runs from (issue #186) -
+   * missing, no task can start its relay at all. */
+  relayImage(): DoctorCheck;
   workerToken(recordHome: string): DoctorCheck;
   githubToken(): DoctorCheck;
   inspector(): DoctorCheck;
@@ -237,6 +246,8 @@ export const realProbes: DoctorProbes = {
     }
   },
   workerImage: () => workerImageStatus(),
+  workerCli: () => workerCliVersionStatus(),
+  relayImage: () => relayImageStatus(),
   workerToken: (recordHome) => workerTokenStatus(process.env, recordHome),
   githubToken: () => githubTokenStatus(process.env),
   inspector: () => inspectorBranchStatus(process.env),
@@ -309,6 +320,8 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
     probes.checkout(),
     probes.docker(),
     probes.workerImage(),
+    probes.workerCli(),
+    probes.relayImage(),
     probes.workerToken(recordHome),
     probes.githubToken(),
     probes.inspector(),

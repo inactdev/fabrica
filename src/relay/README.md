@@ -1,25 +1,38 @@
 # relay
 
-The first half of issue #186: a relay a worker box's traffic is forced
-through, instead of reaching the network itself. This module is the
-relay and the policy it enforces; `src/containment/isolated-network.ts`
-and `container/launch.ts` are the Docker-side halves that make "forced
+Issue #186: a relay a worker box's traffic is forced through, instead of
+reaching the network itself. This module is the relay and the policy it
+enforces; `src/containment/isolated-network.ts` and
+`container/launch.ts` are the Docker-side halves that make "forced
 through" actually true rather than a convention a worker could ignore.
 
 ## What's in scope here, and what isn't
 
-This half builds and tests the mechanism on its own - the issue's own
-acceptance shape, "a fake worker and a fake provider" (`server.test.ts`,
-`helpers/fake-provider.ts`) - and, as of a later, scoped-down slice of
-issue #186's second half, wires the reference CLI adapter's own
-`connectThroughRelay`/`prepareNetwork` helpers (`src/brain/adapters/`) to
-actually run every real call through it. Still missing, and still
-deferred to whoever picks up the rest of #186's second half: a real
-place to configure a credential per *project*
-(`projects.toml` - the adapter's credential today is still the one
-`defaultBrainAdapter` already reads from the host or `brain.env`, just
-no longer forwarded into the worker's container raw) and a `fabrica
-doctor` check that the mechanism is healthy before a task starts.
+The mechanism is tested on its own - the issue's own acceptance shape,
+"a fake worker and a fake provider" (`server.test.ts`,
+`helpers/fake-provider.ts`) - and the reference CLI adapter's
+`connectThroughRelay`/`prepareNetwork` helpers (`src/brain/adapters/`)
+run every real call through it.
+
+Issue #186's second half added the policy around that mechanism:
+
+- **Per-project allowed hosts** (`policy.ts` here,
+  `src/foreman/network-policy.ts` for the projects.toml side).
+- **A refusal on the task's own record**, rather than on a throwaway
+  scratch location - see "Which task a refusal belongs to" below.
+- **Two limits** - request size, and calls per task (`limits.mjs`).
+- **Two `fabrica doctor` lines** - this module's own `relay image`
+  (`container/doctor-check.ts`) and the adapter's `worker CLI`
+  (`src/brain/adapters/doctor-checks.ts`).
+- **A real `npm ci` through the relay** (`npm-ci-in-box.test.ts`,
+  Docker-gated) plus a hermetic fake-registry proof of the same
+  decision (`npm-registry.test.ts`).
+
+What the issue left to a later one, and this still doesn't do: a
+per-project *credential*. The adapter's credential is still the one
+`defaultBrainAdapter` reads from the host or `brain.env` - swapped in by
+the relay, never forwarded into the worker's container raw, but one
+credential for every project rather than one per project.
 
 ## Why not the third-party sandboxing/proxy tool the issue named
 
@@ -108,6 +121,103 @@ port }`, naming exactly what the worker box tried to reach. There is no
 equivalent refusal for gateway mode - a relay with no `gateway`
 configured just answers every non-`CONNECT` request `501`, since there
 is nowhere to send it, not because some host was turned away.
+
+## Which hosts, which limits: the project says
+
+A project declares what its Workers may reach, in its own
+`projects.toml` entry (`src/config/load.ts`):
+
+    [projects.spending-app]
+    path = "~/inkling-umbrella/spending-app"
+    check = "./check.sh"
+    hosts = ["registry.npmjs.org"]
+    maxRequestBytes = 10485760
+    maxCallsPerTask = 2000
+
+`hosts` is **additive** (Client ruling, issue #186): the model
+provider's own host and GitHub are always allowed, and a project's
+entries are added to them. A project that declares none therefore gets
+exactly those - never nothing - so an unregistered project, which is
+what every contract fixture is, behaves as it always did. An entry is a
+host name, optionally one port (`"example.com:8443"`), optionally with
+a leading `*.` for one level of subdomain; one that could never match
+anything is refused loudly (`RelayError("invalid-config")`) rather than
+accepted and silently never matched.
+
+`policy.ts` is the composition (`tunnelAllowlistFor`,
+`relayLimitsFor`), deliberately ignorant of what the base hosts are -
+the model provider's host is adapter-only knowledge (rule 8), so it
+arrives as a parameter. `src/foreman/network-policy.ts` is the other
+end: it reads the declaration out of the real `projects.toml`, matching
+the project the same way `resolve-check.ts` does.
+
+### The two limits (`limits.mjs`)
+
+| Limit | Default | What happens past it |
+| --- | --- | --- |
+| `maxRequestBytes` | 10 MB | That one gateway request is refused `413`, and recorded with `details.limit = "request-size"`. |
+| `maxCallsPerTask` | 2000 | That call is refused `429`, and recorded once with `details.limit = "calls-per-task"`. |
+
+Neither ever stops the task. Rule 10's spending cap is the only thing
+that does (Client ruling, issue #186) - a refused request is one
+request, and the Worker is free to carry on without it.
+
+Three properties of this worth knowing before changing it:
+
+- **The size limit cannot apply to tunnel mode.** A `CONNECT` tunnel is
+  raw bytes the relay deliberately never looks inside, so there is no
+  "request" in it to measure. A declared `content-length` over the
+  limit is refused before a byte is forwarded; a chunked body with no
+  declared length is measured as it streams and the upstream request
+  abandoned mid-flight the moment it goes over.
+- **A call is one gateway request or one CONNECT tunnel**, counted per
+  relay, which is per task - a relay is started for one task's box and
+  torn down with it.
+- **The call-limit refusal is recorded once, not once per refused
+  call.** `events.jsonl` is shared by every task in a record home and
+  is re-read whole by `fabrica status`/`watch`; a Worker looping
+  against an exhausted limit would otherwise write an unbounded run of
+  identical lines and slow every other task's status down. Later
+  refusals still happen; they just add nothing the first one didn't
+  already say. A refused *host* is still recorded every time, since
+  each one can name a different host.
+
+## Which task a refusal belongs to
+
+`RelayOptions` has always taken a `recordHome` and a `taskId`, but the
+adapter had neither: `Brain.ask`/`work` are ratified as
+brief/workdir/opts (rule 8's socket), so a refusal used to land in a
+throwaway scratch directory and the Client never saw it.
+
+The Foreman now wraps every `brain.ask`/`brain.work` call in that
+task's policy (`src/brain/task-network.ts`, an `AsyncLocalStorage`),
+and the adapter reads it there - so a refused host appends to the
+Client's real record and shows up in `fabrica log <id>`. See that
+module's own header for why it is an async-local scope rather than a
+new field on `BrainWorkOptions` (a ratified type, and a promise every
+future adapter would inherit) or a `workdir`-keyed registry like
+`src/brain/live-transcript.ts`'s (`ask()` has no workdir). A call that
+nothing wrapped - a library-level caller, a test driving the adapter
+directly - still works: it falls back to the old scratch location and
+the base hosts alone.
+
+Two consequences of that worth knowing before changing it:
+
+- **The relay container now bind-mounts the Client's real record home
+  read-write** (`container/launch.ts` always mounted whatever
+  `recordHome` it was given; what changed is which directory that is).
+  That is Fabrica's own trusted code - a worker never drives it, and
+  the worker's own container mounts nothing of the record at all - but
+  it is a real write mount, so nothing in `container/` may grow a
+  reason to write anything there but the one event line.
+- **Two processes now append to the same `events.jsonl`**: the host
+  running the task, and the relay container. That is exactly the case
+  `src/record/`'s append-only design was built and proven for (one
+  `O_APPEND` write per line, with the proof deliberately spawning
+  separate OS processes), and `server.mjs` writes its line the same
+  way by hand rather than through `appendEvent` only because it runs
+  on a stock `node` with no TypeScript - not because it is allowed to
+  write differently.
 
 ### The model provider's host is never named here
 
@@ -268,15 +378,35 @@ Docker-network half as documented-and-reasoned, not machine-verified,
 which this repository's own culture of "verified live, not assumed"
 means stating plainly rather than leaving implicit.
 
+The same goes for `npm-ci-in-box.test.ts`, added by the second half: it
+skips without Docker, and `.github/workflows/docker-tests.yml` is what
+actually runs it. What *was* verified rather than assumed is the reason
+it is written the way it is - npm's own proxy behaviour, read out of
+the installed npm (11.16.0) rather than guessed. `@npmcli/config`'s
+`https-proxy` definition documents that `HTTPS_PROXY`/`https_proxy`/
+`HTTP_PROXY`/`http_proxy` are honored, and `@npmcli/agent/lib/proxy.js`
+resolves an `https:` URL's proxy from the lowercased environment and
+reaches it through `HttpsProxyAgent`, i.e. `CONNECT`. That is why a
+registry a project lists has to be on the *tunnel* allowlist, and why
+the box needs no DNS of its own to reach it: a proxy client sends the
+host name in the `CONNECT` line and lets the relay resolve it.
+
 ## Files
 
 | File | What it is |
 | --- | --- |
 | `types.ts` | `AllowedHost`, `CredentialSwap`, `GatewayTarget`, `RelayOptions`, `RelayHandle` - this module's own configuration shapes, not shared with `contract/surface.ts` except by `FabricaEventName` gaining `"network-refused"` there. |
 | `allowlist.mjs` | `GITHUB_HOSTS` and `isAllowedTarget` - hostname matching (exact or one level of `*.` wildcard, optional port), used by tunnel mode. |
+| `limits.mjs` | `DEFAULT_MAX_REQUEST_BYTES` (10 MB) and `DEFAULT_MAX_CALLS_PER_TASK` (2000). Plain JavaScript, because `server.mjs` runs inside the container with a stock `node`. |
+| `policy.ts` | `parseAllowedHost`, `tunnelAllowlistFor`, `relayLimitsFor` - a project's declaration composed with the caller's base hosts and the defaults. Pure; no I/O. |
 | `server.mjs` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `"network-refused"` event. Runs identically whether started in-process (this module's own fast tests) or inside `container/`'s own container. |
 | `errors.mjs` | `RelayError` - `"invalid-config"` (a malformed `GatewayTarget`) and `"listen-failed"` (also used for a container that never starts or never confirms it's listening). |
 | `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side), `entrypoint.mjs` (runs inside the container), `bootstrap.mjs` (the container's command), `runtime-imports.test.ts` (proves the container's files need nothing but plain `node`), `launch.test.ts` + `helpers/fake-docker.mjs` (the daemon-free failure-path proof - see "A failed launch removes its container" above). |
 | `helpers/fake-provider.ts` | Test-only: a plain-HTTP stand-in for "the model provider," recording every request it receives so a test can assert on exactly what crossed the wire. |
 | `server.test.ts` | The fake-worker/fake-provider proof: gateway credential swap, tunnel allow/refuse, the refusal event, per-task event isolation. |
+| `limits.test.ts` | Both limits against a real relay: refused with the right status, named on the record, and the task able to carry on afterwards. |
+| `policy.test.ts` | The composition: additive hosts, ports, a host nothing could match, and the defaults. |
+| `npm-registry.test.ts` | Hermetic: a real `projects.toml` through `networkPolicyFor` into a real relay decision, against a fake registry. No Docker, no internet. |
+| `npm-ci-in-box.test.ts` | Docker-gated: a real `npm ci` inside a real worker box, against the real registry, reachable only because the project listed it. Skips without Docker; runs for real under `.github/workflows/docker-tests.yml`. |
+| `container/doctor-check.ts` | `fabrica doctor`'s `relay image` line - present, or a FAIL carrying the exact `docker pull`. |
 | `docker-isolation.test.ts` | The containerized proof: a real worker box, on the isolated network, reaches the relay container and nothing else; the relay container itself reaches the real internet through its own egress network. |

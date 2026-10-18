@@ -18,7 +18,8 @@ import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
-import { GITHUB_HOSTS, RelayError, startContainerizedRelay } from "../../relay/index.ts";
+import { currentTaskNetwork } from "../task-network.ts";
+import { GITHUB_HOSTS, RelayError, relayLimitsFor, startContainerizedRelay, tunnelAllowlistFor } from "../../relay/index.ts";
 
 export type ClaudeCodeErrorCode = "spawn-failed" | "cli-error" | "unparseable-output";
 
@@ -71,8 +72,16 @@ interface RelayedNetwork {
   teardown: () => Promise<void>;
 }
 
-/** Issue #186's second half, scoped down (no `projects.toml`, no
- * `fabrica doctor` - just the wiring): every worker box joins a fresh
+/** The hosts every task's worker box may reach through the relay's
+ * CONNECT tunnel, whatever its project declares: the model provider's
+ * own host (only this directory may name it - CONTRACT rule 8) and
+ * GitHub. A project's own `hosts` in projects.toml are *added* to
+ * these, never substituted for them (issue #186's second half - see
+ * `../../relay/policy.ts`'s `tunnelAllowlistFor`), so a project that
+ * declares none gets exactly this list. */
+const BASE_TUNNEL_HOSTS = [{ host: ANTHROPIC_HOST }, ...GITHUB_HOSTS];
+
+/** Issue #186: every worker box joins a fresh
  * isolated network (`../../containment/isolated-network.ts`) with
  * nothing else reachable on it except a relay *container*
  * (`../../relay/container/index.ts`'s `startContainerizedRelay`) - never
@@ -85,9 +94,12 @@ interface RelayedNetwork {
  * the worker is never attached to it. The worker container never sees
  * `realToken` - only a freshly minted, per-call placeholder in
  * `ANTHROPIC_AUTH_TOKEN` - while `ANTHROPIC_BASE_URL` points at the
- * relay's own address on the isolated network. GitHub is reachable
- * through the relay's CONNECT tunnel (`GITHUB_HOSTS`); every other
- * tunnel target is refused. Every other request (model calls, since
+ * relay's own address on the isolated network. The model host and
+ * GitHub are reachable through the relay's CONNECT tunnel, plus
+ * whatever this project declared in projects.toml
+ * (`BASE_TUNNEL_HOSTS`); every other tunnel target is refused, and the
+ * refusal names it on this task's own record. Every other request
+ * (model calls, since
  * `ANTHROPIC_BASE_URL` redirects them here) is forwarded to the real
  * `ANTHROPIC_HOST`, with the placeholder swapped back out for
  * `realToken` on the way - the one place both values ever meet. */
@@ -97,16 +109,21 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
   const egressNetworkName = `fabrica-relay-egress-${id}`;
   const placeholder = `fabrica-placeholder-${id}`;
 
-  // The relay's own "network-refused" bookkeeping (src/relay/types.ts's
-  // RelayOptions) wants a record home and task id, neither of which this
-  // seam has: Brain.ask/work take no taskId at all (CONTRACT rule 8's
-  // socket is brief/workdir/opts only), so there is no real task record
-  // to attribute a refusal to here. A throwaway scratch location stands
-  // in instead, the same spirit as ask()'s own throwaway scratch
-  // directory and homeDir above - a refused tunnel target from this
-  // relay therefore doesn't reach the Client's real task record today;
-  // a stated gap, not a silent one.
-  const scratchRecordHome = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-relay-record-"));
+  // Which record a refused host is written to, which hosts this
+  // project declared, and the two limits in force - all of it per task,
+  // and none of it on `Brain.ask`/`work`'s own ratified signature (rule
+  // 8's socket is brief/workdir/opts). The Foreman puts it where this
+  // call can see it instead: `../task-network.ts`.
+  //
+  // Absent (a library-level caller, a test driving this adapter
+  // directly), there is no task to attribute a refusal to, so a
+  // throwaway scratch location stands in - the same spirit as ask()'s
+  // own throwaway scratch directory and homeDir, and the only behaviour
+  // this file had before the Foreman started supplying the real thing.
+  const policy = currentTaskNetwork();
+  const scratchRecordHome =
+    policy === undefined ? mkdtempSync(join(realpathSync(tmpdir()), "fabrica-relay-record-")) : undefined;
+  const limits = relayLimitsFor(policy);
 
   const isolatedNetwork = await createIsolatedNetwork(isolatedNetworkName);
   const egressNetwork = await createEgressNetwork(egressNetworkName);
@@ -114,11 +131,13 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
   let relay: Awaited<ReturnType<typeof startContainerizedRelay>>;
   try {
     relay = await startContainerizedRelay({
-      recordHome: scratchRecordHome,
-      taskId: "worker",
+      recordHome: policy?.recordHome ?? scratchRecordHome!,
+      taskId: policy?.taskId ?? "worker",
       isolatedNetwork: isolatedNetwork.name,
       egressNetwork: egressNetwork.name,
-      tunnelAllowlist: [...GITHUB_HOSTS],
+      tunnelAllowlist: tunnelAllowlistFor(BASE_TUNNEL_HOSTS, policy),
+      maxRequestBytes: limits.maxRequestBytes,
+      maxCallsPerTask: limits.maxCallsPerTask,
       gateway: {
         host: ANTHROPIC_HOST,
         credential: { header: ANTHROPIC_AUTH_HEADER, fakeValue: placeholder, realValue: `Bearer ${realToken}` },
@@ -127,7 +146,7 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
   } catch (err) {
     await removeIsolatedNetwork(isolatedNetworkName).catch(() => {});
     await removeEgressNetwork(egressNetworkName).catch(() => {});
-    rmSync(scratchRecordHome, { recursive: true, force: true });
+    if (scratchRecordHome !== undefined) rmSync(scratchRecordHome, { recursive: true, force: true });
     throw err;
   }
 
@@ -170,7 +189,7 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
       await relay.close();
       await removeIsolatedNetwork(isolatedNetworkName);
       await removeEgressNetwork(egressNetworkName);
-      rmSync(scratchRecordHome, { recursive: true, force: true });
+      if (scratchRecordHome !== undefined) rmSync(scratchRecordHome, { recursive: true, force: true });
     },
   };
 }

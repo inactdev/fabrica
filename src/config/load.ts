@@ -135,13 +135,13 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
       `${path}: [projects.${name}] must be a table with at least a "path" field.`
     );
   }
-  const { path: projectPath, check, ...rest } = value;
+  const { path: projectPath, check, hosts, maxRequestBytes, maxCallsPerTask, ...rest } = value;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path and check are recognized.`
+        `Only path, check, hosts, maxRequestBytes and maxCallsPerTask are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -153,8 +153,42 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   if (check !== undefined && typeof check !== "string") {
     throw new ConfigError("malformed", `${path}: [projects.${name}].check must be a string.`);
   }
-  const resolvedPath = expandLeadingTilde(projectPath);
-  return check === undefined ? { path: resolvedPath } : { path: resolvedPath, check };
+  const project: ProjectConfig = { path: expandLeadingTilde(projectPath) };
+  if (check !== undefined) project.check = check;
+  if (hosts !== undefined) project.hosts = requireHosts(hosts, `${path}: [projects.${name}].hosts`);
+  if (maxRequestBytes !== undefined) {
+    project.maxRequestBytes = requirePositiveInteger(maxRequestBytes, `${path}: [projects.${name}].maxRequestBytes`);
+  }
+  if (maxCallsPerTask !== undefined) {
+    project.maxCallsPerTask = requirePositiveInteger(maxCallsPerTask, `${path}: [projects.${name}].maxCallsPerTask`);
+  }
+  return project;
+}
+
+/** The extra hosts a project's Workers may reach through the relay
+ * (issue #186). Only the shape is checked here — whether a given entry
+ * ever matches anything is src/relay/allowlist.mjs's business — but an
+ * empty or whitespace-only entry is refused outright rather than
+ * silently never matching, since it can only be a typo. */
+function requireHosts(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new ConfigError(
+      "malformed",
+      `${label} must be an array of host names (for example ["registry.npmjs.org"]).`
+    );
+  }
+  const hosts = (value as string[]).map((entry) => entry.trim());
+  if (hosts.some((entry) => entry.length === 0)) {
+    throw new ConfigError("malformed", `${label} has an empty entry; remove it or name a host.`);
+  }
+  return hosts;
+}
+
+function requirePositiveInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new ConfigError("malformed", `${label} must be a whole number of at least 1, not ${String(value)}.`);
+  }
+  return value;
 }
 
 /**

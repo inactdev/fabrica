@@ -151,6 +151,8 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
     port: CONTAINER_RELAY_PORT,
     tunnelAllowlist: opts.tunnelAllowlist,
     gateway: opts.gateway,
+    maxRequestBytes: opts.maxRequestBytes,
+    maxCallsPerTask: opts.maxCallsPerTask,
   };
 
   // --env-file, not `-e`: the config carries the real credential

@@ -15,7 +15,9 @@
 // not this module's.
 
 import { appendEvent, registerTask, writeTaskFile } from "../record/index.ts";
+import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain, BrainAskResult } from "../brain/index.ts";
+import { networkPolicyFor } from "./network-policy.ts";
 import { ForemanError } from "./errors.ts";
 import { requireRoomToStart } from "./caps.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
@@ -149,7 +151,12 @@ export async function registerAndAsk(
     let asked: BrainAskResult;
     const askStartedAt = new Date().toISOString();
     try {
-      asked = await brain.ask(taskText);
+      // Issue #186: the clarifying step is a real model call over the
+      // real relay, so it runs under this task's own network policy
+      // too - a host it is refused lands on this task's record, not
+      // nowhere. Nothing about `ask(brief)`'s own ratified signature
+      // changes; see src/brain/task-network.ts.
+      asked = await withTaskNetwork(networkPolicyFor(recordHome, taskId, opts.project), () => brain.ask(taskText));
     } catch (err) {
       const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };
       appendEvent(recordHome, { taskId, name: "ask-failed", details });

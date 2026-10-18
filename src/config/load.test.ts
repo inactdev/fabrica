@@ -274,3 +274,95 @@ test("loadConfig: a non-numeric cap is refused as malformed", () => {
     }
   );
 });
+
+test("loadConfig: a project's allowed hosts and relay limits load as declared", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/inkling-umbrella/spending-app"
+    check = "bin/ci"
+    hosts = ["registry.npmjs.org", "*.example.com:8443"]
+    maxRequestBytes = 1048576
+    maxCallsPerTask = 50
+  `);
+
+  assert.deepEqual(loadConfig(recordHome).projects["spending-app"], {
+    path: join(homedir(), "inkling-umbrella/spending-app"),
+    check: "bin/ci",
+    hosts: ["registry.npmjs.org", "*.example.com:8443"],
+    maxRequestBytes: 1048576,
+    maxCallsPerTask: 50,
+  });
+});
+
+test("loadConfig: a project that declares no hosts carries none - the defaults are not written in here", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/inkling-umbrella/spending-app"
+    check = "bin/ci"
+  `);
+
+  const project = loadConfig(recordHome).projects["spending-app"];
+  assert.equal(project.hosts, undefined);
+  assert.equal(project.maxRequestBytes, undefined);
+  assert.equal(project.maxCallsPerTask, undefined);
+});
+
+test("loadConfig: hosts must be an array of strings", () => {
+  for (const hosts of [`"registry.npmjs.org"`, `[1, 2]`, `["registry.npmjs.org", ""]`]) {
+    const recordHome = makeTestHome(`
+      [projects.spending-app]
+      path = "~/app"
+      hosts = ${hosts}
+    `);
+
+    assert.throws(
+      () => loadConfig(recordHome),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /hosts/);
+        return true;
+      },
+      `hosts = ${hosts} should have been refused`
+    );
+  }
+});
+
+test("loadConfig: a relay limit must be a whole number of at least 1", () => {
+  for (const line of ["maxRequestBytes = 0", "maxRequestBytes = 1.5", `maxCallsPerTask = "lots"`, "maxCallsPerTask = -1"]) {
+    const recordHome = makeTestHome(`
+      [projects.spending-app]
+      path = "~/app"
+      ${line}
+    `);
+
+    assert.throws(
+      () => loadConfig(recordHome),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /max(RequestBytes|CallsPerTask)/);
+        return true;
+      },
+      `${line} should have been refused`
+    );
+  }
+});
+
+test("loadConfig: an unknown project field still names every field that is recognized", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/app"
+    allowedHosts = ["registry.npmjs.org"]
+  `);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /allowedHosts/);
+      assert.match(err.message, /hosts/);
+      return true;
+    }
+  );
+});

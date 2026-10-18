@@ -250,8 +250,7 @@ first call, not when the adapter is built, so a command that never needs
 a worker (an `accept` verdict) never needs a token.
 
 **The token stops there now - it never reaches the worker's own
-container.** Issue #186's second half (scoped down: no `projects.toml`,
-no `fabrica doctor`) put a relay between this credential and the box.
+container.** Issue #186 put a relay between this credential and the box.
 `work()`/`ask()` both run every call's `env` through `prepareNetwork`:
 when `HOST_TOKEN_VAR` is present (every real call), `connectThroughRelay`
 spins up a fresh, internet-less Docker network
@@ -265,7 +264,14 @@ to the isolated network's own gateway address, which a fact proven on
 the Client's own Mac on 2026-10-17 ruled out (a container on an
 `--internal` network can reach neither that gateway address, owned by
 the Docker Desktop VM and not the Mac, nor `host.docker.internal`, whose
-route `--internal` strips). `tunnelAllowlist: GITHUB_HOSTS` and a
+route `--internal` strips). The tunnel allowlist (`BASE_TUNNEL_HOSTS` -
+`ANTHROPIC_HOST` and `GITHUB_HOSTS` - plus whatever this project
+declared in `projects.toml`, added to them and never replacing them:
+`../../relay/policy.ts`'s `tunnelAllowlistFor`), the relay's two limits
+for this project, the task's own record home and id (all four from
+`../task-network.ts`, the async-local scope the Foreman wraps each
+`ask`/`work` call in - so a refused host lands on the Client's real
+record rather than a throwaway scratch directory), and a
 `gateway` pointed at the real `ANTHROPIC_HOST`, credential-swapping a
 freshly minted, per-call placeholder for the real token, travel into the
 relay container through a throwaway `--env-file`, the same care

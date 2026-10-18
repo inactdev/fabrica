@@ -14,7 +14,9 @@
 
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile } from "../record/index.ts";
 import { abortRebase, destroyProductionLine, finishRebase, rebaseInProgress, reopenProductionLine } from "../line/index.ts";
+import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
+import { networkPolicyFor } from "./network-policy.ts";
 import { ForemanError } from "./errors.ts";
 import { failedWithNoDelivery, latestDeliveredDetails, refusedWithNoDelivery } from "./queries.ts";
 import { prepareRound, skipIfUnchanged } from "./judge.ts";
@@ -372,34 +374,39 @@ async function runFixRound(
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
-    const attemptsResult = await runAttempts({
-      brain,
-      brief: buildFixBrief(
-        originalBrief,
-        note,
-        handed ? rebaseConflictInstructions(handed.base, handed.conflict) : undefined
-      ),
-      workdir: line.workdir,
-      taskId,
-      judge,
-      totalAttempts: 1,
-      stopEarlyOnGreen: true,
-      spendLimits: spendLimitsFor(recordHome, taskId, caps),
-      onReceipt: (receipt) => recordReceipt(recordHome, receipt),
-      initialSession: lastSession,
-      startAttempt: priorReceipts.length + 1,
-      commitLabel: "(fix)",
-      ...(beforeCommit ? { beforeCommit } : {}),
-      onHeartbeat: (attempt) => {
-        appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
-      },
-      // Issue #70: fires as each entry is known, not once per attempt -
-      // see runAttempts' own onTranscriptEntry doc for why every entry
-      // lands here exactly once either way.
-      onTranscriptEntry: (entry) => {
-        appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
-      },
-    });
+    // Issue #186: a fix round's worker box reaches the network under
+    // the same per-project policy an ordinary round's does (do.ts's own
+    // call site says why this wraps the whole loop).
+    const attemptsResult = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), () =>
+      runAttempts({
+        brain,
+        brief: buildFixBrief(
+          originalBrief,
+          note,
+          handed ? rebaseConflictInstructions(handed.base, handed.conflict) : undefined
+        ),
+        workdir: line.workdir,
+        taskId,
+        judge,
+        totalAttempts: 1,
+        stopEarlyOnGreen: true,
+        spendLimits: spendLimitsFor(recordHome, taskId, caps),
+        onReceipt: (receipt) => recordReceipt(recordHome, receipt),
+        initialSession: lastSession,
+        startAttempt: priorReceipts.length + 1,
+        commitLabel: "(fix)",
+        ...(beforeCommit ? { beforeCommit } : {}),
+        onHeartbeat: (attempt) => {
+          appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
+        },
+        // Issue #70: fires as each entry is known, not once per attempt -
+        // see runAttempts' own onTranscriptEntry doc for why every entry
+        // lands here exactly once either way.
+        onTranscriptEntry: (entry) => {
+          appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
+        },
+      })
+    );
 
     // judge-commit-outcome-deliver-record: one shared tail (issue #182),
     // round.ts's recordRoundResult, also used by do.ts's productionRound.
