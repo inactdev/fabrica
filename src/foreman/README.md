@@ -313,14 +313,30 @@ work passes deserves the Client's eyes every time; Fabrica's own
 delivery record still tells the two apart for the Client's benefit
 (`gateChanges`), the CI check does not need to.
 
-**Temporary test-change review.** Issue #96 adds a third, separately-worded
-workflow pass for `*.test.ts`, after the contract pass. A contract test is a
-contract change first and keeps that message; any other test change says it
-changes what Fabrica considers correct and needs the Client's review. This is
-a temporary stopgap until Inspector's examiner (inactdev/inspector#7) lands,
-then it must be removed. This pass is unrelated to `gateChanges`: it reviews
-every pull request's test changes, declared or not, independent of whatever a
-Worker did or didn't say about its own check-script edits.
+**Test-change review, now Inspector's to clear.** Issue #96 adds a third,
+separately-worded workflow pass for `*.test.ts`, after the contract pass. A
+contract test is a contract change first and keeps that message; any other
+test change says it changes what Fabrica considers correct. What clears such
+a change is Inspector's examiner: it posts a commit status named
+`inspector-tests` on the pull request's head commit, and a `success` there
+clears every changed `*.test.ts` in the pull request at once - the judgment
+is per commit, not per file, because the examiner reads the whole proposed
+change. Anything else keeps needing the Client, with its own wording for each
+cause: a non-success state, no such status at all, and - failing closed - a
+status the job could not read. A pending state is red deliberately and
+without waiting: the gate re-runs on every push, and Inspector posts its
+statuses before it moves the branch, so pending means something went wrong
+rather than "not yet". The status is only read once a changed test file has
+actually been found, so a pull request touching no test is never failed by a
+status it has no use for. The job therefore declares `statuses: read`
+alongside `pull-requests: read`, and nothing about this clearance touches
+rule 9's own pass or the contract pass - neither is Inspector's to clear.
+Still a stopgap: it goes away entirely when the examiner fully replaces it.
+This pass is unrelated to `gateChanges`: it reviews every pull request's test
+changes, declared or not, independent of whatever a Worker did or didn't say
+about its own check-script edits. It also needs the examiner to actually be
+asked for a judgment - that is a `testPaths` entry in the project's
+`.inspector.json`, a Client-owned file Fabrica never edits.
 
 **Protecting its own definition.** An earlier version of this workflow
 ran on plain `pull_request`, which has a sharp edge review caught twice:
@@ -374,12 +390,14 @@ separately-worded pass over the same file list for `contract/**` and
 `CONTRACT.md` (`CONTRACT_PROTECTED_PATHS`, issue #53) - not a third rule
 9 case, since changing the contract is allowed and only needs to never
 merge itself. A third, temporary pass then checks `*.test.ts` (issue #96):
-contract tests retain the earlier contract message, while other test changes
-need the Client's direct review until Inspector's examiner
-(inactdev/inspector#7) lands. The workflow file's own header comment owns
-that reasoning, and `contract/rule9-gate.contract-paths.test.ts` proves the
-pattern lists and distinct wording are there. The job's `permissions:` are scoped to
-`pull-requests: read` only, the minimum the API call needs, rather than
+contract tests retain the earlier contract message, while any other test
+change is cleared only by an `inspector-tests` commit status of `success` on
+the pull request's head, and otherwise needs the Client's direct review. The
+workflow file's own header comment owns that reasoning, and
+`contract/rule9-gate.contract-paths.test.ts` proves the pattern lists, the
+distinct wording, and all four outcomes of that status read are there. The
+job's `permissions:` are scoped to `pull-requests: read` plus
+`statuses: read`, the minimum its two API calls need, rather than
 inheriting the default token scope. The job name stays
 `block-protected-path-change` regardless of any other change to this
 file - that exact string is what gets wired into the repository's
@@ -389,13 +407,16 @@ block a merge — that's a GitHub repository setting, not something this
 code can turn on for you; see the workflow file's own header comment.
 
 **A red check here is sometimes the correct outcome.** A PR that edits
-the workflow, touches `contract/` or `CONTRACT.md` (since issue #53), or
-touches a test file (temporarily, issue #96), fails this check itself - by
-design, every time. GitHub runs the *base
+the workflow, or touches `contract/` or `CONTRACT.md` (since issue #53),
+fails this check itself - by design, every time. A PR touching a test file
+fails it too unless Inspector's examiner cleared that commit (issue #96).
+GitHub runs the *base
 branch's* copy of the workflow, so the branch's own version never
 executes and nothing committed on the branch can turn that check green;
-the only thing the running job reads from the PR is the list of
-filenames it changed. Which leaves exactly one way to go green - change
+the only things the running job reads about the PR are the list of
+filenames it changed and the commit statuses posted on its head - neither
+of which the branch's own contents can write. Which leaves exactly one way
+for a protected-path change to go green - change
 fewer files - and taking it means deleting the very change the PR exists
 to make. Don't. The Client reviews a protected-path change and merges it
 by hand; that is the whole mechanism, not a gap in it.
