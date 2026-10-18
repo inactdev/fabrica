@@ -7,6 +7,17 @@
 // thing this page ever sends the server is an ordinary GET - "now" (for
 // the age column) comes back from the server's own response, never sent.
 //
+// Issue #203: a row now carries the full column set the record can
+// answer for - state, task, project, worker and model, network policy,
+// trigger, started, duration, cost (with its cap meter), checks,
+// delivery, confidence. ONE DOM serves both layouts the Client asked
+// for: above tablet width it is a table with a pinned header, and below
+// it each row becomes a stacked card whose labels come from the cells'
+// own `data-label` attributes via a CSS ::before (style.css). Nothing
+// here reads a media query or re-renders on resize - a second renderer
+// to keep in step with the first is exactly the kind of drift this
+// directory's own comments keep warning about.
+//
 // Every poll re-fetches the full list, but a task's existing row is never
 // torn down and rebuilt - only the specific text/class that actually
 // changed gets written, and a write is skipped entirely when the new value
@@ -48,6 +59,39 @@ function formatAge(ms) {
   return remHours > 0 ? `${days}d${remHours}h` : `${days}d`;
 }
 
+// When a task started, in the reader's own locale and time zone - the
+// browser is the only party here that knows either, so the server sends
+// the epoch milliseconds and this formats them. Deliberately short: the
+// day and the clock time, no year and no seconds, since this column
+// answers "when did this start" and the duration column beside it
+// answers "how long ago".
+function formatStarted(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
+  return new Date(ms).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// Mirrors integrations/live-view/display.ts's projectName and meterFill -
+// duplicated here for the same reason formatAge above is: a plain script
+// with no build step can't import the tested .ts copy.
+function projectName(path) {
+  if (!path) return "—";
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (trimmed.length === 0) return "—";
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || trimmed;
+}
+
+function meterFill(costUsd, capUsd) {
+  if (typeof capUsd !== "number" || !Number.isFinite(capUsd) || capUsd <= 0) return null;
+  const fraction = Math.max(0, Math.min(1, costUsd / capUsd));
+  return { fraction, level: fraction >= 1 ? "full" : fraction >= 0.8 ? "high" : "" };
+}
+
 // The DisplayState string (record-view.ts) to a flat, CSS-safe state
 // class - the one color each row's state word gets.
 const STATE_CLASS = {
@@ -56,6 +100,7 @@ const STATE_CLASS = {
   delivered: "state-delivered",
   failed: "state-failed",
   stopped: "state-stopped",
+  "stopped by you": "state-stopped-by-you",
   "closed (accept)": "state-accept",
   "closed (wrong)": "state-wrong",
   closed: "state-closed",
@@ -71,6 +116,7 @@ const STATE_SYMBOL = {
   delivered: { text: "✓", cls: "symbol-check" },
   failed: { text: "✗", cls: "symbol-failed" },
   stopped: { text: "●", cls: "symbol-dot" },
+  "stopped by you": { text: "■", cls: "symbol-stopped" },
   "closed (accept)": { text: "●", cls: "symbol-dot" },
   "closed (wrong)": { text: "●", cls: "symbol-dot" },
   closed: { text: "●", cls: "symbol-dot" },
@@ -79,6 +125,7 @@ const STATE_SYMBOL = {
 function rowEmphasisClass(state) {
   if (state === "failed" || state === "asked a question") return "row-emphasis";
   if (state === "closed (accept)" || state === "closed (wrong)" || state === "closed") return "row-fade";
+  if (state === "stopped by you") return "row-fade";
   return "";
 }
 
@@ -99,15 +146,102 @@ function renderSpend(spend) {
 // writing to it.
 const rows = new Map();
 
+/** One column's cell. `data-label` is what the phone-width layout prints
+ * in front of the value (style.css's ::before) - the same string the
+ * table header shows above tablet width, so the two can never name the
+ * same column differently. */
+function cell(label, className, children) {
+  return el("div", { className: `cell ${className || ""}`.trim(), "data-label": label }, children || [""]);
+}
+
 function buildRow(taskId) {
-  const ageEl = el("span", { className: "col-dim" }, [""]);
   const symbolEl = el("span", { className: "state-symbol" }, [""]);
   const stateEl = el("span", { className: "col-kind" }, [""]);
-  const stateWrap = el("span", { className: "state-wrap" }, [symbolEl, stateEl]);
-  const titleEl = el("span", { className: "col-title" }, [""]);
-  const line = el("div", { className: "row-line" }, [ageEl, stateWrap, titleEl]);
-  const rowEl = el("div", { className: "row", onclick: () => { location.href = `/tasks/${taskId}`; } }, [line]);
-  return { el: rowEl, ageEl, symbolEl, stateEl, titleEl, last: {} };
+  const stateCell = cell("state", "cell-state", [el("span", { className: "state-wrap" }, [symbolEl, stateEl])]);
+
+  const titleEl = el("span", { className: "cell-value" }, [""]);
+  const taskCell = cell("task", "cell-task", [titleEl]);
+
+  const projectEl = el("span", { className: "cell-value" }, [""]);
+  const projectCell = cell("project", "", [projectEl]);
+
+  const workerEl = el("span", { className: "cell-value" }, [""]);
+  const workerCell = cell("worker · model", "", [workerEl]);
+
+  const networkEl = el("span", { className: "cell-value" }, [""]);
+  const networkCell = cell("network policy", "", [networkEl]);
+
+  const triggerEl = el("span", { className: "cell-value" }, [""]);
+  const triggerCell = cell("trigger", "", [triggerEl]);
+
+  const startedEl = el("span", { className: "cell-value" }, [""]);
+  const startedCell = cell("started", "", [startedEl]);
+
+  const durationEl = el("span", { className: "cell-value" }, [""]);
+  const durationCell = cell("duration", "", [durationEl]);
+
+  // The cost cell carries its own meter, which exists only while the
+  // task has a per-task cap to measure against (Client ruling: with no
+  // cap set, show the cost as plain text and no meter).
+  const costTextEl = el("span", { className: "cell-value" }, [""]);
+  const meterFillEl = el("span", { className: "meter-fill" }, []);
+  const meterEl = el("span", { className: "meter" }, [meterFillEl]);
+  meterEl.hidden = true;
+  const costCell = cell("cost", "cell-cost", [costTextEl, meterEl]);
+
+  const checksEl = el("span", { className: "cell-value" }, [""]);
+  const checksCell = cell("checks", "", [checksEl]);
+
+  const deliveryEl = el("span", { className: "cell-value" }, [""]);
+  const deliveryCell = cell("delivery", "", [deliveryEl]);
+
+  const confidenceEl = el("span", { className: "cell-value" }, [""]);
+  const confidenceCell = cell("confidence", "", [confidenceEl]);
+
+  const rowEl = el(
+    "div",
+    {
+      className: "task-row",
+      onclick: () => {
+        location.href = `/tasks/${taskId}`;
+      },
+    },
+    [
+      stateCell,
+      taskCell,
+      projectCell,
+      workerCell,
+      networkCell,
+      triggerCell,
+      startedCell,
+      durationCell,
+      costCell,
+      checksCell,
+      deliveryCell,
+      confidenceCell,
+    ]
+  );
+
+  return {
+    el: rowEl,
+    symbolEl,
+    stateEl,
+    titleEl,
+    projectEl,
+    projectCell,
+    workerEl,
+    networkEl,
+    triggerEl,
+    startedEl,
+    durationEl,
+    costTextEl,
+    meterEl,
+    meterFillEl,
+    checksEl,
+    deliveryEl,
+    confidenceEl,
+    last: {},
+  };
 }
 
 function setText(node, lastKey, refs, value) {
@@ -122,9 +256,43 @@ function setClass(node, lastKey, refs, value) {
   refs.last[lastKey] = value;
 }
 
-function updateRow(refs, task, now) {
-  setText(refs.ageEl, "age", refs, formatAge(now - task.lastActivityMs));
+function setAttr(node, lastKey, refs, name, value) {
+  if (refs.last[lastKey] === value) return;
+  node.setAttribute(name, value);
+  refs.last[lastKey] = value;
+}
 
+// The cost column: always the same words `fabrica status` uses for this
+// task (the server sends describeTaskCost's own string), plus the cap it
+// is held to and a meter of how much of it is gone. No cap, no meter -
+// the cost stands alone as plain text.
+function updateCost(refs, task) {
+  // Metered dollars only - the per-task cap binds on nothing else
+  // (issue #188), so a subscription estimate must not move this bar.
+  const fill = meterFill(task.costUsd, task.perTaskCapUsd);
+  setText(
+    refs.costTextEl,
+    "cost",
+    refs,
+    fill ? `${task.costLabel} of $${task.perTaskCapUsd.toFixed(2)}` : task.costLabel
+  );
+
+  const shown = fill !== null;
+  if (refs.last.meterShown !== shown) {
+    refs.meterEl.hidden = !shown;
+    refs.last.meterShown = shown;
+  }
+  if (!fill) return;
+
+  const width = `${(fill.fraction * 100).toFixed(1)}%`;
+  if (refs.last.meterWidth !== width) {
+    refs.meterFillEl.style.width = width;
+    refs.last.meterWidth = width;
+  }
+  setClass(refs.meterFillEl, "meterCls", refs, `meter-fill ${fill.level ? `meter-${fill.level}` : ""}`.trim());
+}
+
+function updateRow(refs, task) {
   const symbol = STATE_SYMBOL[task.state] || { text: "", cls: "" };
   setText(refs.symbolEl, "symbolText", refs, symbol.text);
   setClass(refs.symbolEl, "symbolCls", refs, `state-symbol ${symbol.cls}`);
@@ -133,8 +301,24 @@ function updateRow(refs, task, now) {
   setClass(refs.stateEl, "stateCls", refs, `col-kind ${STATE_CLASS[task.state] || ""}`);
 
   setText(refs.titleEl, "title", refs, task.title);
+  setText(refs.projectEl, "project", refs, projectName(task.project));
+  setAttr(refs.projectCell, "projectTitle", refs, "title", task.project || "");
+  setText(refs.workerEl, "worker", refs, task.worker || "—");
+  setText(refs.networkEl, "network", refs, task.networkPolicy);
+  setText(refs.triggerEl, "trigger", refs, task.trigger);
+  setText(refs.startedEl, "started", refs, formatStarted(task.startedAtMs));
+  // The server already decided whether this duration is still running
+  // (now - started) or frozen at what the task last recorded - this only
+  // formats it, so an open and a finished task can't drift apart here.
+  setText(refs.durationEl, "duration", refs, task.startedAtMs === null ? "—" : formatAge(task.durationMs));
 
-  setClass(refs.el, "rowCls", refs, `row ${rowEmphasisClass(task.state)}`.trim());
+  updateCost(refs, task);
+
+  setText(refs.checksEl, "checks", refs, task.checks);
+  setText(refs.deliveryEl, "delivery", refs, task.delivery || "—");
+  setText(refs.confidenceEl, "confidence", refs, task.confidence === null ? "—" : `${task.confidence}%`);
+
+  setClass(refs.el, "rowCls", refs, `task-row ${rowEmphasisClass(task.state)}`.trim());
 }
 
 function renderTasks(state) {
@@ -145,16 +329,19 @@ function renderTasks(state) {
   if (countEl.textContent !== countText) countEl.textContent = countText;
 
   const container = document.getElementById("tasks");
+  const headEl = document.getElementById("task-head");
 
   if (state.tasks.length === 0) {
     for (const refs of rows.values()) refs.el.remove();
     rows.clear();
+    if (headEl) headEl.hidden = true;
     if (!container.querySelector(".empty")) {
       container.replaceChildren(el("p", { className: "empty" }, [EMPTY_MESSAGE]));
     }
     return;
   }
 
+  if (headEl) headEl.hidden = false;
   const existingEmpty = container.querySelector(".empty");
   if (existingEmpty) existingEmpty.remove();
 
@@ -167,7 +354,7 @@ function renderTasks(state) {
       refs = buildRow(task.id);
       rows.set(task.id, refs);
     }
-    updateRow(refs, task, state.now);
+    updateRow(refs, task);
 
     const expectedNext = prevEl ? prevEl.nextSibling : container.firstChild;
     if (expectedNext !== refs.el) container.insertBefore(refs.el, expectedNext);

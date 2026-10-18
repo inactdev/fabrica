@@ -715,6 +715,37 @@ ships - CONTRACT rule 8 means nothing outside `src/brain/adapters/` may
 *choose* which adapter, but wiring in "the default one" is fine), and
 calls `runTask`.
 
+## How a task's own process is found, and why it is a pid file
+
+The live view's `stop` (issue #203) has to signal the detached process
+running a task's round, and `live-view-process.ts`'s header already
+says why "kill whatever holds the port" - or, here, "kill whatever
+looks like it might be this task" - is not acceptable: a pid can be
+reused by something unrelated. `task-process.ts` applies the same two
+safeguards to a task. The pid comes only from `worker.pid` inside that
+task's own folder, written by the process itself, and it is signaled
+only once it is both alive and still running one of the three detached
+entry scripts (`run-task-entry.ts`, `answer-entry.ts`,
+`verdict-fix-entry.ts`) according to a real `ps`. For the two whose
+argv carries the task id, that id must match as well.
+
+Why a pid file at all, rather than searching `ps` for the task id:
+`fabrica do`'s runner does not have the id in its argv - its arguments
+are `<recordHome> <projectPath> <taskText>`, and the id is minted
+inside the child after the spawn (`watch-for-task-id.ts` is how the
+parent learns it). Matching on the task *text* instead would mean
+pattern-matching a Client-supplied string against the process table,
+which is fragile in exactly the direction that gets something else
+killed. So `run-task-entry.ts` writes the file from its
+`onTaskRegistered` callback, the first moment both halves are known,
+and the other two write it straight away.
+
+There is deliberately no fallback scan when the pid file doesn't
+resolve: unlike the live view, which is one shared process on one known
+port, several tasks run at once, and a scan could only guess which one
+it had found. "Nothing found" is reported honestly instead - the stop is
+already recorded, and the response says `signaled: false`.
+
 ## Files
 
 | File | Holds |
@@ -729,10 +760,10 @@ calls `runTask`.
 | `do-command.ts` | Ties config, project resolution, the "is this project set up for Fabrica" refusal (`refusalForUnsetUpProject`, overridable in tests via `setUpRefusal`), the detached spawn, and the ask-outcome wait together for `fabrica do`; `DO_HELP` is `do --help`'s text. |
 | `answer-args.ts` | Parses `fabrica answer`'s arguments. |
 | `answer-command.ts` | Resolves the record home, calls `recordAnswerDecision` synchronously, then hands the resumed round to a detached process (issue #123); `ANSWER_HELP` is `answer --help`'s text. |
-| `answer-entry.ts` | The detached answer round's real entry point: picks the default adapter, calls `runRecordedAnswer`. |
+| `answer-entry.ts` | The detached answer round's real entry point: picks the default adapter, writes the task's `worker.pid` (issue #203), calls `runRecordedAnswer`. |
 | `verdict-args.ts` | Parses `fabrica verdict`'s arguments. |
 | `verdict-command.ts` | Resolves the record home, calls `recordVerdictDecision` synchronously for every ruling, then - `fix` only (issue #123) - hands the round to a detached process; `VERDICT_HELP` is `verdict --help`'s text. |
-| `verdict-fix-entry.ts` | The detached fix round's real entry point: picks the default adapter, calls `runRecordedFix`. |
+| `verdict-fix-entry.ts` | The detached fix round's real entry point: picks the default adapter, writes the task's `worker.pid` (issue #203), calls `runRecordedFix`. |
 | `cost-command.ts` | `fabrica cost <taskId> <usd>` (issue #11): parses the figure strictly and calls `Foreman.recordCost`; `COST_HELP` is `cost --help`'s text. |
 | `load-config.ts` | `loadConfigOrDefault` - `projects.toml`, or no projects and no caps when there is none yet. Shared by every command that needs caps. |
 | `doctor-command.ts` | `fabrica doctor`: runs the checks above as injectable `DoctorProbes` (tests never touch this machine's Docker, tokens or PATH) plus the per-project, caps and spend checks; `DOCTOR_HELP` is `doctor --help`'s text. |
@@ -748,12 +779,13 @@ calls `runTask`.
 | `record-home.ts` | `resolveRecordHome()` - `FABRICA_HOME` or `~/.fabrica`. |
 | `resolve-project.ts` | `--project <path-or-name>` resolution. |
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
+| `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
 | `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); calls `up-command.ts`'s `refreshStaleLiveView` afterward rather than a second stale-live-view check. `UPDATE_HELP` is `update --help`'s text. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
-| `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`. |
+| `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`, and writes the task's `worker.pid` from `onTaskRegistered` (issue #203 - the first moment both the id and this process's own pid are known). |
 | `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `unknown-task`, `project-not-found`, `spawn-failed`, `registration-timeout`. |
 | `helpers/fake-run-task-entry.ts` | Test-only stand-in for `run-task-entry.ts`, using `fakeBrain()` instead of the real adapter - lets `spawn-detached.test.ts` and `do-command.test.ts` exercise the real spawn-and-discover mechanism as a real separate process, without ever invoking a real coding agent. A taskText containing `ASK_ME_SOMETHING` makes its fake brain ask a clarifying question (issue #8) instead of proceeding, and one containing `ASK_FAILS_SOMETHING` makes its `ask()` throw, since there's no other channel to configure a fake running in a separate process. |
 | `helpers/fake-answer-entry.ts` | Test-only stand-in for `answer-entry.ts`, same shape as `fake-run-task-entry.ts` - lets `answer-command.test.ts` exercise the real detached-resume mechanism against `fakeBrain()`/fixture Inspector/check box. |

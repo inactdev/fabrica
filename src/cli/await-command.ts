@@ -32,6 +32,7 @@ exits, printing exactly one line naming which and what to do about it:
   <id> failed - see fabrica log <id>
   <id> is already closed
   <id> was refused by Inspector - see fabrica log <id>
+  <id> was stopped by you - see fabrica log <id>
 
 Never exits for a heartbeat or any other event along the way, and exits
 immediately if the task is already in one of those states when it
@@ -56,7 +57,7 @@ export interface RunAwaitCommandOptions {
   stderr?: (line: string) => void;
 }
 
-type AwaitableState = "delivered" | "asking" | "failed" | "closed" | "refused";
+type AwaitableState = "delivered" | "asking" | "failed" | "closed" | "refused" | "stopped";
 
 function noticeFor(taskId: string, state: AwaitableState): string {
   switch (state) {
@@ -70,10 +71,23 @@ function noticeFor(taskId: string, state: AwaitableState): string {
       return `${taskId} is already closed`;
     case "refused":
       return `${taskId} was refused by Inspector - see fabrica log ${taskId}`;
+    case "stopped":
+      return `${taskId} was stopped by you - see fabrica log ${taskId}`;
   }
 }
 
-const AWAITABLE_STATES: readonly AwaitableState[] = ["delivered", "asking", "failed", "closed", "refused"];
+const AWAITABLE_STATES: readonly AwaitableState[] = [
+  "delivered",
+  "asking",
+  "failed",
+  "closed",
+  "refused",
+  // Issue #203: terminal the moment the Client's own stop lands, so
+  // there is nothing left to wait for - the same reasoning that added
+  // "closed"/"refused" here after the first delivery left them polling
+  // forever (Client ruling, follow-up review).
+  "stopped",
+];
 
 function awaitableStateOf(state: FabricaTask["state"]): AwaitableState | null {
   return (AWAITABLE_STATES as readonly string[]).includes(state) ? (state as AwaitableState) : null;

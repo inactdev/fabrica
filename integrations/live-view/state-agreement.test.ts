@@ -147,6 +147,21 @@ const FIXTURES: Fixture[] = [
     },
   },
   {
+    label: "stopped (the Client stopped it himself)",
+    state: "stopped",
+    liveViewState: "stopped by you",
+    awaitNotice: (id) => `${id} was stopped by you - see fabrica log ${id}`,
+    reviewRowKind: null,
+    build: (recordHome, id) => {
+      appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+      appendEvent(recordHome, {
+        taskId: id,
+        name: "stopped-by-owner",
+        details: { by: "client@example.com", stoppedFrom: "working", lastActivity: null },
+      });
+    },
+  },
+  {
     label: "closed (accept)",
     state: "closed",
     liveViewState: "closed (accept)",
@@ -192,13 +207,16 @@ for (const fixture of FIXTURES) {
     assert.equal(expected, fixture.state, "fixture's own declared state matches stateOf - sanity check");
     const hasDelivery = events.some((e) => e.name === "delivered");
 
-    // status: closed tasks drop off the listing entirely (by design);
-    // every other state shows up with stateOf's own word as its state field.
+    // status: closed tasks - and, since issue #203, ones the Client
+    // stopped himself - drop off the listing entirely (by design: both
+    // are resolved and ask nothing of him); every other state shows up
+    // with stateOf's own word as its state field.
+    const resolved = expected === "closed" || expected === "stopped";
     const statusLines: string[] = [];
     const statusExit = await runStatusCommand([], { recordHome, stdout: (l) => statusLines.push(l) });
     assert.equal(statusExit, 0);
-    if (expected === "closed") {
-      assert.equal(statusStateFor(statusLines, id), undefined, "a closed task is not listed by status");
+    if (resolved) {
+      assert.equal(statusStateFor(statusLines, id), undefined, `a ${expected} task is not listed by status`);
     } else {
       assert.equal(statusStateFor(statusLines, id), expected);
     }

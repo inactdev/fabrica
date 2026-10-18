@@ -9,6 +9,10 @@ export { DEFAULT_ATTEMPTS } from "./do.ts";
 // detached process. See answer.ts/verdict.ts for the full reasoning.
 export { recordAnswerDecision, runRecordedAnswer } from "./answer.ts";
 export { recordVerdictDecision, runRecordedFix } from "./verdict.ts";
+// Issue #203: the Client's own stop - the record half only (the process
+// half is src/cli/task-process.ts; see stop.ts's header for why).
+export { recordStopDecision } from "./stop.ts";
+export type { LastWorkerActivity, StoppedByOwnerDetails } from "./stop.ts";
 export { DEFAULT_CHECK_COMMAND } from "./resolve-check.ts";
 export { finalMessageFor } from "./pr-body.ts";
 export type { FinalMessageForCommit } from "./pr-body.ts";

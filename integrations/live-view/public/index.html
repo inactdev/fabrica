@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Issue #203: without this, a phone renders the page at a notional
+     desktop width and scales it down, so the stacked-card layout below
+     tablet width would never be the one a phone actually gets. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fabrica — live view</title>
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -18,7 +22,28 @@
 </header>
 
 <main>
-  <div id="tasks"></div>
+  <!-- One DOM, two layouts (style.css): a table with this header pinned
+       above tablet width, one stacked card per task below it, where the
+       header is hidden and every cell prints its own data-label instead.
+       The labels here and the cells' data-label attributes in app.js are
+       the same strings on purpose. -->
+  <div class="task-table">
+    <div class="task-head" id="task-head" hidden>
+      <div class="head-cell">state</div>
+      <div class="head-cell">task</div>
+      <div class="head-cell">project</div>
+      <div class="head-cell">worker · model</div>
+      <div class="head-cell">network policy</div>
+      <div class="head-cell">trigger</div>
+      <div class="head-cell">started</div>
+      <div class="head-cell">duration</div>
+      <div class="head-cell">cost</div>
+      <div class="head-cell">checks</div>
+      <div class="head-cell">delivery</div>
+      <div class="head-cell">confidence</div>
+    </div>
+    <div id="tasks"></div>
+  </div>
 </main>
 
 <script src="/app.js"></script>

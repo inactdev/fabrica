@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- See index.html's own note: without this a phone never gets the
+     stacked-card layout at all. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fabrica — history</title>
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -17,7 +20,25 @@
 </header>
 
 <main>
-  <div id="tasks"></div>
+  <!-- Identical column set and markup to index.html - both pages share
+       one script (app.js) because the row format is the same on both. -->
+  <div class="task-table">
+    <div class="task-head" id="task-head" hidden>
+      <div class="head-cell">state</div>
+      <div class="head-cell">task</div>
+      <div class="head-cell">project</div>
+      <div class="head-cell">worker · model</div>
+      <div class="head-cell">network policy</div>
+      <div class="head-cell">trigger</div>
+      <div class="head-cell">started</div>
+      <div class="head-cell">duration</div>
+      <div class="head-cell">cost</div>
+      <div class="head-cell">checks</div>
+      <div class="head-cell">delivery</div>
+      <div class="head-cell">confidence</div>
+    </div>
+    <div id="tasks"></div>
+  </div>
 </main>
 
 <script src="/app.js"></script>

@@ -26,7 +26,7 @@ import {
   stateOf,
   taskSpend,
 } from "../../src/index.ts";
-import type { Caps, Delivery, FabricaEvent, FabricaTask, TaskFollower, TranscriptEntry, WorkerWriteup } from "../../src/index.ts";
+import type { Caps, Delivery, FabricaEvent, FabricaTask, Receipt, TaskFollower, TranscriptEntry, WorkerWriteup } from "../../src/index.ts";
 
 /** How much of the task's own text stands in for a title before a
  * worker's write-up exists - long enough to be recognizable, short
@@ -47,6 +47,16 @@ export type DisplayState =
   | "delivered"
   | "failed"
   | "stopped"
+  /** Issue #203: the Client stopped this task himself. Deliberately its
+   * own word rather than folding into "stopped" above, which has meant
+   * "Inspector reached no verdict" since issue #26 and is asserted as
+   * such - two different outcomes reading as the same word on the same
+   * page would be worse than a slightly longer label. (That earlier
+   * ruling's own wording - keep "stopped" for a task that was actually
+   * stopped - arguably now wants the refused label renamed instead;
+   * that is the Client's to rule on, not something to change under a
+   * ratified assertion's feet.) */
+  | "stopped by you"
   | "closed (accept)"
   | "closed (wrong)"
   /** Defensive only: `stateOf` sets the raw "closed" state exclusively
@@ -71,13 +81,31 @@ export function displayState(state: FabricaTask["state"], closedRuling: "accept"
       return closedRuling === "accept" ? "closed (accept)" : closedRuling === "wrong" ? "closed (wrong)" : "closed";
     case "refused":
       return "stopped";
+    case "stopped":
+      return "stopped by you";
   }
 }
 
 /** A task is history once nothing further is expected of it - every
  * closed verdict, a genuine stop, or an unresolved failure. */
 export function isFinished(state: DisplayState): boolean {
-  return state === "failed" || state === "stopped" || state === "closed (accept)" || state === "closed (wrong)" || state === "closed";
+  return (
+    state === "failed" ||
+    state === "stopped" ||
+    state === "stopped by you" ||
+    state === "closed (accept)" ||
+    state === "closed (wrong)" ||
+    state === "closed"
+  );
+}
+
+/** The two states a task can be stopped from - what the review page's
+ * "Running" section lists, and the only states the stop route itself
+ * accepts (src/foreman/stop.ts's own RUNNING_STATES, which this agrees
+ * with by construction: "checking" is projected onto "working" by
+ * `displayState`, so one word covers both here). */
+export function isRunning(state: DisplayState): boolean {
+  return state === "working";
 }
 
 /** The ruling behind this task's most recent `verdict-recorded` event -
@@ -94,6 +122,12 @@ function latestVerdictRuling(events: FabricaEvent[]): "accept" | "wrong" | null 
   return null;
 }
 
+/** One task, as every surface in this directory shows it. Issue #203
+ * widened this to the full column set the list pages now render -
+ * state, task, project, worker and model, network policy, trigger,
+ * started, duration, cost (with its cap), checks, delivery, confidence -
+ * every one of them derived from this task's own events (plus its
+ * `issue`/`caps.json` task files), never from a live call anywhere. */
 export interface TaskView {
   id: string;
   /** The write-up title once there is one, else the task text's first
@@ -108,11 +142,40 @@ export interface TaskView {
    * binds on. `subscriptionUsd` is the separate, notional figure. */
   costUsd: number;
   subscriptionUsd: number;
+  /** The per-task cap this task started under (`caps.json`) - absent
+   * when none was set, which is what makes the page show the cost as
+   * plain text with no meter (Client ruling, issue #203). */
   perTaskCapUsd?: number;
   prUrl: string | null;
   writeup: WorkerWriteup | null;
   finished: boolean;
+  /** Whether a stop is even possible - see `isRunning`. */
+  running: boolean;
   lastActivityMs: number;
+  /** "Worker and model": the brain's name and its model, off the latest
+   * receipt. Null before any attempt has produced one. */
+  worker: string | null;
+  /** See `networkPolicyLabel` - what the record can actually say about
+   * this task's network, which today is its refusals or nothing. */
+  networkPolicy: string;
+  /** See `triggerLabel` - what started the round this task is on. */
+  trigger: string;
+  /** When the task was received. Null only in the brief window before
+   * its first event has landed. */
+  startedAtMs: number | null;
+  /** How long the task has been running (an open task) or how long it
+   * ran (a finished one) - never recomputed on the page, so one
+   * definition serves both. */
+  durationMs: number;
+  /** See `checksLabel` - whatever most recently judged the work. */
+  checks: string;
+  /** `Delivery.outcome`, or null when there is no delivery to show. */
+  delivery: string | null;
+  /** `Delivery.confidence` - Fabrica/Inspector-derived, the ratified
+   * field (CONTRACT rule 4), never the worker's own write-up
+   * confidence, which is its own separate number shown on the review
+   * page's card. Null with no delivery. */
+  confidence: number | null;
 }
 
 export interface SpendView {
@@ -192,6 +255,34 @@ export interface AskingReviewRow {
   kind: "asking";
   questions: string[];
   lastActivityMs: number;
+}
+
+/** One running task on the review page (issue #203) - enough to
+ * recognize what is about to be stopped, and nothing that invites a
+ * verdict, since a running task has nothing to rule on yet. The last
+ * transcript line is the same detail `recordStopDecision` writes onto
+ * the `stopped-by-owner` event, shown here first so the decision is
+ * made looking at it rather than at nothing. */
+export interface RunningRow {
+  id: string;
+  title: string;
+  project: string | null;
+  worker: string | null;
+  costLabel: string;
+  durationMs: number;
+  lastActivityMs: number;
+  lastActivity: string | null;
+}
+
+/** The worker's last transcript line as one short string, for a running
+ * row. Read off the follower's own already-tailed transcript - never a
+ * fresh read of transcript.log, which on a long-running task is exactly
+ * the whole-file re-read per poll this directory's README forbids. */
+function lastTranscriptLine(transcript: TranscriptEntry[]): string | null {
+  const last = transcript[transcript.length - 1];
+  if (!last) return null;
+  const text = typeof last.text === "string" ? last.text.trim() : "";
+  return text.length > 0 ? text : null;
 }
 
 /** "Inspector's stamp" - green/red/refused when this delivery was
@@ -319,6 +410,178 @@ function lastActivityMs(events: FabricaEvent[]): number {
   return last ? Date.parse(last.occurredAt) : 0;
 }
 
+/** When this task was first received - its own first event, which
+ * `registerTask` always writes as "task-received". Null for the brief
+ * window where a task folder exists but no event has landed yet (the
+ * same window `discoverTaskIds` exists to cover). */
+function startedAtMs(events: FabricaEvent[]): number | null {
+  const first = events[0];
+  if (!first) return null;
+  const parsed = Date.parse(first.occurredAt);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/** The most recent attempt's receipt - the one place the record says
+ * which worker and model actually ran, and whether its check was green
+ * (`contract/surface.ts`'s `Receipt`). Read from this task's own events,
+ * never through `receiptsOf`, which would re-read and re-parse
+ * events.jsonl once per task on every 2-second poll (this module's
+ * header, and the README's own note on why a poll must never re-read a
+ * whole file). Both carriers are checked: an attempt that ended with no
+ * delivery is on the record only as its own "receipt-recorded" event,
+ * while a delivery carries the whole list. */
+function latestReceipt(events: FabricaEvent[]): Receipt | null {
+  let latest: Receipt | null = null;
+  for (const event of events) {
+    const details = event.details as { receipt?: unknown; receipts?: unknown } | undefined;
+    const candidates: unknown[] = [];
+    if (details?.receipt !== undefined) candidates.push(details.receipt);
+    const list = details?.receipts;
+    if (Array.isArray(list)) candidates.push(...list);
+    for (const candidate of candidates) {
+      if (typeof candidate !== "object" || candidate === null) continue;
+      const receipt = candidate as Receipt;
+      if (typeof receipt.attempt !== "number") continue;
+      if (latest === null || receipt.attempt >= latest.attempt) latest = receipt;
+    }
+  }
+  return latest;
+}
+
+/** "Worker and model" - the brain's own name and the model it reported,
+ * off the latest receipt. Null before any attempt has produced one (a
+ * task still asking, or one whose first attempt hasn't finished). */
+function workerLabel(receipt: Receipt | null): string | null {
+  if (!receipt) return null;
+  const brain = typeof receipt.brain === "string" ? receipt.brain.trim() : "";
+  const model = typeof receipt.model === "string" ? receipt.model.trim() : "";
+  if (!brain && !model) return null;
+  if (!model) return brain;
+  if (!brain) return model;
+  return `${brain} · ${model}`;
+}
+
+/**
+ * "Network policy," as far as Fabrica's record can actually say.
+ *
+ * The reference adapter really does choose one per call
+ * (`src/brain/adapters/claude-code.ts`'s `prepareNetwork`: a
+ * relay-backed isolated network when a worker token is present,
+ * `"allowed"` when there is none) - but nothing records it. `Brain.work`
+ * and `BrainWorkResult` are ratified contract shapes with nowhere to
+ * carry it, and that adapter's relay points its own "network-refused"
+ * bookkeeping at a throwaway scratch record home precisely because
+ * `Brain.ask`/`work` take no task id at all - a gap its own header
+ * states rather than hides.
+ *
+ * So this reports the one network fact the record holds: the refusals
+ * attributed to this task. "not recorded" is deliberately not "allowed"
+ * or "isolated" - this page never shows a policy it cannot know, and
+ * will show a real one the day one is recorded.
+ */
+function networkPolicyLabel(events: FabricaEvent[]): string {
+  const refusals = events.filter((event) => event.name === "network-refused");
+  if (refusals.length === 0) return "not recorded";
+  const hosts = new Set<string>();
+  for (const refusal of refusals) {
+    const host = (refusal.details as { host?: unknown } | undefined)?.host;
+    if (typeof host === "string" && host.length > 0) hosts.add(host);
+  }
+  const named = hosts.size > 0 ? ` (${[...hosts].join(", ")})` : "";
+  return `${refusals.length} refused${named}`;
+}
+
+/** "Trigger" - what started the round this task is on, which is the only
+ * part of that question the record can answer differently for different
+ * tasks (every task begins as one `fabrica do`): a first run, the
+ * Client's answer to a clarifying question resuming it, or his Nth
+ * "fix". The explicitly-named issue (`--issue <N>`, persisted as the
+ * task's own "issue" file) rides along when there is one, since that is
+ * the other half of "who asked for this". */
+function triggerLabel(events: FabricaEvent[], issue: string | null): string {
+  let base = "do";
+  let fixRounds = 0;
+  for (const event of events) {
+    if (event.name === "answers-given") base = "answer";
+    else if (event.name === "verdict-recorded" && (event.details as { ruling?: string } | undefined)?.ruling === "fix") {
+      fixRounds += 1;
+      base = `fix ${fixRounds}`;
+    }
+  }
+  const named = issue !== null && /^\d+$/.test(issue.trim()) ? ` #${issue.trim()}` : "";
+  return `${base}${named}`;
+}
+
+/** "Checks" - whatever most recently judged this task's work, in one
+ * short word. A single forward pass, so the latest judgement wins
+ * whichever kind it was: the worker's own box running the project's
+ * check ("check-run", which lands twice per attempt - `phase: "started"`
+ * then the result) or Inspector's independent verdict
+ * ("inspection-finished"), which IS the check in Inspector mode (issue
+ * #64: Fabrica runs none itself). "—" until something has judged
+ * anything. */
+function checksLabel(events: FabricaEvent[]): string {
+  let label = "—";
+  for (const event of events) {
+    if (event.name === "check-run") {
+      const details = event.details as { phase?: string; green?: boolean; notVerified?: string } | undefined;
+      if (details?.phase === "started") label = "running";
+      else if (typeof details?.notVerified === "string") label = "not verified";
+      else if (typeof details?.green === "boolean") label = details.green ? "green" : "red";
+    } else if (event.name === "inspection-finished") {
+      const verdict = (event.details as { verdict?: string } | undefined)?.verdict;
+      if (typeof verdict === "string") label = `inspector: ${verdict}`;
+    } else if (event.name === "inspection-skipped") {
+      label = "self-tested (no Inspector)";
+    }
+  }
+  return label;
+}
+
+/** The task's current delivery, derived from the events already in hand
+ * rather than through `deliveryOf` - same reasoning as `latestReceipt`
+ * above (a per-task re-read of events.jsonl on every poll), and the same
+ * rule `deliveryOf` itself applies: a fix round's Inspector refusal that
+ * lands after a delivery supersedes it, so there is nothing to show. */
+function deliveryFromEvents(events: FabricaEvent[]): Delivery | null {
+  let delivery: Delivery | null = null;
+  for (const event of events) {
+    if (event.name === "delivered") {
+      delivery = (event.details as { delivery?: Delivery } | undefined)?.delivery ?? null;
+    } else if (
+      event.name === "inspection-finished" &&
+      (event.details as { verdict?: string } | undefined)?.verdict === "refused"
+    ) {
+      delivery = null;
+    }
+  }
+  return delivery;
+}
+
+/** The caps this task actually started under (`caps.json`, written once
+ * at registration - src/foreman/ask.ts), falling back to the record
+ * home's current `projects.toml` for a task registered before that file
+ * existed. The fallback is the same number `caps.ts` would enforce
+ * today; the file is the number it was enforcing then, which is what a
+ * cost meter should be read against. */
+function capsAtStart(recordHome: string, taskId: string, currentCaps: Caps): Caps {
+  const raw = readTaskFile(recordHome, taskId, "caps.json");
+  if (raw === null) return currentCaps;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return currentCaps;
+    const { perTaskUsd, perDayUsd } = parsed as { perTaskUsd?: unknown; perDayUsd?: unknown };
+    return {
+      ...(typeof perTaskUsd === "number" && Number.isFinite(perTaskUsd) ? { perTaskUsd } : {}),
+      ...(typeof perDayUsd === "number" && Number.isFinite(perDayUsd) ? { perDayUsd } : {}),
+    };
+  } catch {
+    // A viewer never fails over a malformed convenience file - the
+    // enforced number is still what the caps themselves say.
+    return currentCaps;
+  }
+}
+
 /** A record home with no projects.toml yet has no caps at all - not an
  * error (mirrors src/cli/load-config.ts's loadConfigOrDefault, which
  * lives under src/cli/ and so isn't imported directly - see the note on
@@ -376,7 +639,7 @@ export function createRecordView(recordHome: string) {
     const allEvents = perTask.flatMap(({ events }) => events);
     const { meteredUsd: dailyUsd, subscriptionUsd: dailySubscriptionUsd } = daySpend(allEvents, now);
 
-    const tasks: TaskView[] = perTask.map(({ id, events }) => buildTaskView(id, events, caps));
+    const tasks: TaskView[] = perTask.map(({ id, events }) => buildTaskView(id, events, caps, now));
 
     tasks.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
 
@@ -394,12 +657,17 @@ export function createRecordView(recordHome: string) {
     };
   }
 
-  function buildTaskView(id: string, events: FabricaEvent[], caps: Caps): TaskView {
+  function buildTaskView(id: string, events: FabricaEvent[], caps: Caps, now: number = Date.now()): TaskView {
     const spend = taskSpend(events, id);
     const rawState = stateOf(events);
     const state = displayState(rawState, rawState === "closed" ? latestVerdictRuling(events) : null);
     const taskText = (readTaskFile(recordHome, id, "request.md") ?? "").trim();
     const writeup = writeupFromEvents(events);
+    const finished = isFinished(state);
+    const startedAt = startedAtMs(events);
+    const lastActivity = lastActivityMs(events);
+    const taskCaps = capsAtStart(recordHome, id, caps);
+    const delivery = deliveryFromEvents(events);
     return {
       id,
       title: taskTitle(taskText, writeup?.title),
@@ -410,11 +678,22 @@ export function createRecordView(recordHome: string) {
       costLabel: describeTaskCost(spend, hasAttempts(events, id)),
       costUsd: spend.meteredUsd,
       subscriptionUsd: spend.subscriptionUsd,
-      ...(caps.perTaskUsd !== undefined ? { perTaskCapUsd: caps.perTaskUsd } : {}),
+      ...(taskCaps.perTaskUsd !== undefined ? { perTaskCapUsd: taskCaps.perTaskUsd } : {}),
       prUrl: prUrlFromEvents(events),
       writeup,
-      finished: isFinished(state),
-      lastActivityMs: lastActivityMs(events),
+      finished,
+      running: isRunning(state),
+      lastActivityMs: lastActivity,
+      worker: workerLabel(latestReceipt(events)),
+      networkPolicy: networkPolicyLabel(events),
+      trigger: triggerLabel(events, readTaskFile(recordHome, id, "issue")),
+      startedAtMs: startedAt,
+      // An open task's duration runs to now; a finished one's stops at
+      // whatever it last recorded, so it doesn't keep counting forever.
+      durationMs: startedAt === null ? 0 : Math.max(0, (finished ? lastActivity : now) - startedAt),
+      checks: checksLabel(events),
+      delivery: delivery?.outcome ?? null,
+      confidence: typeof delivery?.confidence === "number" ? delivery.confidence : null,
     };
   }
 
@@ -422,10 +701,10 @@ export function createRecordView(recordHome: string) {
    * a task id this record home has never heard of. Reuses the same
    * `buildTaskView` `getState` uses, so the list and the detail page never
    * disagree on one task's own fields. */
-  function getTask(taskId: string): TaskView | null {
+  function getTask(taskId: string, now: number = Date.now()): TaskView | null {
     if (!discoverTaskIds(recordHome).includes(taskId)) return null;
     const { events } = followerFor(taskId).read();
-    return buildTaskView(taskId, events, loadCapsOrDefault(recordHome));
+    return buildTaskView(taskId, events, loadCapsOrDefault(recordHome), now);
   }
 
   /** The worker's transcript for one task, tailing as it grows - null for
@@ -455,7 +734,7 @@ export function createRecordView(recordHome: string) {
     const caps = loadCapsOrDefault(recordHome);
     const rows: ReviewRow[] = discoverTaskIds(recordHome).flatMap((id): ReviewRow[] => {
       const { events } = followerFor(id).read();
-      const task = buildTaskView(id, events, caps);
+      const task = buildTaskView(id, events, caps, now);
 
       // Waiting on the Client's words rather than on a ruling - the one
       // row kind here that isn't a verdict at all.
@@ -491,7 +770,38 @@ export function createRecordView(recordHome: string) {
     return rows;
   }
 
-  return { getState, getTask, getTranscript, getReviewRows };
+  /** The review page's second, separate list (issue #203): the tasks
+   * currently running, which is where the one write action this page
+   * gained - stop - can actually apply. Deliberately NOT folded into
+   * `getReviewRows` above: those rows are exactly the set `fabrica
+   * status` flags as waiting on the Client, an agreement
+   * `state-agreement.test.ts` pins task-for-task, and a running task is
+   * the opposite of waiting on him. Keeping them apart means the stop
+   * control can exist without widening what "waiting on you" means. */
+  function getRunningRows(now: number = Date.now()): RunningRow[] {
+    const caps = loadCapsOrDefault(recordHome);
+    const rows: RunningRow[] = discoverTaskIds(recordHome).flatMap((id): RunningRow[] => {
+      const { events, transcript } = followerFor(id).read();
+      const task = buildTaskView(id, events, caps, now);
+      if (!task.running) return [];
+      return [
+        {
+          id,
+          title: task.title,
+          project: task.project,
+          worker: task.worker,
+          costLabel: task.costLabel,
+          durationMs: task.durationMs,
+          lastActivityMs: task.lastActivityMs,
+          lastActivity: lastTranscriptLine(transcript),
+        },
+      ];
+    });
+    rows.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
+    return rows;
+  }
+
+  return { getState, getTask, getTranscript, getReviewRows, getRunningRows };
 }
 
 export type RecordView = ReturnType<typeof createRecordView>;

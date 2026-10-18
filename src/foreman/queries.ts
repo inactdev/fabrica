@@ -136,13 +136,30 @@ export function statusOf(recordHome: string): FabricaTask[] {
  * Reusing "check-run" rather than a new event name keeps this out of
  * `contract/surface.ts` (its closed `FabricaEventName` union), which the
  * rule9-gate CI check treats as a protected path the Client merges by
- * hand - not something this ordinary status/log/watch work needs to touch. */
+ * hand - not something this ordinary status/log/watch work needs to touch.
+ *
+ * One state is absorbing rather than overwritable: "stopped" (issue
+ * #203, the Client's own stop). See the loop's first lines for why. */
 export function stateOf(events: FabricaEvent[]): FabricaTask["state"] {
   let state: FabricaTask["state"] = "working";
   let begun = false;
+  let stoppedByOwner = false;
 
   for (const event of events) {
+    // Issue #203: once the Client has stopped the task, that is the
+    // fact. The detached process is being signaled, not asked, so
+    // whatever it still manages to append on its way down (a last
+    // heartbeat, a check-run, even a delivery from work already
+    // finished) is kept on the record but must never move the task back
+    // to looking alive. His own verdict is the one thing that still
+    // can - "accept"/"wrong" close it, exactly as for any other task.
+    if (stoppedByOwner && event.name !== "verdict-recorded") continue;
+
     switch (event.name) {
+      case "stopped-by-owner":
+        state = "stopped";
+        stoppedByOwner = true;
+        break;
       case "cap-refused":
         // Rule 10 refused this task's very first start - it never ran and
         // never will (a new `fabrica do` is a new task). A refused resume

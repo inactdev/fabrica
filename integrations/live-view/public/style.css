@@ -218,13 +218,205 @@ main {
   text-overflow: unset;
 }
 
+/* The task list's two layouts, from one DOM (issue #203).
+
+   Mobile first, deliberately: the base rules below ARE the phone layout
+   - one stacked card per task, every column a labeled row, the label
+   printed by the cell's own data-label attribute so the markup carries
+   it exactly once. The table, with its header pinned, is the media
+   query at the bottom. Nothing in app.js reads a breakpoint or
+   re-renders on resize; the same nodes simply reflow. */
+.task-table {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.task-head {
+  display: none;
+}
+
+.task-row {
+  border-bottom: 1px solid var(--hairline);
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+}
+
+.task-row:hover {
+  background: var(--row-hover);
+}
+
+.cell {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.1rem 0;
+}
+
+/* The column's name, in front of its value - phone width only. The
+   string comes from the cell's own data-label, which is the same string
+   the table header shows above tablet width, so one column can never be
+   named two different things. */
+.cell::before {
+  content: attr(data-label);
+  color: var(--dim);
+  flex: 0 0 auto;
+}
+
+.cell-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* The task's own title leads the card, full width, no label in front of
+   it - it is the thing being identified, not a field of it. */
+.task-row .cell-task {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.task-row .cell-task::before {
+  content: none;
+}
+
+.task-row .cell-task .cell-value {
+  display: block;
+  text-align: left;
+  white-space: normal;
+}
+
+.task-row .cell-state::before {
+  content: none;
+}
+
+.task-row .cell-state {
+  justify-content: flex-start;
+}
+
+/* The per-task cap meter (issue #203). Shown only when the task has a
+   cap to measure against - with none set the cost is plain text and
+   this element is hidden outright (Client ruling). */
+.cell-cost {
+  flex-wrap: wrap;
+}
+
+.meter {
+  display: block;
+  flex: 1 1 4rem;
+  height: 4px;
+  min-width: 3rem;
+  background: var(--hairline);
+}
+
+/* An explicit `display` beats the browser's own `[hidden]` rule, so a
+   capless task's meter needs this to actually disappear. */
+.meter[hidden] {
+  display: none;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--blue);
+}
+
+.meter-high { background: var(--amber); }
+.meter-full { background: var(--red); }
+
+@media (min-width: 768px) {
+  .task-head,
+  .task-row {
+    display: grid;
+    /* state, task, project, worker·model, network, trigger, started,
+       duration, cost, checks, delivery, confidence. */
+    grid-template-columns:
+      9rem minmax(10rem, 2fr) minmax(6rem, 1fr) minmax(8rem, 1fr) minmax(7rem, 1fr)
+      5rem 7rem 5rem minmax(7rem, 1fr) 7rem 8rem 5rem;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0 0.75rem;
+  }
+
+  .task-row {
+    height: 36px;
+  }
+
+  .task-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg);
+    border-bottom: 1px solid var(--hairline);
+    color: var(--dim);
+    height: 28px;
+  }
+
+  .task-head[hidden] {
+    display: none;
+  }
+
+  .head-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cell {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0;
+  }
+
+  .cell::before {
+    content: none;
+  }
+
+  .cell-value {
+    text-align: left;
+  }
+
+  .task-row .cell-task {
+    font-weight: normal;
+    margin-bottom: 0;
+  }
+
+  /* One line per row at this width - the card layout's wrapping title
+     would break the 36px grid. */
+  .task-row .cell-task .cell-value {
+    white-space: nowrap;
+  }
+
+  .task-row .cell-state {
+    display: block;
+  }
+
+  .cell-cost {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .meter {
+    flex: 1 1 2rem;
+    min-width: 2rem;
+  }
+}
+
 /* The one color each state/kind word gets - nothing else on the page is
    colored. */
 .state-working, .kind-toolthink { color: var(--blue); }
 .state-asking { color: var(--amber); }
 .state-delivered, .state-accept { color: var(--green); }
 .state-failed, .state-wrong { color: var(--red); }
-.state-stopped, .state-closed { color: var(--gray); }
+.state-stopped, .state-closed, .state-stopped-by-you { color: var(--gray); }
 .kind-error { color: var(--red); }
 .kind-system { color: var(--green); }
 .kind-text { color: var(--text); }
@@ -248,6 +440,10 @@ main {
 .symbol-question { color: var(--amber); }
 .symbol-failed { color: var(--red); font-weight: bold; }
 .symbol-dot { color: var(--gray); }
+/* The Client's own stop (issue #203) - a square, not the gray dot every
+   other finished-without-a-verdict state wears, so the one outcome he
+   caused himself is findable at a glance among them. */
+.symbol-stopped { color: var(--gray); }
 
 /* "working" has no text glyph - a small CSS-drawn ring, spinning. The one
    animation this page allows itself. */
@@ -271,7 +467,8 @@ main {
   background: var(--accent-bg);
 }
 
-.row-emphasis .col-title {
+.row-emphasis .col-title,
+.row-emphasis .cell-task {
   font-weight: 600;
 }
 
@@ -358,6 +555,34 @@ body.review-page main {
   color: var(--red);
   margin-top: 0.5rem;
   min-height: 1.2em;
+}
+
+/* The one thing a status line says that isn't a failure: a stop that was
+   recorded, where no live process was found to signal (issue #203).
+   Declared after .review-status on purpose - same specificity, so
+   source order is what makes this win. */
+.review-note {
+  color: var(--dim);
+}
+
+/* The review page's own section heading - the running list sits under
+   one (issue #203), the waiting-on-you list doesn't need one since the
+   toolbar already names it. */
+.section-title {
+  font-size: inherit;
+  font-weight: normal;
+  color: var(--dim);
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* A running task's own last transcript line - the thing the decision to
+   stop is actually made on, so it gets the page's normal text color
+   rather than .review-line's dim, and is allowed to wrap. */
+.review-last-activity {
+  color: var(--text);
+  word-break: break-word;
 }
 
 /* A task Inspector refused or that failed before any work started

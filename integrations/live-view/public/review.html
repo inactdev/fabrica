@@ -18,6 +18,17 @@
 
 <main>
   <div id="rows"></div>
+
+  <!-- Issue #203: the tasks currently running, which is where the one
+       write action this page gained - stop - can apply. Deliberately a
+       separate section below the waiting-on-you list, and with its own
+       count: a running task is the opposite of one waiting on the
+       Client, and folding the two together would quietly change what
+       "waiting on you" means (see record-view.ts's getRunningRows). -->
+  <section id="running-section" hidden>
+    <h2 class="section-title">Running · <span id="running-count">0</span></h2>
+    <div id="running"></div>
+  </section>
 </main>
 
 <script src="/review.js"></script>

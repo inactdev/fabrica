@@ -52,14 +52,32 @@ export type Delivery = Omit<ContractDelivery, "outcome"> & {
 };
 
 export type FabricaTask = Omit<ContractFabricaTask, "state"> & {
-  state: ContractFabricaTask["state"] | "refused";
+  /** "refused": Inspector reached no verdict. "stopped": the Client
+   * stopped the task himself (issue #203) - terminal the moment the
+   * `stopped-by-owner` event lands, since his decision is the fact and
+   * whatever the worker's own process reports on its way down is
+   * recorded but never reopens it (see `stateOf`). */
+  state: ContractFabricaTask["state"] | "refused" | "stopped";
 };
 
+/** Fabrica's own event names beyond `contract/surface.ts`'s ratified,
+ * closed set - the one place that widening happens, which
+ * `src/record/types.ts` then re-exports as *the* record's event name
+ * type. Mostly Inspector's trigger and result events, hence this file;
+ * `stopped-by-owner` is here for the same reason rather than in the
+ * contract (`contract/surface.ts` is a path `rule9-gate.yml` protects,
+ * and nothing about this event is a promise to the Client about a seam -
+ * it is Fabrica's own bookkeeping, the same as `inspector-called`). */
 export type FabricaEventName =
   | ContractFabricaEventName
   | "inspector-called"
   | "inspection-finished"
-  | "inspection-skipped";
+  | "inspection-skipped"
+  /** The Client stopped this task himself from the review page (issue
+   * #203). Details: `src/foreman/stop.ts`'s `StoppedByOwnerDetails` -
+   * who stopped it (the Tailscale login), and the worker's last
+   * recorded activity at that moment. */
+  | "stopped-by-owner";
 
 export interface FabricaEvent extends Omit<ContractFabricaEvent, "name"> {
   name: FabricaEventName;

@@ -9,6 +9,7 @@
 
 import { defaultBrainAdapter, runRecordedAnswer } from "../index.ts";
 import { prefixTaskLog } from "./task-log.ts";
+import { writeTaskPidFile } from "./task-process.ts";
 
 const setLogTaskId = prefixTaskLog();
 
@@ -21,6 +22,10 @@ if (recordHome === undefined || taskId === undefined) {
   );
   process.exit(1);
 }
+
+// Issue #203's `stop`: this process is the one running the task's round
+// from here on, and is the only party that knows its own pid.
+writeTaskPidFile(recordHome, taskId);
 
 try {
   await runRecordedAnswer(recordHome, taskId, { brain: defaultBrainAdapter(recordHome) });
