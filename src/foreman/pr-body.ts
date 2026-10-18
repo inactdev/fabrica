@@ -8,6 +8,9 @@
 // codebase (How), Changes outside the codebase, Additional information -
 // with "Closes #N" as the pull request body's first line when the task is
 // the whole of one issue's work.
+// Each of those headings is Fabrica's to emit, exactly once: a heading a
+// worker echoed into its own field is dropped as it renders, so the body
+// can never carry the same heading twice (see withoutTemplateHeadings).
 // A missing or invalid write-up still gets a commit - the attempt loop
 // commits every attempt and makes this one red (attempts.ts) - so this
 // always returns something to commit, falling back to a label naming
@@ -52,6 +55,52 @@ const ADDITIONAL_BULLETS = [
 ] as const satisfies readonly { label: string; field: keyof WorkerWriteup }[];
 
 const ADDITIONAL_HEADING = "## Additional information";
+
+/** Every heading this template owns, in the order the body renders them.
+ * Each one appears in a rendered body exactly once, and only ever
+ * because the code below put it there - see `withoutTemplateHeadings`. */
+export const TEMPLATE_HEADINGS = [
+  ...CONTENT_SECTIONS.map(({ heading }) => heading),
+  ADDITIONAL_HEADING,
+] as const satisfies readonly string[];
+
+const FENCE = /^\s{0,3}(?:```|~~~)/;
+
+/** A write-up field's own value, with any line that is nothing but one
+ * of the template's headings dropped.
+ *
+ * Fabrica renders each heading exactly once, but a worker that echoes a
+ * heading at the end (or start) of a field puts a second copy of it
+ * immediately next to Fabrica's own - "## Additional information" twice
+ * in a row, with nothing between (seen on a real pull request). The
+ * heading is a structural marker, never content: dropping the line
+ * leaves every substantive word the worker wrote untouched, where
+ * refusing the write-up outright would cost the task a whole red round
+ * for a cosmetic slip.
+ *
+ * A heading inside a fenced code block is kept exactly as written: a
+ * write-up that quotes this very template as an example (or documents
+ * it) is showing the heading, not emitting one, and that block is the
+ * one place markdown would not read it as a heading either. An
+ * occurrence inside a sentence is untouched too - only a line that is
+ * the heading and nothing else goes. */
+function withoutTemplateHeadings(value: string): string {
+  const lines = value.split("\n");
+  let inFence = false;
+  const kept = lines.filter((line) => {
+    if (FENCE.test(line)) {
+      inFence = !inFence;
+      return true;
+    }
+    return inFence || !TEMPLATE_HEADINGS.some((heading) => line.trim() === heading);
+  });
+  // Nothing removed: hand back the value as it came, so a worker's own
+  // spacing is never rewritten by a pass that found nothing to do.
+  if (kept.length === lines.length) return value.trim();
+  // A removed line leaves a wider gap than the worker wrote; close it
+  // back up to one blank line so the section reads as intended.
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
 
 /** One labelled bullet, with every continuation line indented under it.
  * A worker that writes two paragraphs into `assumptions` would otherwise
@@ -99,11 +148,11 @@ export function finalMessageFor(writeup: WorkerWriteup | undefined, fallbackTitl
   if (reason !== undefined || writeup === undefined) {
     return { title: fallbackTitle, body: `${describeInvalidWriteup(reason!)}.`, ok: false, reason };
   }
-  const sections = CONTENT_SECTIONS.map(({ heading, field }) => `${heading}\n\n${writeup[field].trim()}`);
+  const sections = CONTENT_SECTIONS.map(({ heading, field }) => `${heading}\n\n${withoutTemplateHeadings(writeup[field])}`);
   const bullets = [bullet("Confidence", `${writeup.confidence}/100`)];
   for (const { label, field } of ADDITIONAL_BULLETS) {
-    const value = writeup[field];
-    if (value !== undefined && value.trim().length > 0) bullets.push(bullet(label, value));
+    const value = writeup[field] === undefined ? undefined : withoutTemplateHeadings(writeup[field]!);
+    if (value !== undefined && value.length > 0) bullets.push(bullet(label, value));
   }
   sections.push(`${ADDITIONAL_HEADING}\n\n${bullets.join("\n")}`);
   return { title: writeup.title.trim(), body: sections.join("\n\n"), ok: true };
