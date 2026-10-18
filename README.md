@@ -110,6 +110,31 @@ a relay Fabrica runs beside it, which swaps the throwaway placeholder
 the Worker holds for the real token on its way to the provider (see
 `src/relay/README.md`).
 
+### Paying per token instead (optional)
+
+The default Worker is the coding agent above, on the flat-rate
+subscription you already have. If you want a different model - an
+open-weight one, a hosted one you pay per token for, or one running on
+your own machine - there is a second Worker that talks to any
+OpenAI-compatible API directly. It **will not start without a per-task
+spending cap** (`[caps].perTaskUsd`), and every dollar on its receipts
+is the real figure the provider charged for the call.
+
+Add to `~/.fabrica/brain.env` (same file, same `chmod 600`):
+
+    FABRICA_BRAIN=openai-compatible
+    FABRICA_MODEL=<the model id, exactly as your provider names it>
+    OPENROUTER_API_KEY=<your key>
+
+Leave `FABRICA_BRAIN` out and nothing changes. `fabrica doctor` then
+reports which model at which endpoint, and `fabrica doctor --live`
+spends a fraction of a cent to confirm it answers and reports its own
+cost. To point it somewhere else entirely - a local server, say - set
+`FABRICA_MODEL_BASE_URL`. See
+`src/brain/adapters/openai-compatible.md` for every setting, what was
+verified against which vendor document, and what still needs checking
+on your own machine.
+
 ### `fabrica doctor`
 
     fabrica doctor

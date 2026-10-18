@@ -102,3 +102,72 @@ test("live probe: running out of the tiny budget still proves the token authenti
   }));
   assert.equal(status.ok, true);
 });
+
+// Issue #200: with the direct-API worker selected, doctor checks that
+// worker, not the one the Client is not using - and the live probe
+// confirms the one fact its receipts depend on.
+
+const DIRECT = { FABRICA_BRAIN: "openai-compatible", FABRICA_MODEL: "some/open-weight-model" };
+const neverCalled = async () => {
+  throw new Error("the live probe must not be called here");
+};
+
+test("with the direct-API worker selected, the check names its model and endpoint, not a CLI token", () => {
+  const status = workerTokenStatus({ ...DIRECT, OPENROUTER_API_KEY: "fake-secret-6" }, home());
+  assert.equal(status.ok, true);
+  assert.match(status.detail, /some\/open-weight-model/);
+  assert.match(status.detail, /openrouter\.ai/);
+  assert.doesNotMatch(status.detail, /CLAUDE_CODE_OAUTH_TOKEN/);
+  assert.ok(!JSON.stringify(status).includes("fake-secret-6"));
+});
+
+test("no credential is fine for a local server, and is said so rather than passed off as configured", () => {
+  const status = workerTokenStatus({ ...DIRECT, FABRICA_MODEL_BASE_URL: "http://127.0.0.1:11434/v1" }, home());
+  assert.equal(status.ok, true);
+  assert.match(status.detail, /no credential configured/);
+  assert.match(status.detail, /127\.0\.0\.1:11434/);
+});
+
+test("the direct-API worker with no model named fails the check, naming the setting to add", () => {
+  const dir = home();
+  const status = workerTokenStatus({ FABRICA_BRAIN: "openai-compatible" }, dir);
+  assert.equal(status.ok, false);
+  assert.match(status.fix ?? "", /FABRICA_MODEL/);
+  assert.ok((status.fix ?? "").includes(join(dir, "brain.env")));
+});
+
+test("live probe: a real call that reports its cost is alive, and one that reports none is a failure", async () => {
+  const dir = home();
+  const alive = await probeWorkerToken({ ...DIRECT, OPENROUTER_API_KEY: "fake-secret-7" }, dir, neverCalled, async (target) => {
+    assert.equal(target.model, "some/open-weight-model");
+    assert.equal(target.apiKey, "fake-secret-7");
+    assert.equal(target.endpoint, "https://openrouter.ai/api/v1");
+    return { choices: [{ message: { content: "OK" } }], usage: { cost: 0.000012 } };
+  });
+  assert.equal(alive.ok, true);
+  assert.match(alive.detail, /alive/);
+  assert.ok(!JSON.stringify(alive).includes("fake-secret-7"));
+
+  const unmeasured = await probeWorkerToken(DIRECT, dir, neverCalled, async () => ({
+    choices: [{ message: { content: "OK" } }],
+    usage: { prompt_tokens: 3 },
+  }));
+  assert.equal(unmeasured.ok, false, "a target that reports no cost would make every receipt unmeasured");
+  assert.match(unmeasured.fix ?? "", /FABRICA_MODEL_COST=free/);
+
+  // Unless the Client has said that target genuinely bills nothing.
+  const free = await probeWorkerToken({ ...DIRECT, FABRICA_MODEL_COST: "free" }, dir, neverCalled, async () => ({
+    choices: [{ message: { content: "OK" } }],
+  }));
+  assert.equal(free.ok, true);
+  assert.match(free.detail, /bills nothing/);
+});
+
+test("live probe: a refused call is dead, with what to check", async () => {
+  const status = await probeWorkerToken(DIRECT, home(), neverCalled, async () => {
+    throw new Error("the model API answered 401: No auth credentials found");
+  });
+  assert.equal(status.ok, false);
+  assert.match(status.detail, /dead - .*401/);
+  assert.match(status.fix ?? "", /FABRICA_MODEL/);
+});
