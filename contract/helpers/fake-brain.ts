@@ -70,9 +70,10 @@ export function fakeBrain(
         opts.writeup === undefined
           ? {
               title: "Fake brain update",
-              what: `fake brain saw: ${brief}`,
               why: "Testing.",
+              what: `fake brain saw: ${brief}`,
               how: "Directly.",
+              outsideChanges: "None.",
               confidence: 90,
               assumptions: "None.",
               expectedOutcomes: "The fake's work lands as described.",

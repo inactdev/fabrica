@@ -109,6 +109,14 @@ function writeupFrom(job, args) {
   /** @type {Record<string, unknown>} */
   const writeup = { confidence: args.confidence };
   for (const field of job.writeupStringFields) writeup[field] = args[field];
+  // An optional field only rides along when the model actually filled
+  // it in: the host omits its bullet entirely when it is empty, so an
+  // empty string here would be the same as leaving it out, with no
+  // placeholder either way.
+  for (const field of job.writeupOptionalStringFields ?? []) {
+    const value = args[field];
+    if (typeof value === "string" && value.trim().length > 0) writeup[field] = value;
+  }
   return writeup;
 }
 

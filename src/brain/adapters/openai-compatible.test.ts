@@ -26,7 +26,7 @@ import {
   splitBaseUrl,
   writeupToolSchema,
 } from "./openai-compatible.ts";
-import { WRITEUP_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
+import { WRITEUP_FIELDS, WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
 import { costFromTranscript } from "../../foreman/spend.ts";
 import { registerLiveTranscriptListener } from "../live-transcript.ts";
 import { chatCompletion } from "./openai-agent/client.mjs";
@@ -165,11 +165,18 @@ test("the write-up tool asks for exactly the ratified fields, with rule 9's decl
   const properties = Object.keys(schema.properties as Record<string, unknown>);
 
   assert.deepEqual(schema.required, [...WRITEUP_STRING_FIELDS, "confidence"]);
-  assert.deepEqual([...WRITEUP_FIELDS].sort(), properties.filter((name) => name !== "gateChanges").sort());
+  assert.deepEqual(
+    [...WRITEUP_FIELDS, ...WRITEUP_OPTIONAL_STRING_FIELDS].sort(),
+    properties.filter((name) => name !== "gateChanges").sort()
+  );
   // gateChanges is offered but never required: leaving the gate alone is
-  // the normal case, and it is not part of the write-up itself.
-  assert.ok(properties.includes("gateChanges"));
-  assert.ok(!(schema.required as string[]).includes("gateChanges"));
+  // the normal case, and it is not part of the write-up itself. The
+  // write-up's own optional field is the same shape for its own reason -
+  // a worker with nothing it could not verify says nothing at all.
+  for (const optional of ["gateChanges", ...WRITEUP_OPTIONAL_STRING_FIELDS]) {
+    assert.ok(properties.includes(optional), `${optional} is not offered`);
+    assert.ok(!(schema.required as string[]).includes(optional), `${optional} must not be required`);
+  }
   const title = (schema.properties as Record<string, { maxLength?: number }>).title;
   assert.equal(title.maxLength, WRITEUP_TITLE_MAX_LENGTH);
   const confidence = (schema.properties as Record<string, { minimum?: number; maximum?: number }>).confidence;
@@ -262,6 +269,7 @@ test("the real worker image runs the staged agent and answers in the protocol", 
     sessionId: "box-check",
     writeupSchema: writeupToolSchema(),
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
+    writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
     maxToolOutputChars: 1_000,
     bashTimeoutMs: 1_000,
@@ -320,6 +328,7 @@ test("a real provider reports the call's cost on its own usage object", async (t
     sessionId: "real-check",
     writeupSchema: writeupToolSchema(),
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
+    writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
     maxToolOutputChars: 1_000,
     bashTimeoutMs: 1_000,

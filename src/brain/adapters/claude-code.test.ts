@@ -314,11 +314,15 @@ test("claudeCodeAdapter passes --json-schema for the write-up: eight required fi
   assert.equal(schema.type, "object");
   assert.deepEqual(
     [...schema.required].sort(),
-    ["assumptions", "confidence", "deviations", "expectedOutcomes", "how", "title", "what", "why"]
+    ["assumptions", "confidence", "deviations", "expectedOutcomes", "how", "outsideChanges", "title", "what", "why"]
   );
-  for (const field of ["title", "what", "why", "how", "assumptions", "expectedOutcomes", "deviations"]) {
+  for (const field of ["title", "what", "why", "how", "outsideChanges", "assumptions", "expectedOutcomes", "deviations"]) {
     assert.equal(schema.properties[field].type, "string", `${field} is not a string field`);
   }
+  // The one optional field: offered, never required - and it has to be a
+  // declared property all the same, since additionalProperties is false.
+  assert.equal(schema.properties.couldNotVerify.type, "string");
+  assert.ok(!schema.required.includes("couldNotVerify"));
   assert.equal(schema.properties.confidence.type, "number");
   assert.equal(schema.properties.confidence.minimum, 0);
   assert.equal(schema.properties.confidence.maximum, 100);
@@ -334,9 +338,10 @@ test("claudeCodeAdapter fills writeup from the result line's structured_output",
 
   assert.deepEqual(result.writeup, {
     title: "Fake structured write-up",
-    what: "What it did.",
     why: "Why it did it.",
+    what: "What it did.",
     how: "How it did it.",
+    outsideChanges: "None.",
     confidence: 90,
     assumptions: "None.",
     expectedOutcomes: "It works as described.",

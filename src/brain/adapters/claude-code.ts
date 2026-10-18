@@ -203,20 +203,25 @@ export const DEFAULT_IMAGE = "fabrica-claude-code:latest";
 /** The write-up work() asks for, as a JSON Schema passed to
  * `--json-schema`. The CLI holds the model's final answer to it and
  * returns the object on the result line's `structured_output` (verified
- * on 2.1.222), so no write-up is ever parsed out of prose. */
+ * on 2.1.222), so no write-up is ever parsed out of prose.
+ * `couldNotVerify` is a declared property but deliberately not in
+ * `required`: it is the one optional field, and `additionalProperties:
+ * false` means a field the worker may send has to be declared even so. */
 export const WRITEUP_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   required: [...WRITEUP_FIELDS],
   properties: {
     title: { type: "string", minLength: 1, maxLength: WRITEUP_TITLE_MAX_LENGTH },
-    what: { type: "string", minLength: 1 },
     why: { type: "string", minLength: 1 },
+    what: { type: "string", minLength: 1 },
     how: { type: "string", minLength: 1 },
+    outsideChanges: { type: "string", minLength: 1 },
     confidence: { type: "number", minimum: 0, maximum: 100 },
     assumptions: { type: "string", minLength: 1 },
     expectedOutcomes: { type: "string", minLength: 1 },
     deviations: { type: "string", minLength: 1 },
+    couldNotVerify: { type: "string" },
   },
 };
 
@@ -775,12 +780,16 @@ function writeupFrom(value: unknown): WorkerWriteup | undefined {
   if (typeof record.confidence !== "number") return undefined;
   return {
     title: record.title as string,
-    what: record.what as string,
     why: record.why as string,
+    what: record.what as string,
     how: record.how as string,
+    outsideChanges: record.outsideChanges as string,
     confidence: record.confidence,
     assumptions: record.assumptions as string,
     expectedOutcomes: record.expectedOutcomes as string,
     deviations: record.deviations as string,
+    // The one optional field: carried only when the model actually sent
+    // a string, so an absent one stays absent rather than becoming "".
+    ...(typeof record.couldNotVerify === "string" ? { couldNotVerify: record.couldNotVerify } : {}),
   };
 }

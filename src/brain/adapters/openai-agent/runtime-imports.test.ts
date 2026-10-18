@@ -17,7 +17,7 @@ import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
+import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
 import { writeupToolSchema } from "../openai-compatible.ts";
 import type { AgentJob, AgentLine } from "./types.ts";
 
@@ -25,9 +25,10 @@ const AGENT_DIR = dirname(fileURLToPath(import.meta.url));
 
 const writeup = {
   title: "Add the file the brief asked for",
-  what: "what",
   why: "why",
+  what: "what",
   how: "how",
+  outsideChanges: "None.",
   confidence: 70,
   assumptions: "none",
   expectedOutcomes: "the file exists",
@@ -101,6 +102,7 @@ test("bootstrap.mjs runs the whole agent with plain node and only this directory
     sessionId: "round-1",
     writeupSchema: writeupToolSchema(),
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
+    writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
     maxToolOutputChars: 4_000,
     bashTimeoutMs: 10_000,
@@ -171,6 +173,7 @@ test("a work job with no cap makes no API call at all, whatever started it", asy
       sessionId: "round-1",
       writeupSchema: writeupToolSchema(),
       writeupStringFields: [...WRITEUP_STRING_FIELDS],
+      writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
       writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
       maxToolOutputChars: 4_000,
       bashTimeoutMs: 10_000,

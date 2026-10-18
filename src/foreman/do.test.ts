@@ -20,10 +20,12 @@ function freshHome(): string {
 }
 
 // Negative first: nothing was declared in the worker's own write-up, so
-// the commit's Deviations section says so plainly rather than leaving it
-// blank or omitting it. (fakeBrain's default write-up, not rule 9's
-// gateChanges declaration - see the next test for that distinction.)
-test("the delivery commit's Deviations section says None when the worker's write-up declared no deviation", async () => {
+// the commit's Deviations bullet says so plainly rather than leaving it
+// blank or omitting it - only the one optional field (couldNotVerify) is
+// ever dropped from "Additional information". (fakeBrain's default
+// write-up, not rule 9's gateChanges declaration - see the next test for
+// that distinction.)
+test("the delivery commit's Deviations bullet says None when the worker's write-up declared no deviation", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n") });
@@ -32,15 +34,16 @@ test("the delivery commit's Deviations section says None when the worker's write
 
   const delivery = deliveryOf(recordHome, task.id);
   const message = execSync(`git log -1 --format=%B ${delivery!.branch}`, { cwd: project, encoding: "utf8" });
-  assert.match(message, /Deviations:\nNone\./);
+  assert.match(message, /- Deviations: None\./);
+  assert.doesNotMatch(message, /Could not verify/, "the one optional field was never filled in");
 });
 
 // rule 9's gateChanges declaration and the write-up's own Deviations
-// section are two different things: gateChanges still lands on
+// bullet are two different things: gateChanges still lands on
 // delivery.gateChanges for CI's rule-9 enforcement, but it is never what
-// the commit's Deviations section shows any more - only the worker's own
+// the commit's Deviations bullet shows any more - only the worker's own
 // write-up is.
-test("the delivery commit's Deviations section carries the worker's own write-up, not rule 9's gateChanges declaration", async () => {
+test("the delivery commit's Deviations bullet carries the worker's own write-up, not rule 9's gateChanges declaration", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
   const brain = fakeBrain({
@@ -48,9 +51,10 @@ test("the delivery commit's Deviations section carries the worker's own write-up
     gateChanges: "widened check.sh's timeout because the suite grew",
     writeup: {
       title: "Widen the check timeout",
-      what: "Widened check.sh's timeout.",
       why: "The suite grew.",
+      what: "Widened check.sh's timeout.",
       how: "Bumped the sleep value.",
+      outsideChanges: "None.",
       confidence: 90,
       assumptions: "None.",
       expectedOutcomes: "The check no longer times out on the larger suite.",
@@ -63,7 +67,7 @@ test("the delivery commit's Deviations section carries the worker's own write-up
   const delivery = deliveryOf(recordHome, task.id);
   assert.equal(delivery?.gateChanges, "widened check.sh's timeout because the suite grew");
   const message = execSync(`git log -1 --format=%B ${delivery!.branch}`, { cwd: project, encoding: "utf8" });
-  assert.match(message, /Deviations:\nWidened check\.sh's timeout because the suite grew\./);
+  assert.match(message, /- Deviations: Widened check\.sh's timeout because the suite grew\./);
 });
 
 // Negative first (pull requests must read like a human wrote them): a
@@ -76,9 +80,10 @@ test("a worker's write-up with an empty title is refused, not delivered as done"
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
     writeup: {
       title: "",
-      what: "Did the work.",
       why: "Asked to.",
+      what: "Did the work.",
       how: "Directly.",
+      outsideChanges: "None.",
       confidence: 90,
       assumptions: "None.",
       expectedOutcomes: "None.",
@@ -127,9 +132,10 @@ test("a valid write-up becomes the delivery commit's exact subject and body", as
     onWork: (_brief, workdir) => writeFileSync(join(workdir, "feature.txt"), "work\n"),
     writeup: {
       title: "Add the login retry fix",
-      what: "Retries login on timeout.",
       why: "Users were seeing spurious failures.",
+      what: "Retries login on timeout.",
       how: "Wrapped the call in a retry loop.",
+      outsideChanges: "None.",
       confidence: 95,
       assumptions: "None.",
       expectedOutcomes: "Login no longer fails spuriously on a timeout.",
@@ -145,13 +151,15 @@ test("a valid write-up becomes the delivery commit's exact subject and body", as
   assert.equal(
     message.trim(),
     "Add the login retry fix\n\n" +
-      "What:\nRetries login on timeout.\n\n" +
-      "Why:\nUsers were seeing spurious failures.\n\n" +
-      "How:\nWrapped the call in a retry loop.\n\n" +
-      "What to look at:\nConfidence: 95/100\n\n" +
-      "Assumptions:\nNone.\n\n" +
-      "Expected outcomes:\nLogin no longer fails spuriously on a timeout.\n\n" +
-      "Deviations:\nNone."
+      "## Context (Why)\n\nUsers were seeing spurious failures.\n\n" +
+      "## Description (What)\n\nRetries login on timeout.\n\n" +
+      "## Changes in the codebase (How)\n\nWrapped the call in a retry loop.\n\n" +
+      "## Changes outside the codebase\n\nNone.\n\n" +
+      "## Additional information\n\n" +
+      "- Confidence: 95/100\n" +
+      "- Assumptions: None.\n" +
+      "- Expected outcomes: Login no longer fails spuriously on a timeout.\n" +
+      "- Deviations: None."
   );
 });
 
@@ -215,9 +223,10 @@ function liveStreamingBrain(): Brain {
         session: "s1",
         writeup: {
           title: "Stream three entries",
-          what: "a",
           why: "b",
+          what: "a",
           how: "c",
+          outsideChanges: "None.",
           confidence: 90,
           assumptions: "None.",
           expectedOutcomes: "None.",

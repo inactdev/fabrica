@@ -74,7 +74,7 @@ test("a green Fabrica check hands a configured branch to Inspector before delive
 
 // "Make every pull request it opens close its issue on merge": case 1,
 // the task's own text names the issue as the whole of the work.
-test("a task whose text starts with \"Issue #N:\" gets a pull request body ending with Closes #N", async () => {
+test("a task whose text starts with \"Issue #N:\" gets a pull request body opening with Closes #N", async () => {
   const recordHome = freshHome();
   const inspector = fakeInspector({ verdict: "green", report: "ok" });
   const foreman = createForeman({ recordHome, inspector });
@@ -82,7 +82,7 @@ test("a task whose text starts with \"Issue #N:\" gets a pull request body endin
   await foreman.do("Issue #186: add retries", { project: inspectedProject(), brain: fakeBrain() });
 
   assert.equal(inspector.calls.length, 1);
-  assert.match(inspector.calls[0].prBody ?? "", /\nCloses #186$/);
+  assert.match(inspector.calls[0].prBody ?? "", /^Closes #186\n/);
 });
 
 // Case 2, the chat agent names the issue explicitly instead - even when
@@ -95,7 +95,7 @@ test("a task whose caller names an issue explicitly gets the same closing line",
   await foreman.do("add retries, see the issue tracker", { project: inspectedProject(), brain: fakeBrain(), issue: 186 });
 
   assert.equal(inspector.calls.length, 1);
-  assert.match(inspector.calls[0].prBody ?? "", /\nCloses #186$/);
+  assert.match(inspector.calls[0].prBody ?? "", /^Closes #186\n/);
 });
 
 // A task that is only part of an issue's work names it in passing, not
@@ -115,7 +115,7 @@ test("a task that is only part of an issue's work gets no closing line", async (
 // A "fix" round re-opens the same pull request's body - the closing
 // line must still be there, re-derived from the record rather than lost
 // once the first round's process has exited.
-test("a fix round's pull request body still ends with Closes #N", async () => {
+test("a fix round's pull request body still opens with Closes #N", async () => {
   const recordHome = freshHome();
   const inspector = fakeInspector({ verdict: "red", report: "lint fails" }, { verdict: "green", report: "fixed" });
   const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "f.txt"), `${Math.random()}\n`) });
@@ -125,7 +125,7 @@ test("a fix round's pull request body still ends with Closes #N", async () => {
   await foreman.verdict(task.id, "fix", "repair the lint failure");
 
   assert.equal(inspector.calls.length, 2);
-  assert.match(inspector.calls[1].prBody ?? "", /\nCloses #186$/);
+  assert.match(inspector.calls[1].prBody ?? "", /^Closes #186\n/);
 });
 
 // Negative first (the write-up rule's own fix #1, revised by the
@@ -156,9 +156,10 @@ test("an invalid write-up is red with no Inspector call and no PR - a later vali
         session: "s1",
         writeup: {
           title,
-          what: "a",
           why: "b",
+          what: "a",
           how: "c",
+          outsideChanges: "None.",
           confidence: 90,
           assumptions: "None.",
           expectedOutcomes: "None.",
@@ -431,13 +432,15 @@ test("Inspector is handed the worker's own write-up title as pr-title and its se
   const brain = fakeBrain({
     writeup: {
       title: "Fix retry on login timeout",
-      what: "Retries once.",
       why: "It happens on retry.",
+      what: "Retries once.",
       how: "Added a retry.",
+      outsideChanges: "None.",
       confidence: 92,
       assumptions: "None.",
       expectedOutcomes: "Login no longer fails on the first timeout.",
       deviations: "None.",
+      couldNotVerify: "The login service itself was not reachable from here.",
     },
   });
 
@@ -447,9 +450,16 @@ test("Inspector is handed the worker's own write-up title as pr-title and its se
   assert.equal(inspector.calls[0].prTitle, "Fix retry on login timeout");
   assert.equal(
     inspector.calls[0].prBody,
-    "What:\nRetries once.\n\nWhy:\nIt happens on retry.\n\nHow:\nAdded a retry.\n\n" +
-      "What to look at:\nConfidence: 92/100\n\nAssumptions:\nNone.\n\n" +
-      "Expected outcomes:\nLogin no longer fails on the first timeout.\n\nDeviations:\nNone."
+    "## Context (Why)\n\nIt happens on retry.\n\n" +
+      "## Description (What)\n\nRetries once.\n\n" +
+      "## Changes in the codebase (How)\n\nAdded a retry.\n\n" +
+      "## Changes outside the codebase\n\nNone.\n\n" +
+      "## Additional information\n\n" +
+      "- Confidence: 92/100\n" +
+      "- Assumptions: None.\n" +
+      "- Expected outcomes: Login no longer fails on the first timeout.\n" +
+      "- Deviations: None.\n" +
+      "- Could not verify here: The login service itself was not reachable from here."
   );
 });
 

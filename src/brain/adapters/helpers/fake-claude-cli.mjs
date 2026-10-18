@@ -144,9 +144,10 @@ switch (brief) {
     // the same object JSON-encoded in "result".
     const writeup = {
       title: "Fake structured write-up",
-      what: "What it did.",
       why: "Why it did it.",
+      what: "What it did.",
       how: "How it did it.",
+      outsideChanges: "None.",
       confidence: 90,
       assumptions: "None.",
       expectedOutcomes: "It works as described.",
@@ -159,7 +160,9 @@ switch (brief) {
   case "WRITEUP_AS_PROSE_ONLY": {
     // A write-up typed out as text, with no structured_output: nothing
     // may be parsed out of it.
-    const prose = "Fake write-up\n\nWhat:\na\n\nWhy:\nb\n\nHow:\nc\n\nDeviations:\nNone.";
+    const prose =
+      "Fake write-up\n\n## Context (Why)\n\nb\n\n## Description (What)\n\na\n\n" +
+      "## Changes in the codebase (How)\n\nc\n\n## Changes outside the codebase\n\nNone.";
     line({ type: "assistant", message: { content: [{ type: "text", text: prose } ] } });
     line(resultLine({ result: prose }));
     break;

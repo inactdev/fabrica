@@ -23,9 +23,10 @@ import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
 
 const WRITEUP: WorkerWriteup = {
   title: "Add the retry on login timeout",
-  what: "Retries login once on a timeout.",
   why: "Users saw spurious failures.",
+  what: "Retries login once on a timeout.",
   how: "Wrapped the call in one retry.",
+  outsideChanges: "None.",
   confidence: 90,
   assumptions: "None.",
   expectedOutcomes: "A timed-out login succeeds on the retry.",
@@ -34,13 +35,15 @@ const WRITEUP: WorkerWriteup = {
 
 const WRITEUP_MESSAGE =
   "Add the retry on login timeout\n\n" +
-  "What:\nRetries login once on a timeout.\n\n" +
-  "Why:\nUsers saw spurious failures.\n\n" +
-  "How:\nWrapped the call in one retry.\n\n" +
-  "What to look at:\nConfidence: 90/100\n\n" +
-  "Assumptions:\nNone.\n\n" +
-  "Expected outcomes:\nA timed-out login succeeds on the retry.\n\n" +
-  "Deviations:\nNone.";
+  "## Context (Why)\n\nUsers saw spurious failures.\n\n" +
+  "## Description (What)\n\nRetries login once on a timeout.\n\n" +
+  "## Changes in the codebase (How)\n\nWrapped the call in one retry.\n\n" +
+  "## Changes outside the codebase\n\nNone.\n\n" +
+  "## Additional information\n\n" +
+  "- Confidence: 90/100\n" +
+  "- Assumptions: None.\n" +
+  "- Expected outcomes: A timed-out login succeeds on the retry.\n" +
+  "- Deviations: None.";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-writeup-home-"));

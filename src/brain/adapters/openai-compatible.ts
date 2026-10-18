@@ -44,7 +44,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
-import { WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
+import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
 import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgressNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
@@ -282,26 +282,38 @@ async function connectThroughRelay(opts: { baseUrl: string; apiKey?: string }): 
   };
 }
 
-/** The write-up tool's `parameters`: the eight ratified fields, built
- * from src/brain/writeup.ts so no field list is restated here or in the
- * agent, plus the one extra thing a worker may declare with its work -
- * rule 9's `gateChanges`, which is optional because leaving the gate
- * alone is the normal case and "no changes here" has no other spelling
- * (src/brain/README.md's `gateChanges` section). */
+/** The write-up tool's `parameters`: the nine required ratified fields
+ * and the one optional one, built from src/brain/writeup.ts so no field
+ * list is restated here or in the agent, plus the one extra thing a
+ * worker may declare with its work - rule 9's `gateChanges`, which is
+ * optional because leaving the gate alone is the normal case and "no
+ * changes here" has no other spelling (src/brain/README.md's
+ * `gateChanges` section). */
 export function writeupToolSchema(): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
     required: [...WRITEUP_STRING_FIELDS, "confidence"],
     properties: {
-      title: { type: "string", minLength: 1, maxLength: WRITEUP_TITLE_MAX_LENGTH, description: "Your own words, at most 60 characters - never the task text." },
-      what: { type: "string", minLength: 1 },
-      why: { type: "string", minLength: 1 },
-      how: { type: "string", minLength: 1 },
+      title: { type: "string", minLength: 1, maxLength: WRITEUP_TITLE_MAX_LENGTH, description: "Your own words, in the imperative, at most 60 characters - never the task text." },
+      why: { type: "string", minLength: 1, description: "What this change is for, from the product side." },
+      what: { type: "string", minLength: 1, description: "The steps you took to accomplish the task." },
+      how: { type: "string", minLength: 1, description: "The engineering side: what you added, modified or refactored." },
+      outsideChanges: {
+        type: "string",
+        minLength: 1,
+        description:
+          'Anything this change needs beyond this repository - settings, infrastructure, an external service, the machine it runs on - or "None."',
+      },
       confidence: { type: "number", minimum: 0, maximum: 100 },
       assumptions: { type: "string", minLength: 1 },
       expectedOutcomes: { type: "string", minLength: 1 },
       deviations: { type: "string", minLength: 1, description: 'What you deviated from the request and why, or "None."' },
+      couldNotVerify: {
+        type: "string",
+        description:
+          "Optional: anything you could not check from where you are - a service you could not reach, a test you could not run. Leave it out entirely if there is nothing.",
+      },
       gateChanges: {
         type: "string",
         description:
@@ -399,6 +411,9 @@ function writeupFrom(value: unknown): WorkerWriteup | undefined {
   // arguments object) must not end up inside the write-up itself.
   const writeup = { confidence: record.confidence } as Record<string, unknown>;
   for (const field of WRITEUP_STRING_FIELDS) writeup[field] = record[field];
+  for (const field of WRITEUP_OPTIONAL_STRING_FIELDS) {
+    if (typeof record[field] === "string") writeup[field] = record[field];
+  }
   return writeup as unknown as WorkerWriteup;
 }
 
@@ -429,6 +444,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
     bashTimeoutMs: opts.bashTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS,
     writeupSchema: writeupToolSchema(),
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
+    writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
   };
 

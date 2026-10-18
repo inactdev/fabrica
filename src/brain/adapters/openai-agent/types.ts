@@ -89,6 +89,12 @@ export interface AgentJob extends ChatTarget {
   /** The write-up's required string fields and title limit, from the
    * same single source, for the agent's own check on submission. */
   writeupStringFields: string[];
+  /** The write-up's *optional* string fields, from that same source.
+   * Separate from the required list because the two are checked
+   * differently: a missing one of these is not a problem, and an empty
+   * one is dropped rather than reported. Carried over the job file so
+   * this directory still restates no field name of its own. */
+  writeupOptionalStringFields: string[];
   writeupTitleMaxLength: number;
   /** How much of one tool result is kept, in characters - for the model
    * and for the transcript alike. A check's full output can be

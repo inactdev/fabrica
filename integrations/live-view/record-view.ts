@@ -148,7 +148,7 @@ export interface DeliveredReviewRow {
   kind: "delivered";
   /** The pull request's own body, rendered through the exact same
    * `finalMessageFor` that built it (src/foreman/pr-body.ts) - never a
-   * second hand-written copy of the four-section shape, so this page
+   * second hand-written copy of the Client's own template, so this page
    * can never show text that disagrees with the real pull request. */
   writeupBody: string;
   /** False when the write-up was invalid and `writeupBody` is Fabrica's
