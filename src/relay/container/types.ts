@@ -28,6 +28,12 @@ export interface RelayContainerConfig {
   port: number;
   tunnelAllowlist: AllowedHost[];
   gateway?: GatewayTarget;
+  /** The two limits this task's relay enforces (src/relay/limits.mjs,
+   * and RelayOptions in src/relay/types.ts) - carried through so a
+   * project's own projects.toml overrides reach the relay running
+   * inside the container, not only one started in-process. */
+  maxRequestBytes?: number;
+  maxCallsPerTask?: number;
 }
 
 export interface ContainerizedRelayOptions {
@@ -45,6 +51,10 @@ export interface ContainerizedRelayOptions {
   egressNetwork: string;
   tunnelAllowlist: AllowedHost[];
   gateway?: GatewayTarget;
+  /** See `RelayContainerConfig` above; omitted, the relay's own
+   * defaults apply. */
+  maxRequestBytes?: number;
+  maxCallsPerTask?: number;
   /** Defaults to `RELAY_IMAGE` (launch.ts) - overridable for tests. */
   image?: string;
   /** How long to wait for the container's own `FABRICA-RELAY-LISTENING`

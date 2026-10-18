@@ -26,6 +26,8 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
     checkout: () => ok("checkout"),
     docker: () => ok("docker"),
     workerImage: () => ok("worker image"),
+    workerCli: () => ok("worker CLI"),
+    relayImage: () => ok("relay image"),
     workerToken: () => ok("worker token"),
     githubToken: () => ok("GitHub token"),
     inspector: () => ok("inspector"),
@@ -70,13 +72,23 @@ test("fabrica doctor: everything healthy - every line OK, exit 0, and nothing is
   const probes = okProbes();
   const { code, lines } = await doctor(healthyHome(), probes);
   assert.equal(code, 0, lines.join("\n"));
-  // 7 machine checks, 1 project, caps, spend.
-  assert.equal(lines.length, 10, lines.join("\n"));
+  // 9 machine checks, 1 project, caps, spend.
+  assert.equal(lines.length, 12, lines.join("\n"));
   assert.ok(lines.every((l) => l.startsWith("OK ")), lines.join("\n"));
   assert.equal(probes.liveCalls, 0, "the live call ran without --live - doctor must spend nothing by default");
 });
 
-for (const name of ["node", "checkout", "docker", "workerImage", "workerToken", "githubToken", "inspector"] as const) {
+for (const name of [
+  "node",
+  "checkout",
+  "docker",
+  "workerImage",
+  "workerCli",
+  "relayImage",
+  "workerToken",
+  "githubToken",
+  "inspector",
+] as const) {
   test(`fabrica doctor: a failing ${name} check prints FAIL with its fix, and exits 1`, async () => {
     const failing: DoctorCheck = { ok: false, label: name, detail: "broken", fix: `the exact fix for ${name}` };
     const { code, lines } = await doctor(healthyHome(), okProbes({ [name]: () => failing }));

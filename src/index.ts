@@ -56,7 +56,8 @@ export type { DeliveryErrorCode } from "./delivery/index.ts";
 // 8) - it asks for whichever one v1 wires in by default.
 export { defaultBrainAdapter } from "./brain/index.ts";
 // `fabrica doctor`'s machine checks (src/cli/doctor-command.ts).
-export { probeWorkerToken, workerImageStatus, workerTokenStatus } from "./brain/index.ts";
+export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerTokenStatus } from "./brain/index.ts";
+export { relayImageStatus } from "./relay/index.ts";
 export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
 export { requireGitRoot } from "./foreman/index.ts";
 export type { Brain, Caps, GateResult, Receipt } from "../contract/surface.ts";

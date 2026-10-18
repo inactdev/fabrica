@@ -150,11 +150,20 @@ preflight that spends nothing: one line per check - `OK`, or `FAIL` with
 the exact fix - covering Node, which copy of `fabrica` you're actually
 running (a developer checkout's branch and commit, or an installed
 copy's version and commit, either way compared against the project's
-`origin/master`), Docker, the worker image, the worker token above, the
-GitHub token Inspector needs, Inspector itself, every project you've
-registered, your spending caps, and any unmeasured spend blocking new
-work. `fabrica doctor --live` additionally spends a few cents to confirm
-the worker token actually authenticates.
+`origin/master`), Docker, the worker image, the coding agent's version
+installed inside it, the relay image every task's network goes through,
+the worker token above, the GitHub token Inspector needs, Inspector
+itself, every project you've registered, your spending caps, and any
+unmeasured spend blocking new work. `fabrica doctor --live`
+additionally spends a few cents to confirm the worker token actually
+authenticates.
+
+Two of those lines are about the network a Worker gets. **relay image**
+fails if the image the relay container runs from isn't on the machine -
+no task can start its relay without it - and prints the exact `docker
+pull`. **worker CLI** reports the coding agent's version as actually
+installed in the worker image against the version the Dockerfile pins,
+and only fails when those two disagree.
 
 ### Installing Inspector (optional)
 
@@ -315,6 +324,43 @@ it, by looking up the real figure and recording it by hand with
 `fabrica cost <taskId> <usd>`; it is the one way out, and it is denied
 to the AI you talk to for the same reason `fabrica verdict` and
 `fabrica answer` are.
+
+## What a task may reach on the network
+
+A Worker's container has no route to the internet at all. Everything it
+sends goes through a relay Fabrica runs beside it, and the relay turns
+away anything the project didn't ask for. Out of the box that means the
+model provider and GitHub - nothing else.
+
+A project that needs more says so in its own entry in
+`~/.fabrica/projects.toml`:
+
+    [projects.spending-app]
+    path = "/Users/you/inkling-umbrella/spending-app"
+    check = "./check.sh"
+    hosts = ["registry.npmjs.org"]
+
+`hosts` is **added to** the model provider and GitHub, never a
+replacement for them, so listing a registry can't accidentally cut a
+task off from the things every task needs. An entry is a host name,
+optionally with one port (`"example.com:8443"`), optionally with a
+leading `*.` to cover one level of subdomain (`"*.example.com"` covers
+`api.example.com`, not `example.com` itself - list both if you need
+both). A host the project never listed is refused, and the refusal is
+on that task's own record with the host named: `fabrica log <id>`.
+
+This is what a check that installs its own dependencies needs. With
+`registry.npmjs.org` listed, `npm ci` inside the Worker's box works;
+without it, it is refused.
+
+Two limits apply to the same traffic, both overridable in the same
+place:
+
+    maxRequestBytes = 10485760   # default: 10 MB, per request
+    maxCallsPerTask = 2000       # default: 2000 calls, per task
+
+Going over either refuses that one request - and nothing more. The task
+keeps running: your spending cap is the only thing that stops a task.
 
 ## Stopping the AI you talk to from editing files or ruling for you
 

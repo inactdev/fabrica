@@ -217,6 +217,15 @@ project uses - rather than inventing either one:
   different matter: no network flag helps, because the box runs as your
   own user and cannot write outside the project. Pick an `--image` that
   already ships that tool instead.
+- A check that installs its own dependencies also needs the *Worker's*
+  box to reach wherever they come from, which is a separate list: a
+  `hosts = ["registry.npmjs.org"]` line in that project's own
+  `~/.fabrica/projects.toml` entry (README.md's "What a task may reach
+  on the network"). The model provider and GitHub are always allowed;
+  anything else is refused until it is listed, and the refusal shows up
+  in `fabrica log <id>` naming the host. `fabrica register` doesn't
+  write that line - tell the Client it is a one-line edit to make by
+  hand if their check installs anything.
 
 Then run it:
 

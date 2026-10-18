@@ -80,6 +80,23 @@ export interface RelayOptions {
    * swap at all) - every non-CONNECT request then gets a plain 501,
    * since there is nowhere configured to send it. */
   gateway?: GatewayTarget;
+  /** The largest single request a worker box may send through gateway
+   * mode, in bytes (issue #186). Defaults to `limits.mjs`'s
+   * `DEFAULT_MAX_REQUEST_BYTES`; a project overrides it with
+   * projects.toml's `maxRequestBytes`. Over it, that one request is
+   * refused with a 413 and a `"network-refused"` event naming the
+   * limit, and the task runs on - rule 10's spending cap is the only
+   * thing that stops a task (Client ruling, issue #186). This
+   * deliberately cannot apply to tunnel mode: a CONNECT tunnel is raw
+   * bytes the relay never looks inside, so there is no request in it to
+   * measure. */
+  maxRequestBytes?: number;
+  /** How many calls this task may make through the relay - one gateway
+   * request, or one CONNECT tunnel, is one call. Defaults to
+   * `limits.mjs`'s `DEFAULT_MAX_CALLS_PER_TASK`; a project overrides it
+   * with projects.toml's `maxCallsPerTask`. Past it every further call
+   * is refused (429), recorded once, and the task still runs on. */
+  maxCallsPerTask?: number;
 }
 
 export interface RelayHandle {

@@ -313,13 +313,23 @@ ref anywhere is mutated), never failing the check on its own, only
 `FAIL`ing outright when an installed copy has no `build-info.json` to
 read at all (naming reinstall as the fix); Docker, the worker image
 (present, and stamped with the current Dockerfile's hash), the worker
-token (from the environment or `brain.env`, mode 600), the GitHub token
-Inspector needs, `inspector` on PATH taking `-branch`, every registered
-project (exists, git root, a check, an `origin` remote), the caps, and
-any SPEND UNKNOWN block. `--live` adds one minimal real call with the
-worker token (a few cents) and reports it alive or dead. No check
-prints a token. The adapter- and Inspector-specific checks live beside
-those modules (`src/brain/adapters/doctor-checks.ts`,
+CLI's own version inside that image against the version its Dockerfile
+pins (issue #186 - asked of the CLI itself inside the image, and a
+failure only when a pin exists and the two differ; an image that can't
+be asked is reported but never failed twice, the worker image line
+above already owning that), the relay image every task's network goes
+through (issue #186 - `docker image inspect` only, which never pulls,
+and a FAIL carrying the exact `docker pull`: a missing one means the
+first task of the day dies inside `docker run` instead of here), the
+worker token (from the environment or `brain.env`, mode 600), the
+GitHub token Inspector needs, `inspector` on PATH taking `-branch`,
+every registered project (exists, git root, a check, an `origin`
+remote), the caps, and any SPEND UNKNOWN block. `--live` adds one
+minimal real call with the worker token (a few cents) and reports it
+alive or dead. No check prints a token. The adapter-, relay- and
+Inspector-specific checks live beside those modules
+(`src/brain/adapters/doctor-checks.ts`,
+`src/relay/container/doctor-check.ts`,
 `src/inspector/doctor-checks.ts`); this command only prints them.
 
 ## `fabrica up`

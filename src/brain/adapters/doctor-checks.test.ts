@@ -7,7 +7,14 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dockerfileSha256, probeWorkerToken, workerImageStatus, workerTokenStatus } from "./doctor-checks.ts";
+import {
+  dockerfileSha256,
+  pinnedCliVersion,
+  probeWorkerToken,
+  workerCliVersionStatus,
+  workerImageStatus,
+  workerTokenStatus,
+} from "./doctor-checks.ts";
 
 test("worker image: absent is not present, and the fix is the exact build command, stamped with the Dockerfile's hash", () => {
   const status = workerImageStatus(() => null);
@@ -170,4 +177,53 @@ test("live probe: a refused call is dead, with what to check", async () => {
   assert.equal(status.ok, false);
   assert.match(status.detail, /dead - .*401/);
   assert.match(status.fix ?? "", /FABRICA_MODEL/);
+});
+
+test("worker CLI: the version installed in the image matching the Dockerfile's pin is current", () => {
+  const status = workerCliVersionStatus(
+    () => "2.1.222",
+    () => "2.1.222"
+  );
+  assert.equal(status.ok, true);
+  assert.match(status.detail, /2\.1\.222/);
+});
+
+test("worker CLI: an installed version that differs from the pin fails, with the rebuild command", () => {
+  const status = workerCliVersionStatus(
+    () => "2.0.0",
+    () => "2.1.222"
+  );
+  assert.equal(status.ok, false);
+  assert.match(status.detail, /2\.0\.0/);
+  assert.match(status.detail, /2\.1\.222/);
+  assert.match(status.fix ?? "", /docker build/);
+});
+
+test("worker CLI: with no pin to differ from, the installed version is information, never a failure", () => {
+  const status = workerCliVersionStatus(
+    () => "2.1.222",
+    () => null
+  );
+  assert.equal(status.ok, true);
+  assert.match(status.detail, /pins no version/);
+});
+
+test("worker CLI: an image that cannot be asked is reported, but the worker image line owns that failure", () => {
+  const unreadable = workerCliVersionStatus(
+    () => null,
+    () => "2.1.222"
+  );
+  assert.equal(unreadable.ok, true, "doctor must not report the same missing image as two separate failures");
+  assert.match(unreadable.detail, /could not be read/);
+  assert.match(unreadable.detail, /2\.1\.222/);
+});
+
+test("worker CLI: the pin is read from the Dockerfile's own install line", () => {
+  assert.equal(pinnedCliVersion(() => "RUN npm install -g @anthropic-ai/claude-code@9.9.9\n"), "9.9.9");
+  assert.equal(pinnedCliVersion(() => "RUN npm install -g @anthropic-ai/claude-code@latest\n"), null);
+  assert.equal(pinnedCliVersion(() => "RUN apk add --no-cache git bash\n"), null);
+  // The real Dockerfile pins one today; if that ever stops being true,
+  // this check becomes information-only rather than silently wrong.
+  const real = pinnedCliVersion();
+  assert.ok(real === null || /^\d+\.\d+\.\d+/.test(real), `unexpected pinned version: ${real}`);
 });
