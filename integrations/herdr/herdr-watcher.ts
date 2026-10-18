@@ -216,6 +216,13 @@ function reactionForEvent(event: FabricaEvent): Reaction | null {
       const ruling = (event.details as { ruling?: string } | undefined)?.ruling;
       return ruling === "accept" || ruling === "wrong" ? { action: "release" } : null;
     }
+    // Issue #203: the Client stopped the task himself. Terminal the
+    // moment this lands (`stateOf`), so the agent is released here for
+    // the same reason a closing verdict releases it - without this, a
+    // stopped task's row would sit at "working" forever, since the
+    // heartbeat that last reported it is the newest thing Herdr saw.
+    case "stopped-by-owner":
+      return { action: "release" };
     default:
       return null;
   }

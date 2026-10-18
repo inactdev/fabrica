@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, appendFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, recordPath, registerTask } from "../../src/record/index.ts";
+import { appendEvent, appendTaskFile, recordPath, registerTask, writeTaskFile } from "../../src/record/index.ts";
 import {
   createRecordView,
   displayState,
@@ -30,6 +30,11 @@ test("displayState: collapses FabricaTask's richer union, but keeps a closed ver
   // (Inspector reaching no verdict at all) - a closed verdict shows the
   // ruling the Client actually gave instead.
   assert.equal(displayState("refused"), "stopped");
+  // Issue #203: the Client stopping a task himself is its own word -
+  // "stopped" above has meant "Inspector reached no verdict" since
+  // issue #26, and two outcomes reading as one word on one page would
+  // be worse than a longer label.
+  assert.equal(displayState("stopped"), "stopped by you");
   assert.equal(displayState("closed", "accept"), "closed (accept)");
   assert.equal(displayState("closed", "wrong"), "closed (wrong)");
   // Defensive only - stateOf never reports "closed" without one of the
@@ -44,6 +49,7 @@ test("isFinished: a closed verdict, a real stop, or a failure all count as histo
   assert.equal(isFinished("delivered"), false);
   assert.equal(isFinished("failed"), true);
   assert.equal(isFinished("stopped"), true);
+  assert.equal(isFinished("stopped by you"), true);
   assert.equal(isFinished("closed (accept)"), true);
   assert.equal(isFinished("closed (wrong)"), true);
   assert.equal(isFinished("closed"), true);
@@ -196,7 +202,13 @@ test("createRecordView: getTask returns the same view getState would, for one ta
   const taskId = registerTask(recordHome, "look at just this one").id;
   appendEvent(recordHome, { taskId, name: "work-started", details: { project: "/p" } });
 
-  assert.deepEqual(view.getTask(taskId), view.getState().tasks.find((t) => t.id === taskId));
+  // Both are given the same `now` (issue #203 added a live `durationMs`
+  // to this shape): left to their own defaults they would read the
+  // clock a fraction of a millisecond apart, and the one field that is
+  // meant to differ over time would make this comparison flaky for a
+  // reason that has nothing to do with what it is proving.
+  const now = Date.now();
+  assert.deepEqual(view.getTask(taskId, now), view.getState(now).tasks.find((t) => t.id === taskId));
 });
 
 test("createRecordView: getTask reads as null for a task id this record home has never heard of", () => {
@@ -364,4 +376,220 @@ test("createRecordView: never writes to the record home", () => {
   const after = readFileSync(recordPath(recordHome), "utf8");
 
   assert.equal(after, before);
+});
+
+// --- the full column set (issue #203) ---------------------------------
+//
+// Every column the list pages now show has to come off the record and
+// nothing else. These tests build the record by hand, event by event,
+// because that is exactly the question being asked: given these events,
+// what does the page say?
+
+/** A receipt as attempts.ts records one, with only the fields these
+ * columns read filled in. */
+function receiptEvent(recordHome: string, taskId: string, receipt: Record<string, unknown>): void {
+  appendEvent(recordHome, { taskId, name: "receipt-recorded", details: { receipt } });
+}
+
+test("worker and model come off the latest receipt, and read as nothing before there is one", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/proj/thing" } });
+
+  assert.equal(createRecordView(recordHome).getTask(id)!.worker, null, "no attempt yet, so nothing to claim");
+
+  receiptEvent(recordHome, id, { attempt: 1, brain: "claude-code", model: "old-model" });
+  receiptEvent(recordHome, id, { attempt: 2, brain: "claude-code", model: "new-model" });
+
+  assert.equal(createRecordView(recordHome).getTask(id)!.worker, "claude-code · new-model");
+});
+
+test("a receipt carried only on a delivered event's own list is still found", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, {
+    taskId: id,
+    name: "delivered",
+    details: { outcome: "done", receipts: [{ attempt: 1, brain: "some-brain", model: "some-model" }] },
+  });
+
+  assert.equal(createRecordView(recordHome).getTask(id)!.worker, "some-brain · some-model");
+});
+
+test("network policy says only what the record can say: nothing, or the refusals it holds", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+
+  // Fabrica records no per-task network policy today (the adapter picks
+  // one per call and nothing writes it down - see networkPolicyLabel),
+  // so this must not claim one.
+  assert.equal(createRecordView(recordHome).getTask(id)!.networkPolicy, "not recorded");
+
+  appendEvent(recordHome, { taskId: id, name: "network-refused", details: { host: "evil.example", port: 443 } });
+  appendEvent(recordHome, { taskId: id, name: "network-refused", details: { host: "evil.example", port: 443 } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.networkPolicy, "2 refused (evil.example)");
+});
+
+test("trigger names the round the task is on, and the issue it was given explicitly", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.trigger, "do");
+
+  appendEvent(recordHome, { taskId: id, name: "answers-given", details: {} });
+  assert.equal(createRecordView(recordHome).getTask(id)!.trigger, "answer");
+
+  appendEvent(recordHome, { taskId: id, name: "verdict-recorded", details: { ruling: "fix" } });
+  appendEvent(recordHome, { taskId: id, name: "verdict-recorded", details: { ruling: "fix" } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.trigger, "fix 2");
+});
+
+test("an explicitly named issue rides along with the trigger", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  writeTaskFile(recordHome, id, "issue", "203");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+
+  assert.equal(createRecordView(recordHome).getTask(id)!.trigger, "do #203");
+});
+
+test("started and duration come from the task's own first and last events", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+
+  const view = createRecordView(recordHome);
+  const started = view.getTask(id)!.startedAtMs!;
+  assert.ok(Number.isFinite(started), "a registered task always has a start");
+
+  // An open task's duration runs to now...
+  const open = view.getTask(id, started + 90_000)!;
+  assert.equal(open.durationMs, 90_000);
+
+  // ...and a finished one's stops at whatever it last recorded, rather
+  // than counting up forever on the history page.
+  appendEvent(recordHome, { taskId: id, name: "delivered", details: { outcome: "done" } });
+  appendEvent(recordHome, { taskId: id, name: "verdict-recorded", details: { ruling: "accept" } });
+  const closed = createRecordView(recordHome).getTask(id, started + 10 * 60_000)!;
+  assert.ok(closed.finished);
+  assert.ok(closed.durationMs < 60_000, "a closed task's duration is frozen, not still running");
+});
+
+test("checks reports whatever most recently judged the work, Inspector included", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.checks, "—");
+
+  appendEvent(recordHome, { taskId: id, name: "check-run", details: { attempt: 1, phase: "started" } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.checks, "running");
+
+  appendEvent(recordHome, { taskId: id, name: "check-run", details: { attempt: 1, green: false } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.checks, "red");
+
+  appendEvent(recordHome, { taskId: id, name: "inspection-finished", details: { verdict: "green", report: "" } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.checks, "inspector: green");
+});
+
+test("delivery and confidence come off the real Delivery, and an Inspector refusal after it supersedes it", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.delivery, null);
+  assert.equal(createRecordView(recordHome).getTask(id)!.confidence, null);
+
+  appendEvent(recordHome, {
+    taskId: id,
+    name: "delivered",
+    details: { outcome: "done", delivery: { outcome: "done", confidence: 100, summary: "s" } },
+  });
+  assert.equal(createRecordView(recordHome).getTask(id)!.delivery, "done");
+  assert.equal(createRecordView(recordHome).getTask(id)!.confidence, 100);
+
+  appendEvent(recordHome, { taskId: id, name: "inspection-finished", details: { verdict: "refused", report: "no token" } });
+  assert.equal(createRecordView(recordHome).getTask(id)!.delivery, null, "a refusal after a delivery supersedes it");
+});
+
+test("the cost meter's cap is the one the task started under, not whatever projects.toml says now", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  writeTaskFile(recordHome, id, "caps.json", JSON.stringify({ perTaskUsd: 3 }));
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+
+  assert.equal(createRecordView(recordHome).getTask(id)!.perTaskCapUsd, 3);
+});
+
+test("a task registered before caps were ever recorded shows no cap rather than a wrong one", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+
+  // No caps.json, and no projects.toml in this throwaway record home
+  // either - so there is no cap, and the page shows the cost as plain
+  // text with no meter.
+  assert.equal(createRecordView(recordHome).getTask(id)!.perTaskCapUsd, undefined);
+});
+
+test("a caps.json that cannot be parsed falls back rather than taking the page down", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  writeTaskFile(recordHome, id, "caps.json", "{ not json");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+
+  assert.equal(createRecordView(recordHome).getTask(id)!.perTaskCapUsd, undefined);
+});
+
+test("getRunningRows lists exactly the stoppable tasks, with the worker's own last line", () => {
+  const recordHome = tempRecordHome();
+
+  const { id: running } = registerTask(recordHome, "still going");
+  appendEvent(recordHome, { taskId: running, name: "work-started", details: { project: "/p" } });
+  appendTaskFile(
+    recordHome,
+    running,
+    "transcript.log",
+    `${JSON.stringify({ occurredAt: "2026-10-18T10:00:00.000Z", kind: "stdout", text: "editing a file" })}\n`
+  );
+
+  const { id: delivered } = registerTask(recordHome, "already done");
+  appendEvent(recordHome, { taskId: delivered, name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, { taskId: delivered, name: "delivered", details: { outcome: "done" } });
+
+  const { id: asking } = registerTask(recordHome, "waiting on words");
+  appendEvent(recordHome, { taskId: asking, name: "questions-asked", details: { questions: ["which?"] } });
+
+  const rows = createRecordView(recordHome).getRunningRows();
+
+  assert.deepEqual(rows.map((r) => r.id), [running], "only the one that is actually running");
+  assert.equal(rows[0].lastActivity, "editing a file");
+  assert.equal(rows[0].title, "still going");
+});
+
+test("a task mid-check is running too - it is the same 'working' word on this page", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "checking away");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, { taskId: id, name: "check-run", details: { attempt: 1, phase: "started" } });
+
+  assert.deepEqual(createRecordView(recordHome).getRunningRows().map((r) => r.id), [id]);
+});
+
+test("a task the Client stopped is finished, not running, and never waiting on him", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "stopped one");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, {
+    taskId: id,
+    name: "stopped-by-owner",
+    details: { by: "client@example.com", stoppedFrom: "working", lastActivity: null },
+  });
+
+  const view = createRecordView(recordHome);
+  const task = view.getTask(id)!;
+  assert.equal(task.state, "stopped by you");
+  assert.equal(task.finished, true);
+  assert.equal(task.running, false);
+  assert.deepEqual(view.getRunningRows(), []);
+  assert.deepEqual(view.getReviewRows(), []);
 });

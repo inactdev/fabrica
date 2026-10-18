@@ -378,6 +378,11 @@ export function formatTerminalNotice(
       // Stopped for clarifying questions before any Worker ran (issue #8)
       // - polling forever here would look like a hang with no way out.
       return `-- task asking - stopped for clarifying questions; answer with \`fabrica answer ${ctx.taskId} -m "<text>"\` to resume it --`;
+    case "stopped":
+      // Issue #203: the Client stopped it himself. Terminal, and
+      // deliberately not worded as a failure or as something to resolve
+      // - the decision was his, and nothing is being asked of him.
+      return "-- task stopped by you - the worker's process was signaled; nothing more will land on this transcript --";
     default:
       return null;
   }
@@ -530,6 +535,18 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       // `brain.ask()` itself throws, before any Worker ever ran.
       const d = details as { error?: string };
       return d.error ? `ask failed: ${d.error}` : "ask failed";
+    }
+
+    case "stopped-by-owner": {
+      // `stop.ts`'s StoppedByOwnerDetails (issue #203). The last
+      // activity is a whole transcript line, which can be long and can
+      // have newlines in it - its first line only, like `task-failed`
+      // above, since this rendering is one line per event.
+      const d = details as { by?: string; stoppedFrom?: string; lastActivity?: { text?: string } | null };
+      const who = d.by ? ` by ${d.by}` : "";
+      const from = d.stoppedFrom ? ` while ${d.stoppedFrom}` : "";
+      const last = d.lastActivity?.text ? `, last activity: ${d.lastActivity.text.split("\n")[0]}` : "";
+      return `stopped${who}${from}${last}`;
     }
 
     default:

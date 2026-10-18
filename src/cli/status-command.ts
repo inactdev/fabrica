@@ -142,7 +142,17 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
       task: { id, state: stateOf(events) },
       events,
       hasDelivery: events.some((e) => e.name === "delivered"),
-    })).filter(({ task }) => !task.id.startsWith(PHANTOM_TASK_PREFIX) && task.state !== "closed");
+    })).filter(
+      ({ task }) =>
+        !task.id.startsWith(PHANTOM_TASK_PREFIX) &&
+        task.state !== "closed" &&
+        // Issue #203: the Client's own stop is as resolved as a closed
+        // verdict - he decided it, nothing is expected of him, and the
+        // task cannot move again. Listed under "open tasks" it would be
+        // the one line on this listing asking nothing of anyone. The
+        // live view's /history page is where it stays visible.
+        task.state !== "stopped"
+    );
 
     if (openTasks.length === 0) {
       stdout("No open tasks.");

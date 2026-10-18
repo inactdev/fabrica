@@ -119,6 +119,13 @@ export async function registerAndAsk(
   // taskText from request.md, rather than it being threaded through a
   // parameter that round never receives.
   if (opts.issue !== undefined) writeTaskFile(recordHome, taskId, "issue", String(opts.issue));
+  // Rule 10's numbers as of this moment, persisted once (issue #203):
+  // these are the caps this task is actually held to, and a cost meter
+  // read weeks later should show the ceiling that applied rather than
+  // whatever projects.toml says by then. Written for every task, caps
+  // set or not, so "no cap" is recorded as a fact rather than as a
+  // missing file that could equally mean "an older task".
+  writeTaskFile(recordHome, taskId, "caps.json", JSON.stringify(opts.caps ?? {}));
 
   return recordingFailure(recordHome, taskId, async () => {
     // Before anything spends, the clarifying step included: the project

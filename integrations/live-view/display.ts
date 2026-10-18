@@ -22,6 +22,11 @@ const STATE_SYMBOLS: Record<DisplayState, StateSymbol> = {
   delivered: { text: "✓", cls: "symbol-check" },
   failed: { text: "✗", cls: "symbol-failed" },
   stopped: { text: "●", cls: "symbol-dot" },
+  // Issue #203: the Client's own stop gets a square rather than the
+  // gray dot every other finished-without-a-verdict state wears - it is
+  // the one outcome on this page he caused himself, and it should be
+  // findable at a glance among them.
+  "stopped by you": { text: "■", cls: "symbol-stopped" },
   "closed (accept)": { text: "●", cls: "symbol-dot" },
   "closed (wrong)": { text: "●", cls: "symbol-dot" },
   closed: { text: "●", cls: "symbol-dot" },
@@ -34,12 +39,43 @@ export function stateSymbol(state: DisplayState): StateSymbol {
 export type RowEmphasis = "emphasis" | "fade" | "normal";
 
 /** Failed and asked-a-question rows stand out more than the others; a
- * closed row (whichever ruling) fades back. Stopped stays normal - it
- * only gets the dimmer gray symbol above, not the fade treatment. */
+ * closed row (whichever ruling) fades back, and so does one the Client
+ * stopped himself - he already knows about that one. Stopped (as in
+ * Inspector reached no verdict) stays normal: it only gets the dimmer
+ * gray symbol above, not the fade treatment. */
 export function rowEmphasis(state: DisplayState): RowEmphasis {
   if (state === "failed" || state === "asked a question") return "emphasis";
   if (state === "closed (accept)" || state === "closed (wrong)" || state === "closed") return "fade";
+  if (state === "stopped by you") return "fade";
   return "normal";
+}
+
+/** The project's own folder name - what identifies it at a glance in a
+ * column too narrow for a whole path (the full path goes on the cell's
+ * title attribute). Trailing separators are dropped first, so a path
+ * registered with one doesn't read as an empty name, and a project with
+ * no path recorded yet reads as an em dash rather than blank. */
+export function projectName(path: string | null): string {
+  if (!path) return "—";
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (trimmed.length === 0) return "—";
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || trimmed;
+}
+
+/** How full the per-task cost meter is, 0 to 1, and which of its three
+ * colors that is (issue #203). Pure arithmetic, for the same reason
+ * `isScrolledToBottom` below is: the page's own copy of this runs in a
+ * browser with no test harness. Clamped at both ends - a task past its
+ * cap shows a full bar, never one that overflows its track - and
+ * measured on metered dollars alone, since that is the only spend the
+ * per-task cap binds on (issue #188). A cap of zero or less has no
+ * meaningful fraction and is treated as no meter at all, the same as an
+ * absent one. */
+export function meterFill(costUsd: number, capUsd: number | undefined): { fraction: number; level: "" | "high" | "full" } | null {
+  if (typeof capUsd !== "number" || !Number.isFinite(capUsd) || capUsd <= 0) return null;
+  const fraction = Math.max(0, Math.min(1, costUsd / capUsd));
+  return { fraction, level: fraction >= 1 ? "full" : fraction >= 0.8 ? "high" : "" };
 }
 
 /** Whether a scrollable area is at (or within `thresholdPx` of) its own

@@ -19,6 +19,11 @@ export { fixRoundOf } from "./foreman/index.ts";
 // itself is re-derived from the record rather than threaded through.
 export { recordAnswerDecision, runRecordedAnswer } from "./foreman/index.ts";
 export { recordVerdictDecision, runRecordedFix } from "./foreman/index.ts";
+// Issue #203: the review page's one new write - recording the Client's
+// decision to stop a task. Signaling the worker's own process is a
+// separate, CLI-layer step (src/cli/task-process.ts).
+export { recordStopDecision } from "./foreman/index.ts";
+export type { LastWorkerActivity, StoppedByOwnerDetails } from "./foreman/index.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
 export { readTranscript, eventsByTask, stateOf, deliveryOf, earlyStopKindOf } from "./foreman/index.ts";
 export { followTask } from "./foreman/index.ts";
@@ -54,7 +59,7 @@ export { defaultBrainAdapter } from "./brain/index.ts";
 export { probeWorkerToken, workerImageStatus, workerTokenStatus } from "./brain/index.ts";
 export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
 export { requireGitRoot } from "./foreman/index.ts";
-export type { Brain, Caps } from "../contract/surface.ts";
+export type { Brain, Caps, GateResult, Receipt } from "../contract/surface.ts";
 export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
 
 // Config: the record home's project registry and caps (SPEC.md

@@ -4,8 +4,10 @@
 // (request.md, answers.md, brief.md, plan.md, delivery.md, verdict,
 // transcript.log) is a convenience view of it.
 
-// The base record shapes are ratified in contract/surface.ts. Inspector's
-// trigger and result events extend that closed set in src/inspector/types.ts.
+// The base record shapes are ratified in contract/surface.ts. Fabrica's
+// own additions to that closed set - Inspector's trigger and result
+// events, and the Client's own "stopped-by-owner" - extend it in
+// src/inspector/types.ts, the single place that widening happens.
 import type { FabricaEvent, FabricaEventName } from "../inspector/types.ts";
 export type { FabricaEvent, FabricaEventName };
 
@@ -36,4 +38,14 @@ export type TaskFile =
    * time (`do(..., { issue })`), plain text, written once at
    * registration - never derived from task text, which is re-read from
    * request.md instead. See src/foreman/pr-body.ts's `closesIssueFor`. */
-  | "issue";
+  | "issue"
+  /** The caps (rule 10) this task actually started under, as JSON,
+   * written once at registration - so a cost meter shown weeks later
+   * reports the ceiling the task was held to rather than whatever
+   * projects.toml happens to say when it is read (issue #203). */
+  | "caps.json"
+  /** The pid of the detached process running this task's current round,
+   * written by that process itself (src/cli/task-process.ts) - the only
+   * pid `stop` will ever consider signaling, and never trusted without
+   * re-verifying it against the real process table first. */
+  | "worker.pid";

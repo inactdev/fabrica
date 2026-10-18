@@ -510,3 +510,28 @@ test("herdrWatcherStatus: exited, and the stale file is removed, when the pid na
   assert.equal(existsSync(pidFile), false, "a stale pid file should be cleaned up");
   assert.equal(isHerdrWatcherRunning(recordHome), false);
 });
+
+test("a task the Client stopped himself releases the agent - it is terminal, not still working (issue #203)", () => {
+  withFakeHerdrLog((readCalls) => {
+    const recordHome = makeRecordHome();
+    const watcher = watcherOver(recordHome);
+
+    const { id } = registerTask(recordHome, "Fix the login bug");
+    watcher.pollOnce(); // seq 1
+
+    appendEvent(recordHome, { taskId: id, name: "heartbeat", details: { attempt: 1 } });
+    watcher.pollOnce(); // seq 2 - working
+
+    appendEvent(recordHome, {
+      taskId: id,
+      name: "stopped-by-owner",
+      details: { by: "client@example.com", stoppedFrom: "working", lastActivity: null },
+    });
+    watcher.pollOnce();
+
+    const releases = readCalls().filter((c) => c.args[0] === "pane" && c.args[1] === "release-agent");
+    assert.deepEqual(releases.map((c) => c.args.slice(2)), [
+      ["w1:p1", "--source", "custom:fabrica", "--agent", "Fix the login bug", "--seq", "3"],
+    ]);
+  });
+});

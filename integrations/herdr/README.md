@@ -75,6 +75,13 @@ closing it, and the next heartbeat the resumed worker emits already
 reports `working` again, so there's no separate case for it here - the
 tab stays open exactly as before.
 
+A `stopped-by-owner` event (issue #203: the Client stopped the task
+himself from the live view's review page) runs those same three
+commands, for the same reason - that state is terminal the moment the
+event lands (`stateOf`), so the row would otherwise sit at `working`
+forever, the last thing a heartbeat reported before the worker's
+process was signaled.
+
 `--seq` is a per-task counter, starting at 1 on the task's first
 `report-agent` call and increasing by one on every `report-agent` or
 `release-agent` call for that task after that - matching Herdr's own

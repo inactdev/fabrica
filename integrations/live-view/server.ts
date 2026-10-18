@@ -1,11 +1,15 @@
 // A tiny HTTP server for watching what the factory is doing (issue #26),
-// now with one deliberate exception (issue #202): every handler still
-// only ever reads (`readFileSync`/`readdirSync`, directly or through
-// src/index.ts) EXCEPT the two POST routes below that record the
-// Client's own decisions from the phone review page - his verdict on a
-// delivery, and his answer to a worker's clarifying questions. See
-// "Recording a decision from the phone" lower in this file, and this
-// module's README, for why those writes are safe to allow here.
+// now with a few deliberate exceptions (issues #202, #203): every
+// handler still only ever reads (`readFileSync`/`readdirSync`, directly
+// or through src/index.ts) EXCEPT the three POST routes below that
+// record the Client's own decisions from the phone review page - his
+// verdict on a delivery, his answer to a worker's clarifying questions,
+// and his decision to stop a running task. See "Recording a decision
+// from the phone" lower in this file, and this module's README, for why
+// those writes are safe to allow here. The stop route is the only one
+// that reaches outside the record at all (it signals the task's own
+// detached process), and it does so through src/cli/task-process.ts,
+// which will not signal a pid it has not re-verified.
 //
 // It never binds anywhere but the loopback interface - HOST below is not
 // a parameter anywhere, so there is no way to ask this server for
@@ -20,10 +24,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { recordAnswerDecision, recordVerdictDecision, TASK_ID_PATTERN } from "../../src/index.ts";
+import { recordAnswerDecision, recordStopDecision, recordVerdictDecision, TASK_ID_PATTERN } from "../../src/index.ts";
 import { runningCopyCommit } from "../../src/cli/doctor-command.ts";
 import { loadConfigOrDefault } from "../../src/cli/load-config.ts";
 import { spawnDetachedResume } from "../../src/cli/spawn-detached.ts";
+import { findTaskProcess, stopTaskProcess } from "../../src/cli/task-process.ts";
 import { createRecordView } from "./record-view.ts";
 
 export const DEFAULT_PORT = 7777;
@@ -64,6 +69,9 @@ const TASK_PAGE_PATH = new RegExp(`^/tasks/(${TASK_ID_PATTERN.source.slice(1, -1
  * all and reporting a generic 405. */
 const REVIEW_VERDICT_PATH = /^\/api\/review\/tasks\/([^/]+)\/verdict$/;
 const REVIEW_ANSWER_PATH = /^\/api\/review\/tasks\/([^/]+)\/answer$/;
+/** Issue #203's one new write: stopping a running task. Same loose
+ * capture and same decode-then-validate handling as the two above. */
+const REVIEW_STOP_PATH = /^\/api\/review\/tasks\/([^/]+)\/stop$/;
 /** Serve adds this to a proxied request's headers for the authenticated
  * tailnet user, and strips it from anything a client tried to send
  * itself (Tailscale's own docs: "to avoid header spoofing") - so its
@@ -109,12 +117,19 @@ export function startLiveView(opts: {
    * default answer-entry script runs, exactly as a real
    * `fabrica answer <id> -m "..."` would. */
   answerEntryScript?: string;
+  /** Test-only: replaces the half of `stop` that signals a real
+   * process, so a test can prove the route's identity gate, refusals
+   * and recorded event without a real worker to kill. Omitted, the real
+   * `findTaskProcess`/`stopTaskProcess` pair runs - which still signals
+   * nothing it has not verified first (src/cli/task-process.ts). */
+  stopProcess?: StopProcess;
 }): Promise<LiveView> {
   const view = createRecordView(opts.recordHome);
   const commit = opts.commit ?? (() => runningCopyCommit(CHECKOUT));
   const entryScripts = { fix: opts.fixEntryScript, answer: opts.answerEntryScript };
+  const stopProcess = opts.stopProcess ?? defaultStopProcess;
   const server = createServer((req, res) => {
-    handleRequest(req, res, view, commit, opts.recordHome, entryScripts).catch((err) => {
+    handleRequest(req, res, view, commit, opts.recordHome, entryScripts, stopProcess).catch((err) => {
       if (res.headersSent) return;
       send(res, 500, "text/plain; charset=utf-8", `fabrica live: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -141,29 +156,50 @@ interface EntryScripts {
   answer: string | undefined;
 }
 
+/** The process half of `stop` (issue #203): find the task's own
+ * detached process and signal it. Reports the pid it actually signaled,
+ * or null when none could be identified - never "assume it worked." */
+export type StopProcess = (recordHome: string, taskId: string) => { pid: number | null };
+
+/** The real thing: `findTaskProcess` first (which refuses to return a
+ * pid it has not re-verified against the live process table), then one
+ * SIGTERM with a SIGKILL queued behind it. A task whose process cannot
+ * be identified - already exited, no pid file, a stale pid whose number
+ * now belongs to something else - signals nothing at all, which is the
+ * right outcome: the record already says the task is stopped, and
+ * signaling an unverified pid is the one thing this must never do. */
+const defaultStopProcess: StopProcess = (recordHome, taskId) => {
+  const found = findTaskProcess(recordHome, taskId);
+  if (!found) return { pid: null };
+  return { pid: stopTaskProcess(found.pid) ? found.pid : null };
+};
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
   view: ReturnType<typeof createRecordView>,
   commit: () => string | null,
   recordHome: string,
-  entryScripts: EntryScripts
+  entryScripts: EntryScripts,
+  stopProcess: StopProcess
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${HOST}`);
 
-  // The only two routes that aren't GETs - everything else below this
-  // still only ever reads. Checked before the blanket "only GET"
-  // rejection so these two POSTs aren't caught by it.
+  // The only routes that aren't GETs - everything else below this still
+  // only ever reads. Checked before the blanket "only GET" rejection so
+  // these POSTs aren't caught by it.
   const verdictMatch = REVIEW_VERDICT_PATH.exec(url.pathname);
   const answerMatch = REVIEW_ANSWER_PATH.exec(url.pathname);
-  if (req.method === "POST" && (verdictMatch || answerMatch)) {
-    const taskId = decodeTaskId((verdictMatch ?? answerMatch)![1]);
+  const stopMatch = REVIEW_STOP_PATH.exec(url.pathname);
+  if (req.method === "POST" && (verdictMatch || answerMatch || stopMatch)) {
+    const taskId = decodeTaskId((verdictMatch ?? answerMatch ?? stopMatch)![1]);
     if (taskId === null) {
       send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
       return;
     }
     if (verdictMatch) await handleRecordVerdict(req, res, recordHome, taskId, entryScripts.fix);
-    else await handleRecordAnswer(req, res, recordHome, taskId, entryScripts.answer);
+    else if (answerMatch) await handleRecordAnswer(req, res, recordHome, taskId, entryScripts.answer);
+    else handleStopTask(req, res, recordHome, taskId, stopProcess);
     return;
   }
 
@@ -179,8 +215,32 @@ async function handleRequest(
     // try/sendRecordError shape as /api/state just below: a record read
     // that throws answers with the error as data rather than taking the
     // whole server down.
+    //
+    // `running` is a second, separate list (issue #203): the tasks the
+    // stop control applies to. Kept apart from `rows` on purpose - those
+    // are exactly the tasks waiting on the Client, and a running task is
+    // the opposite of that (record-view.ts's getRunningRows).
+    //
+    // `identified` is how the page knows whether to draw the stop
+    // control at all (Client ruling: absent from the page with no
+    // identity, AND refused by the server without it). A browser script
+    // cannot see the headers its own page was fetched with, so this one
+    // GET - which arrives through the very same `tailscale serve` proxy
+    // that adds the header to a POST - is where that fact has to come
+    // from. It is a display hint and nothing more: the stop route makes
+    // its own decision on its own request, and would refuse a POST from
+    // a page that drew the button anyway.
     try {
-      send(res, 200, "application/json", JSON.stringify({ rows: view.getReviewRows() }));
+      send(
+        res,
+        200,
+        "application/json",
+        JSON.stringify({
+          rows: view.getReviewRows(),
+          running: view.getRunningRows(),
+          identified: identityOf(req) !== null,
+        })
+      );
     } catch (err) {
       sendRecordError(res, err);
     }
@@ -311,6 +371,18 @@ function sendRecordError(res: ServerResponse, err: unknown): void {
   send(res, 200, "application/json", JSON.stringify({ error: `could not read the record: ${message}` }));
 }
 
+/** The authenticated tailnet user on this request, or null when there
+ * isn't one. The one place that header is read: `refuseWithoutIdentity`
+ * gates on it, and the stop route additionally records the login as part
+ * of its own decision (issue #203 - the record says who made every
+ * other decision, and a stop is one). */
+function identityOf(req: IncomingMessage): string | null {
+  const identity = req.headers[TAILSCALE_IDENTITY_HEADER];
+  if (typeof identity !== "string") return null;
+  const trimmed = identity.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 /** Recording a decision from the phone - the identity half, shared by
  * both of this server's writes (issue #202's verdict, and answering a
  * worker's questions).
@@ -328,10 +400,9 @@ function sendRecordError(res: ServerResponse, err: unknown): void {
  * identity this ever needs to recognize at all.
  *
  * `what` names the decision in the refusal's own words ("a verdict", "an
- * answer"); true means the request may proceed. */
+ * answer", "a stop"); true means the request was refused. */
 function refuseWithoutIdentity(req: IncomingMessage, res: ServerResponse, what: string): boolean {
-  const identity = req.headers[TAILSCALE_IDENTITY_HEADER];
-  if (typeof identity === "string" && identity.trim().length > 0) return false;
+  if (identityOf(req) !== null) return false;
   send(
     res,
     403,
@@ -446,6 +517,57 @@ async function handleRecordAnswer(
   } catch (err) {
     send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }
+}
+
+/**
+ * Stopping a running task from the phone (issue #203) - this server's
+ * third write, and the only one that reaches outside the record at all.
+ *
+ * Identity: the same `Tailscale-User-Login` gate as the verdict and
+ * answer routes, with the same 403 and the same one-line message. A stop
+ * ends work that is costing money and discards whatever the worker was
+ * part-way through, so it is at least as much a decision as a ruling.
+ * The login is additionally recorded, which neither of the other two
+ * routes does: those write a ruling or an answer the Client composed,
+ * while this writes only "it was stopped", and by whom is the rest of
+ * that sentence.
+ *
+ * No body is read at all - there is nothing to say beyond "stop", and
+ * the one confirmation the Client gives happens on the page before the
+ * request is ever sent (Client ruling: "one confirmation tap before
+ * firing").
+ *
+ * Order: record first, signal second. `recordStopDecision` refuses a
+ * task that isn't running with a 400 naming the state it is actually in
+ * - the page hides the control for those, but a page can be stale, and
+ * refusing is a better answer than stopping something that finished an
+ * hour ago. Once the event lands the task is terminal, whatever happens
+ * to the process next: the Client's decision is the fact (Client
+ * ruling), so a process that cannot be found - already exited, or a pid
+ * this module refused to trust - is reported honestly in the response
+ * rather than turned into a failure that would leave the record
+ * disagreeing with him.
+ */
+function handleStopTask(
+  req: IncomingMessage,
+  res: ServerResponse,
+  recordHome: string,
+  taskId: string,
+  stopProcess: StopProcess
+): void {
+  if (refuseWithoutIdentity(req, res, "a stop")) return;
+  const by = identityOf(req)!;
+
+  let stoppedFrom: string;
+  try {
+    stoppedFrom = recordStopDecision(recordHome, taskId, by).stoppedFrom;
+  } catch (err) {
+    send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+    return;
+  }
+
+  const { pid } = stopProcess(recordHome, taskId);
+  send(res, 200, "application/json", JSON.stringify({ ok: true, stoppedFrom, signaled: pid !== null, pid }));
 }
 
 /** A small, capped JSON body reader - this server otherwise never reads

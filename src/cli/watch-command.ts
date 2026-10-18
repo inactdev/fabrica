@@ -244,13 +244,14 @@ async function streamTranscript(ctx: {
       stdout(notice);
     }
 
-    // A closed task, an ask failure before delivery, and an Inspector
-    // refusal with no verdict cannot move again. isDeadEnd is the one
-    // shared definition for the latter two, so this exit condition stays
-    // aligned with status and terminal notices. A failed delivery,
-    // "asking", and "delivered" still keep polling - a `fix` verdict or
-    // `fabrica answer` can wake those back up.
-    return state === "closed" || isDeadEnd(state, hasDelivery);
+    // A closed task, one the Client stopped himself (issue #203), an ask
+    // failure before delivery, and an Inspector refusal with no verdict
+    // cannot move again. isDeadEnd is the one shared definition for the
+    // latter two, so this exit condition stays aligned with status and
+    // terminal notices. A failed delivery, "asking", and "delivered"
+    // still keep polling - a `fix` verdict or `fabrica answer` can wake
+    // those back up.
+    return state === "closed" || state === "stopped" || isDeadEnd(state, hasDelivery);
   };
 
   if (await poll()) return;

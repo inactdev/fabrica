@@ -22,7 +22,10 @@ export type ForemanErrorCode =
   | "cap-refused"
   | "spend-unknown"
   | "invalid-cost"
-  | "nothing-to-record";
+  | "nothing-to-record"
+  /** `stop` (issue #203) on a task that isn't running - already
+   * delivered, already closed, waiting on an answer, or never started. */
+  | "not-running";
 
 export class ForemanError extends Error {
   readonly code: ForemanErrorCode;

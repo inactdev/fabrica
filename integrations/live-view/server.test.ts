@@ -750,8 +750,8 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
       fetch(`${base}/api/state`, { method: "POST" }),
       fetch(`${base}/api/tasks/..%2f..%2fetc/transcript`),
       // No Tailscale identity header - refused before the body is even
-      // read, so these two well-formed-looking POSTs (the server's only
-      // two write routes) must write nothing either.
+      // read, so these three well-formed-looking POSTs (the server's
+      // only write routes) must write nothing either.
       fetch(`${base}/api/review/tasks/${taskId}/verdict`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -762,9 +762,228 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answer: "nope" }),
       }),
+      fetch(`${base}/api/review/tasks/${taskId}/stop`, { method: "POST" }),
     ]);
 
     assert.deepEqual(snapshotTree(recordHome), before);
+  } finally {
+    await view.close();
+  }
+});
+
+// --- stop (issue #203) ------------------------------------------------
+//
+// The third write route, and the only one that reaches outside the
+// record at all. Its process half is injected here (`stopProcess`): what
+// these tests are for is the gate, the refusals, and what lands on the
+// record - the real signaling is proved against real processes in
+// src/cli/task-process.test.ts, which is where the operating system's
+// own behavior belongs.
+
+/** A task genuinely mid-work: registered, a worker started, one
+ * transcript line written exactly the way attempts.ts writes them. */
+function workingTask(recordHome: string, lastLine = "editing src/thing.ts"): string {
+  const { id } = registerTask(recordHome, "a long-running task");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+  appendTaskFile(
+    recordHome,
+    id,
+    "transcript.log",
+    `${JSON.stringify({ occurredAt: "2026-10-18T10:00:00.000Z", kind: "stdout", text: lastLine })}\n`
+  );
+  return id;
+}
+
+/** A stand-in for the half of `stop` that signals a real process,
+ * recording what it was asked to do. */
+function recordingStopProcess(pid: number | null) {
+  const calls: { recordHome: string; taskId: string }[] = [];
+  return {
+    calls,
+    stopProcess: (recordHome: string, taskId: string) => {
+      calls.push({ recordHome, taskId });
+      return { pid };
+    },
+  };
+}
+
+test("startLiveView: a stop POST with no Tailscale identity header is refused, and neither records nor signals anything", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = workingTask(recordHome);
+  const stopper = recordingStopProcess(4242);
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: stopper.stopProcess });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${taskId}/stop`, { method: "POST" });
+    assert.equal(res.status, 403);
+
+    const events = readEventsForTask(recordHome, taskId);
+    assert.ok(!events.some((e) => e.name === "stopped-by-owner"), "nothing recorded");
+    assert.deepEqual(stopper.calls, [], "and nothing signaled - the gate comes first");
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an empty Tailscale identity header is treated the same as a missing one on the stop route too", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = workingTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: () => ({ pid: 1 }) });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${taskId}/stop`, {
+      method: "POST",
+      headers: { "Tailscale-User-Login": "   " },
+    });
+    assert.equal(res.status, 403);
+    assert.ok(!readEventsForTask(recordHome, taskId).some((e) => e.name === "stopped-by-owner"));
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a stop POST with the identity header records who stopped it and the worker's last activity, then signals the process", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = workingTask(recordHome, "running the check");
+  const stopper = recordingStopProcess(9931);
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: stopper.stopProcess });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${taskId}/stop`, {
+      method: "POST",
+      headers: IDENTITY_HEADERS,
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true, stoppedFrom: "working", signaled: true, pid: 9931 });
+
+    const event = readEventsForTask(recordHome, taskId).find((e) => e.name === "stopped-by-owner");
+    assert.ok(event, "the decision is on the record");
+    const details = event!.details as { by: string; lastActivity: { text: string } | null };
+    assert.equal(details.by, "client@example.com", "the Tailscale login of whoever stopped it");
+    assert.equal(details.lastActivity?.text, "running the check");
+
+    assert.deepEqual(stopper.calls, [{ recordHome, taskId }]);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a stopped task is terminal - it leaves the open list for history, and is not waiting on anyone", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = workingTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: () => ({ pid: 1 }) });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+    const runningBefore = await (await fetch(`${base}/api/review`)).json();
+    assert.deepEqual(
+      runningBefore.running.map((r: { id: string }) => r.id),
+      [taskId],
+      "a running task is what the stop control is offered for"
+    );
+
+    await fetch(`${base}/api/review/tasks/${taskId}/stop`, { method: "POST", headers: IDENTITY_HEADERS });
+
+    const open = await (await fetch(`${base}/api/state`)).json();
+    assert.deepEqual(open.tasks, [], "no longer an open task");
+    const history = await (await fetch(`${base}/api/history`)).json();
+    assert.deepEqual(
+      history.tasks.map((t: { id: string; state: string }) => [t.id, t.state]),
+      [[taskId, "stopped by you"]]
+    );
+    const review = await (await fetch(`${base}/api/review`)).json();
+    assert.deepEqual(review.rows, [], "nothing is waiting on the Client");
+    assert.deepEqual(review.running, [], "and nothing is left to stop");
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: stopping a task that is not running is refused with a 400 naming the state, and signals nothing", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const stopper = recordingStopProcess(1234);
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: stopper.stopProcess });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/stop`, {
+      method: "POST",
+      headers: IDENTITY_HEADERS,
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.match(body.error, /is delivered, not running/);
+    assert.deepEqual(stopper.calls, []);
+    assert.ok(!readEventsForTask(recordHome, task.id).some((e) => e.name === "stopped-by-owner"));
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a task whose process can no longer be found is still recorded as stopped, and says so plainly", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = workingTask(recordHome);
+  // Exactly what findTaskProcess returns when the pid file is gone, the
+  // process already exited, or its command line no longer matches - the
+  // Client's decision still stands.
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: () => ({ pid: null }) });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${taskId}/stop`, {
+      method: "POST",
+      headers: IDENTITY_HEADERS,
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true, stoppedFrom: "working", signaled: false, pid: null });
+    assert.ok(readEventsForTask(recordHome, taskId).some((e) => e.name === "stopped-by-owner"));
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a stop for a malformed task id is a 400 before anything else, like every other route taking one", async () => {
+  const recordHome = tempRecordHome();
+  const stopper = recordingStopProcess(1);
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: stopper.stopProcess });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/..%2f..%2fetc/stop`, {
+      method: "POST",
+      headers: IDENTITY_HEADERS,
+    });
+    assert.equal(res.status, 400);
+    assert.equal(await res.text(), "Not a task id.");
+    assert.deepEqual(stopper.calls, []);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a stop for an unknown task id is refused, not recorded against a task that doesn't exist", async () => {
+  const recordHome = tempRecordHome();
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: () => ({ pid: 1 }) });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/20260101-nope-aa/stop`, {
+      method: "POST",
+      headers: IDENTITY_HEADERS,
+    });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /no task/);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /api/review says whether this very request carried an identity, so the page knows whether to draw stop at all", async () => {
+  const recordHome = tempRecordHome();
+  workingTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0, stopProcess: () => ({ pid: 1 }) });
+  try {
+    const plain = await (await fetch(`http://127.0.0.1:${view.port}/api/review`)).json();
+    assert.equal(plain.identified, false, "reached directly, with no Serve in front of it");
+
+    const proxied = await (await fetch(`http://127.0.0.1:${view.port}/api/review`, { headers: IDENTITY_HEADERS })).json();
+    assert.equal(proxied.identified, true);
+
+    // A display hint only - the route still decides for itself, on its
+    // own request, so a page that drew the button anyway gets nowhere.
+    const blank = await (await fetch(`http://127.0.0.1:${view.port}/api/review`, {
+      headers: { "Tailscale-User-Login": "  " },
+    })).json();
+    assert.equal(blank.identified, false, "an empty header is no identity here either");
   } finally {
     await view.close();
   }

@@ -12,6 +12,7 @@
 import { defaultBrainAdapter } from "../index.ts";
 import { runTask } from "./run-task.ts";
 import { prefixTaskLog } from "./task-log.ts";
+import { writeTaskPidFile } from "./task-process.ts";
 
 const setLogTaskId = prefixTaskLog();
 
@@ -31,7 +32,14 @@ const issue = issueArg !== undefined ? Number(issueArg) : undefined;
 
 try {
   await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome), {
-    onTaskRegistered: setLogTaskId,
+    // The task id does not exist until registration, and this process
+    // is the only party that knows its own pid - so the pid file
+    // (issue #203's `stop`) is written here, at the first moment both
+    // halves are known.
+    onTaskRegistered: (taskId) => {
+      setLogTaskId(taskId);
+      writeTaskPidFile(recordHome, taskId);
+    },
     issue,
   });
 } catch (err) {

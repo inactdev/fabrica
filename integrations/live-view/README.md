@@ -46,9 +46,12 @@ before ever stopping it (`src/cli/live-view-process.ts`).
 
 ## What the task list page shows, and what's one click away
 
-A row shows four things: a small symbol for the task's state, the age of
-its last recorded activity, the state word, and a short title - the
-worker's write-up title (`WorkerWriteup.title`, carried as a sibling of
+A row carries twelve columns (issue #203), every one of them derived
+from the task's own record and nothing else: **state**, **task**,
+**project**, **worker · model**, **network policy**, **trigger**,
+**started**, **duration**, **cost** (with a cap meter), **checks**,
+**delivery**, and **confidence**. The task column is the worker's
+write-up title (`WorkerWriteup.title`, carried as a sibling of
 `delivery` on the "delivered" event's own `details` - never on the
 ratified `Delivery` shape itself, which the contract doesn't promise it)
 once there is one, else the task text's first line cut to about 60
@@ -59,6 +62,55 @@ attempt, cost, pull request link, and write-up - everything
 `record-view.ts`'s `TaskView` carries except the transcript - in a column
 on the right, and the full live transcript as the page's own dense event
 stream on the left.
+
+Each column's own derivation lives beside it in `record-view.ts`
+(`latestReceipt`/`workerLabel`, `networkPolicyLabel`, `triggerLabel`,
+`checksLabel`, `deliveryFromEvents`, `capsAtStart`). Four are worth
+knowing without reading the code:
+
+- **network policy** says what the record can actually say, which today
+  is "not recorded" or the `network-refused` events attributed to this
+  task. The reference adapter really does pick a policy per call
+  (`src/brain/adapters/claude-code.ts`'s `prepareNetwork`: a
+  relay-backed isolated network when a worker token is present,
+  `"allowed"` when there is none) - but nothing writes it down.
+  `Brain.work`/`BrainWorkResult` are ratified contract shapes with
+  nowhere to carry it, and that adapter's relay points its own refusal
+  bookkeeping at a throwaway scratch record home precisely because
+  `Brain.ask`/`work` take no task id at all, a gap its own header
+  states. This column will show a real policy the day one is recorded,
+  and until then it does not invent one.
+- **trigger** is what started the round the task is on - `do`,
+  `answer`, or `fix N` - plus the issue number when one was named
+  explicitly (`--issue`, persisted as the task's own `issue` file).
+  Every task begins as one `fabrica do`, so the round is the only part
+  of "what triggered this" the record can answer differently per task.
+- **duration** runs to now for an open task and freezes at whatever a
+  finished one last recorded, so the history page isn't full of
+  counters still ticking. The server decides which; the page only
+  formats it.
+- **cost** is `describeTaskCost`'s own wording - the same words
+  `fabrica status` uses - against the per-task cap *the task started
+  under*, not whatever `projects.toml` says when the page is read.
+  That cap is written once at registration into the task's own
+  `caps.json` (`src/foreman/ask.ts`); a task registered before that
+  file existed falls back to the current config. With no cap set there
+  is no meter at all and the cost stands as plain text (Client ruling).
+
+## One DOM, two layouts: phone and desk
+
+Below tablet width every row is a stacked card, each column a labeled
+row; at 768px and up the same nodes become a table with its header
+pinned to the top of the page. There is no second renderer and no
+media query in JavaScript: each cell carries its column name in a
+`data-label` attribute, which the phone layout prints in front of the
+value through a CSS `::before` (`style.css`, written mobile-first - the
+card layout is the base, the table is the one media query). The header
+row in `index.html`/`history.html` spells the same names as those
+`data-label`s on purpose, so a column can never end up named two
+different things depending on how wide the window is. Both pages also
+carry the `width=device-width` viewport meta - without it a phone
+renders at a notional desktop width and the card layout never applies.
 
 ## Two pages, split by whether a task is still open (a third, `/review`, is below)
 
@@ -73,6 +125,20 @@ right - `server.test.ts` proves it by hitting both endpoints directly.
 Both pages share one script (`public/app.js`, reading `location.pathname`
 to pick its endpoint and empty-state wording) since the row format is
 identical on both.
+
+## Two things that both want the word "stopped"
+
+`record-view.ts`'s `DisplayState` has had a `"stopped"` label since
+issue #26 - for `stateOf`'s `"refused"`, Inspector reaching no verdict.
+Its own comment quotes a Client ruling: keep "stopped" for a task that
+was actually stopped. Nothing could actually stop a task then; issue
+#203's `stop` means something can now. Rather than re-label a word that
+is already ruled on and already asserted in tests, the owner's stop
+renders as its own `"stopped by you"` and the collision is left for the
+Client to rule on. If he wants the older label renamed (to "no verdict",
+say), that is a one-line change here plus the two hand-kept browser
+copies and their tests - not something to do under a ratified
+assertion's feet.
 
 ## The state symbol, and why "working" has no glyph
 
@@ -149,6 +215,17 @@ any more (follow-up to issue #202, "show every task waiting on me"):
   not one per question), and one button, send. This is what lets a
   phone - and, later, Amy - unblock a worker without a terminal.
 
+Below that list sits a second, separate one (issue #203): **Running** -
+the tasks currently working, each with what it is, where, how long it
+has been going, what it has spent, and the worker's own last transcript
+line, and one button: **stop**, behind one confirmation. A running task
+is the opposite of one waiting on the Client, so it is deliberately not
+folded into the rows above: `getReviewRows` stays exactly the set
+`fabrica status` flags as waiting (an agreement `state-agreement.test.ts`
+pins task by task), and `getRunningRows` is its own list on its own
+`running` array in `/api/review`'s response. A task with nothing to
+stop simply has no section.
+
 The first three are what `src/foreman/queries.ts`'s `earlyStopKindOf`
 (plus `state === "delivered"`) says is waiting on the Client - the exact
 same function `fabrica status` calls for its own "awaiting your verdict"
@@ -179,8 +256,9 @@ process, returning immediately rather than waiting for it (issue #123).
 ### These are the only writes anywhere in this directory
 
 Everything else in this module only ever reads. `POST /api/review/tasks/
-<id>/verdict` and `POST /api/review/tasks/<id>/answer` are the two
-exceptions, and both are held to the same two checks GET never needs:
+<id>/verdict`, `POST /api/review/tasks/<id>/answer` and `POST
+/api/review/tasks/<id>/stop` are the exceptions, and all three are held
+to the same two checks GET never needs:
 
 - **Identity.** A request carrying no `Tailscale-User-Login` header is
   refused (403) before its body is even read. This server still only
@@ -210,6 +288,56 @@ exceptions, and both are held to the same two checks GET never needs:
   checked here rather than there is the request's own shape - a body
   without a string `answer` is a 400 - because `recordAnswerDecision`
   takes words, not JSON.
+
+### Stop (issue #203)
+
+The third write, and the only one in this directory that reaches
+outside the record at all. It is held to the same identity gate as the
+other two, with the same 403 and the same one-line message - a stop
+ends work that is costing money and throws away whatever the worker was
+part-way through, so it is at least as much a decision as a ruling.
+Unlike the other two it also *records who made it*: the
+`Tailscale-User-Login` goes into the event, because those two write a
+ruling or an answer the Client composed, while this one writes only "it
+was stopped," and by whom is the rest of that sentence. It reads no
+body at all; the one confirmation happens on the page before the
+request is ever sent (Client ruling: "one confirmation tap").
+
+What it does, in order:
+
+1. `recordStopDecision` (`src/foreman/stop.ts`) refuses a task that is
+   not running - a 400 naming the state it is actually in. The page
+   only ever offers the control for a running task, but a page can be a
+   couple of seconds stale, and refusing is a better answer than
+   stopping something that finished an hour ago (both halves are the
+   Client's own ruling).
+2. It appends `stopped-by-owner`, carrying who stopped it, which state
+   it was stopped from, and the worker's last transcript line with its
+   timestamp. **The task is terminal from that moment** - `stateOf`
+   treats the state as absorbing, so anything the dying process still
+   manages to append (a last heartbeat, a finished check, even a
+   delivery from work it had already done) is kept on the record but
+   never makes the task look alive again. His own `accept`/`wrong`
+   verdict is the one thing that can still move it. That ordering is
+   the ruling itself: the Client's decision is the fact, and the signal
+   is how the machine is asked to catch up with it.
+3. Only then does it signal: SIGTERM to the task's own detached
+   process, SIGKILL ten seconds later if it is still there
+   (`src/cli/task-process.ts`, which will not signal a pid it has not
+   re-verified against the live process table first - see that file and
+   `src/cli/README.md`). A task whose process cannot be identified is
+   still stopped; the response says `signaled: false` and the page says
+   so rather than pretending either way.
+
+The control is also **absent** from the page when the request carrying
+it isn't identified (Client ruling: absent without identity, *and*
+refused by the server without it). A browser script cannot read the
+headers its own page was fetched with, so `/api/review` - which arrives
+through the very same Serve proxy that adds the header to a POST -
+answers an `identified` boolean alongside its rows, and `review.js`
+draws one dim line instead of the button when it is false. That is a
+display hint only: the route makes its own decision on its own request,
+and a page that drew the button anyway would get the same 403.
 
 **What's deliberately NOT here (the "dotfiles half" of issue #202):**
 actually running `tailscale serve` to publish this port onto the
@@ -250,6 +378,13 @@ background process `fabrica verdict fix` uses) - reached the same way
 from `src/cli/` rather than through `src/index.ts`, the one established
 exception to the "integrations reach Fabrica only through `src/index.ts`"
 rule.
+
+Issue #203's stop route added `recordStopDecision` (the record half, on
+`src/index.ts` like the rest) plus `Receipt` and `GateResult` as types,
+which the worker/model and checks columns read; its process half,
+`findTaskProcess`/`stopTaskProcess`, is imported straight from
+`src/cli/task-process.ts` under the same established exception
+`runningCopyCommit` and `spawnDetachedResume` already use.
 
 The answer route added nothing to that list: `recordAnswerDecision` has
 been on `src/index.ts` since issue #123 split the CLI's answer command
