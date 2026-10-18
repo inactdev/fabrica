@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { closesIssueFor, finalMessageFor, issueNamedByTaskText, renderCommitMessage, withClosesLine, writeupProblem } from "./pr-body.ts";
+import {
+  TEMPLATE_HEADINGS,
+  closesIssueFor,
+  finalMessageFor,
+  issueNamedByTaskText,
+  renderCommitMessage,
+  withClosesLine,
+  writeupProblem,
+} from "./pr-body.ts";
 import type { WorkerWriteup } from "../brain/index.ts";
 
 const WRITEUP: WorkerWriteup = {
@@ -99,6 +107,63 @@ test("a multi-line bullet value stays indented inside its own bullet", () => {
   const result = finalMessageFor({ ...WRITEUP, assumptions: "First one.\n\nSecond one." }, "x");
 
   assert.match(result.body, /^- Assumptions: First one\.\n {2}\n {2}Second one\.$/m);
+});
+
+/** How many times `heading` appears in `text`, counted as plain text so
+ * an indented copy (a heading echoed inside a bullet) counts too. */
+function occurrences(text: string, heading: string): number {
+  return text.split(heading).length - 1;
+}
+
+// A duplicated heading was seen on a real pull request: the body read
+// "## Additional information" twice in a row, with nothing between. Each
+// of the template's headings is Fabrica's own to emit, exactly once -
+// whatever the worker's fields hold, and wherever the body is used.
+test("every template heading appears exactly once, in the body and the commit message", () => {
+  const writeup = { ...WRITEUP, couldNotVerify: "The remote service was unreachable." };
+  const bodies = {
+    body: finalMessageFor(WRITEUP, "x").body,
+    "body with couldNotVerify": finalMessageFor(writeup, "x").body,
+    "body with a closing line": withClosesLine(finalMessageFor(writeup, "x").body, 52),
+    "commit message": renderCommitMessage(finalMessageFor(writeup, "x")),
+  };
+
+  assert.equal(TEMPLATE_HEADINGS.length, 5);
+  for (const [what, text] of Object.entries(bodies)) {
+    for (const heading of TEMPLATE_HEADINGS) {
+      assert.equal(occurrences(text, heading), 1, `${what}: "${heading}" appears ${occurrences(text, heading)} times`);
+    }
+  }
+});
+
+// The one way a second copy of a heading can reach the body: a worker
+// that echoes one into a field of its own write-up, where it lands right
+// next to Fabrica's. The echo is dropped; every word around it stays.
+test("a heading a worker echoed into its own field never doubles Fabrica's", () => {
+  const echoed = finalMessageFor(
+    {
+      ...WRITEUP,
+      why: "## Context (Why)\n\nb",
+      outsideChanges: "None.\n\n## Additional information",
+      assumptions: "d\n## Additional information",
+      deviations: "## Changes in the codebase (How)\nNone.",
+    },
+    "x"
+  );
+
+  for (const heading of TEMPLATE_HEADINGS) {
+    assert.equal(occurrences(echoed.body, heading), 1, `"${heading}" doubled`);
+  }
+  assert.equal(echoed.body, BODY, "the words around the echoed headings must be untouched");
+});
+
+// A write-up that quotes the template (documenting it, as this very
+// change does) is showing a heading, not emitting one.
+test("a heading inside a fenced code block is kept exactly as written", () => {
+  const quoted = finalMessageFor({ ...WRITEUP, how: "The body is:\n\n```\n## Additional information\n```" }, "x");
+
+  assert.match(quoted.body, /```\n## Additional information\n```/);
+  assert.equal(occurrences(quoted.body, "## Additional information"), 2, "Fabrica's own, plus the quoted one");
 });
 
 test("renderCommitMessage is the title, a blank line, then the same five sections", () => {
