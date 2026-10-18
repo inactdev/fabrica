@@ -260,9 +260,10 @@ test("createRecordView: getReviewRows shows only delivered tasks, with the real 
   appendEvent(recordHome, { taskId: delivered, name: "work-started", details: { project: "/p" } });
   const writeup = {
     title: "Ship the thing",
-    what: "did the thing",
     why: "because",
+    what: "did the thing",
     how: "carefully",
+    outsideChanges: "None.",
     confidence: 90,
     assumptions: "none",
     expectedOutcomes: "it ships",
@@ -296,9 +297,10 @@ test("createRecordView: getReviewRows shows only delivered tasks, with the real 
   assert.equal(row.gateState, "untouched");
   assert.equal(row.prUrl, "https://github.com/x/y/pull/1");
   assert.equal(row.writeupOk, true);
-  assert.match(row.writeupBody, /What:\ndid the thing/);
-  assert.match(row.writeupBody, /Why:\nbecause/);
-  assert.match(row.writeupBody, /How:\ncarefully/);
+  assert.match(row.writeupBody, /## Description \(What\)\n\ndid the thing/);
+  assert.match(row.writeupBody, /## Context \(Why\)\n\nbecause/);
+  assert.match(row.writeupBody, /## Changes in the codebase \(How\)\n\ncarefully/);
+  assert.match(row.writeupBody, /## Changes outside the codebase\n\nNone\./);
 });
 
 test("questionsFromEvents: the latest questions-asked wins, and a details shape that isn't a list of questions reads as none", () => {

@@ -62,9 +62,10 @@ function slowBrain(delayMs: number): Brain {
         // write-up failure report, not the delivery this test watches for.
         writeup: {
           title: "Slow brain update",
-          what: "Slept.",
           why: "Testing watch.",
+          what: "Slept.",
           how: "A timer.",
+          outsideChanges: "None.",
           confidence: 90,
           assumptions: "None.",
           expectedOutcomes: "None.",

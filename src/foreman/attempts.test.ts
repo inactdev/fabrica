@@ -102,9 +102,10 @@ test("truncation never stores a half-character left by cutting mid-symbol", () =
 // unrelated to what this test is actually checking.
 const SLOW_WRITEUP = {
   title: "Slow brain update",
-  what: "Slept.",
   why: "Testing heartbeats.",
+  what: "Slept.",
   how: "A timer.",
+  outsideChanges: "None.",
   confidence: 90,
   assumptions: "None.",
   expectedOutcomes: "None.",

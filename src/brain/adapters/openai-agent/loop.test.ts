@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { runAsk, runWork, writeupProblem, questionsFrom, IDLE_NUDGE, WORK_SYSTEM_PROMPT } from "./loop.mjs";
 import { WRITEUP_TOOL_NAME } from "./tools.mjs";
 import { writeupToolSchema } from "../openai-compatible.ts";
-import { WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
+import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
 import type { AgentJob, AgentLine, ChatTarget } from "./types.ts";
 
 function makeJob(overrides: Partial<AgentJob> = {}): AgentJob {
@@ -33,6 +33,7 @@ function makeJob(overrides: Partial<AgentJob> = {}): AgentJob {
     sessionId: "session-1",
     writeupSchema: writeupToolSchema(),
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
+    writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
     maxToolOutputChars: 2_000,
     bashTimeoutMs: 10_000,
@@ -42,9 +43,10 @@ function makeJob(overrides: Partial<AgentJob> = {}): AgentJob {
 
 const goodWriteup = {
   title: "A short title",
-  what: "what",
   why: "why",
+  what: "what",
   how: "how",
+  outsideChanges: "None.",
   confidence: 80,
   assumptions: "assumptions",
   expectedOutcomes: "outcomes",

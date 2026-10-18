@@ -5,14 +5,28 @@ import type { WorkerWriteup } from "../brain/index.ts";
 
 const WRITEUP: WorkerWriteup = {
   title: "Add retries",
-  what: "a",
   why: "b",
+  what: "a",
   how: "c",
+  outsideChanges: "None.",
   confidence: 85,
   assumptions: "d",
   expectedOutcomes: "e",
   deviations: "None.",
 };
+
+/** The Client's template, in full, for the write-up above - the exact
+ * string a reviewer sees, headings and all (Client ruling 2026-10-18). */
+const BODY =
+  "## Context (Why)\n\nb\n\n" +
+  "## Description (What)\n\na\n\n" +
+  "## Changes in the codebase (How)\n\nc\n\n" +
+  "## Changes outside the codebase\n\nNone.\n\n" +
+  "## Additional information\n\n" +
+  "- Confidence: 85/100\n" +
+  "- Assumptions: d\n" +
+  "- Expected outcomes: e\n" +
+  "- Deviations: None.";
 
 // Negative first: no write-up at all (a brain that returned none) must
 // still produce something to commit - a labeled fallback, never the
@@ -49,24 +63,46 @@ test("writeupProblem rejects a confidence outside 0-100, or not a number", () =>
   );
 });
 
-test("finalMessageFor returns the worker's own title and rendered sections when valid", () => {
+test("writeupProblem rejects a write-up with no outsideChanges, like any other required field", () => {
+  assert.equal(writeupProblem({ ...WRITEUP, outsideChanges: "" }), "the outsideChanges field is empty");
+  assert.equal(writeupProblem({ ...WRITEUP, outsideChanges: "   " }), "the outsideChanges field is empty");
+});
+
+// couldNotVerify is the one optional field: leaving it out is not a
+// problem, and nothing renders in its place.
+test("writeupProblem accepts a write-up with no couldNotVerify at all", () => {
+  assert.equal(writeupProblem({ ...WRITEUP, couldNotVerify: undefined }), undefined);
+});
+
+test("finalMessageFor renders the Client's template exactly: five headings in order", () => {
   const result = finalMessageFor(WRITEUP, "fabrica: task-1");
 
   assert.equal(result.ok, true);
   assert.equal(result.title, "Add retries");
-  assert.equal(
-    result.body,
-    "What:\na\n\nWhy:\nb\n\nHow:\nc\n\n" +
-      "What to look at:\nConfidence: 85/100\n\nAssumptions:\nd\n\nExpected outcomes:\ne\n\nDeviations:\nNone."
-  );
+  assert.equal(result.body, BODY);
 });
 
-test("renderCommitMessage is the title, a blank line, then the body", () => {
-  assert.equal(
-    renderCommitMessage(finalMessageFor(WRITEUP, "fabrica: task-1")),
-    "Add retries\n\nWhat:\na\n\nWhy:\nb\n\nHow:\nc\n\n" +
-      "What to look at:\nConfidence: 85/100\n\nAssumptions:\nd\n\nExpected outcomes:\ne\n\nDeviations:\nNone."
-  );
+test("a couldNotVerify field renders as the last bullet; an empty or absent one renders no bullet at all", () => {
+  const withIt = finalMessageFor({ ...WRITEUP, couldNotVerify: "Docker was not installed here." }, "x");
+  assert.equal(withIt.body, `${BODY}\n- Could not verify here: Docker was not installed here.`);
+
+  for (const value of [undefined, "", "  "]) {
+    const without = finalMessageFor({ ...WRITEUP, couldNotVerify: value }, "x");
+    assert.equal(without.body, BODY, `couldNotVerify ${JSON.stringify(value)} left a bullet behind`);
+    assert.doesNotMatch(without.body, /Could not verify/);
+  }
+});
+
+// A worker that writes more than one line into a bullet's field must not
+// break out of the markdown list at the blank line between paragraphs.
+test("a multi-line bullet value stays indented inside its own bullet", () => {
+  const result = finalMessageFor({ ...WRITEUP, assumptions: "First one.\n\nSecond one." }, "x");
+
+  assert.match(result.body, /^- Assumptions: First one\.\n {2}\n {2}Second one\.$/m);
+});
+
+test("renderCommitMessage is the title, a blank line, then the same five sections", () => {
+  assert.equal(renderCommitMessage(finalMessageFor(WRITEUP, "fabrica: task-1")), `Add retries\n\n${BODY}`);
 });
 
 // "make every pull request it opens close its issue on merge": a task
@@ -99,7 +135,8 @@ test("closesIssueFor: a task that is only part of an issue's work gets neither",
   assert.equal(closesIssueFor("the first half of #186, only the worker part", undefined), undefined);
 });
 
-test("withClosesLine appends \"Closes #N\" only when an issue is set", () => {
-  assert.equal(withClosesLine("What:\na", 186), "What:\na\n\nCloses #186");
-  assert.equal(withClosesLine("What:\na", undefined), "What:\na");
+// The Client's template puts it first, not last (ruling 2026-10-18).
+test("withClosesLine makes \"Closes #N\" the body's very first line, only when an issue is set", () => {
+  assert.equal(withClosesLine(BODY, 186), `Closes #186\n\n${BODY}`);
+  assert.equal(withClosesLine(BODY, undefined), BODY);
 });

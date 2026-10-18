@@ -510,10 +510,13 @@ own subscription (ROADMAP.md), so there is no live case to detect yet.
 ## `writeup` and `--json-schema`
 
 Every `work()` call passes `--json-schema` with `WRITEUP_JSON_SCHEMA`: an
-object of eight required fields, no other keys - seven non-empty strings
-(`title` at most 60 characters, `what`, `why`, `how`, `assumptions`,
-`expectedOutcomes`, `deviations`) plus one number, `confidence`, from 0
-to 100 (issues #185/#194). Verified on 2.1.222 with a real call: the
+object of nine required fields plus one optional one, no other keys -
+eight non-empty strings (`title` at most 60 characters, `why`, `what`,
+`how`, `outsideChanges`, `assumptions`, `expectedOutcomes`,
+`deviations`), one number, `confidence`, from 0 to 100 (issues
+#185/#194), and the optional `couldNotVerify` (declared as a property
+all the same, since `additionalProperties` is false, but kept out of
+`required` - Client ruling 2026-10-18). Verified on 2.1.222 with a real call: the
 result line then carries the answer as an object on `structured_output`
 (with `subtype: "success"`), and `work()`
 returns it as `writeup`. Nothing is ever parsed out of the worker's text;

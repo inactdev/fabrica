@@ -96,17 +96,33 @@ export interface BrainWorkResult {
 
 /** A worker's write-up: the commit message, and the pull request's title
  * and body when one is opened. The title is the worker's own words, at
- * most 60 characters; every string field is required and non-empty, and
- * `confidence` is required and must be a number from 0 to 100 (issues
- * #185/#194). The pull request body renders these as exactly four
- * sections - What, Why, How, and "What to look at," the last of which
- * folds confidence, assumptions, expectedOutcomes, and deviations
- * together for the reviewer (`src/foreman/pr-body.ts`). */
+ * most 60 characters, in the imperative; every required string field is
+ * non-empty, and `confidence` must be a number from 0 to 100 (issues
+ * #185/#194). The pull request body renders these as the Client's own
+ * template (Client ruling 2026-10-18) - "## Context (Why)", "##
+ * Description (What)", "## Changes in the codebase (How)", "## Changes
+ * outside the codebase", then "## Additional information" folding
+ * confidence, assumptions, expectedOutcomes, deviations and
+ * couldNotVerify together as labelled bullets
+ * (`src/foreman/pr-body.ts`). Every field describes the change for a
+ * reviewer who did not run the task; the worker's own surroundings
+ * belong under Additional information and nowhere else. */
 export interface WorkerWriteup {
   title: string;
+  /** The steps taken to accomplish the task - the pull request's
+   * "Description (What)". */
   what: string;
+  /** What this change is for, from the product side - the pull
+   * request's "Context (Why)", and the body's opening section. */
   why: string;
+  /** The engineering side: what was added, modified or refactored - the
+   * pull request's "Changes in the codebase (How)". */
   how: string;
+  /** Anything this change needs beyond this repository - settings,
+   * infrastructure, an external service, the Client's own machine.
+   * Required and non-empty like every other string field: a worker with
+   * nothing to report here writes "None." */
+  outsideChanges: string;
   /** How sure the worker is in this result, 0-100. */
   confidence: number;
   /** Every judgment call made where the brief was silent. */
@@ -115,6 +131,11 @@ export interface WorkerWriteup {
   expectedOutcomes: string;
   /** What the worker deviated from the request and why, or "None." */
   deviations: string;
+  /** Anything the worker could not check from inside its own box - a
+   * service it could not reach, a test it could not run. The one
+   * optional field: absent or empty, its bullet is omitted from
+   * "Additional information" entirely rather than rendered as "None." */
+  couldNotVerify?: string;
 }
 
 /**
