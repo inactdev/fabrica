@@ -15,6 +15,7 @@ import { defaultInspector, inspectorIsConfigured } from "../inspector/index.ts";
 import { defaultCheckBox } from "../brain/index.ts";
 import type { CheckBox } from "../brain/index.ts";
 import type { GateResult, ProductionLine } from "../../contract/surface.ts";
+import type { RebaseConflict } from "../line/index.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 import type { Delivery } from "../inspector/types.ts";
 import { requireCheckCommand, resolveCheckCommand } from "./resolve-check.ts";
@@ -44,7 +45,13 @@ export type Judgement =
   /** The branch has no new commit versus where this round started - never
    * judged at all (`skipIfUnchanged` below), so there is nothing for a
    * check or Inspector to say. */
-  | { kind: "unchanged" };
+  | { kind: "unchanged" }
+  /** The stopped rebase this round's worker was handed (issue #235) could
+   * not be finished: markers were still in the working tree, or a later
+   * commit of the same rebase conflicted afresh. The rebase is aborted by
+   * the time this is returned, so the branch is back at its own last
+   * commit; nothing was committed and nothing was judged. */
+  | { kind: "rebase-conflicted"; base: string; reason: "markers-remain" | "new-conflict"; conflict: RebaseConflict };
 
 export type Judge = (attempt: number, gateChanges: string | undefined, finalMessage: FinalMessageForCommit) => Promise<Judgement>;
 

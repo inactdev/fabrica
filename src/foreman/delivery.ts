@@ -4,6 +4,7 @@
 // as real (CONTRACT rule 4, issue #9).
 
 import type { GateResult } from "../../contract/surface.ts";
+import type { RebaseConflict } from "../line/index.ts";
 import type { Delivery, Inspection } from "../inspector/types.ts";
 import { gateForRecord } from "./attempts.ts";
 import type { CapStop } from "./attempts.ts";
@@ -256,6 +257,68 @@ export function buildNothingChangedDelivery(ctx: {
     branch: ctx.branch,
     files: ctx.files,
     gateChanges: ctx.declaredGateChanges ?? "",
+  };
+}
+
+/**
+ * A `Delivery` for a fix round whose branch could not be brought up to
+ * origin's current default branch (issue #235): the rebase conflicted,
+ * and the conflict is handed to the Client as `inspection-red` so he can
+ * rule `fix` with instructions for resolving it. Red rather than a
+ * failure report because this is work waiting on his judgment, not the
+ * machine having failed at something it could retry - `deliveredState`
+ * puts `inspection-red` in front of him, which is the whole point.
+ *
+ * The branch is always back at its own last commit by the time this is
+ * built (`src/line/rebase.ts` aborts before the report is written), so
+ * nothing was rewritten and the `files` diff still describes the task's
+ * own work. `evidence` carries the conflict markers themselves, capped
+ * per `MAX_CONFLICT_LINES_PER_FILE`/`_TOTAL` and saying so where a cap
+ * cut something.
+ */
+export function buildRebaseConflictDelivery(ctx: {
+  branch: string;
+  files: string[];
+  declaredGateChanges: string | undefined;
+  /** origin's default branch name, e.g. "main". */
+  base: string;
+  conflict: RebaseConflict;
+  /** True when a worker was already handed this conflict with the
+   * Client's own instructions and it is still unresolved - a different
+   * sentence, since "give a fix verdict with instructions" is no longer
+   * news at that point. */
+  afterWorker: boolean;
+}): Delivery {
+  const count = ctx.conflict.files.length;
+  const files = `${count} file${count === 1 ? "" : "s"}`;
+  const summary = ctx.afterWorker
+    ? `Rebasing \`${ctx.branch}\` onto origin/${ctx.base} still conflicts in ${files} after the worker's attempt.`
+    : `Rebasing \`${ctx.branch}\` onto origin/${ctx.base} conflicts in ${files}.`;
+  const instruction = ctx.afterWorker
+    ? "The worker had your note and the conflicted file list and did not resolve every marker. Give a fix " +
+      "verdict with more specific instructions to hand it the stopped rebase again, or rule wrong to close it."
+    : "Give a fix verdict saying how to resolve these conflicts: that round re-attempts the rebase, hands " +
+      "the worker the stopped rebase with your note, and the host stages and continues it afterwards.";
+  return {
+    outcome: "inspection-red",
+    confidence: 0,
+    summary,
+    evidence: [`Conflicted files:`, ...ctx.conflict.files.map((path) => `  ${path}`), "", ctx.conflict.markers].join(
+      "\n"
+    ),
+    assumptions: "",
+    gaps:
+      `origin/${ctx.base} has moved on, and the task's own commits do not replay cleanly on top of it. ` +
+      `Nothing was rewritten: \`${ctx.branch}\` is exactly where it was, and the rebase was aborted. ` +
+      `${instruction}`,
+    branch: ctx.branch,
+    files: ctx.files,
+    gateChanges: ctx.declaredGateChanges ?? "",
+    // Deliberately no `inspection`: that field means "this branch was
+    // handed to Inspector" (src/inspector/types.ts), and this branch
+    // never was - the round stopped before any worker or judge ran. The
+    // markers are the delivery's own `evidence` instead, which is what
+    // `delivery.md` and the review page already show as the report.
   };
 }
 

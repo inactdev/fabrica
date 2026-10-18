@@ -111,6 +111,15 @@ export async function runAttempts(opts: {
   /** Fires with each attempt's receipt the moment it exists, so its
    * spend is on the record even while the task is still running. */
   onReceipt?: (receipt: Receipt) => void;
+  /** Issue #235: a host-side git step this attempt's own commit depends
+   * on - finishing the rebase the worker was handed stopped, which only
+   * the host can do (a worker's git is read-only). Runs once `work()`
+   * returns and before anything is committed. Returning a judgement
+   * means that step did not finish: the attempt is judged on it alone,
+   * never committed, and never handed to a check or Inspector - the same
+   * shape an invalid write-up already has. Omitted, nothing runs between
+   * the two. */
+  beforeCommit?: (attempt: number) => Promise<Judgement | undefined>;
   /** A short label appended to the fallback commit title used when a
    * worker's write-up is missing or invalid (e.g. "(fix)" for verdict.ts's
    * fix round) - so even the fallback distinguishes an ordinary round
@@ -132,6 +141,7 @@ export async function runAttempts(opts: {
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
     spendLimits,
     onReceipt,
+    beforeCommit,
     commitLabel,
   } = opts;
 
@@ -212,18 +222,28 @@ export async function runAttempts(opts: {
     const finalMessage = finalMessageFor(workResult.writeup, fallbackTitle);
     lastFinalMessage = finalMessage;
     lastWriteup = finalMessage.ok ? workResult.writeup : undefined;
+    // Issue #235: a host-side git step that has to happen between the
+    // worker returning and this attempt being committed. When it reports
+    // a failure, that IS this attempt's judgement - nothing is committed
+    // on top of a branch the host could not get into the state the
+    // commit assumes.
+    const preempted = beforeCommit ? await beforeCommit(attempt) : undefined;
     let commitError: string | undefined;
-    try {
-      const committed = commitWorktreeChanges(workdir, renderCommitMessage(finalMessage), {
-        amend: unpublishedFallbackCommit,
-      });
-      if (committed) unpublishedFallbackCommit = !finalMessage.ok;
-    } catch (err) {
-      if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
-      commitError = err.message;
+    if (preempted === undefined) {
+      try {
+        const committed = commitWorktreeChanges(workdir, renderCommitMessage(finalMessage), {
+          amend: unpublishedFallbackCommit,
+        });
+        if (committed) unpublishedFallbackCommit = !finalMessage.ok;
+      } catch (err) {
+        if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
+        commitError = err.message;
+      }
     }
     const judgement: Judgement =
-      commitError !== undefined
+      preempted !== undefined
+        ? preempted
+        : commitError !== undefined
         ? { kind: "commit-failed", error: commitError }
         : finalMessage.ok
           ? await judge(attempt, workResult.gateChanges, finalMessage)

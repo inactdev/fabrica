@@ -16,6 +16,7 @@ import { commitWorktreeChanges } from "./commit.ts";
 import { renderCommitMessage } from "./pr-body.ts";
 import type { AttemptLoopResult } from "./attempts.ts";
 import { buildDelivery, buildCommitFailureDelivery, buildNothingChangedDelivery, renderDeliveryMarkdown } from "./delivery.ts";
+import { deliverRebaseConflict } from "./fix-rebase.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf, recordCapStop, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps, ProductionLine, Receipt } from "../../contract/surface.ts";
@@ -77,6 +78,33 @@ export function recordRoundResult(
   const declaredGateChanges = mergeGateDeclarations(ctx.priorGateChanges, roundGateChanges);
   const priorReceipts = ctx.priorReceipts ?? [];
   const allReceipts = [...priorReceipts, ...newReceipts];
+
+  // Issue #235: the worker was handed a stopped rebase and the host could
+  // not finish it. The rebase is already aborted (`finishRebase`'s caller
+  // in verdict.ts), so the branch is back at its own last commit and
+  // `ctx.baseCommit` is its original fork point again - which is why
+  // nothing is committed here: whatever the worker left in the worktree
+  // was either reset by the abort or is an untracked stray, and putting
+  // it on the branch would contradict the delivery's own promise that
+  // nothing was rewritten. Handled before the cap and "unchanged"
+  // branches below, unlike those two, because a conflict is the fact
+  // about the branch that the Client has to rule on either way: a
+  // cap-stopped report would tell him to raise a cap when the real
+  // blocker is a conflict. A cap stop in the same round still lands on
+  // the record as its own event, so rule 10 loses nothing.
+  if (lastJudgement.kind === "rebase-conflicted") {
+    deliverRebaseConflict(recordHome, taskId, line, {
+      base: lastJudgement.base,
+      conflict: lastJudgement.conflict,
+      baseCommit: ctx.baseCommit,
+      receipts: allReceipts,
+      totalAttempts: ctx.totalAttempts,
+      declaredGateChanges,
+      afterWorker: true,
+    });
+    if (capStop) recordCapStop(recordHome, taskId, capStop, "a rebase conflict stopped this round");
+    return { kind: "recorded", outcome: "inspection-red" };
+  }
 
   // A fix round whose Worker left the branch exactly where it already
   // was - never judged at all (`judge.ts`'s `skipIfUnchanged`) - unless
