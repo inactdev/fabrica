@@ -257,6 +257,59 @@ repos, or an ad hoc path before it's ever registered) gets the
 `check.sh` convention. Nothing about how `do()` runs changes between the
 two — only which command the self-test runs in the Worker's box.
 
+## "Run only the tests you touched" is a project setting (issue #142)
+
+The Client's standing ruling: a Worker runs the tests covering what it
+touched, not the project's whole suite. The project's own check runs in
+full afterwards — in the Worker's box, or by Inspector — so a Worker
+re-running everything itself buys nothing and costs minutes on every
+attempt.
+
+Before this it had to be typed into each task's text. Now each project
+carries it:
+
+```toml
+[projects.spending-app]
+path  = "/Users/ari/inkling-umbrella/spending-app"
+check = "bin/ci"
+onlyTouchedTests = true
+```
+
+Three things make it a *standing* ruling rather than one more optional
+field:
+
+- the loader defaults it to `true` (`src/config/load.ts`), so an entry
+  written before the field existed is governed by it too;
+- `fabrica register` writes the line out explicitly, so the Client sees
+  the knob when his project is registered and has a line to flip;
+- a project nobody registered at all — every contract fixture, and a
+  bare `fabrica do --project <path>` — gets it as well.
+
+Two ways out, both the Client's own: `onlyTouchedTests = false` in the
+project's entry turns it off for good, and a task that asks for the full
+suite in its own words turns it off for itself (and only itself).
+
+`touched-tests.ts` is both halves. `onlyTouchedTestsFor` answers the
+question for one round; `workerBrief` is what every round calls to turn
+the task's own words into the brief a Worker receives — rule 11's
+standing prefix plus, when this project and this task both leave it on,
+`ONLY_TOUCHED_TESTS_NOTICE`. All three brief-building paths (`do.ts`'s
+first round, `answer.ts`'s resumed round, `verdict.ts`'s fix round) go
+through that one function, so they cannot drift: before this, each one
+applied `withStandingQuestion` itself, and a conditional notice resolved
+three times is a notice three places can get wrong. `attempts.ts` still
+re-applies `withStandingQuestion` to its correction brief, which is a
+no-op on an already-prefixed brief — the guard keys on the fixed prefix,
+which the conditional notice sits *after*, so a nested re-application
+can neither double rule 11's prefix nor silently drop this notice.
+
+The match for a task's own opt-out is deliberately narrow — four literal
+spellings of "run the full suite", case-insensitive. A looser one would
+turn ordinary task text into an accidental opt-out, and the downside of
+missing a spelling is small: the notice is advice to a Worker, not a
+restriction on it, so a task that misses still gets what it asked for by
+the Worker simply running the tests it wants.
+
 ## Rule 9: blocked by CI, not by Fabrica, and not watched by Fabrica either
 
 Three earlier designs here, all superseded by Client rulings. First, an
@@ -1146,7 +1199,9 @@ attempts *end*.
 | `judge.ts` | Who judges each attempt (issue #64): Inspector, or a self-test in the Worker's box. `prepareRound` picks the mode; `roundOutcome` turns the last judgement into a delivery outcome. `Judge` is handed each attempt's resolved `finalMessage` (pr-body.ts) alongside `gateChanges`, so `inspectorJudge`'s own per-attempt commit and Inspector's pull request always carry the same title/body `attempts.ts` computed - `attempts.ts` only calls `judge()` once that message is valid, so this commit and that pull request are only ever made with a valid write-up as their message. Nothing here runs a check on the host - `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`. `skipIfUnchanged(judge, workdir, priorHead)` wraps any `Judge` so an attempt that leaves `workdir`'s HEAD exactly at `priorHead` never reaches the real judge at all - returns `Judgement.unchanged` instead - `verdict.ts`'s `runFixRound` is the one caller, `priorHead` being the branch's HEAD the moment that round's line was reopened. |
 | `pr-body.ts` | `writeupProblem`/`finalMessageFor`/`renderCommitMessage`: checks a worker's structured write-up (`BrainWorkResult.writeup` - title at most 60 characters, seven other non-empty required string fields, a `confidence` number from 0 to 100, and the one optional `couldNotVerify`; issues #185/#194, Client ruling 2026-10-18) and renders it as the commit message and (when Inspector is configured) the pull request title and body - the Client's own template, five sections to the heading: `## Context (Why)`, `## Description (What)`, `## Changes in the codebase (How)` and `## Changes outside the codebase` each holding one field verbatim, then `## Additional information` folding confidence/assumptions/expectedOutcomes/deviations/couldNotVerify into labelled bullets in that fixed order, a bullet with nothing in it omitted entirely rather than rendered as a placeholder - or, when it is missing or invalid, a fallback naming what is wrong, never the task's own words. Nothing is parsed out of the worker's prose. Each of those five headings (`TEMPLATE_HEADINGS`) is Fabrica's own to emit and appears in a rendered body exactly once: a worker that echoes a heading into one of its own fields - the one way a real pull request ended up reading `## Additional information` twice in a row, since no code path here has ever emitted it more than once - has that heading-only line dropped as the field renders (`withoutTemplateHeadings`), keeping every word around it, where refusing the write-up outright would cost a red round for a cosmetic slip. A heading inside a fenced code block is kept exactly as written: a write-up quoting this template is showing a heading, not emitting one. Also `closesIssueFor`/`issueNamedByTaskText`/`withClosesLine`: whether this task's pull request should close an issue on merge - only when the task is the *whole* of that issue's work, from `taskText` opening with "Issue #N:" or from an `issue` number the chat agent named explicitly (`Foreman.do`'s `opts.issue`, persisted once at registration by `ask.ts`) - prepended as the pull request **body**'s first line by `judge.ts`'s `inspectorJudge`, never put on the commit message. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention; `requireCheckCommand` refuses a self-tested task with none. |
-| `network-policy.ts` | `networkPolicyFor(recordHome, taskId, projectPath)` - the hosts and relay limits a project declared in `projects.toml` (issue #186), matched to the project the same way `resolve-check.ts` matches its check. The second (and only other) place `src/config` participates in the loop. `ask.ts`, `do.ts` and `verdict.ts` each wrap their `brain.ask`/`brain.work` call in the result (`src/brain/task-network.ts`), which is how a refused host reaches *this* task's record instead of nowhere; an unregistered project declares nothing, which means the adapter's own base hosts and the relay's default limits, never "nothing allowed". |
+| `registered-project.ts` | `registeredProject(recordHome, projectPath)` - which `projects.toml` entry, if any, is this project, both sides resolved through `realpath`. Shared by `network-policy.ts` and `touched-tests.ts`; a malformed registry reads as "unregistered" here, since `resolve-check.ts` runs first in every round and is the right place for that error to surface loudly. |
+| `touched-tests.ts` | Issue #142's "run only the tests you touched": `onlyTouchedTestsFor` (the project's `onlyTouchedTests` setting, unless this task's own words ask for the full suite) and `workerBrief`, the one function every round calls to build the brief a Worker actually receives. See the section above. |
+| `network-policy.ts` | `networkPolicyFor(recordHome, taskId, projectPath)` - the hosts and relay limits a project declared in `projects.toml` (issue #186), matched to the project the same way `resolve-check.ts` matches its check, through `registered-project.ts`. `ask.ts`, `do.ts` and `verdict.ts` each wrap their `brain.ask`/`brain.work` call in the result (`src/brain/task-network.ts`), which is how a refused host reaches *this* task's record instead of nowhere; an unregistered project declares nothing, which means the adapter's own base hosts and the relay's default limits, never "nothing allowed". |
 | `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. Commits every attempt the moment `work()` returns, with the worker's write-up as the message (`pr-body.ts`), or a fallback naming what is wrong. A missing or invalid write-up makes the attempt red on that alone (`write-up invalid: <reason>`, set as `Judgement.writeupInvalid`) without calling `judge()`, so it is never handed to Inspector; that fallback commit is unpublished, and the next attempt amends it - new changes and message together, or only the message - rather than stacking another. The next attempt's correction brief quotes the reason back; a round that ends on it delivers as `failure-report`, never `inspection-red` (`judge.ts`'s `roundOutcome`). Returns the last attempt's resolved message as `finalMessage`, which `do.ts`/`verdict.ts` use for their pre-teardown commit should anything be left uncommitted. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. Also ticks `onHeartbeat` every `DEFAULT_HEARTBEAT_INTERVAL_MS` while a `brain.work` call is in flight, so a long opaque await still shows up on the record (issue #12) - and asks on the same tick whether that box's own network relay is still there (`src/brain/relay-health.ts`), failing the attempt with `ForemanError("worker-network-gone")` when it isn't, rather than waiting minutes for the worker to notice (see "A worker whose network is gone fails now" above) - `do.ts` and `verdict.ts` both wire it to a `"heartbeat"` event - and fires `onCheckStarted` right before the check runs, so `"check-run"` lands twice per attempt (`details.phase: "started"`, then the result-carrying one) and a task genuinely mid-check is distinguishable from one that already finished a check (`queries.ts`'s `stateOf`). `onTranscriptEntry` fires once per transcript entry, live, the moment a streaming-capable brain reports it through `src/brain/live-transcript.ts`'s workdir-keyed listener registry (issue #70) - registered before `brain.work()` is called and unregistered once it settles; any entry `workResult.transcript` carries that never arrived that way (every entry, for a brain with no finer-grained signal than "the whole call just finished") is delivered right after, from the return value's remainder - so every entry reaches `onTranscriptEntry` exactly once, in order, whether or not the brain streams. `do.ts`/`verdict.ts` wire it straight to an `appendTaskFile` call per entry. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, declared or undeclared gate change included - see "Rule 9: blocked by CI, not by Fabrica, and not watched by Fabrica either" above. |
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing - and `buildNothingChangedDelivery` for a fix round `judge.ts`'s `skipIfUnchanged` caught before it ever reached a check or Inspector. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. `deliveredState` treats `"nothing-changed"` as `"delivered"`, same as `"done"`/`"inspection-red"`/`"not-verified"` - and `"paused-by-meter"` (issue #189) too, since a paused round waits on the Client's own `fix` verdict and is explicitly never a failure. `buildPausedByMeterDelivery` builds that report. |
@@ -1164,7 +1219,7 @@ attempts *end*.
 | `caps.ts` | Rule 10's enforcement: `requireRoomToStart`, the per-round `spendLimitsFor`, the `"receipt-recorded"`/`"cap-stopped"` writers, and `recordCost`. See "Rule 10: spending caps" above. |
 | `meters.ts` | Issue #189's pause rule: `pauseRuleFor` (projects.toml's `[pause]`, defaults when there is no file), `standingOf`/`refusalFor`/`stopFor` (the three decisions), `meterReadingFromTranscript` and `latestMeterReading` (the two ways a reading is read back - an attempt's own, and the record's newest), `requireMeterRoomToStart` (the start gate, called beside `requireRoomToStart` at all three of its sites), `recordMeterPause`/`meterPauseOf`, and the shared wording (`describeMeters`, `formatPercent`, `pauseMessage`) that `fabrica status` and the phone review page both show. See "The pause rule" above. |
 | `task-failure.ts` | #73: `recordingFailure` appends `"task-failed"` (with the message) for any error after `task-received` and before a delivery or refusal - except one already on the record as `ask-failed` or `cap-refused`. `requireGitRoot` refuses a project path that is missing or not a git root before the clarifying step spends anything. |
-| `standing-question.ts` | CONTRACT rule 11: `withStandingQuestion` puts the standing question, then the write-up notice (the structured write-up every worker must return), then the same-shape notice (a fix lists every other place in the code with the same shape, in the write-up, fixed or not - issue #147), then the durable-notes notice (a durable project fact goes in `notes/`, one file per task, never appended straight into the project's root agent-memory file's shared body - the merge-conflict fix that file documents) - all stated here rather than left to a file a worker might not read - at the start of every brief, applied where `attempts.ts` hands the brief over and in each brief builder (correction, fix, answered round), never twice. Only `STANDING_QUESTION` itself is ratified text (`contract/rule11.standing-question.test.ts` holds a verbatim copy); a new standing line is added as its own exported constant folded into `STANDING_PREFIX`, never appended to that question, so it needs no change to a protected contract path. |
+| `standing-question.ts` | CONTRACT rule 11: `withStandingQuestion` puts the standing question, then the write-up notice (the structured write-up every worker must return), then the same-shape notice (a fix lists every other place in the code with the same shape, in the write-up, fixed or not - issue #147), then the durable-notes notice (a durable project fact goes in `notes/`, one file per task, never appended straight into the project's root agent-memory file's shared body - the merge-conflict fix that file documents) - all stated here rather than left to a file a worker might not read - at the start of every brief, applied by `touched-tests.ts`'s `workerBrief` once per round and again where `attempts.ts` hands its correction brief over, never twice. Also `ONLY_TOUCHED_TESTS_NOTICE` (issue #142), which unlike those four is conditional - `withStandingQuestion`'s `onlyTouchedTests` option adds it after the fixed prefix, and `touched-tests.ts` decides it. Only `STANDING_QUESTION` itself is ratified text (`contract/rule11.standing-question.test.ts` holds a verbatim copy); a new standing line is added as its own exported constant folded into `STANDING_PREFIX`, never appended to that question, so it needs no change to a protected contract path. |
 | `foreman.ts` | `createForeman` — assembles the above into the `Foreman` shape, including the per-instance task→brain memory `verdict()`'s fix path and `answer()` both use. |
 
 `GateResult`, `Delivery`, `FabricaTask`, `BrainAskResult`, and

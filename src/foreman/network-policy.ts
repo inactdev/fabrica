@@ -8,9 +8,7 @@
 // for that call reads it there. Nothing about it is threaded through
 // `Brain` or `contract/surface.ts` - see that module's own header.
 
-import { realpathSync } from "node:fs";
-import { ConfigError, loadConfig } from "../config/index.ts";
-import type { ProjectConfig } from "../config/index.ts";
+import { registeredProject } from "./registered-project.ts";
 import type { TaskNetworkPolicy } from "../brain/index.ts";
 
 /**
@@ -22,13 +20,11 @@ import type { TaskNetworkPolicy } from "../brain/index.ts";
  * project, which is what every contract fixture is, behaves exactly as
  * it did before any of this existed.
  *
- * Both sides of the comparison go through realpath, the project's own
- * path included: the loader only expands a leading `~`, and on macOS
- * tmpdir() sits behind a /var -> /private/var symlink, so otherwise the
- * same directory can look like two. (resolve-check.ts resolves only the
- * registered side because its own caller always hands it
- * `line.project`, already resolved; this one is also called from
- * ask.ts, before any ProductionLine exists to resolve anything.)
+ * The lookup itself is registered-project.ts's (shared with
+ * touched-tests.ts); a malformed projects.toml reads as "no
+ * declaration" here rather than throwing, because resolve-check.ts runs
+ * first in every round and refuses on it, loudly, where that error
+ * belongs.
  */
 export function networkPolicyFor(recordHome: string, taskId: string, projectPath: string): TaskNetworkPolicy {
   const registered = registeredProject(recordHome, projectPath);
@@ -39,28 +35,4 @@ export function networkPolicyFor(recordHome: string, taskId: string, projectPath
     ...(registered?.maxRequestBytes !== undefined ? { maxRequestBytes: registered.maxRequestBytes } : {}),
     ...(registered?.maxCallsPerTask !== undefined ? { maxCallsPerTask: registered.maxCallsPerTask } : {}),
   };
-}
-
-function registeredProject(recordHome: string, projectPath: string): ProjectConfig | undefined {
-  let config;
-  try {
-    config = loadConfig(recordHome);
-  } catch (err) {
-    // A missing projects.toml is the ordinary unregistered case. Any
-    // other config error (malformed TOML) is left to the callers that
-    // already report it properly - resolve-check.ts runs first in every
-    // round and refuses there, loudly, rather than here.
-    if (err instanceof ConfigError) return undefined;
-    throw err;
-  }
-  const resolved = realpath(projectPath);
-  return Object.values(config.projects).find((project) => realpath(project.path) === resolved);
-}
-
-function realpath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
 }

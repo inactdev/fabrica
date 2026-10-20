@@ -30,8 +30,31 @@ test("appendProjectEntry creates projects.toml when there is none, and it parses
   });
 
   assert.equal(tomlPath, projectsTomlPath(recordHome));
-  assert.equal(appended, '[projects.fabrica]\npath = "/srv/fabrica"\ncheck = "./check.sh"\n');
-  assert.deepEqual(loadConfig(recordHome).projects.fabrica, { path: "/srv/fabrica", check: "./check.sh" });
+  assert.equal(
+    appended,
+    '[projects.fabrica]\npath = "/srv/fabrica"\ncheck = "./check.sh"\nonlyTouchedTests = true\n'
+  );
+  assert.deepEqual(loadConfig(recordHome).projects.fabrica, {
+    path: "/srv/fabrica",
+    check: "./check.sh",
+    onlyTouchedTests: true,
+  });
+});
+
+// Issue #142: the standing ruling is written out rather than left to the
+// loader's own default, because this text is what the Client is shown
+// when his project is registered - and the line he edits to turn it off.
+test("appendProjectEntry writes the only-touched-tests ruling into the entry, as a line the Client can flip", () => {
+  const recordHome = tempHome();
+  const { appended } = appendProjectEntry({
+    recordHome,
+    name: "fabrica",
+    path: "/srv/fabrica",
+    check: "./check.sh",
+  });
+
+  assert.match(appended, /^onlyTouchedTests = true$/m);
+  assert.equal(loadConfig(recordHome).projects.fabrica.onlyTouchedTests, true);
 });
 
 test("appendProjectEntry leaves everything already in the file exactly as it was", () => {

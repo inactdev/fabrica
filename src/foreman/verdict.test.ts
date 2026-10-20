@@ -80,11 +80,16 @@ test("fix re-enters the same warm worker session on the same line", async () => 
   assert.equal(brain.calls, 2, "fix ran exactly one more worker call");
   const sessions = [...brain.historyBySession.keys()];
   assert.deepEqual(sessions, [firstSession], "fix continued the same session, it did not start a new one");
+  // onlyTouchedTests is on for an unregistered fixture project too
+  // (issue #142: the Client's ruling is standing, and projects.toml's
+  // loader defaults it on for every registered entry) - so both rounds'
+  // briefs carry the notice.
   assert.deepEqual(brain.historyBySession.get(firstSession!), [
-    withStandingQuestion("small change"),
+    withStandingQuestion("small change", { onlyTouchedTests: true }),
     withStandingQuestion(
       `small change\n\n---\n\nThe Client reviewed your previous delivery and asked for a change. ` +
-        `Keep everything that was already right, and fix exactly this:\n\nwrong button spot`
+        `Keep everything that was already right, and fix exactly this:\n\nwrong button spot`,
+      { onlyTouchedTests: true }
     ),
   ]);
 

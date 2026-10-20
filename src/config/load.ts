@@ -197,13 +197,13 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
       `${path}: [projects.${name}] must be a table with at least a "path" field.`
     );
   }
-  const { path: projectPath, check, hosts, maxRequestBytes, maxCallsPerTask, ...rest } = value;
+  const { path: projectPath, check, hosts, maxRequestBytes, maxCallsPerTask, onlyTouchedTests, ...rest } = value;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path, check, hosts, maxRequestBytes and maxCallsPerTask are recognized.`
+        `Only path, check, hosts, maxRequestBytes, maxCallsPerTask and onlyTouchedTests are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -215,7 +215,20 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   if (check !== undefined && typeof check !== "string") {
     throw new ConfigError("malformed", `${path}: [projects.${name}].check must be a string.`);
   }
-  const project: ProjectConfig = { path: expandLeadingTilde(projectPath) };
+  // Issue #142: the Client's standing ruling, so it is a default on load
+  // rather than something each entry has to carry. An entry written
+  // before this existed is therefore governed by it too; only an
+  // explicit `onlyTouchedTests = false` turns it off.
+  if (onlyTouchedTests !== undefined && typeof onlyTouchedTests !== "boolean") {
+    throw new ConfigError(
+      "malformed",
+      `${path}: [projects.${name}].onlyTouchedTests must be true or false, not ${String(onlyTouchedTests)}.`
+    );
+  }
+  const project: ProjectConfig = {
+    path: expandLeadingTilde(projectPath),
+    onlyTouchedTests: onlyTouchedTests ?? true,
+  };
   if (check !== undefined) project.check = check;
   if (hosts !== undefined) project.hosts = requireHosts(hosts, `${path}: [projects.${name}].hosts`);
   if (maxRequestBytes !== undefined) {

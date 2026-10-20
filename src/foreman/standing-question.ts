@@ -75,6 +75,26 @@ export const DURABLE_NOTES_NOTICE =
   "file's shared body directly - that is what causes parallel tasks' pull requests to conflict on the same " +
   "spot, every time.";
 
+/** The Client's standing ruling on how a worker spends its own time
+ * (issue #142): the project's check runs in full after the worker is
+ * done, by Inspector or in the worker's own box, so a worker re-running
+ * the whole suite itself buys nothing and costs minutes on every
+ * attempt. Carried by each project's own settings
+ * (`projects.toml`'s `onlyTouchedTests`, on unless the project turns it
+ * off) rather than retyped into every task - which is the whole point
+ * of the issue - and resolved per round by
+ * src/foreman/touched-tests.ts, which is also where a single task's
+ * "run the full suite" opt-out lives. Unlike the four notices above it
+ * is therefore conditional, which is why it is not part of
+ * STANDING_PREFIX. The second sentence is the safety valve: narrower
+ * test runs must not turn into silent risk, so an untested consequence
+ * is something the reviewer hears about. */
+export const ONLY_TOUCHED_TESTS_NOTICE =
+  "While you work, run only the tests that cover what you touched, not the project's whole suite - the " +
+  "project's own check runs in full after you finish, so running everything yourself costs time and proves " +
+  "nothing that check will not. If your change could break something the tests you ran do not cover, say so " +
+  "in your write-up.";
+
 const STANDING_PREFIX = [
   STANDING_QUESTION,
   FINAL_MESSAGE_FORMAT_NOTICE,
@@ -85,7 +105,17 @@ const STANDING_PREFIX = [
 /** `brief`, beginning with the standing question, the write-up notice,
  * the same-shape notice and the durable-notes notice exactly once -
  * applied by every brief builder and again where the brief is handed
- * over, so a builder nested inside another never doubles it. */
-export function withStandingQuestion(brief: string): string {
-  return brief.startsWith(STANDING_PREFIX) ? brief : `${STANDING_PREFIX}\n\n${brief}`;
+ * over, so a builder nested inside another never doubles it.
+ *
+ * `onlyTouchedTests` adds ONLY_TOUCHED_TESTS_NOTICE after those four.
+ * The doubling guard deliberately keys on STANDING_PREFIX alone, which
+ * the conditional notice sits *after*: a brief an outer builder already
+ * prefixed comes back untouched whatever this call asks for, so a
+ * nested re-application can neither double the prefix nor quietly drop
+ * a notice the outer builder resolved. Resolving it is
+ * src/foreman/touched-tests.ts's job, in one place per round. */
+export function withStandingQuestion(brief: string, opts: { onlyTouchedTests?: boolean } = {}): string {
+  if (brief.startsWith(STANDING_PREFIX)) return brief;
+  const prefix = opts.onlyTouchedTests ? `${STANDING_PREFIX}\n\n${ONLY_TOUCHED_TESTS_NOTICE}` : STANDING_PREFIX;
+  return `${prefix}\n\n${brief}`;
 }

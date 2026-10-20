@@ -22,7 +22,7 @@ import { failedWithNoDelivery, latestDeliveredDetails, refusedWithNoDelivery } f
 import { prepareRound, skipIfUnchanged } from "./judge.ts";
 import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
-import { withStandingQuestion } from "./standing-question.ts";
+import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { runAttempts } from "./attempts.ts";
 import { recordRoundResult } from "./round.ts";
@@ -257,13 +257,17 @@ export async function recordVerdict(
  * mirrors attempts.ts's correctionBrief, but from the Client's review
  * rather than a failed check. `extra` (issue #235) is anything the host
  * needs the worker to know about the state it is being handed, appended
- * after the Client's own words and still before the standing question,
- * which stays last wherever it appears. */
+ * after the Client's own words.
+ *
+ * This is the round's own words only; `workerBrief` puts the standing
+ * prefix - and, when the project asks for it, the only-touched-tests
+ * notice (issue #142) - in front of the whole thing at the call site,
+ * the same way do.ts's round does. */
 function buildFixBrief(originalBrief: string, note: string, extra?: string): string {
-  return withStandingQuestion(
+  return (
     `${originalBrief}\n\n---\n\nThe Client reviewed your previous delivery and asked for a change. ` +
-      `Keep everything that was already right, and fix exactly this:\n\n${note}` +
-      (extra ? `\n\n---\n\n${extra}` : "")
+    `Keep everything that was already right, and fix exactly this:\n\n${note}` +
+    (extra ? `\n\n---\n\n${extra}` : "")
   );
 }
 
@@ -391,10 +395,10 @@ async function runFixRound(
     const attemptsResult = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), () =>
       runAttempts({
         brain,
-        brief: buildFixBrief(
-          originalBrief,
-          note,
-          handed ? rebaseConflictInstructions(handed.base, handed.conflict) : undefined
+        brief: workerBrief(
+          recordHome,
+          line.project,
+          buildFixBrief(originalBrief, note, handed ? rebaseConflictInstructions(handed.base, handed.conflict) : undefined)
         ),
         workdir: line.workdir,
         taskId,

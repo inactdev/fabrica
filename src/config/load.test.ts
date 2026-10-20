@@ -28,10 +28,12 @@ test("loadConfig: a valid config loads projects and caps", () => {
   assert.deepEqual(config.projects["spending-app"], {
     path: join(homedir(), "inkling-umbrella/spending-app"),
     check: "bin/ci",
+    onlyTouchedTests: true,
   });
   assert.deepEqual(config.projects["other-app"], {
     path: join(homedir(), "inkling-umbrella/other-app"),
     check: "npm test",
+    onlyTouchedTests: true,
   });
 });
 
@@ -55,6 +57,7 @@ test("loadConfig: a project may be registered without a check yet", () => {
   const config = loadConfig(recordHome);
   assert.deepEqual(config.projects["spending-app"], {
     path: join(homedir(), "inkling-umbrella/spending-app"),
+    onlyTouchedTests: true,
   });
 });
 
@@ -73,6 +76,7 @@ test("loadConfig: a project named caps loads correctly, distinct from the [caps]
   assert.deepEqual(config.projects["caps"], {
     path: join(homedir(), "inkling-umbrella/caps"),
     check: "bin/ci",
+    onlyTouchedTests: true,
   });
 });
 
@@ -291,6 +295,7 @@ test("loadConfig: a project's allowed hosts and relay limits load as declared", 
     hosts: ["registry.npmjs.org", "*.example.com:8443"],
     maxRequestBytes: 1048576,
     maxCallsPerTask: 50,
+    onlyTouchedTests: true,
   });
 });
 
@@ -345,6 +350,49 @@ test("loadConfig: a relay limit must be a whole number of at least 1", () => {
         return true;
       },
       `${line} should have been refused`
+    );
+  }
+});
+
+// Issue #142: the Client's standing ruling, so the loader applies it to
+// every entry - including every entry written before the field existed.
+test("loadConfig: onlyTouchedTests defaults to true and can be turned off per project", () => {
+  const recordHome = makeTestHome(`
+    [projects.default-app]
+    path = "/srv/default-app"
+
+    [projects.opted-out]
+    path = "/srv/opted-out"
+    onlyTouchedTests = false
+
+    [projects.explicit]
+    path = "/srv/explicit"
+    onlyTouchedTests = true
+  `);
+
+  const { projects } = loadConfig(recordHome);
+  assert.equal(projects["default-app"].onlyTouchedTests, true);
+  assert.equal(projects["opted-out"].onlyTouchedTests, false);
+  assert.equal(projects["explicit"].onlyTouchedTests, true);
+});
+
+test("loadConfig: a non-boolean onlyTouchedTests is refused as malformed, never read as off", () => {
+  for (const value of [`"false"`, "0", "[true]"]) {
+    const recordHome = makeTestHome(`
+      [projects.spending-app]
+      path = "~/app"
+      onlyTouchedTests = ${value}
+    `);
+
+    assert.throws(
+      () => loadConfig(recordHome),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /onlyTouchedTests/);
+        return true;
+      },
+      `onlyTouchedTests = ${value} should have been refused`
     );
   }
 });

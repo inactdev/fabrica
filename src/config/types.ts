@@ -33,6 +33,16 @@ export interface ProjectConfig {
    * make through it (src/relay/limits.mjs's
    * DEFAULT_MAX_CALLS_PER_TASK). */
   maxCallsPerTask?: number;
+  /** The Client's standing ruling (issue #142): a Worker on this project
+   * runs only the tests covering what it touched, never the whole suite,
+   * since the project's own check runs in full afterwards either way.
+   * **Not optional** — the loader fills it in as `true` for every entry
+   * that doesn't mention it, so an existing projects.toml written before
+   * this existed carries the ruling too; `onlyTouchedTests = false` in
+   * the entry is the way to turn it off for one project. A single task
+   * opts out by saying so in its own text (src/foreman/touched-tests.ts).
+   */
+  onlyTouchedTests: boolean;
 }
 
 /** The pause rule (issue #189): how full the provider's own

@@ -19,6 +19,7 @@ import { closesIssueFor } from "./pr-body.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { networkPolicyFor } from "./network-policy.ts";
+import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { recordReceipt, spendLimitsFor } from "./caps.ts";
 import { pauseRuleFor } from "./meters.ts";
@@ -81,9 +82,11 @@ export async function doTask(
  * SPEC.md steps 3-6: isolate, work, verify, inspect when configured,
  * then deliver or refuse. Shared by a task
  * proceeding straight out of `doTask` and one resuming after `fabrica
- * answer` (answer.ts) - `brief` is whatever the brain should actually
- * receive: the bare task text in doTask's case, request.md plus every
- * answer so far in answer.ts's.
+ * answer` (answer.ts) - `brief` is the task's own words: the bare task
+ * text in doTask's case, request.md plus every answer so far in
+ * answer.ts's. What the worker receives is built from it here, once the
+ * project is resolved (`workerBrief`, touched-tests.ts): the standing
+ * prefix rule 11 requires, plus whatever this project's settings add.
  */
 export async function runProductionRound(
   recordHome: string,
@@ -222,7 +225,11 @@ async function productionRound(
     const attemptsResult = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), () =>
       runAttempts({
         brain,
-        brief,
+        // Issue #142: the project's own settings decide whether this
+        // brief also carries the only-touched-tests ruling. Built here,
+        // not at each caller, so a resumed round (answer.ts) and a
+        // first attempt resolve it identically.
+        brief: workerBrief(recordHome, line.project, brief),
         workdir: line.workdir,
         taskId,
         judge,

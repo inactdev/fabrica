@@ -208,6 +208,15 @@ to merge. Then it appends the project to `~/.fabrica/projects.toml`:
     [projects.spending-app]
     path = "/Users/you/inkling-umbrella/spending-app"
     check = "./check.sh"
+    onlyTouchedTests = true
+
+`onlyTouchedTests` is the standing instruction every Worker on this
+project is given: run the tests covering what you touched, not the
+whole suite - the project's check runs in full after the Worker is
+done either way, so running everything twice only costs time. It is on
+for every project, including ones registered before this existed; set
+it to `false` here to turn it off for good, or say "run the full suite"
+in a task's own text to turn it off for that one task.
 
 Everything that can refuse refuses before anything is created: a path
 that isn't a repository, a missing `origin`, a `gh` that isn't logged

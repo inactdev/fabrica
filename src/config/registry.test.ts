@@ -22,6 +22,7 @@ test("requireProject: a registered project with a check command resolves", () =>
   assert.deepEqual(project, {
     path: join(homedir(), "inkling-umbrella/spending-app"),
     check: "bin/ci",
+    onlyTouchedTests: true,
   });
 });
 
@@ -104,6 +105,7 @@ test("requireProject: a project literally named __proto__ still resolves", () =>
   assert.deepEqual(project, {
     path: join(homedir(), "inkling-umbrella/proto-app"),
     check: "bin/ci",
+    onlyTouchedTests: true,
   });
 });
 
@@ -122,6 +124,7 @@ test("requireProject: a project literally named caps resolves, distinct from the
   assert.deepEqual(project, {
     path: join(homedir(), "inkling-umbrella/caps"),
     check: "bin/ci",
+    onlyTouchedTests: true,
   });
 });
 
