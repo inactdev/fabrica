@@ -7,15 +7,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { fakeInspector } from "../../contract/helpers/fake-inspector.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { main } from "./main.ts";
-import { runDoctorCommand, type DoctorCheck, type DoctorProbes } from "./doctor-command.ts";
+import { runDoctorCommand, type CopyInfo, type DoctorCheck, type DoctorProbes } from "./doctor-command.ts";
 
 const ok = (label: string): DoctorCheck => ({ ok: true, label, detail: "fine" });
 
@@ -24,6 +25,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
     liveCalls: 0,
     node: () => ok("node"),
     checkout: () => ok("checkout"),
+    npmLink: () => ok("npm link"),
     docker: () => ok("docker"),
     workerImage: () => ok("worker image"),
     workerCli: () => ok("worker CLI"),
@@ -72,8 +74,8 @@ test("fabrica doctor: everything healthy - every line OK, exit 0, and nothing is
   const probes = okProbes();
   const { code, lines } = await doctor(healthyHome(), probes);
   assert.equal(code, 0, lines.join("\n"));
-  // 9 machine checks, 1 project, caps, spend.
-  assert.equal(lines.length, 12, lines.join("\n"));
+  // 10 machine checks, 1 project, caps, spend.
+  assert.equal(lines.length, 13, lines.join("\n"));
   assert.ok(lines.every((l) => l.startsWith("OK ")), lines.join("\n"));
   assert.equal(probes.liveCalls, 0, "the live call ran without --live - doctor must spend nothing by default");
 });
@@ -81,6 +83,7 @@ test("fabrica doctor: everything healthy - every line OK, exit 0, and nothing is
 for (const name of [
   "node",
   "checkout",
+  "npmLink",
   "docker",
   "workerImage",
   "workerCli",
@@ -219,12 +222,180 @@ test("checkout check: an installed copy reports its version and commit against o
   assert.match(behind.detail, /behind origin\/master, latest is zzz999/);
 });
 
-test("checkout check: an installed copy with no build-info.json fails, naming reinstall", async () => {
+test("checkout check: an installed copy with no build-info.json fails, naming reinstall into its own prefix", async () => {
   const { checkoutCheck } = await import("./doctor-command.ts");
   const copy = { kind: "installed" as const, root: "/usr/local/lib/node_modules/fabrica", branch: null, commit: null, version: "1.2.3" };
   const check = checkoutCheck(copy, "aaa111");
   assert.equal(check.ok, false);
+  // The prefix this copy lives under, not npm's default - which is
+  // read-only on a Nix-managed host (issue #171).
+  assert.match(check.fix ?? "", /npm install -g --prefix \/usr\/local github:inactdev\/fabrica/);
+});
+
+test("checkout check: an installed copy under no npm prefix at all still names the plain install command", async () => {
+  const { checkoutCheck } = await import("./doctor-command.ts");
+  const copy = { kind: "installed" as const, root: "/home/me/.npm/_npx/0a1b2c3d/node_modules/fabrica", branch: null, commit: null, version: "1.2.3" };
+  const check = checkoutCheck(copy, "aaa111");
+  assert.equal(check.ok, false);
   assert.match(check.fix ?? "", /npm install -g github:inactdev\/fabrica/);
+});
+
+// Issue #171: a leftover `npm link` symlink standing where an installed
+// copy belongs. The wording/pass-fail cases are pure; the three below
+// them build real symlinks, since the point of that half is reading a
+// real filesystem correctly.
+const devCopy = (root: string): CopyInfo => ({ kind: "dev-checkout", root, branch: "master", commit: "aaa111", version: "0.0.0" });
+const installedCopy = (root: string): CopyInfo => ({ kind: "installed", root, branch: null, commit: "aaa111", version: "1.2.3" });
+
+test("npm link check: no symlink at any prefix checked is OK, and says where it looked", async () => {
+  const { npmLinkCheck } = await import("./doctor-command.ts");
+  const check = npmLinkCheck(
+    [{ prefix: "/usr/local", linkTarget: null, dangling: false, npmDefault: true }],
+    installedCopy("/usr/local/lib/node_modules/fabrica")
+  );
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /\/usr\/local\/lib\/node_modules\/fabrica/);
+});
+
+test("npm link check: no prefix to check at all is OK, not a failure", async () => {
+  const { npmLinkCheck } = await import("./doctor-command.ts");
+  const check = npmLinkCheck([], devCopy("/src/fabrica"));
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /no npm prefix to check/);
+});
+
+test("npm link check: a link to the dev checkout running right now is the developer install, not a leftover", async () => {
+  const { npmLinkCheck } = await import("./doctor-command.ts");
+  const check = npmLinkCheck(
+    [{ prefix: "/usr/local", linkTarget: "/src/fabrica", dangling: false, npmDefault: true }],
+    devCopy("/src/fabrica")
+  );
+  assert.equal(check.ok, true, check.detail);
+  assert.match(check.detail, /developer install/);
+});
+
+test("npm link check: a leftover link while an installed copy runs fails, printing npm unlink -g fabrica", async () => {
+  const { npmLinkCheck } = await import("./doctor-command.ts");
+  const check = npmLinkCheck(
+    [{ prefix: "/usr/local", linkTarget: "/src/fabrica", dangling: false, npmDefault: true }],
+    installedCopy("/home/me/.npm-global/lib/node_modules/fabrica")
+  );
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /\/usr\/local\/lib\/node_modules\/fabrica is an npm link symlink/);
+  assert.match(check.detail, /ENOTDIR/);
+  assert.equal(check.fix, "npm unlink -g fabrica");
+});
+
+test("npm link check: a leftover link at a prefix that is not npm's own names that prefix in the fix", async () => {
+  const { npmLinkCheck } = await import("./doctor-command.ts");
+  const check = npmLinkCheck(
+    [{ prefix: "/home/me/.npm-global", linkTarget: "/src/fabrica", dangling: false, npmDefault: false }],
+    installedCopy("/usr/local/lib/node_modules/fabrica")
+  );
+  assert.equal(check.ok, false);
+  assert.equal(check.fix, "npm unlink -g --prefix /home/me/.npm-global fabrica");
+});
+
+test("npm link check: a link whose target is gone fails even on the dev checkout that is running", async () => {
+  const { npmLinkCheck } = await import("./doctor-command.ts");
+  const check = npmLinkCheck(
+    [{ prefix: "/usr/local", linkTarget: "/src/gone", dangling: true, npmDefault: true }],
+    devCopy("/src/gone")
+  );
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /no longer exists/);
+  assert.equal(check.fix, "npm unlink -g fabrica");
+});
+
+test("npm link check: the fix it prints is the one the install documentation tells a Client to run", async () => {
+  // Issue #171 asks for both halves, and they are only useful as one
+  // answer: the install section's note and this check's fix have to be
+  // the same command, so a reader who hits the ENOTDIR and a reader who
+  // runs doctor are told the same thing.
+  const { npmLinkCheck } = await import("./doctor-command.ts");
+  const check = npmLinkCheck(
+    [{ prefix: "/usr/local", linkTarget: "/src/fabrica", dangling: false, npmDefault: true }],
+    installedCopy("/home/me/.npm-global/lib/node_modules/fabrica")
+  );
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "README.md"), "utf8");
+
+  assert.equal(check.fix, "npm unlink -g fabrica");
+  assert.ok(readme.includes("`npm unlink -g fabrica`"), "README.md must name the same fix doctor prints");
+});
+
+test("npmLinkPrefixes: the running executable's prefix, the running copy's own, and npm's - deduplicated", async () => {
+  const { npmLinkPrefixes } = await import("./doctor-command.ts");
+
+  // An installed copy run through its own prefix's bin, with npm's
+  // default prefix elsewhere: two sites, npm's marked as its own.
+  assert.deepEqual(
+    npmLinkPrefixes(installedCopy("/home/me/.npm-global/lib/node_modules/fabrica"), "/home/me/.npm-global/bin/fabrica", "/usr/local"),
+    [
+      { prefix: "/home/me/.npm-global", npmDefault: false },
+      { prefix: "/usr/local", npmDefault: true },
+    ]
+  );
+
+  // The same prefix reached two ways is one site, and it is npm's own.
+  assert.deepEqual(npmLinkPrefixes(installedCopy("/usr/local/lib/node_modules/fabrica"), "/usr/local/bin/fabrica", "/usr/local"), [
+    { prefix: "/usr/local", npmDefault: true },
+  ]);
+
+  // A linked dev checkout: its root names no prefix, the bin it was
+  // reached through does.
+  assert.deepEqual(npmLinkPrefixes(devCopy("/src/fabrica"), "/usr/local/bin/fabrica", null), [
+    { prefix: "/usr/local", npmDefault: false },
+  ]);
+
+  // Nothing derivable (run straight out of a checkout, no npm on PATH):
+  // nothing is searched, rather than a guessed prefix.
+  assert.deepEqual(npmLinkPrefixes(devCopy("/src/fabrica"), "/src/fabrica/src/cli/bin.mjs", null), []);
+});
+
+test("inspectNpmLinkSite: a real installed directory is not a link", async () => {
+  const { inspectNpmLinkSite } = await import("./doctor-command.ts");
+  const prefix = mkdtempSync(join(tmpdir(), "fabrica-doctor-prefix-"));
+  mkdirSync(join(prefix, "lib", "node_modules", "fabrica"), { recursive: true });
+
+  assert.deepEqual(inspectNpmLinkSite({ prefix, npmDefault: true }), { prefix, npmDefault: true, linkTarget: null, dangling: false });
+});
+
+test("inspectNpmLinkSite: npm link's own relative symlink is read, resolved against its own folder", async () => {
+  const { inspectNpmLinkSite } = await import("./doctor-command.ts");
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "fabrica-doctor-linked-")));
+  const checkout = join(base, "checkout");
+  mkdirSync(checkout);
+  const nodeModules = join(base, "prefix", "lib", "node_modules");
+  mkdirSync(nodeModules, { recursive: true });
+  // Exactly what `npm link` writes - a path relative to the link, not
+  // an absolute one.
+  symlinkSync(join("..", "..", "..", "checkout"), join(nodeModules, "fabrica"));
+
+  assert.deepEqual(inspectNpmLinkSite({ prefix: join(base, "prefix"), npmDefault: false }), {
+    prefix: join(base, "prefix"),
+    npmDefault: false,
+    linkTarget: checkout,
+    dangling: false,
+  });
+});
+
+test("inspectNpmLinkSite: a symlink whose target is gone is reported as dangling, not as nothing", async () => {
+  const { inspectNpmLinkSite } = await import("./doctor-command.ts");
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "fabrica-doctor-dangling-")));
+  const nodeModules = join(base, "prefix", "lib", "node_modules");
+  mkdirSync(nodeModules, { recursive: true });
+  symlinkSync(join(base, "gone"), join(nodeModules, "fabrica"));
+
+  const site = inspectNpmLinkSite({ prefix: join(base, "prefix"), npmDefault: true });
+  assert.equal(site.dangling, true);
+  assert.equal(site.linkTarget, join(base, "gone"));
+});
+
+test("inspectNpmLinkSite: a prefix with nothing installed under it is not a link either", async () => {
+  const { inspectNpmLinkSite } = await import("./doctor-command.ts");
+  const prefix = mkdtempSync(join(tmpdir(), "fabrica-doctor-empty-prefix-"));
+
+  assert.deepEqual(inspectNpmLinkSite({ prefix, npmDefault: false }), { prefix, npmDefault: false, linkTarget: null, dangling: false });
 });
 
 test("detectCopy: a directory with .git is a dev checkout, read live through the injected git function", async () => {

@@ -10,6 +10,17 @@
 // the documented install command, `npm install -g
 // github:inactdev/fabrica` (README.md's "Installable from zero").
 //
+// That install is run with `--prefix` set to the prefix the running
+// copy is actually installed under, derived from its own path
+// (npm-prefix.ts). npm's own default global prefix is the folder node
+// itself sits in, which on a Nix-managed host is a read-only store
+// path - so an installed copy living under some other, writable prefix
+// is only updatable in place by naming that prefix, and the copy's own
+// path is the one thing that knows it. A copy that is neither a
+// checkout nor a global install - `npx` runs a throwaway one out of its
+// own cache - is refused rather than reinstalled somewhere it never
+// lived.
+//
 // Once the code is updated, a live view listening on 127.0.0.1:7777
 // running older code is restarted - by calling `fabrica up`'s own
 // stale-live-view check (up-command.ts's refreshStaleLiveView), never a
@@ -22,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { detectCopy, git, short, type CopyInfo } from "./doctor-command.ts";
+import { INSTALL_SPEC, installCommandArgs, prefixOfGlobalInstall } from "./npm-prefix.ts";
 import { LIVE_VIEW_PORT, refreshStaleLiveView } from "./up-command.ts";
 
 export const UPDATE_USAGE = "fabrica update";
@@ -38,7 +50,12 @@ session:
          first, with a clear message, if the checkout isn't on master
          or has uncommitted changes.
        - Installed: re-runs the documented install command, \`npm
-         install -g github:inactdev/fabrica\`.
+         install -g github:inactdev/fabrica\`, with \`--prefix\` set
+         to the prefix this copy is installed under rather than npm's
+         default - so a copy installed outside that default (on a host
+         whose default prefix is read-only, say) updates where it
+         actually lives. A copy that is neither of the two - \`npx\`
+         runs one out of its own cache - is refused.
   2. If a live view is listening on 127.0.0.1:7777 and running older
      code (checked via its own /api/version), restarts it - the same
      check and restart \`fabrica up\` itself runs. One already current,
@@ -81,8 +98,10 @@ export interface UpdateProbes {
   isDirty(root: string): boolean;
   /** Runs `git pull --ff-only origin master`. Dev-checkout only. */
   pull(root: string): { ok: boolean; message: string };
-  /** Runs the documented install command. Installed-copy only. */
-  reinstall(): { ok: boolean; message: string };
+  /** Runs the documented install command against one npm prefix -
+   * the one the running copy is installed under. Installed-copy
+   * only. */
+  reinstall(prefix: string): { ok: boolean; message: string };
 }
 
 function commandFailureMessage(err: unknown): string {
@@ -108,9 +127,9 @@ function gitPullFfOnly(root: string): { ok: boolean; message: string } {
   }
 }
 
-function npmInstallGlobal(): { ok: boolean; message: string } {
+function npmInstallGlobal(prefix: string): { ok: boolean; message: string } {
   try {
-    const out = execFileSync("npm", ["install", "-g", "github:inactdev/fabrica"], {
+    const out = execFileSync("npm", installCommandArgs(prefix), {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -183,9 +202,18 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
       return 1;
     }
   } else {
-    const result = probes.reinstall();
+    const prefix = prefixOfGlobalInstall(before.root);
+    if (prefix === null) {
+      stderr(
+        `fabrica update: this copy of fabrica runs from ${before.root}, which is neither a checkout nor a global ` +
+          `npm install (npx, for one, runs a throwaway copy out of its own cache) - fabrica update needs an ` +
+          `installed or checked-out copy to update. Install one with: npm install -g ${INSTALL_SPEC}`
+      );
+      return 1;
+    }
+    const result = probes.reinstall(prefix);
     if (!result.ok) {
-      stderr(`fabrica update: npm install -g github:inactdev/fabrica failed: ${result.message}`);
+      stderr(`fabrica update: npm ${installCommandArgs(prefix).join(" ")} failed: ${result.message}`);
       return 1;
     }
   }

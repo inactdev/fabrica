@@ -5,8 +5,8 @@
 // alive or dead. No check ever prints a token.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   capsActive,
@@ -24,6 +24,13 @@ import {
 } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
+import {
+  globalPackagePath,
+  installCommandArgs,
+  normalizedPrefix,
+  prefixOfGlobalBin,
+  prefixOfGlobalInstall,
+} from "./npm-prefix.ts";
 import { resolveRecordHome } from "./record-home.ts";
 
 export const DOCTOR_USAGE = "fabrica doctor [--live]";
@@ -33,7 +40,9 @@ export const DOCTOR_HELP = `Usage: ${DOCTOR_USAGE}
 Checks, without spending anything, that this machine can run tasks: Node,
 the copy of fabrica actually running - a developer checkout (branch,
 commit) or an installed copy (version, commit), either way compared
-against origin/master - Docker, the worker image, the worker CLI version
+against origin/master - any leftover \`npm link\` symlink standing where
+an installed copy belongs (which makes the global install fail with
+ENOTDIR), Docker, the worker image, the worker CLI version
 installed in it, the relay image every task's network goes through, the
 worker token, the GitHub token Inspector needs, Inspector itself, every
 registered project, the caps, and any SPEND UNKNOWN block. One line per
@@ -58,6 +67,11 @@ export interface DoctorCheck {
 export interface DoctorProbes {
   node(): DoctorCheck;
   checkout(): DoctorCheck;
+  /** A leftover `npm link` symlink sitting where an installed copy
+   * belongs (issue #171) - `npm install -g github:inactdev/fabrica`
+   * fails with ENOTDIR while one is there, and the fix is one
+   * command. */
+  npmLink(): DoctorCheck;
   docker(): DoctorCheck;
   workerImage(): DoctorCheck;
   /** The CLI version actually installed in the worker image, against
@@ -132,7 +146,11 @@ export function checkoutCheck(copy: CopyInfo, remoteMasterCommit: string | null)
         ok: false,
         label,
         detail: `installed copy at ${copy.root} has no build-info.json, so its commit is unknown`,
-        fix: "reinstall with: npm install -g github:inactdev/fabrica",
+        // Into the prefix this copy actually lives under whenever its
+        // own path says which (issue #171's other half): npm's default
+        // global prefix is read-only on some hosts, so the bare command
+        // is only the right advice when nothing names a prefix.
+        fix: `reinstall with: npm ${installCommandArgs(prefixOfGlobalInstall(copy.root)).join(" ")}`,
       };
     }
     return { ok: true, label, detail: `installed copy v${copy.version}, commit ${short(copy.commit)} (${behindNote})` };
@@ -142,6 +160,118 @@ export function checkoutCheck(copy: CopyInfo, remoteMasterCommit: string | null)
   return copy.branch === "master"
     ? { ok: true, label, detail }
     : { ok: false, label, detail: `${detail}, not master`, fix: `git -C ${copy.root} checkout master && git -C ${copy.root} pull` };
+}
+
+/** What `<prefix>/lib/node_modules/fabrica` turns out to be at one
+ * prefix worth looking in (issue #171). */
+export interface NpmLinkSite {
+  prefix: string;
+  /** Where the symlink there points, or `null` when there is no symlink
+   * at that path at all - an ordinary installed directory, or nothing.
+   * Resolved to a real path whenever the target exists, so comparing it
+   * against the running copy's own (already real, since node resolves a
+   * module's path through symlinks) root compares like with like. */
+  linkTarget: string | null;
+  /** A symlink whose target is gone - leftover whatever else is true. */
+  dangling: boolean;
+  /** npm's own global prefix: the one a bare `npm install -g` writes to
+   * and a bare `npm unlink -g` removes from. */
+  npmDefault: boolean;
+}
+
+/** The prefixes worth looking in, in the order they are searched: the
+ * one the running `fabrica` executable came from, the one the running
+ * copy is installed under, and npm's own global prefix (where a bare
+ * `npm install -g` would hit the ENOTDIR). Deduplicated, and a prefix
+ * nothing can derive is simply not searched. */
+export function npmLinkPrefixes(
+  copy: CopyInfo,
+  execPath: string | undefined,
+  npmPrefix: string | null
+): { prefix: string; npmDefault: boolean }[] {
+  const candidates: [string | null, boolean][] = [
+    [prefixOfGlobalBin(execPath), false],
+    [prefixOfGlobalInstall(copy.root), false],
+    [normalizedPrefix(npmPrefix), true],
+  ];
+  const sites: { prefix: string; npmDefault: boolean }[] = [];
+  for (const [prefix, npmDefault] of candidates) {
+    if (prefix === null) continue;
+    const already = sites.find((site) => site.prefix === prefix);
+    if (already) already.npmDefault = already.npmDefault || npmDefault;
+    else sites.push({ prefix, npmDefault });
+  }
+  return sites;
+}
+
+/** Pure wording/pass-fail, so every case is testable without a real
+ * symlink anywhere. A link pointing at the dev checkout that is running
+ * right now is the documented developer install (README.md's
+ * "Developing Fabrica itself"), not a leftover - failing that would
+ * refuse every `fabrica up` session on a linked checkout, which is not
+ * what issue #171 is about. Anything else - a link to some other
+ * checkout, or one whose target is gone - stands between npm and the
+ * installed copy, and gets the one command that removes it. */
+export function npmLinkCheck(sites: NpmLinkSite[], copy: CopyInfo): DoctorCheck {
+  const label = "npm link";
+  const linked = sites.filter((site) => site.linkTarget !== null);
+
+  if (linked.length === 0) {
+    return {
+      ok: true,
+      label,
+      detail:
+        sites.length === 0
+          ? "no npm prefix to check (fabrica is running from neither a global install nor npm's own prefix)"
+          : `no leftover symlink at ${sites.map((site) => globalPackagePath(site.prefix)).join(", ")}`,
+    };
+  }
+
+  const leftover = linked.find(
+    (site) => site.dangling || copy.kind !== "dev-checkout" || site.linkTarget !== copy.root
+  );
+  if (leftover === undefined) {
+    return {
+      ok: true,
+      label,
+      detail: `${globalPackagePath(linked[0].prefix)} is linked to the checkout running right now (${copy.root}) - the developer install, not a leftover`,
+    };
+  }
+
+  const path = globalPackagePath(leftover.prefix);
+  const what = leftover.dangling
+    ? `an npm link symlink to ${leftover.linkTarget}, which no longer exists`
+    : `an npm link symlink to the checkout ${leftover.linkTarget}, not an installed copy`;
+  return {
+    ok: false,
+    label,
+    detail: `${path} is ${what} - npm ${installCommandArgs(null).join(" ")} fails with ENOTDIR while it is there`,
+    fix: leftover.npmDefault ? "npm unlink -g fabrica" : `npm unlink -g --prefix ${leftover.prefix} fabrica`,
+  };
+}
+
+/** Reads one prefix off the real filesystem. `npm link` writes a
+ * *relative* symlink (`../../../<checkout>`, verified against a real
+ * one), so a target is resolved against the link's own folder before
+ * anything is said about it. */
+export function inspectNpmLinkSite(site: { prefix: string; npmDefault: boolean }): NpmLinkSite {
+  const path = globalPackagePath(site.prefix);
+  let isLink = false;
+  try {
+    isLink = lstatSync(path).isSymbolicLink();
+  } catch {
+    return { ...site, linkTarget: null, dangling: false };
+  }
+  if (!isLink) return { ...site, linkTarget: null, dangling: false };
+
+  const raw = readlinkSync(path);
+  const target = isAbsolute(raw) ? raw : resolve(dirname(path), raw);
+  if (!existsSync(target)) return { ...site, linkTarget: target, dangling: true };
+  try {
+    return { ...site, linkTarget: realpathSync(target), dangling: false };
+  } catch {
+    return { ...site, linkTarget: target, dangling: true };
+  }
 }
 
 /** The exact Node version .inspector.json's image tag names, or `null`
@@ -234,9 +364,31 @@ function fetchRemoteMasterCommit(): string | null {
   }
 }
 
+/** npm's own global prefix - what a bare `npm install -g` would write
+ * to. One short `npm` call, and `null` (nothing claimed) if npm isn't
+ * on this PATH at all. */
+function npmGlobalPrefix(): string | null {
+  try {
+    return (
+      execFileSync("npm", ["prefix", "-g"], {
+        encoding: "utf8",
+        timeout: 20_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
 export const realProbes: DoctorProbes = {
   node: () => nodeCheck(process.version, pinnedNodeVersion()),
   checkout: () => checkoutCheck(detectCopy(CHECKOUT, (args) => git(CHECKOUT, args)), fetchRemoteMasterCommit()),
+  npmLink() {
+    const copy = detectCopy(CHECKOUT, (args) => git(CHECKOUT, args));
+    const sites = npmLinkPrefixes(copy, process.argv[1], npmGlobalPrefix()).map(inspectNpmLinkSite);
+    return npmLinkCheck(sites, copy);
+  },
   docker() {
     try {
       execFileSync("docker", ["info"], { stdio: "ignore", timeout: 20_000 });
@@ -318,6 +470,7 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
   const checks: DoctorCheck[] = [
     probes.node(),
     probes.checkout(),
+    probes.npmLink(),
     probes.docker(),
     probes.workerImage(),
     probes.workerCli(),

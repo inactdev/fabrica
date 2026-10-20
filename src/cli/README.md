@@ -40,6 +40,12 @@ developer-only install: every command breaks the moment this checkout
 is mid-edit or mid-merge, which the global install above exists to
 avoid for anyone who isn't actively changing this repo's code.
 
+`npm unlink -g fabrica` undoes it - and has to, before the global
+install will work at all: the symlink `npm link` leaves behind makes
+`npm install -g github:inactdev/fabrica` fail with `ENOTDIR` (issue
+#171). `fabrica doctor` reports a leftover one with that exact fix; see
+"The `npm link` check" below.
+
 ## `fabrica register <path> --check "<command>" --image <image>`
 
 Sets a repository up for Fabrica and registers it - run once per
@@ -311,7 +317,14 @@ is current via one side-effect-free `git ls-remote
 https://github.com/inactdev/fabrica.git master` (no local fetch, so no
 ref anywhere is mutated), never failing the check on its own, only
 `FAIL`ing outright when an installed copy has no `build-info.json` to
-read at all (naming reinstall as the fix); Docker, the worker image
+read at all (naming reinstall as the fix); **any leftover `npm link`
+symlink** standing where an installed copy belongs (issue #171 - while
+one is at `<prefix>/lib/node_modules/fabrica`, `npm install -g
+github:inactdev/fabrica` fails with `ENOTDIR`, so this check prints
+`npm unlink -g fabrica`, carrying `--prefix` when the leftover isn't at
+npm's own prefix; see "The `npm link` check" below for which prefixes
+are looked in and why a deliberately linked checkout is not a failure);
+Docker, the worker image
 (present, and stamped with the current Dockerfile's hash), the worker
 CLI's own version inside that image against the version its Dockerfile
 pins (issue #186 - asked of the CLI itself inside the image, and a
@@ -331,6 +344,37 @@ Inspector-specific checks live beside those modules
 (`src/brain/adapters/doctor-checks.ts`,
 `src/relay/container/doctor-check.ts`,
 `src/inspector/doctor-checks.ts`); this command only prints them.
+
+### The `npm link` check
+
+`npm link` puts a symlink at `<prefix>/lib/node_modules/fabrica`
+pointing at a checkout (a *relative* one, `../../../<checkout>` -
+checked against a real `npm link`, not assumed). While it is there, the
+global install fails with `ENOTDIR` and `fabrica` runs that checkout's
+live files rather than a frozen copy. Issue #171 is that the error names
+neither the symlink nor the one command that removes it, so `doctor`
+does.
+
+Which prefixes it looks in (`npmLinkPrefixes`, deduplicated, and any it
+cannot derive is simply not searched rather than guessed at):
+
+- the prefix the running executable came from - `process.argv[1]` is
+  npm's own `<prefix>/bin/fabrica` symlink, which node leaves as typed
+  even though it resolves the module path behind it (so this is the one
+  record of which prefix put `fabrica` on this `PATH`, for an installed
+  and a linked copy alike);
+- the prefix the running copy is installed under, read back out of its
+  own path (`npm-prefix.ts`);
+- npm's own global prefix (`npm prefix -g`) - where a bare `npm install
+  -g` would hit the `ENOTDIR`.
+
+A symlink pointing at the dev checkout that is running right now is the
+documented developer install (README.md's "Developing Fabrica itself"),
+reported `OK` and never failed: `fabrica up` stops on any doctor FAIL,
+so failing it would refuse to start a session on every linked checkout,
+which is not what #171 is about. Anything else - a link to some other
+checkout, or one whose target is gone - is leftover and fails with the
+fix.
 
 ## `fabrica up`
 
@@ -430,7 +474,16 @@ copy of that logic. A developer checkout refuses, before touching
 anything, if it isn't on `master` or has uncommitted changes
 (`git status --porcelain` non-empty); otherwise it runs
 `git pull --ff-only origin master`. An installed copy re-runs the
-documented install command, `npm install -g github:inactdev/fabrica`.
+documented install command, `npm install -g github:inactdev/fabrica`,
+with `--prefix` set to the prefix that copy is installed under -
+derived from its own path by `npm-prefix.ts`'s `prefixOfGlobalInstall`,
+never asked of npm, whose *default* global prefix is the folder node
+itself sits in and is read-only on a Nix-managed host. That is what
+makes an installed copy updatable from wherever it lives rather than
+only from npm's default. A copy that is neither a checkout nor a global
+install - `npx` extracts a throwaway one into its own cache, under no
+prefix at all - is refused outright, naming the install command,
+instead of being reinstalled somewhere it never lived.
 
 Once updated, it calls `refreshStaleLiveView` - the exact function
 `fabrica up`'s own Step 2 uses, pulled out of `runUpCommand` for this
@@ -868,7 +921,8 @@ already recorded, and the response says `signaled: false`.
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). Issue #99 adds the reporting side on top of that same verification, for `status`/`watch`: `probeTaskWorker` (`alive`/`not-found`/`unknown`), `cachedProcessTable`, and `WORKER_PROBE_INTERVAL_MS`. |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
-| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); calls `up-command.ts`'s `refreshStaleLiveView` afterward rather than a second stale-live-view check. `UPDATE_HELP` is `update --help`'s text. |
+| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); the install itself is spelled once, in `npm-prefix.ts`'s `installCommandArgs`, so the message a failure prints is the command that really ran; calls `up-command.ts`'s `refreshStaleLiveView` afterward rather than a second stale-live-view check. `UPDATE_HELP` is `update --help`'s text. |
+| `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus `INSTALL_SPEC`/`installCommandArgs`, the one spelling of the documented install command, shared by `fabrica update`'s real call and every message that prints it. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
