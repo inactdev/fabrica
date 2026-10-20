@@ -189,6 +189,31 @@ next time to keep talking to the same worker instead of starting over.
 It's also written onto that attempt's receipt, so the record shows which
 session produced which result.
 
+## Is the box's network still there? `relay-health.ts`
+
+An adapter that stands a worker box up on a network of its own (both
+written ones do: an isolated Docker network whose only route out is a
+per-task relay container - `src/relay/`) registers a probe for this
+call's `workdir`, through `src/brain/relay-health.ts`'s
+`registerRelayHealthProbe`. The Foreman's heartbeat calls it on every
+tick while `work()` is in flight and fails the attempt when it reports
+that the relay is gone, naming it.
+
+Same mechanism and same reasoning as `live-transcript.ts`: keyed on
+`workdir`, the one value both sides already share through the ordinary
+`Brain` interface, so nothing is added to a ratified signature and two
+concurrent tasks never cross wires. Like live transcripts it is
+entirely optional - an adapter that opens no network of its own
+registers nothing, and the probe then reports no problem.
+
+Answering is only half of what the written adapters do in theirs: a box
+whose relay has died cannot finish, so they also stop it
+(`runContained`'s `containerName`/`stopSignal`), which ends `work()`
+in about a second with every teardown still on its ordinary path. Why
+any of this exists: on 2026-10-18 a relay died mid-attempt, nothing
+asked, and the task spent four minutes reporting heartbeats before the
+box itself failed with a bare `ConnectionRefused`.
+
 ## Writing an adapter
 
 A real adapter is anything that implements `Brain` honestly: pick a

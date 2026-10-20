@@ -26,9 +26,9 @@ import * as net from "node:net";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readEventsForTask } from "../record/index.ts";
 import { networkPolicyFor } from "../foreman/network-policy.ts";
 import { startRelay } from "./server.mjs";
+import { collectRefusals } from "./helpers/collect-refusals.ts";
 import { tunnelAllowlistFor } from "./policy.ts";
 import type { AllowedHost } from "./types.ts";
 
@@ -99,9 +99,9 @@ test("a project that lists the registry reaches it through the relay", async () 
   const recordHome = homeFor(project, [`127.0.0.1:${registry.port}`]);
 
   const policy = networkPolicyFor(recordHome, "t1", project);
+  const reported = collectRefusals();
   const relay = await startRelay({
-    recordHome,
-    taskId: policy.taskId,
+    onRefusal: reported.onRefusal,
     tunnelAllowlist: tunnelAllowlistFor(BASE, policy),
   });
 
@@ -111,7 +111,7 @@ test("a project that lists the registry reaches it through the relay", async () 
 
     const response = await fetchThrough(socket, "/left-pad");
     assert.match(response, /left-pad/, `expected the registry's own answer through the tunnel, got: ${response}`);
-    assert.equal(readEventsForTask(recordHome, "t1").length, 0, "nothing was refused, so nothing is on the record");
+    assert.deepEqual(reported.refusals, [], "nothing was refused, so nothing is reported");
   } finally {
     await relay.close();
     await registry.close();
@@ -124,9 +124,9 @@ test("a project that lists nothing cannot reach the registry, and the refusal na
   const recordHome = homeFor(project);
 
   const policy = networkPolicyFor(recordHome, "t2", project);
+  const reported = collectRefusals();
   const relay = await startRelay({
-    recordHome,
-    taskId: policy.taskId,
+    onRefusal: reported.onRefusal,
     tunnelAllowlist: tunnelAllowlistFor(BASE, policy),
   });
 
@@ -135,10 +135,7 @@ test("a project that lists nothing cannot reach the registry, and the refusal na
     assert.equal(status, 403);
     socket.destroy();
 
-    const events = readEventsForTask(recordHome, "t2");
-    assert.equal(events.length, 1);
-    assert.equal(events[0]?.name, "network-refused");
-    assert.deepEqual(events[0]?.details, { host: "127.0.0.1", port: registry.port });
+    assert.deepEqual(reported.refusals, [{ host: "127.0.0.1", port: registry.port }]);
   } finally {
     await relay.close();
     await registry.close();

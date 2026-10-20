@@ -1,8 +1,9 @@
 // Issue #186: "the relay enforces a request-size limit and a per-task
 // call limit". Both are refusals of one request - the task keeps
 // running, since rule 10's spending cap is the only thing that stops a
-// task (Client ruling) - and both land on that task's own record as a
-// "network-refused" event naming which limit was hit.
+// task (Client ruling) - and both are reported naming which limit was
+// hit, which the host side turns into that task's own
+// "network-refused" event (container/launch.ts).
 //
 // Driven the same way server.test.ts drives the rest of the relay: a
 // fake worker (plain node:net/node:http) and a fake provider, with
@@ -12,18 +13,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as net from "node:net";
 import * as http from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { readEventsForTask } from "../record/index.ts";
 import { startRelay } from "./server.mjs";
+import { collectRefusals } from "./helpers/collect-refusals.ts";
 import { startFakeProvider } from "./helpers/fake-provider.ts";
 import type { FakeProviderHandle } from "./helpers/fake-provider.ts";
-import type { RelayHandle } from "./types.ts";
-
-function freshRecordHome(): string {
-  return mkdtempSync(join(tmpdir(), "fabrica-relay-limits-"));
-}
+import type { RefusalDetails, RelayHandle } from "./types.ts";
 
 /** One gateway-mode request with a body of exactly `bytes` bytes.
  * `chunked` sends it without a content-length, which is the case the
@@ -72,43 +66,40 @@ function connect(relayPort: number, target: string): Promise<{ socket: net.Socke
 }
 
 async function withGatewayRelay(
-  recordHome: string,
   limits: { maxRequestBytes?: number; maxCallsPerTask?: number },
-  body: (relay: RelayHandle, provider: FakeProviderHandle) => Promise<void>
+  body: (relay: RelayHandle, provider: FakeProviderHandle, refusals: RefusalDetails[]) => Promise<void>
 ): Promise<void> {
   const provider = await startFakeProvider({ body: "provider said hi" });
+  const reported = collectRefusals();
   const relay = await startRelay({
-    recordHome,
-    taskId: "t1",
+    onRefusal: reported.onRefusal,
     tunnelAllowlist: [{ host: "allowed.example" }],
     gateway: { host: "127.0.0.1", port: provider.port, tls: false },
     ...limits,
   });
   try {
-    await body(relay, provider);
+    await body(relay, provider, reported.refusals);
   } finally {
     await relay.close();
     await provider.close();
   }
 }
 
-test("a request over the size limit is refused, named on the record, and never forwarded", async () => {
-  const recordHome = freshRecordHome();
-  await withGatewayRelay(recordHome, { maxRequestBytes: 64 }, async (relay, provider) => {
+test("a request over the size limit is refused, named in the refusal, and never forwarded", async () => {
+  await withGatewayRelay({ maxRequestBytes: 64 }, async (relay, provider, refusals) => {
     const refused = await postBody(relay.port, 500);
     assert.equal(refused.status, 413);
     assert.equal(provider.requests.length, 0, "an oversized request must not reach the provider at all");
 
-    const events = readEventsForTask(recordHome, "t1");
-    assert.equal(events.length, 1);
-    assert.equal(events[0]?.name, "network-refused");
-    assert.deepEqual(events[0]?.details, {
-      host: "127.0.0.1",
-      port: provider.port,
-      limit: "request-size",
-      maxRequestBytes: 64,
-      requestBytes: 500,
-    });
+    assert.deepEqual(refusals, [
+      {
+        host: "127.0.0.1",
+        port: provider.port,
+        limit: "request-size",
+        maxRequestBytes: 64,
+        requestBytes: 500,
+      },
+    ]);
 
     // The task is not stopped: the very next request, within the
     // limit, goes through as if nothing had happened.
@@ -119,14 +110,12 @@ test("a request over the size limit is refused, named on the record, and never f
 });
 
 test("a body that declares no length is measured as it streams, and cut off over the limit", async () => {
-  const recordHome = freshRecordHome();
-  await withGatewayRelay(recordHome, { maxRequestBytes: 64 }, async (relay, provider) => {
+  await withGatewayRelay({ maxRequestBytes: 64 }, async (relay, provider, refusals) => {
     const refused = await postBody(relay.port, 4096, { chunked: true });
     assert.equal(refused.status, 413);
 
-    const events = readEventsForTask(recordHome, "t1");
-    assert.equal(events.length, 1);
-    const details = events[0]?.details as { limit: string; maxRequestBytes: number; requestBytes: number };
+    assert.equal(refusals.length, 1);
+    const details = refusals[0] as unknown as { limit: string; maxRequestBytes: number; requestBytes: number };
     assert.equal(details.limit, "request-size");
     assert.equal(details.maxRequestBytes, 64);
     assert.ok(details.requestBytes > 64, `expected the refusal to name how far over it got, got ${details.requestBytes}`);
@@ -139,18 +128,16 @@ test("a body that declares no length is measured as it streams, and cut off over
 });
 
 test("a request within the size limit is forwarded untouched", async () => {
-  const recordHome = freshRecordHome();
-  await withGatewayRelay(recordHome, { maxRequestBytes: 64 }, async (relay, provider) => {
+  await withGatewayRelay({ maxRequestBytes: 64 }, async (relay, provider, refusals) => {
     const result = await postBody(relay.port, 64);
     assert.equal(result.status, 200);
     assert.equal(provider.requests[0]?.body.length, 64);
-    assert.equal(readEventsForTask(recordHome, "t1").length, 0, "a request within the limit is not a refusal");
+    assert.deepEqual(refusals, [], "a request within the limit is not a refusal");
   });
 });
 
-test("past the per-task call limit every further call is refused, and the record says so once", async () => {
-  const recordHome = freshRecordHome();
-  await withGatewayRelay(recordHome, { maxCallsPerTask: 2 }, async (relay, provider) => {
+test("past the per-task call limit every further call is refused, and it is reported once", async () => {
+  await withGatewayRelay({ maxCallsPerTask: 2 }, async (relay, provider, refusals) => {
     assert.equal((await postBody(relay.port, 4)).status, 200);
     assert.equal((await postBody(relay.port, 4)).status, 200);
 
@@ -162,29 +149,28 @@ test("past the per-task call limit every further call is refused, and the record
 
     assert.equal(provider.requests.length, 2, "only the calls within the limit reach the provider");
 
-    // Recorded once, not once per refused call: events.jsonl is shared
-    // by every task in a record home and re-read whole by `fabrica
-    // status`, so a worker looping against an exhausted limit must not
-    // be able to grow it without bound.
-    const events = readEventsForTask(recordHome, "t1");
-    assert.equal(events.length, 1);
-    assert.equal(events[0]?.name, "network-refused");
-    assert.deepEqual(events[0]?.details, {
-      host: "127.0.0.1",
-      port: provider.port,
-      limit: "calls-per-task",
-      maxCallsPerTask: 2,
-      calls: 3,
-    });
+    // Reported once, not once per refused call: each report becomes a
+    // line in events.jsonl, which is shared by every task in a record
+    // home and re-read whole by `fabrica status`, so a worker looping
+    // against an exhausted limit must not be able to grow it without
+    // bound.
+    assert.deepEqual(refusals, [
+      {
+        host: "127.0.0.1",
+        port: provider.port,
+        limit: "calls-per-task",
+        maxCallsPerTask: 2,
+        calls: 3,
+      },
+    ]);
   });
 });
 
 test("a CONNECT tunnel counts as one call against the same limit", async () => {
-  const recordHome = freshRecordHome();
   const upstream = await startFakeProvider();
+  const reported = collectRefusals();
   const relay = await startRelay({
-    recordHome,
-    taskId: "t1",
+    onRefusal: reported.onRefusal,
     tunnelAllowlist: [{ host: "127.0.0.1" }],
     maxCallsPerTask: 1,
   });
@@ -198,9 +184,8 @@ test("a CONNECT tunnel counts as one call against the same limit", async () => {
     assert.equal(second.status, 429, "an allowed host is still refused once the task is out of calls");
     second.socket.destroy();
 
-    const events = readEventsForTask(recordHome, "t1");
-    assert.equal(events.length, 1);
-    assert.equal((events[0]?.details as { limit: string }).limit, "calls-per-task");
+    assert.equal(reported.refusals.length, 1);
+    assert.equal(reported.refusals[0]?.limit, "calls-per-task");
   } finally {
     await relay.close();
     await upstream.close();

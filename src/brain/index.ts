@@ -2,6 +2,8 @@ export type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, Transcri
 export { WRITEUP_FIELDS, WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "./writeup.ts";
 export { defaultBrainAdapter, defaultCheckBox } from "./adapters/index.ts";
 export { registerLiveTranscriptListener } from "./live-transcript.ts";
+export { probeRelayHealth, registerRelayHealthProbe } from "./relay-health.ts";
+export type { RelayHealthProbe } from "./relay-health.ts";
 export { currentTaskNetwork, withTaskNetwork } from "./task-network.ts";
 export type { TaskNetworkPolicy } from "./task-network.ts";
 export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerTokenStatus } from "./adapters/doctor-checks.ts";

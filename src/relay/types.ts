@@ -52,9 +52,29 @@ export interface GatewayTarget {
   credential?: CredentialSwap;
 }
 
+/** What a refusal says: always the host and port the worker box was
+ * trying to reach; a refusal caused by one of the limits (limits.mjs)
+ * additionally names which, with its numbers. Shaped as the `details` of
+ * the `"network-refused"` event it becomes, since that is the only thing
+ * ever done with it. */
+export type RefusalDetails = Record<string, unknown>;
+
 export interface RelayOptions {
-  recordHome: string;
-  taskId: string;
+  /** Where a refusal goes. Called with nothing else expected of it - a
+   * listener that throws is logged on the relay's own stderr and
+   * dropped, and a relay with no listener at all still refuses exactly
+   * the same traffic, it just says so to nobody.
+   *
+   * The relay deliberately does NOT write the record itself any more
+   * (2026-10-18): it used to append the `"network-refused"` event
+   * straight to `<recordHome>/events.jsonl` from inside its own
+   * container, so a record home that was missing, read-only or full
+   * made a refusal throw out of a request handler and exit the
+   * process - taking the worker's whole network with it. Nothing in
+   * here knows a host path now. `container/entrypoint.mjs` prints
+   * refusals on stdout and `container/launch.ts` appends the event on
+   * the host side, where a failed write costs one log line. */
+  onRefusal?: (details: RefusalDetails) => void;
   /** Host-side port to listen on. Omitted (the default, 0) asks the OS
    * for any free port - read back from the returned handle. A caller
    * that needs the same port across a restart (none do yet) can pin

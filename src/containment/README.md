@@ -188,6 +188,26 @@ const result = await runContained("echo", ["hi"], {
   resolves to `/`, which is neither writable nor a sensible home
   directory). See "Session persistence" below for why the reference
   adapter always sets this.
+- **`containerName`** and **`stopSignal`** - a name (`docker run
+  --name`) and a way to end the run from outside the call that started
+  it. Aborting the signal force-removes the container (`docker rm -f`,
+  the same shape `src/relay/container/launch.ts` already uses on its
+  own) and the attached docker client exits, which settles this call
+  with whatever it reported on the way out. The container is *removed*,
+  not merely stopped: one left in `docker ps -a` keeps the networks it
+  is attached to undeletable, so a half-stop leaks the caller's teardown
+  too.
+
+  One case needs this (2026-10-18): a worker box whose task's relay
+  container has died has no network left and will spend minutes failing
+  before it exits by itself, so the Foreman's heartbeat stops it instead
+  - see `src/relay/README.md`'s "Noticing a relay that is gone".
+  Stopping it is what keeps the adapter's own teardown (the relay
+  container, the two throwaway networks) on the ordinary path rather
+  than abandoned mid-call. Both are omitted everywhere else: nothing
+  that never needs stopping gains a name docker then has to keep
+  unique, and aborting without a `containerName` does nothing, since
+  there is no name to hand docker.
 
 Returns `{ stdout, stderr, exitCode }` - identical in shape to a plain
 `child_process.spawn` wrapped in a promise, so an adapter that already

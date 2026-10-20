@@ -25,7 +25,14 @@ export type ForemanErrorCode =
   | "nothing-to-record"
   /** `stop` (issue #203) on a task that isn't running - already
    * delivered, already closed, waiting on an answer, or never started. */
-  | "not-running";
+  | "not-running"
+  /** The network a Worker's box was running on is gone (2026-10-18): its
+   * task's own relay container stopped serving mid-attempt, so every
+   * request the box makes is refused by an address with nothing
+   * listening. Carries what the relay watcher reported, which names the
+   * relay - a worker left to discover this itself says only
+   * "ConnectionRefused", minutes later, if at all. */
+  | "worker-network-gone";
 
 export class ForemanError extends Error {
   readonly code: ForemanErrorCode;

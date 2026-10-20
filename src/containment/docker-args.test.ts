@@ -21,6 +21,22 @@ test("buildDockerArgs mounts workdir at /workdir and sets it as the working dire
   ]);
 });
 
+test("buildDockerArgs names the container only when asked - that name is what makes it stoppable", () => {
+  const named = buildDockerArgs({
+    workdir: "/w",
+    network: "denied",
+    image: "alpine",
+    containerName: "fabrica-worker-box-abc",
+  });
+  const unnamed = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine" });
+
+  assert.equal(named[named.indexOf("--name") + 1], "fabrica-worker-box-abc");
+  // Nothing that never needs stopping gains a name docker then has to
+  // keep unique - see `stopSignal` in types.ts for the one case that
+  // does.
+  assert.ok(!unnamed.includes("--name"));
+});
+
 test("buildDockerArgs adds --user when given one, omits it otherwise", () => {
   const withUser = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine", user: "501:20" });
   const without = buildDockerArgs({ workdir: "/w", network: "denied", image: "alpine" });

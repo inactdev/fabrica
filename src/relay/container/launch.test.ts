@@ -28,14 +28,29 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readEventsForTask } from "../../record/index.ts";
 import { RelayError } from "../errors.mjs";
 import { startContainerizedRelay } from "./launch.ts";
+
+/** Polls `done` until it holds, rather than sleeping for a guessed
+ * interval: the watcher reads the container's log on its own timer, so
+ * what a test waits for is the effect, not a duration. */
+async function waitFor(done: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for the watcher");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 const FAKE_DOCKER = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-docker.mjs");
 
 interface FakeDockerConfig {
   runExitCode?: number;
   logsOutput?: string;
+  logsOutputs?: string[];
+  logsFailFrom?: number;
+  inspectOutput?: string;
 }
 
 interface FakeDocker {
@@ -160,4 +175,99 @@ test("a `docker run` that fails leaves no container behind either", async (t) =>
     ["run", "rm"]
   );
   assert.deepEqual(calls[1], ["rm", "-f", containerNameFrom(calls)]);
+});
+
+test("the record home is never mounted into the relay container", async (t) => {
+  const docker = fakeDocker(t, { runExitCode: 125 });
+
+  await assert.rejects(startContainerizedRelay(launchOptions(docker.recordHome)));
+
+  const run = docker.calls().find((call) => call[0] === "run");
+  assert.ok(run);
+  const mounts = run.filter((arg) => arg.startsWith("type=bind,"));
+  assert.equal(mounts.length, 1, `expected exactly one mount, got ${JSON.stringify(mounts)}`);
+  assert.match(mounts[0]!, /,readonly$/, "the one mount, the checkout, must be read-only");
+  assert.ok(
+    !run.some((arg) => arg.includes(docker.recordHome)),
+    "the relay appends nothing itself any more, so it must not be able to write the record at all"
+  );
+});
+
+test("a refusal the relay reports on stdout becomes this task's network-refused event, on the host", async (t) => {
+  const listening = "FABRICA-RELAY-LISTENING 8090\n";
+  const docker = fakeDocker(t, {
+    logsOutputs: [
+      listening,
+      // A line still being written, with no newline yet: it must be
+      // withheld, not parsed in half and then never seen whole.
+      `${listening}FABRICA-RELAY-REFUSAL {"host":"registry.npmjs.org","por`,
+      `${listening}FABRICA-RELAY-REFUSAL {"host":"registry.npmjs.org","port":443}\n`,
+      `${listening}FABRICA-RELAY-REFUSAL {"host":"registry.npmjs.org","port":443}\nFABRICA-RELAY-REFUSAL {"host":"evil.example","port":443,"limit":"calls-per-task"}\n`,
+    ],
+    inspectOutput: "172.30.0.2\n",
+  });
+
+  const relay = await startContainerizedRelay({ ...launchOptions(docker.recordHome), watchIntervalMs: 5 });
+  try {
+    // The config the container actually reads names no record home
+    // either - it reaches the container through this file, so this is
+    // where "the relay knows no host path" is provable.
+    const run = docker.calls().find((call) => call[0] === "run")!;
+    const envFile = run[run.indexOf("--env-file") + 1]!;
+    assert.ok(
+      !readFileSync(envFile, "utf8").includes(docker.recordHome),
+      "the relay's own configuration must not carry a record path"
+    );
+
+    await waitFor(() => readEventsForTask(docker.recordHome, "t1").length === 2);
+    const events = readEventsForTask(docker.recordHome, "t1");
+    assert.deepEqual(
+      events.map((event) => event.name),
+      ["network-refused", "network-refused"]
+    );
+    assert.deepEqual(events[0]?.details, { host: "registry.npmjs.org", port: 443 });
+    assert.deepEqual(events[1]?.details, { host: "evil.example", port: 443, limit: "calls-per-task" });
+    assert.equal(relay.failure(), undefined, "a refused request is not the relay failing");
+  } finally {
+    await relay.close();
+  }
+
+  // Exactly two: a log re-read must never append the same refusal twice,
+  // however many times it is polled.
+  assert.equal(readEventsForTask(docker.recordHome, "t1").length, 2);
+});
+
+test("a relay container that goes away is reported as a failure naming it", async (t) => {
+  const docker = fakeDocker(t, {
+    logsOutputs: ["FABRICA-RELAY-LISTENING 8090\n"],
+    // The relay's own container exits (it crashed, or something stopped
+    // it) and `--rm` reaps it, so docker stops knowing the name.
+    logsFailFrom: 2,
+    inspectOutput: "172.30.0.2\n",
+  });
+
+  const relay = await startContainerizedRelay({ ...launchOptions(docker.recordHome), watchIntervalMs: 5 });
+  try {
+    await waitFor(() => relay.failure() !== undefined);
+    const failure = relay.failure()!;
+    const name = containerNameFrom(docker.calls());
+    assert.match(failure, new RegExp(`relay.*"${name}"`), `the failure must name the relay container: ${failure}`);
+    assert.match(failure, /no longer running/);
+  } finally {
+    await relay.close();
+  }
+});
+
+test("a deliberately closed relay is not a failure", async (t) => {
+  const docker = fakeDocker(t, {
+    logsOutputs: ["FABRICA-RELAY-LISTENING 8090\n"],
+    inspectOutput: "172.30.0.2\n",
+  });
+
+  const relay = await startContainerizedRelay({ ...launchOptions(docker.recordHome), watchIntervalMs: 5 });
+  await relay.close();
+  // Past close(), `docker logs` failing says nothing: the container was
+  // asked to stop. Nothing may call this a failure after the fact.
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(relay.failure(), undefined);
 });

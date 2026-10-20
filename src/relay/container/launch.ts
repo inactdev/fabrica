@@ -38,11 +38,24 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendEvent } from "../../record/index.ts";
 import { RelayError } from "../errors.mjs";
+import { LISTENING_MARKER, REFUSAL_MARKER } from "./protocol.mjs";
 import { CONTAINER_RELAY_PORT } from "./types.ts";
 import type { ContainerizedRelayHandle, ContainerizedRelayOptions, RelayContainerConfig } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
+
+/** How often the watcher below reads the relay container's log. A
+ * second is far faster than anything downstream needs (the Foreman's own
+ * heartbeat, which asks whether the relay is still there, runs every 15)
+ * and the log it reads is a handful of lines. */
+export const DEFAULT_WATCH_INTERVAL_MS = 1_000;
+
+/** How many `docker logs` reads in a row have to fail before the relay
+ * container counts as gone rather than as a daemon hiccup. Two, not one:
+ * failing a task is expensive and a single blip must not do it. */
+const LOG_FAILURES_BEFORE_GONE = 2;
 
 // The exact digest src/brain/adapters/docker/Dockerfile's own `FROM`
 // line already pins (Node 24.18.0 on Alpine 3.24.1) - reused rather than
@@ -87,7 +100,7 @@ async function waitForListening(name: string, timeoutMs = 15_000): Promise<void>
   while (Date.now() < deadline) {
     try {
       const { stdout } = await execFileAsync("docker", ["logs", name]);
-      if (stdout.includes("FABRICA-RELAY-LISTENING")) return;
+      if (stdout.includes(LISTENING_MARKER)) return;
     } catch {
       // The container may not exist in docker's own bookkeeping yet, an
       // instant after `docker run -d` returns - retried below rather
@@ -131,6 +144,125 @@ async function relayAddressOn(name: string, network: string): Promise<string> {
   return ip;
 }
 
+interface RelayWatcher {
+  /** Why the relay stopped serving, once that is established. */
+  failure: () => string | undefined;
+  /** Drains one last time (so a refusal from the final moments still
+   * reaches the record), then stops polling. */
+  stop: () => Promise<void>;
+}
+
+/** Watches one running relay container from the host, through the only
+ * channel that reaches into it - `docker logs`, read one-shot on a
+ * timer, exactly as `waitForListening` above already reads it. Two jobs,
+ * one call per tick:
+ *
+ * - Every new `REFUSAL_MARKER` line becomes this task's
+ *   `"network-refused"` event, appended HERE, on the host. The relay
+ *   used to append it itself from inside the container, which is how a
+ *   refusal could kill it (see server.mjs's header); out here, a failed
+ *   append is one line on stderr and nothing else - the worker's network
+ *   does not depend on it.
+ * - A read that fails `LOG_FAILURES_BEFORE_GONE` times running means
+ *   docker no longer knows this container: `docker run --rm` reaps one
+ *   that exited, taking its name with it (the same fact
+ *   `waitForListening`'s own fallback already relies on). That is the
+ *   relay being gone, which the caller turns into a failed attempt.
+ *
+ * Deliberately not `docker logs --follow`: one-shot `docker logs` is the
+ * shape this project has already run against a real daemon, and a
+ * follower's exit behaviour could not be verified here. The cost is
+ * re-reading a tiny log once a second; only the bytes past what was
+ * already consumed are parsed, and never a trailing line whose newline
+ * has not landed yet. Known limit: a relay container that is stopped but
+ * NOT removed still reads as alive, since its log is still there -
+ * `--rm` makes that a narrow window. */
+function watchRelayContainer(
+  name: string,
+  recordHome: string,
+  taskId: string,
+  intervalMs: number
+): RelayWatcher {
+  let consumedChars = 0;
+  let logFailures = 0;
+  let failure: string | undefined;
+  let stopped = false;
+  let timer: NodeJS.Timeout | undefined;
+
+  const appendRefusal = (details: Record<string, unknown>): void => {
+    try {
+      appendEvent(recordHome, { taskId, name: "network-refused", details });
+    } catch (err) {
+      // Reporting is never allowed to be the thing that breaks: a
+      // refusal the record missed costs the Client one line of history,
+      // while anything thrown from this timer would be an uncaught
+      // exception in the task's own process.
+      process.stderr.write(
+        `fabrica: could not record a refused request for task ${taskId}: ${errorMessage(err)}\n`
+      );
+    }
+  };
+
+  const consume = (stdout: string): void => {
+    // Only up to the last newline: a line still being written must be
+    // left for the next read rather than parsed in half and then never
+    // seen whole again.
+    const complete = stdout.slice(0, stdout.lastIndexOf("\n") + 1);
+    if (complete.length <= consumedChars) return;
+    const fresh = complete.slice(consumedChars);
+    consumedChars = complete.length;
+    for (const line of fresh.split("\n")) {
+      if (!line.startsWith(`${REFUSAL_MARKER} `)) continue;
+      const payload = line.slice(REFUSAL_MARKER.length + 1);
+      let details: Record<string, unknown>;
+      try {
+        details = JSON.parse(payload) as Record<string, unknown>;
+      } catch {
+        details = { unparsed: payload };
+      }
+      appendRefusal(details);
+    }
+  };
+
+  const poll = async (final: boolean): Promise<void> => {
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync("docker", ["logs", name]));
+    } catch (err) {
+      // On the final drain the container is already being stopped, so a
+      // failed read here says nothing about its health.
+      if (final) return;
+      logFailures += 1;
+      if (logFailures >= LOG_FAILURES_BEFORE_GONE && failure === undefined) {
+        failure = `the task's network relay (container "${name}") is no longer running, so every request from the worker box is refused: ${errorMessage(err)}`;
+      }
+      return;
+    }
+    logFailures = 0;
+    consume(stdout);
+  };
+
+  const schedule = (): void => {
+    timer = setTimeout(() => {
+      void poll(false).finally(() => {
+        if (!stopped) schedule();
+      });
+    }, intervalMs);
+    // Never a reason for this timer alone to hold the process open.
+    timer.unref();
+  };
+  schedule();
+
+  return {
+    failure: () => failure,
+    stop: async () => {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+      await poll(true);
+    },
+  };
+}
+
 /** Starts the relay as a fresh, detached container attached to both
  * `opts.isolatedNetwork` (shared with the worker it serves) and
  * `opts.egressNetwork` (its own route to the real internet) - see this
@@ -143,11 +275,8 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
   const image = opts.image ?? RELAY_IMAGE;
   const name = `fabrica-relay-${randomUUID().replace(/-/g, "")}`;
   const repoRoot = realpathSync(REPO_ROOT);
-  const recordHome = realpathSync(opts.recordHome);
 
   const config: RelayContainerConfig = {
-    recordHome,
-    taskId: opts.taskId,
     port: CONTAINER_RELAY_PORT,
     tunnelAllowlist: opts.tunnelAllowlist,
     gateway: opts.gateway,
@@ -180,10 +309,14 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
         opts.isolatedNetwork,
         "--network",
         opts.egressNetwork,
+        // The checkout, read-only, and nothing else: the record home
+        // used to be mounted here too, writable, so the relay could
+        // append its own refusal events. It no longer can and no longer
+        // needs to (see types.ts's `RelayContainerConfig`), which also
+        // means a relay container has no write access to the Client's
+        // record at all any more.
         "--mount",
         `type=bind,source=${repoRoot},target=${repoRoot},readonly`,
-        "--mount",
-        `type=bind,source=${recordHome},target=${recordHome}`,
         "--env-file",
         envFile,
         "--init",
@@ -209,10 +342,25 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
 
     await waitForListening(name, opts.listenTimeoutMs);
     const host = await relayAddressOn(name, opts.isolatedNetwork);
+    // Started only once the relay is confirmed up and addressable: until
+    // then `waitForListening` is the one reading its log, and there is
+    // no worker yet for anything to be refused for.
+    const watcher = watchRelayContainer(
+      name,
+      opts.recordHome,
+      opts.taskId,
+      opts.watchIntervalMs ?? DEFAULT_WATCH_INTERVAL_MS
+    );
     return {
       host,
       port: CONTAINER_RELAY_PORT,
+      failure: watcher.failure,
       close: async () => {
+        // The watcher stops first, and drains once on its way out: a
+        // refusal from the relay's last moments still reaches the
+        // record, and nothing reports a deliberately stopped container
+        // as a failure.
+        await watcher.stop();
         await execFileAsync("docker", ["stop", name]).catch(() => {});
         rmSync(envFileDir, { recursive: true, force: true });
       },

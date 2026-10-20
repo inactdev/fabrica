@@ -298,6 +298,18 @@ proxy convention). Both networks, and the relay container, are torn down
 in the same `finally` that already cleans up each call's sanitized git
 config/scratch dirs - as throwaway as the worker's own container.
 
+`work()` also registers a probe for this call's `workdir`
+(`../relay-health.ts`) backed by the relay handle's own `failure()`, and
+names the worker's container so it can be stopped
+(`runContained`'s `containerName`/`stopSignal`). The Foreman's heartbeat
+calls that probe every tick; if this box's relay has died, the box is
+removed and `work()` throws `ClaudeCodeError("cli-error")` carrying the
+watcher's sentence, which names the relay container. Without it the box
+kept running against an address with nothing listening and eventually
+reported its own `API Error: Unable to connect to API
+(ConnectionRefused)` - observed 2026-10-18, four minutes after the relay
+had actually gone. The same `finally` unregisters the probe.
+
 Why a relay *container* with its own second network, and not a second
 network on the worker instead: see `../../relay/README.md`'s "Why the
 relay is the container with two networks" for the full comparison - in

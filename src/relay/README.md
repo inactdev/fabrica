@@ -115,12 +115,63 @@ that belong to later issues.
   (below) can observe it. The relay's own leg to the real upstream is
   real TLS by default (`GatewayTarget.tls`, defaults to true).
 
-A disallowed tunnel target is refused (`403`) and recorded: a
-`"network-refused"` event (`contract/surface.ts`), `details: { host,
-port }`, naming exactly what the worker box tried to reach. There is no
-equivalent refusal for gateway mode - a relay with no `gateway`
-configured just answers every non-`CONNECT` request `501`, since there
-is nowhere to send it, not because some host was turned away.
+A disallowed tunnel target is refused (`403`) and *reported*: the relay
+hands the refusal to its `onRefusal` callback, and the host side turns
+that into a `"network-refused"` event (`contract/surface.ts`),
+`details: { host, port }`, naming exactly what the worker box tried to
+reach. There is no equivalent refusal for gateway mode - a relay with no
+`gateway` configured just answers every non-`CONNECT` request `501`,
+since there is nowhere to send it, not because some host was turned
+away.
+
+### The relay cannot be killed by a refusal, and never writes the record
+
+Read this before touching `server.mjs`. On 2026-10-18 a task's record
+showed a refused `registry.npmjs.org` tunnel, then four minutes of
+heartbeats, then the worker's own `API Error: Unable to connect to API
+(ConnectionRefused)`. The relay had **exited on the refusal itself**, so
+every later request from that box reached an address with nothing
+listening on it.
+
+Two independent faults did that, both reproduced:
+
+1. The client socket a refused `CONNECT` is answered on had no `error`
+   listener - only the allowed path attached one, after `net.connect`
+   succeeded. A client that resets the connection the moment it is
+   refused (npm does) therefore emitted `error` on a socket with no
+   listener, which in Node is an uncaught exception. Same gap on the
+   `400` (unparseable `CONNECT`) and `429` (call-limit) answers.
+2. The refusal event itself was appended *inside the relay container*,
+   to `<recordHome>/events.jsonl` through a writable bind mount. A
+   record home that is missing, read-only or full made that `mkdir`/
+   `open` throw straight out of the same handler, with the same result.
+
+Both are closed, and the shape of the fix is the rule to keep:
+
+- **Nothing in a relay handler may throw.** Every handler runs on an
+  event callback, never on a path anyone awaits, so a throw there exits
+  the process - and a relay that exits has not failed one request, it
+  has silently cut the network out from under a worker that goes on
+  running for minutes before it notices. Every socket gets an `error`
+  listener before the first byte is written to it, both top-level
+  handlers are wrapped so an unanticipated throw costs that one call,
+  and the server keeps a permanent `error` listener past `listen()`
+  (the bind-time one is a `once`, consumed by then).
+- **Serving never depends on recording.** `server.mjs` has no file
+  path, no `recordHome` and no `taskId` at all now. A refusal goes to
+  `onRefusal`; the container's `entrypoint.mjs` implements that as one
+  line on stdout (`container/protocol.mjs`'s `REFUSAL_MARKER`), and
+  `container/launch.ts`'s host-side watcher appends the event out
+  there, where a failed write costs one line on stderr. A listener that
+  throws is logged and dropped.
+- Consequently the record home is **not bind-mounted into the relay
+  container** any more either, so a relay has no write access to the
+  Client's record at all.
+
+`server.test.ts` drives the exact incident sequence - refused
+`registry.npmjs.org` tunnel, the client resetting that socket, then an
+ordinary gateway request that must still get `200` - and fails
+(`ECONNRESET`) against the pre-fix code.
 
 ## Which hosts, which limits: the project says
 
@@ -184,10 +235,18 @@ Three properties of this worth knowing before changing it:
 
 ## Which task a refusal belongs to
 
-`RelayOptions` has always taken a `recordHome` and a `taskId`, but the
-adapter had neither: `Brain.ask`/`work` are ratified as
-brief/workdir/opts (rule 8's socket), so a refusal used to land in a
-throwaway scratch directory and the Client never saw it.
+The relay itself knows neither - it reports a refusal and the host side
+decides whose record it belongs on (see "The relay cannot be killed by a
+refusal" above for why it stopped knowing). The host side is
+`container/launch.ts`, which was given a `recordHome` and a `taskId`
+all along; what it does with them now is append the event itself,
+through `src/record/`'s ordinary `appendEvent`, from the same process
+the task is running in.
+
+Which task that is was its own problem: the adapter had neither value,
+since `Brain.ask`/`work` are ratified as brief/workdir/opts (rule 8's
+socket), so a refusal used to land in a throwaway scratch directory and
+the Client never saw it.
 
 The Foreman now wraps every `brain.ask`/`brain.work` call in that
 task's policy (`src/brain/task-network.ts`, an `AsyncLocalStorage`),
@@ -201,23 +260,22 @@ nothing wrapped - a library-level caller, a test driving the adapter
 directly - still works: it falls back to the old scratch location and
 the base hosts alone.
 
-Two consequences of that worth knowing before changing it:
+One consequence worth knowing before changing it: the refusal reaches
+the record a moment *after* the request was refused, not during it -
+the watcher reads the relay's log on a timer (`watchIntervalMs`,
+default one second). `close()` drains once before it stops, so a
+refusal from the relay's last moments is still on the record by the
+time a caller that closed the relay looks - which is what lets
+`npm-ci-in-box.test.ts` assert on refusals immediately after its
+install returns, with no sleep anywhere in it.
 
-- **The relay container now bind-mounts the Client's real record home
-  read-write** (`container/launch.ts` always mounted whatever
-  `recordHome` it was given; what changed is which directory that is).
-  That is Fabrica's own trusted code - a worker never drives it, and
-  the worker's own container mounts nothing of the record at all - but
-  it is a real write mount, so nothing in `container/` may grow a
-  reason to write anything there but the one event line.
-- **Two processes now append to the same `events.jsonl`**: the host
-  running the task, and the relay container. That is exactly the case
-  `src/record/`'s append-only design was built and proven for (one
-  `O_APPEND` write per line, with the proof deliberately spawning
-  separate OS processes), and `server.mjs` writes its line the same
-  way by hand rather than through `appendEvent` only because it runs
-  on a stock `node` with no TypeScript - not because it is allowed to
-  write differently.
+This also replaced an earlier arrangement where the relay container
+bind-mounted the Client's real record home read-write and appended the
+event in there - two processes writing one `events.jsonl`, which
+`src/record/`'s append-only design does handle (one `O_APPEND` write
+per line, proven across separate OS processes), but which put a write
+that can fail inside a request handler that must not throw. Nothing in
+`container/` has any business writing anything, anywhere, any more.
 
 ### The model provider's host is never named here
 
@@ -304,10 +362,11 @@ the stock image's `node` runs it as-is - no `tsx`, nothing from
 `node_modules`. Those files carry `// @ts-check` and JSDoc types (read
 from `types.ts`) so `npm run typecheck` still checks them;
 `container/runtime-imports.test.ts` proves they start with plain `node`
-from a folder holding nothing else. `server.mjs` writes its
-`"network-refused"` line to `<recordHome>/events.jsonl` itself rather
-than through `src/record/`'s `appendEvent`, for the same reason - same
-line shape, same single `O_APPEND` write. Neither side of the control plane (confirming the container is
+from a folder holding nothing else. `server.mjs` writes nothing anywhere: a refusal
+leaves on stdout and the host appends the event (see "The relay cannot
+be killed by a refusal" above), which is also why nothing in there needs
+`src/record/`'s `appendEvent` from a place it could not import it.
+Neither side of the control plane (confirming the container is
 listening, reading its address on the isolated network) touches the
 network at all - both are read through the Docker CLI/API (`docker
 logs`, `docker inspect`), which works regardless of the same
@@ -350,6 +409,45 @@ given a seam to make this testable; only `listenTimeoutMs`
 (`container/types.ts`) is new, so the timeout path doesn't cost the fast
 suite a real 15-second wait. This is the one test in this module that
 neither needs nor skips on Docker.
+
+### Noticing a relay that is gone
+
+The same watcher answers a second question: is this relay still there at
+all? A read of `docker logs` that fails twice in a row means docker no
+longer knows the container - `docker run --rm` reaps one that exited,
+taking its name with it, the same fact `waitForListening`'s own
+fallback already relies on - and the handle's `failure()` then returns a
+sentence naming the relay container.
+
+Who reads it: the adapter hands `failure()` to the Foreman's heartbeat
+through `src/brain/relay-health.ts` (a `workdir`-keyed registry, the
+same mechanism as `src/brain/live-transcript.ts`), so every heartbeat
+tick asks. A relay that is gone then fails the attempt with that
+sentence, and the adapter stops the worker box as well
+(`runContained`'s `containerName`/`stopSignal`, a `docker rm -f`), so
+the call ends in about a second with every teardown still on its
+ordinary path. Before this, nothing asked: the box ran on against an
+address with nothing listening, heartbeats kept being recorded, and the
+first word of the problem was the worker's own `ConnectionRefused` four
+minutes later - a message that names no relay.
+
+Two deliberate choices here:
+
+- **One-shot `docker logs` on a timer, not `docker logs --follow`.**
+  The one-shot form is the shape this project has already run against a
+  real daemon (`waitForListening`); a follower's exit behaviour could
+  not be verified from the box this was written in, and guessing at an
+  external tool's semantics is exactly what this project doesn't do. The
+  cost is re-reading a tiny log once a second - and only the bytes past
+  what was already consumed are parsed, never a trailing line whose
+  newline has not landed yet.
+- **Two consecutive failures, not one.** Failing a task is expensive;
+  a single daemon hiccup must not do it.
+
+Known limit: a relay container that is stopped but *not* removed still
+reads as alive to this watcher, since its log is still there. `--rm`
+makes that a narrow window, and the grace period in
+`src/foreman/attempts.ts` bounds what it can cost.
 
 ### What's verified, what isn't
 
@@ -395,15 +493,16 @@ host name in the `CONNECT` line and lets the relay resolve it.
 
 | File | What it is |
 | --- | --- |
-| `types.ts` | `AllowedHost`, `CredentialSwap`, `GatewayTarget`, `RelayOptions`, `RelayHandle` - this module's own configuration shapes, not shared with `contract/surface.ts` except by `FabricaEventName` gaining `"network-refused"` there. |
+| `types.ts` | `AllowedHost`, `CredentialSwap`, `GatewayTarget`, `RefusalDetails`, `RelayOptions`, `RelayHandle` - this module's own configuration shapes, not shared with `contract/surface.ts` except by `FabricaEventName` gaining `"network-refused"` there. |
 | `allowlist.mjs` | `GITHUB_HOSTS` and `isAllowedTarget` - hostname matching (exact or one level of `*.` wildcard, optional port), used by tunnel mode. |
 | `limits.mjs` | `DEFAULT_MAX_REQUEST_BYTES` (10 MB) and `DEFAULT_MAX_CALLS_PER_TASK` (2000). Plain JavaScript, because `server.mjs` runs inside the container with a stock `node`. |
 | `policy.ts` | `parseAllowedHost`, `tunnelAllowlistFor`, `relayLimitsFor` - a project's declaration composed with the caller's base hosts and the defaults. Pure; no I/O. |
-| `server.mjs` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `"network-refused"` event. Runs identically whether started in-process (this module's own fast tests) or inside `container/`'s own container. |
+| `server.mjs` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `onRefusal` report. Writes nothing and cannot be killed by a refusal - read "The relay cannot be killed by a refusal, and never writes the record" above before changing it. Runs identically whether started in-process (this module's own fast tests) or inside `container/`'s own container. |
 | `errors.mjs` | `RelayError` - `"invalid-config"` (a malformed `GatewayTarget`) and `"listen-failed"` (also used for a container that never starts or never confirms it's listening). |
-| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side), `entrypoint.mjs` (runs inside the container), `bootstrap.mjs` (the container's command), `runtime-imports.test.ts` (proves the container's files need nothing but plain `node`), `launch.test.ts` + `helpers/fake-docker.mjs` (the daemon-free failure-path proof - see "A failed launch removes its container" above). |
+| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side, including the watcher that appends refusals and notices a relay that is gone), `protocol.mjs` (the two lines the container says out loud, one definition for both sides), `entrypoint.mjs` (runs inside the container), `bootstrap.mjs` (the container's command), `runtime-imports.test.ts` (proves the container's files need nothing but plain `node`, and that a refusal leaves on stdout), `launch.test.ts` + `helpers/fake-docker.mjs` (the daemon-free proof of the failure paths and of the watcher - see "A failed launch removes its container" and "Noticing a relay that is gone" below). |
 | `helpers/fake-provider.ts` | Test-only: a plain-HTTP stand-in for "the model provider," recording every request it receives so a test can assert on exactly what crossed the wire. |
-| `server.test.ts` | The fake-worker/fake-provider proof: gateway credential swap, tunnel allow/refuse, the refusal event, per-task event isolation. |
+| `helpers/collect-refusals.ts` | Test-only: collects what an in-process relay reports to `onRefusal`, for tests that used to read `events.jsonl` instead. |
+| `server.test.ts` | The fake-worker/fake-provider proof: gateway credential swap, tunnel allow/refuse, what a refusal reports, and the 2026-10-18 crash sequence (a refusal must not cost the next request). |
 | `limits.test.ts` | Both limits against a real relay: refused with the right status, named on the record, and the task able to carry on afterwards. |
 | `policy.test.ts` | The composition: additive hosts, ports, a host nothing could match, and the defaults. |
 | `npm-registry.test.ts` | Hermetic: a real `projects.toml` through `networkPolicyFor` into a real relay decision, against a fake registry. No Docker, no internet. |
