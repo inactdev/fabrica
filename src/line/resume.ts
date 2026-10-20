@@ -14,7 +14,14 @@ import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { LineError } from "./errors.ts";
 import type { ProductionLine } from "../../contract/surface.ts";
-import { assertSafeId, describeGitError, requireRepoRoot } from "./safety.ts";
+import {
+  assertSafeId,
+  describeGitError,
+  listWorktrees,
+  realpathIfPresent,
+  requireRepoRoot,
+} from "./safety.ts";
+import type { WorktreeEntry } from "./safety.ts";
 
 /** True if a branch `fabrica/<taskId>` already exists in `project`. Never
  * throws (matches safety.ts's isKnownWorktree's style). This is the
@@ -41,6 +48,33 @@ function productionLineBranchExists(project: string, taskId: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** The worktree of `project` that currently has `branch` checked out, or
+ * null if no worktree does. `isProjectCheckout` tells the Client's own
+ * checkout (git's main worktree, always the first entry `listWorktrees`
+ * reports) apart from any other linked worktree - told from that
+ * position, never from comparing paths, so the macOS `/var` ->
+ * `/private/var` symlink can't make the two look different.
+ *
+ * Never throws: an unreadable worktree list returns null and lets
+ * `git worktree add` produce its own `cut-failed` as before. This check
+ * only ever improves a message, so it must never be the reason a reopen
+ * fails. */
+function worktreeHoldingBranch(
+  project: string,
+  branch: string
+): { path: string; isProjectCheckout: boolean } | null {
+  let entries: WorktreeEntry[];
+  try {
+    entries = listWorktrees(project);
+  } catch {
+    return null;
+  }
+
+  const index = entries.findIndex((entry) => entry.branch === branch);
+  if (index === -1) return null;
+  return { path: realpathIfPresent(entries[index].path), isProjectCheckout: index === 0 };
 }
 
 export function reopenProductionLine(opts: { project: string; taskId: string; recordHome: string }): ProductionLine {
@@ -73,6 +107,29 @@ export function reopenProductionLine(opts: { project: string; taskId: string; re
       "no-such-branch",
       `Cannot reopen a ProductionLine for ${branch}: no local branch of that name exists in ${project}. ` +
         `A line can only be reopened for a task that already ran once with createProductionLine.`
+    );
+  }
+
+  // git will not check one branch out in two places, so a project folder
+  // sitting on this very branch - the Client having run `git checkout
+  // fabrica/<taskId>` to read what a Worker did is the ordinary way it
+  // happens - makes the reopen below fail. Said here, from git's own
+  // worktree list, before anything is created: git's own refusal names
+  // neither the Client's checkout as the thing in the way nor what to do
+  // about it, and its wording is version-dependent besides ("already
+  // used by worktree at" on git 2.54, "already checked out at" on older
+  // ones), so matching that text instead would quietly stop working.
+  const holder = worktreeHoldingBranch(project, branch);
+  if (holder !== null) {
+    throw new LineError(
+      "branch-checked-out",
+      holder.isProjectCheckout
+        ? `Cannot reopen a ProductionLine for ${branch}: the project's own checkout at ${project} is on ` +
+            `that branch right now, and git cannot check one branch out in two places. Switch that ` +
+            `checkout to another branch and try again.`
+        : `Cannot reopen a ProductionLine for ${branch}: another worktree of ${project} has that branch ` +
+            `checked out, at ${holder.path}, and git cannot check one branch out in two places. Remove ` +
+            `that worktree or switch it to another branch, then try again.`
     );
   }
 

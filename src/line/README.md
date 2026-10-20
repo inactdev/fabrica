@@ -79,9 +79,9 @@ resumable session is scoped to the `cwd` it was created in (see
 the identical path.
 
 Every refusal `createProductionLine` can raise applies here too, plus
-`no-such-branch` (below) - including `workdir-exists`, which still
-refuses rather than reusing a leftover worktree, so a line has to be
-destroyed before it can be reopened.
+`no-such-branch` and `branch-checked-out` (below) - including
+`workdir-exists`, which still refuses rather than reusing a leftover
+worktree, so a line has to be destroyed before it can be reopened.
 
 ### `productionLineBranchExists(project, taskId)` (module-private)
 
@@ -110,6 +110,42 @@ from the *record* instead (`answer.ts`: this exact taskId, in this exact
 record home, already has a `"line-cut"` event - proof a line was
 genuinely cut for it once) - a claim only that task's own round can make
 true, unlike a branch's mere existence in the project.
+
+### Why this is checked here, not read out of git's own error (issue #170)
+
+`reopenProductionLine` asks git's own worktree list, before it creates
+anything, whether some worktree already has `fabrica/<taskId>` checked
+out, and refuses with `branch-checked-out` when one does. The reopen
+would fail either way - git will not check one branch out in two places -
+so this check adds no safety git doesn't already provide. What it adds is
+a message the Client can act on, for the one situation that produces it
+in practice: reading a Worker's branch by hand in the project folder
+(`git checkout fabrica/<taskId>`), then ruling `fix` without switching
+back. Git's own refusal for that reads `fatal: 'fabrica/<taskId>' is
+already used by worktree at '<project>'`, wrapped in `cut-failed` - true,
+but it names neither the Client's own checkout as the thing in the way
+nor what to do about it.
+
+Matching that text instead of asking git for the facts was the obvious
+shortcut and is the wrong one: git's wording here is version-dependent
+("already used by worktree at" on git 2.54, "already checked out at" on
+older ones), so a string match would quietly stop matching one day and
+fall back to the cryptic message with nothing failing to say so. Reading
+`git worktree list --porcelain` (`safety.ts`'s `listWorktrees`, already
+the module's one parser of it) gives the same answer in a form that
+doesn't drift.
+
+The project's own checkout is told from any other worktree by *position* -
+git always lists the main worktree first - never by comparing its path to
+`project`, so the macOS `/var` -> `/private/var` symlink can't make one
+directory look like two. Paths this message prints go through
+`safety.ts`'s `realpathIfPresent` for the same reason, so what the Client
+reads matches what they would type.
+
+One deliberate asymmetry: this check never *causes* a failure. An
+unreadable worktree list makes it return "nobody holds it" and fall
+through to `git worktree add`, which then raises its own `cut-failed`
+exactly as before. A better message is not worth a new way to fail.
 
 ## `rebaseOntoOriginDefault(line, { onConflict })` (issue #235)
 
@@ -342,6 +378,20 @@ what triggers each one and what to do about it.
   that same name (a tag, say) is not a branch to commit onto, so it is
   refused rather than reopened - see `resume.ts` for what checking it out
   would cost.
+- **`branch-checked-out`** - `reopenProductionLine` was asked for a task
+  whose branch `fabrica/<taskId>` some *other* worktree already has
+  checked out, and git cannot check one branch out in two places. Nearly
+  always that other worktree is the project folder itself, because the
+  Client ran `git checkout fabrica/<taskId>` to read what a Worker did and
+  then ruled `fix` without switching back; the message says so, naming
+  the folder, and the fix is to switch that checkout to another branch
+  and rule `fix` again. Nothing is created when this fires - no worktree,
+  no commit - so the task is left exactly as resumable as it was. If the
+  holder is some *other* worktree instead (a hand-made one, or a leftover
+  from a different record home), the message names that path instead and
+  asks for it to be removed or switched. `reopenProductionLine`'s own
+  "Why this is checked here, not read out of git's own error" section
+  has the reasoning.
 - **`unsafe-teardown`** - `destroyProductionLine` won't touch
   `line.workdir` because it can't confirm, via git's own worktree list,
   that the path is a registered *linked* worktree of `project` and not

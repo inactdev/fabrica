@@ -79,8 +79,12 @@ export function listWorktrees(project: string): WorktreeEntry[] {
   return entries;
 }
 
-/** Realpath if the path still exists, else the path as-is (already absolute). */
-function normalize(path: string): string {
+/** Realpath if the path still exists, else the path as-is (already
+ * absolute). Exported because every comparison *or display* of a path
+ * git reported against a path we computed needs it: on macOS
+ * `os.tmpdir()` resolves through a `/var` -> `/private/var` symlink, so
+ * the two spellings of one directory differ as strings. */
+export function realpathIfPresent(path: string): string {
   try {
     return realpathSync(path);
   } catch {
@@ -100,16 +104,16 @@ export function requireLinkedWorktree(project: string, workdir: string): Worktre
   }
 
   const [main, ...linked] = entries;
-  const workdirNormalized = normalize(workdir);
+  const workdirNormalized = realpathIfPresent(workdir);
 
-  if (normalize(main.path) === workdirNormalized) {
+  if (realpathIfPresent(main.path) === workdirNormalized) {
     throw new LineError(
       "unsafe-teardown",
       `Refusing to destroy ${workdir}: it is the project's own checkout, not a ProductionLine.`
     );
   }
 
-  const match = linked.find((entry) => normalize(entry.path) === workdirNormalized);
+  const match = linked.find((entry) => realpathIfPresent(entry.path) === workdirNormalized);
   if (!match) {
     throw new LineError(
       "unsafe-teardown",
@@ -127,8 +131,8 @@ export function requireLinkedWorktree(project: string, workdir: string): Worktre
  * requireLinkedWorktree, this never throws.
  */
 export function isKnownWorktree(project: string, workdir: string): boolean {
-  const target = normalize(workdir);
-  return listWorktrees(project).some((entry) => normalize(entry.path) === target);
+  const target = realpathIfPresent(workdir);
+  return listWorktrees(project).some((entry) => realpathIfPresent(entry.path) === target);
 }
 
 /** Best-effort human-readable detail from a failed git invocation. */

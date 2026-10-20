@@ -10,6 +10,11 @@ export type LineErrorCode =
   | "fetch-failed"
   | "cut-failed"
   | "no-such-branch"
+  /** `reopenProductionLine` was asked for a task whose branch some other
+   * worktree - usually the project's own checkout - already has checked
+   * out, so git cannot check it out again (issue #170,
+   * src/line/resume.ts). */
+  | "branch-checked-out"
   | "unsafe-teardown"
   | "teardown-failed"
   | "not-a-worktree"
