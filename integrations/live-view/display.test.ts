@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isScrolledToBottom, meterFill, noteToSend, projectName, rowEmphasis, stateSymbol } from "./display.ts";
+import {
+  configProblemNotice,
+  isScrolledToBottom,
+  meterFill,
+  noteToSend,
+  projectName,
+  rowEmphasis,
+  stalenessNotice,
+  stateSymbol,
+} from "./display.ts";
 import type { DisplayState } from "./record-view.ts";
 
 const ALL_DISPLAY_STATES: DisplayState[] = [
@@ -106,4 +115,50 @@ test("noteToSend: real text is sent trimmed, the same note `fabrica verdict -m` 
   // Only the ends are trimmed - the Client's own wording, including any
   // punctuation and inner spacing, reaches the record verbatim.
   assert.equal(noteToSend("\nthe button is on the wrong side.  twice.\n"), "the button is on the wrong side.  twice.");
+});
+
+// The staleness rule has to agree, exactly, with the one
+// src/cli/up-command.ts's refreshStaleLiveView applies before stopping a
+// live view: stale only when both commits are known strings and they
+// differ. A page claiming stale about a live view `fabrica up` would
+// happily reuse (or the reverse) is worse than no banner at all.
+test("stalenessNotice: two different known commits is stale, and the banner names both and the fix", () => {
+  const notice = stalenessNotice("aaaaaaaaaaaabbbb", "ccccccccccccdddd");
+  assert.ok(notice, "a server running different code from the checkout must say so");
+  // Both commits, at doctor's own 12-character display width.
+  assert.match(notice, /aaaaaaaaaaaa/);
+  assert.match(notice, /cccccccccccc/);
+  assert.doesNotMatch(notice, /aaaaaaaaaaaabbbb/, "the full sha is longer than this banner needs");
+  assert.match(notice, /fabrica update/, "a banner the reader can't act on is just noise");
+});
+
+test("stalenessNotice: the same commit on both sides says nothing", () => {
+  assert.equal(stalenessNotice("abc123abc123", "abc123abc123"), null);
+});
+
+// A null on either side means the comparison cannot be made at all - an
+// installed copy with no recorded commit, a git lookup that failed, a
+// request that never landed. Saying "stale" there would teach the Client
+// to ignore the one banner that matters.
+test("stalenessNotice: an unknown commit on either side says nothing rather than guessing", () => {
+  assert.equal(stalenessNotice(null, "abc123abc123"), null);
+  assert.equal(stalenessNotice("abc123abc123", null), null);
+  assert.equal(stalenessNotice(null, null), null);
+});
+
+// The message already carries the file's path and the line the parser
+// stopped on (src/config/load.ts) - this only labels it, so there is
+// exactly one author of the wording a reader acts on.
+test("configProblemNotice: a real problem is shown verbatim, with the consequence named", () => {
+  const notice = configProblemNotice({ message: "/home/me/.fabrica/projects.toml:3:1: not valid TOML - bad key" });
+  assert.ok(notice);
+  assert.match(notice, /\/home\/me\/\.fabrica\/projects\.toml:3:1: not valid TOML - bad key/);
+  assert.match(notice, /caps and projects are unknown/);
+});
+
+test("configProblemNotice: no problem, or an empty one, says nothing", () => {
+  assert.equal(configProblemNotice(null), null);
+  assert.equal(configProblemNotice(undefined), null);
+  assert.equal(configProblemNotice({}), null);
+  assert.equal(configProblemNotice({ message: "   " }), null);
 });

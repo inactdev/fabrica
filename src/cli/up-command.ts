@@ -325,7 +325,13 @@ async function startLiveViewAndReport(opts: {
   return started;
 }
 
-export type LiveViewStaleOutcome = "not-listening" | "current" | "restarted" | "could-not-identify-process";
+export type LiveViewStaleOutcome =
+  | "not-listening"
+  | "current"
+  | "restarted"
+  /** Nothing was listening and `startIfStopped` asked for one anyway. */
+  | "started"
+  | "could-not-identify-process";
 
 export interface RefreshStaleLiveViewOptions {
   recordHome: string;
@@ -333,6 +339,20 @@ export interface RefreshStaleLiveViewOptions {
   isListening?: (host: string, port: number) => Promise<boolean>;
   fetchLiveViewVersion?: (port: number) => Promise<string | null>;
   getRunningCommit?: () => string | null;
+  /** Treat an already-listening live view as stale without asking its
+   * own `/api/version` at all - what `fabrica update` passes once the
+   * commit has actually changed under it (Client ruling: restart
+   * unconditionally when the commit changed). The version question is
+   * the right one when nobody knows whether anything moved; when the
+   * caller just moved the code itself, it is a question whose answer
+   * cannot change the decision. */
+  force?: boolean;
+  /** Start a live view when nothing is listening, instead of reporting
+   * "not-listening" and leaving it stopped - again what `fabrica update`
+   * passes on a changed commit, so updating never leaves the Client
+   * with no live view where he had one a moment ago. `fabrica up` does
+   * not pass it: it has its own first-start path. */
+  startIfStopped?: boolean;
   findLiveViewProcess?: (recordHome: string) => { pid: number } | null;
   stopLiveViewProcess?: (pid: number) => void;
   startLiveView?: (opts: { recordHome: string; port: number }) => void;
@@ -343,14 +363,25 @@ export interface RefreshStaleLiveViewOptions {
 }
 
 /**
- * The stale-live-view check `fabrica up`'s own Step 2 runs (below):
- * nothing listening is left alone (there is nothing to restart), a live
- * view already running this exact commit is left alone, and one running
- * anything else is stopped and replaced with a fresh one. Pulled out so
- * `fabrica update` (src/cli/update-command.ts) can run the identical
- * check after pulling new code - without a second copy of this logic,
- * per the Client's own instruction - and report whether it restarted
- * anything in its own one-line summary.
+ * The stale-live-view check `fabrica up`'s own Step 2 runs (below): by
+ * default, nothing listening is left alone (there is nothing to
+ * restart), a live view already running this exact commit is left alone,
+ * and one running anything else is stopped and replaced with a fresh
+ * one. Pulled out so `fabrica update` (src/cli/update-command.ts) can
+ * run the identical check after pulling new code - without a second copy
+ * of this logic, per the Client's own instruction - and report whether
+ * it restarted anything in its own one-line summary.
+ *
+ * `force` and `startIfStopped` are what `fabrica update` adds once the
+ * commit really did change: restart whatever is listening without
+ * asking, and start one where none was. See their own doc comments.
+ *
+ * The "running this exact commit" question is only answerable at all
+ * because `/api/version` reports the commit the live view *process* was
+ * started from and never re-reads the checkout
+ * (integrations/live-view/server.ts). While it did re-read it, this
+ * comparison was the same on-disk value on both sides and could never
+ * find a stale live view.
  */
 export async function refreshStaleLiveView(opts: RefreshStaleLiveViewOptions): Promise<LiveViewStaleOutcome> {
   const { recordHome } = opts;
@@ -359,18 +390,24 @@ export async function refreshStaleLiveView(opts: RefreshStaleLiveViewOptions): P
   const startTimeoutMs = opts.startTimeoutMs ?? 10_000;
   const stdout = opts.stdout ?? (() => {});
   const stderr = opts.stderr ?? (() => {});
+  const startLiveView = opts.startLiveView ?? (() => spawnDetachedLiveView({ recordHome }));
+  const openBrowser = opts.openBrowser ?? defaultOpenBrowser;
 
-  if (!(await isListening("127.0.0.1", port))) return "not-listening";
+  if (!(await isListening("127.0.0.1", port))) {
+    if (!opts.startIfStopped) return "not-listening";
+    await startLiveViewAndReport({ recordHome, port, isListening, startLiveView, openBrowser, startTimeoutMs, stdout, stderr });
+    return "started";
+  }
 
-  const fetchVersion = opts.fetchLiveViewVersion ?? defaultFetchLiveViewVersion;
-  const getRunningCommit = opts.getRunningCommit ?? (() => runningCopyCommit(CHECKOUT));
-  const remoteCommit = await fetchVersion(port);
-  const ourCommit = getRunningCommit();
-  const sameCommit = remoteCommit !== null && ourCommit !== null && remoteCommit === ourCommit;
-
-  if (sameCommit) {
-    stdout(`Live view already running - ${liveViewUrl(port)}`);
-    return "current";
+  if (!opts.force) {
+    const fetchVersion = opts.fetchLiveViewVersion ?? defaultFetchLiveViewVersion;
+    const getRunningCommit = opts.getRunningCommit ?? (() => runningCopyCommit(CHECKOUT));
+    const remoteCommit = await fetchVersion(port);
+    const ourCommit = getRunningCommit();
+    if (remoteCommit !== null && ourCommit !== null && remoteCommit === ourCommit) {
+      stdout(`Live view already running - ${liveViewUrl(port)}`);
+      return "current";
+    }
   }
 
   const findProcess = opts.findLiveViewProcess ?? locateLiveViewProcess;
@@ -386,16 +423,7 @@ export async function refreshStaleLiveView(opts: RefreshStaleLiveViewOptions): P
   stopProcess(found.pid);
   await waitUntilNotListening(isListening, port, startTimeoutMs);
 
-  await startLiveViewAndReport({
-    recordHome,
-    port,
-    isListening,
-    startLiveView: opts.startLiveView ?? (() => spawnDetachedLiveView({ recordHome })),
-    openBrowser: opts.openBrowser ?? defaultOpenBrowser,
-    startTimeoutMs,
-    stdout,
-    stderr,
-  });
+  await startLiveViewAndReport({ recordHome, port, isListening, startLiveView, openBrowser, startTimeoutMs, stdout, stderr });
   return "restarted";
 }
 

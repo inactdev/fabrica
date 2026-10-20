@@ -104,3 +104,49 @@ export function noteToSend(raw: string): string | undefined {
 export function isScrolledToBottom(scrollTop: number, scrollHeight: number, clientHeight: number, thresholdPx = 4): boolean {
   return scrollHeight - scrollTop - clientHeight <= thresholdPx;
 }
+
+/** The first 12 characters of a commit, for display - the same width
+ * `src/cli/doctor-command.ts`'s own `short()` prints, so a banner and a
+ * doctor line name the same commit identically. */
+function shortCommit(sha: string): string {
+  return sha.slice(0, 12);
+}
+
+/**
+ * The banner a page shows when the server answering it is running older
+ * code than the checkout on disk - `/api/version` (this server process's
+ * own startup commit) against `/api/checkout` (what is on disk right
+ * now). Null means say nothing.
+ *
+ * Stale exactly when both commits are known strings and they differ -
+ * the identical rule `src/cli/up-command.ts`'s `refreshStaleLiveView`
+ * applies before stopping a live view, so a page cannot claim stale
+ * about a live view `fabrica up` would happily reuse, or vice versa. A
+ * null on either side means the comparison cannot be made at all (an
+ * installed copy with no build-info.json, a git lookup that failed), and
+ * the page says nothing rather than guessing: a banner that cries stale
+ * because it could not read a commit would teach the Client to ignore
+ * it.
+ *
+ * Pure, so the rule is unit tested here; public/banner.js keeps a
+ * hand-duplicated copy, same as every other function in this file.
+ */
+export function stalenessNotice(serverCommit: string | null, checkoutCommit: string | null): string | null {
+  if (typeof serverCommit !== "string" || typeof checkoutCommit !== "string") return null;
+  if (serverCommit === checkoutCommit) return null;
+  return (
+    `This page is served by an older copy of Fabrica: the server is running ${shortCommit(serverCommit)}, ` +
+    `the checkout is on ${shortCommit(checkoutCommit)}. Run \`fabrica update\` to restart it.`
+  );
+}
+
+/** The banner a page shows for a projects.toml that is there but will
+ * not parse. The message already carries the file's path and the line
+ * the parser stopped on (src/config/load.ts) - this only labels it, so
+ * the wording a reader acts on has exactly one author. Null means say
+ * nothing. */
+export function configProblemNotice(problem: { message?: unknown } | null | undefined): string | null {
+  const message = problem?.message;
+  if (typeof message !== "string" || message.trim().length === 0) return null;
+  return `projects.toml could not be read, so caps and projects are unknown: ${message}`;
+}

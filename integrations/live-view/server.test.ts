@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,6 +98,69 @@ test("startLiveView: /api/version reports exactly whatever the commit override r
   }
 });
 
+// The bug this whole change started from. /api/version used to call its
+// commit reader per request, so a live view process started before a
+// merge answered with the commit the CHECKOUT had since moved to - the
+// code on disk, not the code it was running. `fabrica up` and `fabrica
+// update` compare that answer against their own read of the same
+// on-disk value, so the comparison was a value against itself and could
+// never find a stale live view at all. The commit is now captured once,
+// at startup, and never read again.
+test("startLiveView: /api/version keeps reporting the startup commit after the checkout moves under it", async () => {
+  let onDisk = "commit-at-start";
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0, commit: () => onDisk });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+    assert.deepEqual(await (await fetch(`${base}/api/version`)).json(), { commit: "commit-at-start" });
+
+    // The merge. Same running process, new code on disk.
+    onDisk = "commit-after-merge";
+
+    assert.deepEqual(
+      await (await fetch(`${base}/api/version`)).json(),
+      { commit: "commit-at-start" },
+      "/api/version must report the code this process is running, not the code on disk"
+    );
+    // And a second request is not where it quietly catches up either.
+    assert.deepEqual(await (await fetch(`${base}/api/version`)).json(), { commit: "commit-at-start" });
+
+    // /api/checkout is the one that moves - that disagreement is the
+    // whole signal a page's banner and fabrica up/update act on.
+    assert.deepEqual(await (await fetch(`${base}/api/checkout`)).json(), { commit: "commit-after-merge" });
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /api/checkout reads the checkout fresh on every request", async () => {
+  let onDisk: string | null = "first";
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0, commit: () => onDisk });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+    assert.deepEqual(await (await fetch(`${base}/api/checkout`)).json(), { commit: "first" });
+    onDisk = "second";
+    assert.deepEqual(await (await fetch(`${base}/api/checkout`)).json(), { commit: "second" });
+    // A reader that cannot say answers null rather than guessing - the
+    // page then shows no banner at all, since there is nothing to
+    // compare.
+    onDisk = null;
+    assert.deepEqual(await (await fetch(`${base}/api/checkout`)).json(), { commit: null });
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: /api/checkout, like /api/version, uses the real detectCopy-based computation by default", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${view.port}/api/checkout`)).json();
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    assert.equal(body.commit, head);
+  } finally {
+    await view.close();
+  }
+});
+
 test("startLiveView: /api/version reports null, not a crash, when the commit override itself returns null", async () => {
   const view = await startLiveView({ recordHome: tempRecordHome(), port: 0, commit: () => null });
   try {
@@ -107,6 +170,124 @@ test("startLiveView: /api/version reports null, not a crash, when the commit ove
   } finally {
     await view.close();
   }
+});
+
+// A projects.toml that will not parse used to make this viewer throw out
+// of `getState`, which turned every page into one "could not read the
+// record" line - a config problem reported as a record problem, with the
+// task list (which needs no config at all) taken down with it. Client
+// ruling: show the parse error, with the path and the line, and keep the
+// list working from the record.
+test("startLiveView: an unparseable projects.toml is reported with its path and line, and the task list still works", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  writeFileSync(join(recordHome, "projects.toml"), `[caps]\nperDayUsd = 5\nthis is not [valid toml\n`);
+
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+
+    const res = await fetch(`${base}/api/config-problem`);
+    assert.equal(res.status, 200, "a broken config file is not a broken server");
+    const { problem } = await res.json();
+    assert.ok(problem, "the parse error must be reported, never swallowed");
+    assert.equal(problem.path, join(recordHome, "projects.toml"));
+    assert.equal(problem.line, 3);
+    assert.match(problem.message, /not valid TOML/);
+    assert.ok(problem.message.includes(join(recordHome, "projects.toml")), problem.message);
+
+    // Every page's own data still comes back, with the task in it.
+    for (const path of ["/api/state", "/api/review"]) {
+      const body = await (await fetch(`${base}${path}`)).json();
+      assert.equal(body.error, undefined, `${path} reported a record error for a config problem: ${body.error}`);
+    }
+    const state = await (await fetch(`${base}/api/state`)).json();
+    assert.deepEqual(
+      state.tasks.map((t: { id: string }) => t.id),
+      [task.id]
+    );
+    // The caps fall back to "none set", which is exactly why the banner
+    // above has to exist: nothing else on the page distinguishes that
+    // from a deliberate choice.
+    assert.equal(state.spend.perDayCapUsd, undefined);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: a projects.toml that reads fine reports no problem at all", async () => {
+  const recordHome = tempRecordHome();
+  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 5\n");
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${view.port}/api/config-problem`)).json();
+    assert.deepEqual(body, { problem: null });
+  } finally {
+    await view.close();
+  }
+});
+
+// No projects.toml at all is ordinary, not a problem - a record home
+// that has never had one registered still shows its tasks, and a banner
+// there would be noise, not information.
+test("startLiveView: a record home with no projects.toml reports no problem", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${view.port}/api/config-problem`)).json();
+    assert.deepEqual(body, { problem: null });
+  } finally {
+    await view.close();
+  }
+});
+
+// The banner strip is one script shared by all four pages (see
+// public/banner.js's own header). A page that forgot to load it would
+// silently show no banner at all, which is the exact failure this change
+// exists to remove - so every page's own source is checked for it.
+test("startLiveView: banner.js is served, and every page loads it", async () => {
+  const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+    const script = await fetch(`${base}/banner.js`);
+    assert.equal(script.status, 200);
+    assert.match(script.headers.get("content-type") ?? "", /javascript/);
+    const source = await script.text();
+    // It polls both halves of the staleness comparison and the config
+    // problem - the three facts a banner can be about.
+    for (const endpoint of ["/api/version", "/api/checkout", "/api/config-problem"]) {
+      assert.ok(source.includes(endpoint), `banner.js never asks ${endpoint}`);
+    }
+    assert.match(source, /fabrica update/, "the stale banner must name the command that fixes it");
+
+    const taskPagePath = `/tasks/${"20260101-x-aa"}`;
+    for (const path of ["/", "/history", "/review", taskPagePath]) {
+      const page = await (await fetch(`${base}${path}`)).text();
+      assert.match(page, /<script src="\/banner\.js"><\/script>/, `${path} does not load banner.js`);
+    }
+  } finally {
+    await view.close();
+  }
+});
+
+// banner.js keeps a hand-duplicated copy of display.ts's own
+// stalenessNotice/configProblemNotice wording, the same way app.js
+// duplicates formatAge (a plain script with no build step cannot import
+// across the src/ts boundary). This pins the two sentences so the copy
+// that actually runs in a browser cannot drift from the tested one.
+test("banner.js: the two banner sentences match the tested display.ts copies word for word", () => {
+  const source = readFileSync(fileURLToPath(new URL("./public/banner.js", import.meta.url)), "utf8");
+  assert.ok(
+    source.includes("This page is served by an older copy of Fabrica: the server is running ${shortCommit(serverCommit)}, "),
+    "banner.js's stale sentence no longer matches display.ts's stalenessNotice"
+  );
+  assert.ok(
+    source.includes("the checkout is on ${shortCommit(checkoutCommit)}. Run \\`fabrica update\\` to restart it."),
+    "banner.js's stale sentence no longer matches display.ts's stalenessNotice"
+  );
+  assert.ok(
+    source.includes("projects.toml could not be read, so caps and projects are unknown: ${message}"),
+    "banner.js's config sentence no longer matches display.ts's configProblemNotice"
+  );
 });
 
 test("startLiveView: binds only to 127.0.0.1, never to every interface", async () => {
@@ -808,6 +989,9 @@ test("startLiveView: no request, of any kind, ever changes a file on disk", asyn
       fetch(`${base}/api/history`),
       fetch(`${base}/api/review`),
       fetch(`${base}/api/version`),
+      fetch(`${base}/api/checkout`),
+      fetch(`${base}/api/config-problem`),
+      fetch(`${base}/banner.js`),
       fetch(`${base}/api/tasks/${taskId}`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),
       fetch(`${base}/api/tasks/${taskId}/transcript`),

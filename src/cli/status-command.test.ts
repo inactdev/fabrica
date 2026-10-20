@@ -95,6 +95,53 @@ test("runStatusCommand: a project:<name> blocked-edit bucket never shows as a ta
   assert.ok(io.out.includes("blocked edit attempts on record: 1"), `missing the blocked-edit count line: ${JSON.stringify(io.out)}`);
 });
 
+// A projects.toml that will not parse used to take the whole listing
+// down: `loadConfigOrDefault` threw, the catch printed the message to
+// stderr and the command exited 1 having listed nothing at all. Client
+// ruling: print the error on the first line and still list the tasks -
+// they come from the record, which needs no config.
+test("runStatusCommand: an unparseable projects.toml is the first line, and the tasks are still listed", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const openTask = await createForeman({ recordHome, inspector: fixtureInspector() }).do("still open", {
+    project,
+    brain: fakeBrain({ askQuestions: ["what should this do?"] }),
+  });
+  // Written after the task so registration itself isn't what breaks.
+  writeFileSync(join(recordHome, "projects.toml"), `[caps]\nperDayUsd = 5\nthis is not [valid toml\n`);
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  // A report, not a check (the same reason a task whose worker is gone
+  // leaves this at 0) - what matters is that it is said, not that the
+  // shell notices.
+  assert.equal(code, 0, io.err.join("\n"));
+  const problemLine = io.out[0];
+  assert.ok(problemLine.startsWith(join(recordHome, "projects.toml")), `the first line must name the file: ${problemLine}`);
+  assert.match(problemLine, /:3:/, `the first line must name the line the parser stopped on: ${problemLine}`);
+  assert.match(problemLine, /not valid TOML/);
+  // And the listing ran anyway.
+  const rows = taskRows(io.out.slice(1));
+  assert.equal(rows.length, 1, `expected the task to still be listed: ${JSON.stringify(io.out)}`);
+  assert.match(rows[0], new RegExp(`^${openTask.id}\\s`));
+});
+
+// The negative control for the line above: a file that reads fine must
+// never produce it. Without this, a bug that printed the problem line
+// unconditionally would pass the test above.
+test("runStatusCommand: a projects.toml that reads fine prints no problem line at all", async () => {
+  const recordHome = tempRecordHome();
+  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 5\n");
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.ok(io.out[0].startsWith("spent in the last 24 hours:"), `expected the spend line first: ${JSON.stringify(io.out)}`);
+  assert.ok(!io.out.some((line) => line.includes("not valid TOML")), JSON.stringify(io.out));
+});
+
 test("runStatusCommand: a delivered task is flagged as awaiting the Client's verdict", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");

@@ -125,6 +125,29 @@ test("fabrica doctor: each registered project is checked - path, git root, a che
   assert.match(text, /FAIL project noorigin: .*no origin remote.*git -C \S+ remote add origin/);
 });
 
+// Client ruling: doctor fails non-zero with the parse error as a FAIL
+// line, and runs its other checks. "Other checks" means the machine
+// checks above it - the per-project, caps and spend ones genuinely
+// cannot be answered from a file nobody could parse, and reporting "no
+// projects are registered" off one would be a second FAIL that is wrong
+// about why.
+test("fabrica doctor: an unparseable projects.toml is one FAIL line naming the file and the line, and every machine check still runs", async () => {
+  const home = recordHome(`[caps]\nperDayUsd = 25\nthis is not [valid toml\n`);
+
+  const { code, lines } = await doctor(home, okProbes());
+
+  assert.equal(code, 1);
+  const fail = lines.find((l) => l.startsWith("FAIL projects.toml"));
+  assert.ok(fail, `no projects.toml FAIL line:\n${lines.join("\n")}`);
+  assert.ok(fail.includes(join(home, "projects.toml")), fail);
+  assert.match(fail, /:3:/, `the line the parser stopped on is missing: ${fail}`);
+  assert.match(fail, /not valid TOML/);
+  assert.match(fail, /fix: fix the TOML in .*projects\.toml at line 3/);
+  // The 10 machine checks all ran and all printed; this is the only FAIL.
+  assert.equal(lines.length, 11, lines.join("\n"));
+  assert.equal(lines.filter((l) => l.startsWith("FAIL")).length, 1, lines.join("\n"));
+});
+
 test("fabrica doctor: no caps set fails, naming the [caps] table", async () => {
   const home = recordHome(`[projects.demo]\npath = "${healthyProject()}"\ncheck = "./check.sh"\n`);
   const { code, lines } = await doctor(home, okProbes());

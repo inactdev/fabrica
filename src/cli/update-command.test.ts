@@ -69,7 +69,42 @@ function installedProbes(overrides: Partial<UpdateProbes> = {}): UpdateProbes {
   return { ...base, ...overrides };
 }
 
-const liveViewNotListening = { isLiveViewListening: async () => false };
+/** For the tests that never reach the live-view step at all (every
+ * refusal below): nothing is listening and nothing may be started. */
+const liveViewNotListening = {
+  isLiveViewListening: async () => false,
+  startLiveView: neverCalled("starting a live view in a run that should have refused first"),
+};
+
+/** A live view that is not running but can be started - which is what
+ * `fabrica update` now does whenever the commit changed (Client ruling:
+ * "if none is running, start one"). `startLiveView` flips the probe to
+ * listening, so the post-start wait resolves immediately instead of
+ * burning the whole start timeout. */
+function startableLiveView() {
+  let listening = false;
+  const state = { startCalls: 0 };
+  return {
+    state,
+    opts: {
+      isLiveViewListening: async () => listening,
+      startLiveView: () => {
+        state.startCalls += 1;
+        listening = true;
+      },
+      openBrowser: () => {},
+      liveViewStartTimeoutMs: 2_000,
+    },
+  };
+}
+
+/** A dev checkout whose pull lands on the commit it was already on -
+ * `git pull --ff-only` on an already-current checkout. The commit not
+ * changing is what keeps `fabrica update` on its ordinary
+ * ask-/api/version-first path instead of the forced restart. */
+function alreadyCurrentProbes(): UpdateProbes {
+  return devCheckoutProbes({ pull: () => ({ ok: true, message: "Already up to date." }) });
+}
 
 test("runUpdateCommand: an unknown flag is refused with exact instructions, not ignored", async () => {
   const io = captureIo();
@@ -100,7 +135,8 @@ test("runUpdateCommand: a dev checkout on master with no local changes is pulled
     return realPull(root);
   };
 
-  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes, ...liveViewNotListening, ...io });
+  const live = startableLiveView();
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes, ...live.opts, ...io });
 
   assert.equal(code, 0, io.err.join("\n"));
   assert.equal(pulledRoot, "/fake/checkout");
@@ -158,7 +194,8 @@ test("runUpdateCommand: an installed copy re-runs the documented install command
     return realReinstall(prefix);
   };
 
-  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes, ...liveViewNotListening, ...io });
+  const live = startableLiveView();
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes, ...live.opts, ...io });
 
   assert.equal(code, 0, io.err.join("\n"));
   // Derived from the running copy's own path, never npm's default -
@@ -205,34 +242,99 @@ test("runUpdateCommand: a copy that is neither a checkout nor a global install i
   assert.match(err, /npm install -g github:inactdev\/fabrica/);
 });
 
-test("runUpdateCommand: no live view listening is left alone, and the summary says so", async () => {
+// Client ruling: "Restart unconditionally when the commit changed; if
+// none is running, start one; no opt-out flag." This test asserted the
+// opposite before that ruling (nothing listening was left stopped) - the
+// Client's reason for changing it is that `fabrica update` otherwise
+// takes away the live view he was watching a moment earlier, which is
+// not something he asked it to do.
+test("runUpdateCommand: a changed commit with no live view running starts one, and the summary says so", async () => {
   const io = captureIo();
   const probes = devCheckoutProbes();
+  const live = startableLiveView();
 
   const code = await runUpdateCommand([], {
     recordHome: "/fake/home",
     probes,
-    isLiveViewListening: async () => false,
-    startLiveView: neverCalled("starting a live view that was never running"),
+    ...live.opts,
     stopLiveViewProcess: neverCalled("stopping a live view that was never running"),
     ...io,
   });
 
   assert.equal(code, 0, io.err.join("\n"));
-  assert.match(io.out.join("\n"), /live view left as is/);
+  assert.equal(live.state.startCalls, 1);
+  assert.match(io.out.join("\n"), /live view started/);
   assert.match(io.out.join("\n"), /fabrica up --continue/);
 });
 
-test("runUpdateCommand: a live view already running the new commit is left alone", async () => {
+// The other half of that ruling: nothing is started when nothing moved.
+// An already-up-to-date pull must not conjure a live view the Client
+// never had open.
+test("runUpdateCommand: an unchanged commit with no live view running leaves it stopped", async () => {
+  const io = captureIo();
+
+  const code = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: alreadyCurrentProbes(),
+    isLiveViewListening: async () => false,
+    startLiveView: neverCalled("starting a live view when the commit never changed"),
+    stopLiveViewProcess: neverCalled("stopping a live view that was never running"),
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.match(io.out.join("\n"), new RegExp(`${BEFORE_COMMIT} -> ${BEFORE_COMMIT}`));
+  assert.match(io.out.join("\n"), /live view left as is/);
+});
+
+// Also inverted by that same ruling. A live view reporting the brand-new
+// commit immediately after a pull can only have been started inside the
+// race between the pull and this check - rare, and not worth trusting:
+// "restart unconditionally when the commit changed" means the
+// /api/version answer cannot save it, and must not even be asked for.
+test("runUpdateCommand: a changed commit restarts the live view without asking its /api/version at all", async () => {
   const io = captureIo();
   const probes = devCheckoutProbes();
-  let stopped = false;
+  let listening = true;
+  let stoppedPid: number | null = null;
+  let startCalls = 0;
 
   const code = await runUpdateCommand([], {
     recordHome: "/fake/home",
     probes,
+    isLiveViewListening: async () => listening,
+    fetchLiveViewVersion: neverCalled("asking /api/version when the commit is already known to have changed"),
+    findLiveViewProcess: () => ({ pid: 99 }),
+    stopLiveViewProcess: (pid) => {
+      stoppedPid = pid;
+      listening = false;
+    },
+    startLiveView: () => {
+      startCalls += 1;
+      listening = true;
+    },
+    openBrowser: () => {},
+    liveViewStartTimeoutMs: 2_000,
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(stoppedPid, 99);
+  assert.equal(startCalls, 1);
+  assert.match(io.out.join("\n"), /live view restarted/);
+});
+
+// The unchanged-commit path still asks, and still leaves a current live
+// view exactly where it is.
+test("runUpdateCommand: an unchanged commit leaves a live view already on that commit alone", async () => {
+  const io = captureIo();
+  let stopped = false;
+
+  const code = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: alreadyCurrentProbes(),
     isLiveViewListening: async () => true,
-    fetchLiveViewVersion: async () => AFTER_COMMIT,
+    fetchLiveViewVersion: async () => BEFORE_COMMIT,
     stopLiveViewProcess: () => {
       stopped = true;
     },
@@ -243,6 +345,40 @@ test("runUpdateCommand: a live view already running the new commit is left alone
   assert.equal(code, 0, io.err.join("\n"));
   assert.equal(stopped, false);
   assert.match(io.out.join("\n"), /live view left as is/);
+});
+
+// And the unchanged-commit path still replaces a live view that really
+// is stale - one left over from an even older commit, which is what the
+// /api/version comparison exists to catch.
+test("runUpdateCommand: an unchanged commit still replaces a live view running older code", async () => {
+  const io = captureIo();
+  let listening = true;
+  let stoppedPid: number | null = null;
+  let startCalls = 0;
+
+  const code = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: alreadyCurrentProbes(),
+    isLiveViewListening: async () => listening,
+    fetchLiveViewVersion: async () => "much-older-1",
+    findLiveViewProcess: () => ({ pid: 1234 }),
+    stopLiveViewProcess: (pid) => {
+      stoppedPid = pid;
+      listening = false;
+    },
+    startLiveView: () => {
+      startCalls += 1;
+      listening = true;
+    },
+    openBrowser: () => {},
+    liveViewStartTimeoutMs: 2_000,
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(stoppedPid, 1234);
+  assert.equal(startCalls, 1);
+  assert.match(io.out.join("\n"), /live view restarted/);
 });
 
 test("runUpdateCommand: a stale live view is stopped and restarted, and the summary says so", async () => {

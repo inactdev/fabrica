@@ -13,6 +13,7 @@ import {
   describeUnmeasured,
   githubTokenStatus,
   inspectorBranchStatus,
+  loadConfigOrProblem,
   probeWorkerToken,
   readEvents,
   requireGitRoot,
@@ -23,7 +24,6 @@ import {
   workerTokenStatus,
 } from "../index.ts";
 import { CliError } from "./errors.ts";
-import { loadConfigOrDefault } from "./load-config.ts";
 import {
   globalPackagePath,
   installCommandArgs,
@@ -47,6 +47,12 @@ installed in it, the relay image every task's network goes through, the
 worker token, the GitHub token Inspector needs, Inspector itself, every
 registered project, the caps, and any SPEND UNKNOWN block. One line per
 check - OK, or FAIL with the exact fix. Exits non-zero if anything fails.
+
+A projects.toml that will not parse is its own FAIL line, naming the
+file, the line the parser stopped on and what it objected to. Every
+machine check above it still runs; only the checks that need the file
+itself - the per-project ones, the caps, the spend block - are skipped,
+since an unreadable file cannot answer them either way.
 
   --live  Also make one minimal real call with the worker token (a few
           cents) and report whether it is alive or dead.
@@ -339,9 +345,17 @@ export function detectCopy(root: string, gitIn: (args: string[]) => string | nul
  * copy's commit (dev checkout: live `git rev-parse HEAD`; installed:
  * `build-info.json`'s recorded commit, or null if that file is
  * missing) - exported so anything else that needs to know "what commit
- * is this running copy" (the live view's own `/api/version`, `fabrica
- * up`'s stale-live-view check) asks this exact question rather than
- * reimplementing detectCopy's dev-checkout-vs-installed branch itself. */
+ * is the copy of fabrica on disk" (`fabrica up`'s stale-live-view
+ * check, and both of the live view's own commit endpoints) asks this
+ * exact question rather than reimplementing detectCopy's
+ * dev-checkout-vs-installed branch itself.
+ *
+ * Note for anything comparing two of these: this reads the copy ON DISK,
+ * live, every call. It is NOT "what code is the calling process
+ * running" - those coincide for a short-lived CLI command, and diverge
+ * for a long-lived server, which is exactly why the live view captures
+ * it once at startup for `/api/version` and calls it per request for
+ * `/api/checkout` (integrations/live-view/server.ts). */
 export function runningCopyCommit(root: string): string | null {
   return detectCopy(root, (args) => git(root, args)).commit;
 }
@@ -480,13 +494,25 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
     probes.inspector(),
   ];
 
-  let config;
-  try {
-    config = loadConfigOrDefault(recordHome);
-  } catch (err) {
-    checks.push({ ok: false, label: "projects.toml", detail: err instanceof Error ? err.message : String(err), fix: "fix projects.toml" });
-  }
-  if (config) {
+  // A projects.toml that will not parse is one FAIL line naming the
+  // file, the line the parser stopped on, and what it objected to - and
+  // every machine check above still ran, and still printed (Client
+  // ruling). The config-derived checks below are the only ones skipped,
+  // because they genuinely cannot be answered: reporting "no projects
+  // are registered" and "no spending cap is set" off an unreadable file
+  // would be three FAILs for one problem, two of them wrong about why.
+  const { config, problem } = loadConfigOrProblem(recordHome);
+  if (problem) {
+    checks.push({
+      ok: false,
+      label: "projects.toml",
+      detail: problem.message,
+      fix:
+        problem.line === null
+          ? `fix the TOML in ${problem.path}`
+          : `fix the TOML in ${problem.path} at line ${problem.line}`,
+    });
+  } else {
     const names = Object.keys(config.projects);
     if (names.length === 0) {
       checks.push({ ok: false, label: "projects", detail: "no projects are registered", fix: `add a [projects.<name>] entry to ${recordHome}/projects.toml` });

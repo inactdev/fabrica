@@ -32,17 +32,81 @@ page, `/api/tasks/<id>`, or `/api/tasks/<id>/transcript`), and that is
 checked against `TASK_ID_PATTERN` (the same shape `src/record/ids.ts`
 generates) before it ever reaches a file path.
 
-`/api/version` answers `{ "commit": "<sha-or-null>" }` - exactly the
-commit `src/cli/doctor-command.ts`'s `runningCopyCommit` (the same
-function behind `fabrica doctor`'s "checkout" line) computes for this
-running copy. It exists so `fabrica up` can tell a live view running
-today's code from one left running from before a merge (a stale one
-otherwise silently serves a blank page against today's record shape) -
-see that command's own README section. The one write in this directory
-isn't in `server.ts` either: `start.ts` (the real process entry point,
-not the server module itself) writes `<recordHome>/live-view.pid` once
-it's actually bound to its port, for `fabrica up` to find and verify
-before ever stopping it (`src/cli/live-view-process.ts`).
+The one write in this directory isn't in `server.ts` either: `start.ts`
+(the real process entry point, not the server module itself) writes
+`<recordHome>/live-view.pid` once it's actually bound to its port, for
+`fabrica up` to find and verify before ever stopping it
+(`src/cli/live-view-process.ts`).
+
+## Two commits, and why they are two endpoints
+
+`/api/version` answers `{ "commit": "<sha-or-null>" }` with the commit
+**this server process is running** - captured exactly once, in
+`startLiveView`, by `src/cli/doctor-command.ts`'s `runningCopyCommit`
+(the same function behind `fabrica doctor`'s "checkout" line), and never
+read again for the life of the process.
+
+`/api/checkout` answers the same shape with the commit **on disk right
+now**, by calling that same reader per request.
+
+That split is load-bearing, and it is the fix for a real bug.
+`/api/version` used to call the reader per request too. For the copy
+that matters - a developer checkout - the reader shells out to `git
+rev-parse HEAD` against the checkout, so a live view process started
+before a merge happily reported the commit the checkout had since moved
+to: the code on disk, not the code it was actually executing. Both
+callers of that endpoint (`fabrica up` and `fabrica update`, through
+`src/cli/up-command.ts`'s `refreshStaleLiveView`) compare its answer
+against *their own* read of that same on-disk value - so the comparison
+was a value against itself, could never differ, and the one thing the
+check exists to catch (a live view left over from before the code moved)
+was the one thing it could never catch. A stale server otherwise goes on
+serving a page built against yesterday's record shape, silently.
+
+With the commit pinned at startup, the two endpoints disagreeing is a
+real signal, and three things read it: `fabrica up` (replaces a stale
+live view rather than reusing it), `fabrica update` (restarts it), and
+every page's own banner (below).
+
+## The banner strip - `public/banner.js`
+
+Two things can make a page here quietly lie, and each gets a band across
+the top of every page that nobody can miss:
+
+1. **The server is running older code than the checkout** -
+   `/api/version` against `/api/checkout`, by exactly the rule
+   `refreshStaleLiveView` applies (stale only when both commits are
+   known strings and differ; an unknown on either side says nothing
+   rather than guessing). The banner names both commits and the command
+   that fixes it: `fabrica update`.
+2. **`projects.toml` is there but will not parse** -
+   `/api/config-problem`, which carries the file's path, the line the
+   parser stopped on, and what it objected to. Every cap and project on
+   the page is a default standing in for a number nobody set while that
+   is true, and nothing else on the page distinguishes that from a
+   deliberate choice.
+
+`banner.js` is loaded by all four pages and is deliberately
+self-contained: it builds its own DOM, polls its own endpoints, and needs
+no wiring in `app.js`/`task.js`/`review.js`. One script for four pages
+beats three renderers that each have to stay in step. `/api/version` is
+fetched **once** (a running process's startup commit cannot change while
+it is answering); the other two are polled on the same 2-second tick the
+pages use, so a banner appears within one poll of the checkout moving or
+the file breaking. Its two sentences are hand-duplicated from
+`display.ts`'s tested `stalenessNotice`/`configProblemNotice` - the same
+reason `app.js` duplicates `formatAge` - and `server.test.ts` pins both
+copies word for word so the one that actually runs in a browser cannot
+drift.
+
+A `projects.toml` that will not parse is never an HTTP error here: a
+broken config is not a broken server. `record-view.ts` reads it through
+`loadConfigOrProblem` (`src/config/`), which hands back the same empty
+config a missing file does plus the problem to show - so the task list
+keeps rendering from the record, which needs no config at all. It used to
+rethrow that case straight out of `getState`, which turned every page
+into one "could not read the record" line: a config problem reported as a
+record problem, with the task list taken down with it.
 
 ## What the task list page shows, and what's one click away
 
@@ -437,6 +501,17 @@ Issue #189's meters line added `describeMeters`, `latestMeterReading`,
 type) to `src/index.ts` - the pause rule's own decision functions, so
 this page shows the same numbers that gate new work rather than a second
 reading of the same receipts.
+
+The staleness banner and the loud `projects.toml` added one export,
+`loadConfigOrProblem` - the reader that hands back usable defaults *plus*
+the problem, for a surface that must keep working against a broken config
+rather than refuse. `loadConfig` and `src/cli/load-config.ts`'s
+`loadConfigOrDefault` still throw on the same file, deliberately:
+`fabrica do`/`answer`/`verdict` spend real money and must refuse rather
+than quietly run with no cap. Readers degrade loudly, spenders refuse.
+`pauseRuleFor` is no longer read here - the pause rule comes off the same
+`loadConfigOrProblem` call, which is one fewer read of the same file and,
+unlike `pauseRuleFor`, does not throw on a file that will not parse.
 
 The answer route added nothing to that list: `recordAnswerDecision` has
 been on `src/index.ts` since issue #123 split the CLI's answer command

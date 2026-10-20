@@ -1,4 +1,5 @@
-export { loadConfig, projectsTomlPath, DEFAULT_PAUSE_RULE } from "./load.ts";
+export { loadConfig, loadConfigOrProblem, projectsTomlPath, DEFAULT_PAUSE_RULE } from "./load.ts";
+export type { ConfigProblem } from "./load.ts";
 export { requireProject } from "./registry.ts";
 export { ConfigError } from "./errors.ts";
 export type { ConfigErrorCode } from "./errors.ts";

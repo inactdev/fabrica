@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_PAUSE_RULE, loadConfig } from "./load.ts";
+import { DEFAULT_PAUSE_RULE, loadConfig, loadConfigOrProblem, projectsTomlPath } from "./load.ts";
 import { ConfigError } from "./errors.ts";
 import { makeTestHome } from "./helpers/test-home.ts";
 
@@ -193,6 +193,91 @@ test("loadConfig: invalid TOML syntax is refused as malformed", () => {
       return true;
     }
   );
+});
+
+// Everything that re-prints this refusal now prints it on ONE line -
+// `fabrica doctor`'s FAIL line, `fabrica status`'s first line, the live
+// view's banner - so the path and the line the parser stopped on have to
+// be in that one line, not buried in a code block underneath it.
+test("loadConfig: an unparseable projects.toml names the file and the exact line, on one line", () => {
+  const recordHome = makeTestHome(`[caps]\nperTaskUsd = 2.5\nthis is not [valid toml\n`);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      // Line 3 is where the broken line actually is - not line 1, and
+      // not "somewhere in this file".
+      assert.equal(err.line, 3);
+      assert.equal(err.message.split("\n").length, 1, `expected one line, got: ${JSON.stringify(err.message)}`);
+      assert.ok(err.message.startsWith(`${projectsTomlPath(recordHome)}:3:`), err.message);
+      assert.match(err.message, /not valid TOML/);
+      // The parser's own reason survives; its "Invalid TOML document:"
+      // preamble does not, since the path above already says which file.
+      assert.doesNotMatch(err.message, /Invalid TOML document/);
+      return true;
+    }
+  );
+});
+
+// Only a parse failure has one line to point at. A file that parsed
+// fine but names an unknown field has a table and a field instead, and
+// must not claim a line number it does not have.
+test("loadConfig: a refusal that isn't a parse failure carries no line number", () => {
+  const recordHome = makeTestHome(`[caps]\nperTaskUsd = 2.5\nnonsense = true\n`);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.equal(err.line, null);
+      return true;
+    }
+  );
+});
+
+test("loadConfigOrProblem: a good file loads with no problem reported", () => {
+  const recordHome = makeTestHome(`[caps]\nperTaskUsd = 2.5\n`);
+
+  const { config, problem } = loadConfigOrProblem(recordHome);
+
+  assert.equal(problem, null);
+  assert.deepEqual(config.caps, { perTaskUsd: 2.5 });
+});
+
+// No projects.toml at all is ordinary, not a problem: no file means no
+// registered projects and no caps, which is how every caller has always
+// treated it.
+test("loadConfigOrProblem: a missing projects.toml is the empty config, not a problem", () => {
+  const recordHome = mkdtempSync(join(tmpdir(), "fabrica-config-missing-"));
+
+  const { config, problem } = loadConfigOrProblem(recordHome);
+
+  assert.equal(problem, null);
+  assert.deepEqual(config.caps, {});
+  assert.deepEqual(config.projects, {});
+  assert.deepEqual(config.pause, DEFAULT_PAUSE_RULE);
+});
+
+// The whole point of this reader: a caller that must keep working gets
+// usable defaults AND the problem to show - never one without the other,
+// and never a silent fallback.
+test("loadConfigOrProblem: an unparseable projects.toml yields defaults plus the problem, path and line", () => {
+  const recordHome = makeTestHome(`[caps]\nperTaskUsd = 2.5\nthis is not [valid toml\n`);
+
+  const { config, problem } = loadConfigOrProblem(recordHome);
+
+  assert.ok(problem, "a file that will not parse must report a problem");
+  assert.equal(problem.path, projectsTomlPath(recordHome));
+  assert.equal(problem.line, 3);
+  assert.ok(problem.message.includes(projectsTomlPath(recordHome)), problem.message);
+  // The defaults, so the caller can still render - the caps are empty
+  // rather than half-read from a file nobody could parse.
+  assert.deepEqual(config.caps, {});
+  assert.deepEqual(config.projects, {});
+  assert.deepEqual(config.pause, DEFAULT_PAUSE_RULE);
 });
 
 test("loadConfig: a project table missing path is refused as malformed", () => {

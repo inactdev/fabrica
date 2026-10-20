@@ -21,11 +21,16 @@
 // own cache - is refused rather than reinstalled somewhere it never
 // lived.
 //
-// Once the code is updated, a live view listening on 127.0.0.1:7777
-// running older code is restarted - by calling `fabrica up`'s own
-// stale-live-view check (up-command.ts's refreshStaleLiveView), never a
-// second copy of that logic. A live view that's already current, or not
-// running at all, is left exactly as it is.
+// Once the code is updated, the live view is brought in line with it -
+// by calling `fabrica up`'s own stale-live-view check (up-command.ts's
+// refreshStaleLiveView), never a second copy of that logic. When the
+// commit actually changed, that restart is unconditional and a live view
+// that wasn't running is started (Client ruling - no opt-out flag):
+// updating must never leave the Client reading a page served by the code
+// he just replaced, or with no page at all where he had one. When the
+// commit did not change (an already-up-to-date pull), the ordinary
+// version comparison decides, and a current or absent live view is left
+// exactly as it is.
 
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -34,7 +39,7 @@ import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { detectCopy, git, short, type CopyInfo } from "./doctor-command.ts";
 import { INSTALL_SPEC, installCommandArgs, prefixOfGlobalInstall } from "./npm-prefix.ts";
-import { LIVE_VIEW_PORT, refreshStaleLiveView } from "./up-command.ts";
+import { LIVE_VIEW_PORT, refreshStaleLiveView, type LiveViewStaleOutcome } from "./up-command.ts";
 
 export const UPDATE_USAGE = "fabrica update";
 
@@ -56,12 +61,17 @@ session:
          whose default prefix is read-only, say) updates where it
          actually lives. A copy that is neither of the two - \`npx\`
          runs one out of its own cache - is refused.
-  2. If a live view is listening on 127.0.0.1:7777 and running older
-     code (checked via its own /api/version), restarts it - the same
-     check and restart \`fabrica up\` itself runs. One already current,
-     or not running at all, is left alone.
+  2. Brings the live view on 127.0.0.1:7777 in line with the code that
+     just landed - the same check and restart \`fabrica up\` itself
+     runs. If the commit changed, whatever is listening is restarted
+     and one that wasn't running is started; there is no flag to skip
+     that, because a page served by the code you just replaced is worse
+     than no page. If the commit did not change, a live view running
+     older code (checked via its own /api/version) is still replaced,
+     and one already current, or not running at all, is left alone.
   3. Prints one summary line: the commit before and after, whether the
-     live view was restarted, and the exact next step.
+     live view was restarted, started or left as is, and the exact next
+     step.
 
 Resume your session afterward with \`fabrica up --continue\` - your
 chat harness's own flag for continuing the most recent conversation in
@@ -220,10 +230,20 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
 
   const after = probes.copy();
 
+  // Client ruling: when the commit actually changed, restart the live
+  // view unconditionally, and start one if none was running - no flag to
+  // opt out. The ordinary `/api/version` comparison is still what
+  // decides when the commit did NOT change (an already-up-to-date pull,
+  // a reinstall of the same commit): a live view from some even older
+  // commit still deserves replacing, and one that is current is left
+  // alone.
+  const commitChanged = before.commit !== after.commit;
   const port = opts.liveViewPort ?? LIVE_VIEW_PORT;
   const outcome = await refreshStaleLiveView({
     recordHome,
     port,
+    force: commitChanged,
+    startIfStopped: commitChanged,
     isListening: opts.isLiveViewListening,
     fetchLiveViewVersion: opts.fetchLiveViewVersion,
     getRunningCommit: () => after.commit,
@@ -241,10 +261,19 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
     );
   }
 
-  const restarted = outcome === "restarted";
   stdout(
-    `fabrica update: ${short(before.commit)} -> ${short(after.commit)} - live view ${restarted ? "restarted" : "left as is"}. ` +
+    `fabrica update: ${short(before.commit)} -> ${short(after.commit)} - live view ${describeLiveViewOutcome(outcome)}. ` +
       `Resume your session with: fabrica up --continue`
   );
   return 0;
+}
+
+/** The three words this summary line can end on. "started" is its own
+ * word rather than folded into "restarted": nothing was running, so
+ * nothing was restarted, and the Client is about to be told a browser
+ * tab he never had is now open. */
+function describeLiveViewOutcome(outcome: LiveViewStaleOutcome): string {
+  if (outcome === "restarted") return "restarted";
+  if (outcome === "started") return "started";
+  return "left as is";
 }
