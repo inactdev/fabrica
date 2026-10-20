@@ -39,6 +39,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
   return {
     node: () => ok("node"),
     checkout: () => ok("checkout"),
+    npmLink: () => ok("npm link"),
     docker: () => ok("docker"),
     workerImage: () => ok("worker image"),
     workerCli: () => ok("worker CLI"),

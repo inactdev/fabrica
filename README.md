@@ -58,6 +58,10 @@ as a FAIL.
 
     npm install -g github:inactdev/fabrica
 
+If you have ever run `npm link` from a checkout of this repository, run
+`npm unlink -g fabrica` first - that leftover symlink makes this install
+fail with `ENOTDIR`, and `fabrica doctor` reports it with the same fix.
+
 That's the whole install. It puts a fixed, standalone copy of `fabrica`
 on your `PATH`, working from any directory - verified against a real
 install: npm clones the repo, runs its own build step (recording the
@@ -68,8 +72,11 @@ your shell profile or any other file on the machine.
 That installed copy is frozen: it does not change when some other
 checkout of this repository changes, including one you are actively
 editing, mid-merge, or on a branch - the problem that motivated this
-install method. To upgrade later, run the same command again. There is
-no uninstall step beyond the ordinary `npm uninstall -g fabrica`.
+install method. To upgrade later, run `fabrica update` (or the same
+install command again); `fabrica update` reinstalls into the prefix this
+copy actually lives under, which matters on a host whose default npm
+prefix is read-only. There is no uninstall step beyond the ordinary `npm
+uninstall -g fabrica`.
 
 **`npm link` is a separate, developer-only install**, documented above
 under "Developing Fabrica itself" - it points the `fabrica` command at

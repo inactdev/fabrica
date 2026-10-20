@@ -48,10 +48,17 @@ function devCheckoutProbes(overrides: Partial<UpdateProbes> = {}): UpdateProbes 
   return { ...base, ...overrides };
 }
 
+/** An installed copy's root is npm's own global layout,
+ * `<prefix>/lib/node_modules/fabrica` - which is where `fabrica update`
+ * reads the prefix to reinstall into back off (issue #171 / "updatable
+ * from wherever it lives"). */
+const INSTALL_PREFIX = "/fake/prefix";
+const INSTALL_ROOT = `${INSTALL_PREFIX}/lib/node_modules/fabrica`;
+
 function installedProbes(overrides: Partial<UpdateProbes> = {}): UpdateProbes {
   let commit = OLD_BUILD_COMMIT;
   const base: UpdateProbes = {
-    copy: (): CopyInfo => ({ kind: "installed", root: "/fake/install", branch: null, commit, version: "1.2.3" }),
+    copy: (): CopyInfo => ({ kind: "installed", root: INSTALL_ROOT, branch: null, commit, version: "1.2.3" }),
     isDirty: neverCalled("isDirty on an installed copy"),
     pull: neverCalled("pull on an installed copy"),
     reinstall: () => {
@@ -141,24 +148,26 @@ test("runUpdateCommand: a failed git pull --ff-only is reported and refuses", as
   assert.match(io.err.join("\n"), /fatal: Not possible to fast-forward/);
 });
 
-test("runUpdateCommand: an installed copy re-runs the documented install command", async () => {
+test("runUpdateCommand: an installed copy re-runs the documented install command, into the prefix it lives under", async () => {
   const io = captureIo();
-  let reinstallCalls = 0;
+  const prefixes: string[] = [];
   const probes = installedProbes();
   const realReinstall = probes.reinstall;
-  probes.reinstall = () => {
-    reinstallCalls += 1;
-    return realReinstall();
+  probes.reinstall = (prefix) => {
+    prefixes.push(prefix);
+    return realReinstall(prefix);
   };
 
   const code = await runUpdateCommand([], { recordHome: "/fake/home", probes, ...liveViewNotListening, ...io });
 
   assert.equal(code, 0, io.err.join("\n"));
-  assert.equal(reinstallCalls, 1);
+  // Derived from the running copy's own path, never npm's default -
+  // which on a Nix-managed host is a read-only store path.
+  assert.deepEqual(prefixes, [INSTALL_PREFIX]);
   assert.match(io.out.join("\n"), new RegExp(`${OLD_BUILD_COMMIT} -> ${NEW_BUILD_COMMIT}`));
 });
 
-test("runUpdateCommand: a failed install is reported and refuses", async () => {
+test("runUpdateCommand: a failed install is reported, naming the exact command that ran", async () => {
   const io = captureIo();
   const probes = installedProbes({
     reinstall: () => ({ ok: false, message: "npm error 404 Not Found" }),
@@ -168,6 +177,32 @@ test("runUpdateCommand: a failed install is reported and refuses", async () => {
 
   assert.equal(code, 1);
   assert.match(io.err.join("\n"), /npm error 404 Not Found/);
+  assert.match(io.err.join("\n"), new RegExp(`npm install -g --prefix ${INSTALL_PREFIX} github:inactdev/fabrica`));
+});
+
+test("runUpdateCommand: a copy that is neither a checkout nor a global install is refused, never reinstalled", async () => {
+  const io = captureIo();
+  // What `npx fabrica update` runs: a throwaway copy in npx's own
+  // cache, under no npm prefix at all.
+  const probes = installedProbes({
+    copy: () => ({
+      kind: "installed",
+      root: "/home/me/.npm/_npx/0a1b2c3d/node_modules/fabrica",
+      branch: null,
+      commit: OLD_BUILD_COMMIT,
+      version: "1.2.3",
+    }),
+    reinstall: neverCalled("reinstall of a copy that lives under no npm prefix"),
+  });
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes, ...liveViewNotListening, ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  const err = io.err.join("\n");
+  assert.match(err, /_npx/);
+  assert.match(err, /needs an installed or checked-out copy/);
+  assert.match(err, /npm install -g github:inactdev\/fabrica/);
 });
 
 test("runUpdateCommand: no live view listening is left alone, and the summary says so", async () => {
