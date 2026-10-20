@@ -13,7 +13,7 @@
 // happens.
 
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile } from "../record/index.ts";
-import { abortRebase, destroyProductionLine, finishRebase, rebaseInProgress, reopenProductionLine } from "../line/index.ts";
+import { abortRebase, destroyProductionLine, rebaseInProgress, reopenProductionLine } from "../line/index.ts";
 import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { networkPolicyFor } from "./network-policy.ts";
@@ -25,8 +25,14 @@ import { closesIssueFor } from "./pr-body.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { runAttempts } from "./attempts.ts";
-import { recordRoundResult } from "./round.ts";
-import { deliverRebaseConflict, rebaseConflictInstructions, rebaseForFixRound } from "./fix-rebase.ts";
+import { mergeGateDeclarations, recordRoundResult } from "./round.ts";
+import {
+  continueStoppedRebase,
+  rebaseConflictInstructions,
+  rebaseForFixRound,
+  recordStop,
+} from "./fix-rebase.ts";
+import type { FixRebaseStep, StoppedRebase } from "./fix-rebase.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { recordReceipt, requireRoomToStart, spendLimitsFor } from "./caps.ts";
 import { pauseRuleFor, requireMeterRoomToStart } from "./meters.ts";
@@ -225,12 +231,6 @@ export async function runRecordedFix(
     baseCommit: baseCommit!,
     priorReceipts,
     priorGateChanges: details?.delivery?.gateChanges || undefined,
-    // Issue #235: present exactly when the delivery the Client just ruled
-    // on was itself a rebase conflict report - so his note is his answer
-    // to those markers, and this round hands the stopped rebase to the
-    // worker instead of reporting the same conflict a second time. See
-    // fix-rebase.ts's header.
-    sawConflictReport: details?.rebaseConflict !== undefined,
     inspector: opts.inspector,
     checkBox: opts.checkBox,
     caps: opts.caps,
@@ -278,9 +278,6 @@ async function runFixRound(
     baseCommit: string;
     priorReceipts: Receipt[];
     priorGateChanges: string | undefined;
-    /** Issue #235: the Client has already seen a rebase conflict report
-     * for this task and this round's note is his answer to it. */
-    sawConflictReport: boolean;
     inspector?: Inspector;
     checkBox?: CheckBox;
     caps?: Caps;
@@ -305,43 +302,34 @@ async function runFixRound(
   // must treat the fix path as an exception.
   const line = reopenProductionLine({ project, taskId, recordHome });
 
+  // Issue #235: the rebase this round is carrying while it is stopped -
+  // declared out here so the `finally` below can name the conflict it
+  // abandoned if something throws mid-round.
+  let stopped: StoppedRebase | undefined;
+
   try {
     // Issue #235, before anything else this round does: bring the branch
     // up to origin's current default branch, on the host, with git only.
     // See fix-rebase.ts's header for the whole policy.
-    const rebase = rebaseForFixRound(recordHome, taskId, line, { sawConflictReport: ctx.sawConflictReport });
+    const rebase = rebaseForFixRound(recordHome, taskId, line);
+    // A conflict is handled in this same round: the rebase is left
+    // stopped with the markers in the working tree, and the worker below
+    // gets the Client's note and the conflicted file list in one brief.
+    if (rebase.status === "handed-to-worker") stopped = rebase.stopped;
 
-    // A conflict the Client has not seen yet: the branch is already back
-    // where it was, and this round ends here - no worker runs, nothing is
-    // spent, and the markers go to him as an inspection-red he can rule
-    // `fix` on with instructions.
-    if (rebase.status === "report-conflict") {
-      deliverRebaseConflict(recordHome, taskId, line, {
-        base: rebase.base,
-        conflict: rebase.conflict,
-        baseCommit,
-        receipts: priorReceipts,
-        totalAttempts,
-        declaredGateChanges: priorGateChanges,
-        afterWorker: false,
-      });
-      return;
-    }
-
-    // The conflict this round's worker is being handed, or undefined when
-    // there is none - bound once here rather than re-derived from
-    // `rebase.status` at each use, so neither the brief nor the
-    // `beforeCommit` closure below depends on narrowing surviving into a
-    // callback.
-    const handed = rebase.status === "handed-to-worker" ? rebase : undefined;
     // After a rebase, origin's tip IS the branch's fork point, and the
     // delivery's `files` diff must be pinned to it - against the old
     // base it would list every file origin itself changed as this task's
     // work. `already-current` keeps the base it already had, which is
-    // still an ancestor of the branch. In the stopped case this is where
-    // the branch is heading, and it only becomes true once the host
-    // finishes the rebase below - so an abort there puts it back.
-    let roundBaseCommit = rebase.status === "already-current" ? baseCommit : rebase.baseCommit;
+    // still an ancestor of the branch. While the rebase is stopped this
+    // is where the branch is heading, and it only becomes true once the
+    // host finishes it below - so an abort puts the old base back.
+    let roundBaseCommit =
+      rebase.status === "already-current"
+        ? baseCommit
+        : rebase.status === "rebased"
+          ? rebase.baseCommit
+          : rebase.stopped.baseCommit;
 
     const { judge: roundJudge, mode } = prepareRound(recordHome, taskId, line, roundBaseCommit, {
       inspector,
@@ -363,65 +351,131 @@ async function runFixRound(
     // returns - and there is nothing to protect against either way: the
     // commits are being replayed, so none of them is one Inspector has
     // already seen. The wrapper is skipped on that path only.
-    const judge = handed ? roundJudge : skipIfUnchanged(roundJudge, line.workdir, baseCommitOf(line.workdir));
-
-    // Issue #235: the worker resolves markers in place (its own git is
-    // read-only), so the host is the one that stages that resolution and
-    // continues the rebase - and it has to happen before this attempt's
-    // own commit, which assumes a branch the rebase has finished moving.
-    // Still conflicted means the branch goes back to where it was and the
-    // Client gets the remaining markers.
-    let beforeCommit: ((attempt: number) => Promise<Judgement | undefined>) | undefined;
-    if (handed !== undefined) {
-      const base = handed.base;
-      beforeCommit = async () => {
-        const finished = finishRebase(line.workdir);
-        if (finished.status === "completed") return undefined;
-        abortRebase(line.workdir);
-        roundBaseCommit = baseCommit;
-        return { kind: "rebase-conflicted", base, reason: finished.reason, conflict: finished.conflict };
-      };
-    }
+    const judge = stopped ? roundJudge : skipIfUnchanged(roundJudge, line.workdir, baseCommitOf(line.workdir));
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
-    // Issue #186: a fix round's worker box reaches the network under
-    // the same per-project policy an ordinary round's does (do.ts's own
-    // call site says why this wraps the whole loop).
-    const attemptsResult = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), () =>
-      runAttempts({
-        brain,
-        brief: buildFixBrief(
-          originalBrief,
-          note,
-          handed ? rebaseConflictInstructions(handed.base, handed.conflict) : undefined
-        ),
-        workdir: line.workdir,
-        taskId,
-        judge,
-        totalAttempts: 1,
-        stopEarlyOnGreen: true,
-        spendLimits: spendLimitsFor(recordHome, taskId, caps),
-        // Issue #189: a fix round is held to the same stop threshold as
-        // any other - see do.ts for why this is read here rather than
-        // threaded in like `caps`.
-        pauseRule: { rule: pauseRuleFor(recordHome) },
-        onReceipt: (receipt) => recordReceipt(recordHome, receipt),
-        initialSession: lastSession,
-        startAttempt: priorReceipts.length + 1,
-        commitLabel: "(fix)",
-        ...(beforeCommit ? { beforeCommit } : {}),
-        onHeartbeat: (attempt) => {
-          appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
-        },
-        // Issue #70: fires as each entry is known, not once per attempt -
-        // see runAttempts' own onTranscriptEntry doc for why every entry
-        // lands here exactly once either way.
-        onTranscriptEntry: (entry) => {
-          appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
-        },
-      })
-    );
+    // This round's own earlier passes over a stopped rebase, kept so the
+    // delivery's attempt count and declared gate changes still cover
+    // every worker call the round made, not just the last one.
+    const earlierReceipts: Receipt[] = [];
+    let earlierGateChanges = priorGateChanges;
+    let session = lastSession;
+
+    // Issue #186: a fix round's worker box reaches the network under the
+    // same per-project policy an ordinary round's does (do.ts's own call
+    // site says why this wraps the whole loop), and every pass below is
+    // one round's work, so one policy covers all of them.
+    const attemptsResult = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), async () => {
+      // One `runAttempts` call per pass. Almost always exactly one: a
+      // round whose rebase did not conflict, or whose worker resolved the
+      // one conflict it was handed, never comes back here. A rebase that
+      // stops again on a later commit hands THAT conflict to the same
+      // warm worker (same session), in this same round, until it finishes
+      // or `continueStoppedRebase` gives up - so one conflicted rebase
+      // costs the Client one round, not one round per conflicting commit.
+      for (;;) {
+        const handed = stopped;
+        // Set from inside `beforeCommit`, the only place that learns how
+        // this pass's rebase ended.
+        let step: FixRebaseStep | undefined;
+        // Issue #235: the worker resolves markers in place (its own git
+        // is read-only), so the host stages that resolution and continues
+        // the rebase - and that has to happen before this attempt's own
+        // commit, which assumes a branch the rebase has finished moving.
+        // Returning a judgement means this attempt is judged on the
+        // rebase alone, never committed and never handed to a check or
+        // Inspector; it is the round's own judgement only when the loop
+        // ends here, and is discarded when another pass follows.
+        const beforeCommit = handed
+          ? async (): Promise<Judgement | undefined> => {
+              step = continueStoppedRebase(recordHome, taskId, line, handed);
+              // `stopped` tracks what is in flight RIGHT NOW, for the
+              // cleanup below: nothing, once the rebase finished or was
+              // aborted; the new conflict, when it stopped again.
+              if (step.status === "completed") {
+                stopped = undefined;
+                return undefined;
+              }
+              if (step.status === "give-up") {
+                stopped = undefined;
+                // Aborted: the branch is back at its own fork point, so
+                // that is what this round's delivery is pinned to again.
+                roundBaseCommit = baseCommit;
+                return {
+                  kind: "rebase-conflicted",
+                  base: handed.base,
+                  reason: step.reason,
+                  conflict: step.conflict,
+                  stops: step.stops,
+                };
+              }
+              stopped = step.stopped;
+              return {
+                kind: "rebase-conflicted",
+                base: handed.base,
+                // Honest only if this is where the round ends (a cap stop
+                // in the same pass) - otherwise the next pass replaces it.
+                reason: "round-ended",
+                conflict: step.stopped.conflict,
+                stops: step.stopped.stop,
+              };
+            }
+          : undefined;
+
+        const result = await runAttempts({
+          brain,
+          brief: buildFixBrief(originalBrief, note, handed ? rebaseConflictInstructions(handed) : undefined),
+          workdir: line.workdir,
+          taskId,
+          judge,
+          totalAttempts: 1,
+          stopEarlyOnGreen: true,
+          // Re-read per pass: each one's receipt is on the record by the
+          // time the next starts, so rule 10's per-task cap still counts
+          // every worker call this round made.
+          spendLimits: spendLimitsFor(recordHome, taskId, caps),
+          // Issue #189: a fix round is held to the same stop threshold as
+          // any other - see do.ts for why this is read here rather than
+          // threaded in like `caps`.
+          pauseRule: { rule: pauseRuleFor(recordHome) },
+          onReceipt: (receipt) => recordReceipt(recordHome, receipt),
+          ...(session ? { initialSession: session } : {}),
+          startAttempt: priorReceipts.length + earlierReceipts.length + 1,
+          commitLabel: "(fix)",
+          ...(beforeCommit ? { beforeCommit } : {}),
+          onHeartbeat: (attempt) => {
+            appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
+          },
+          // Issue #70: fires as each entry is known, not once per attempt -
+          // see runAttempts' own onTranscriptEntry doc for why every entry
+          // lands here exactly once either way.
+          onTranscriptEntry: (entry) => {
+            appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
+          },
+        });
+
+        // Another pass only when the rebase is genuinely still stopped
+        // AND nothing else ended this round: a spending cap or the pause
+        // rule stopping the loop must never be answered by calling the
+        // worker again.
+        if (step?.status !== "handed-again" || result.capStop || result.meterStop) return result;
+        // `stopped` is already this pass's new conflict (set above).
+        session = result.receipts.at(-1)?.session ?? session;
+        earlierReceipts.push(...result.receipts);
+        earlierGateChanges = mergeGateDeclarations(earlierGateChanges, result.declaredGateChanges);
+      }
+    });
+
+    // A rebase still in flight here is one the round ended underneath (a
+    // cap stop, the pause rule): the branch goes back to its own last
+    // commit before anything is delivered, so the delivery's `files` diff
+    // and its "nothing was rewritten" promise describe the same reality.
+    if (rebaseInProgress(line.workdir)) {
+      abortRebase(line.workdir);
+      if (stopped !== undefined) recordStop(recordHome, taskId, stopped, { left: "aborted", reason: "round-ended" });
+      roundBaseCommit = baseCommit;
+    }
 
     // judge-commit-outcome-deliver-record: one shared tail (issue #182),
     // round.ts's recordRoundResult, also used by do.ts's productionRound.
@@ -429,17 +483,31 @@ async function runFixRound(
       recordHome,
       taskId,
       line,
-      { baseCommit: roundBaseCommit, taskText, totalAttempts, mode, caps, priorReceipts, priorGateChanges },
+      {
+        baseCommit: roundBaseCommit,
+        taskText,
+        totalAttempts,
+        mode,
+        caps,
+        priorReceipts: [...priorReceipts, ...earlierReceipts],
+        priorGateChanges: earlierGateChanges,
+      },
       attemptsResult
     );
   } finally {
     // Issue #235: a rebase must never outlive the round that started it.
     // Every path above already aborts its own, so reaching this with one
-    // in flight means something threw mid-rebase - abort it here so the
+    // in flight means something threw mid-round - abort it here so the
     // branch is provably back at its own last commit before the worktree
-    // (and with it the rebase state git keeps per worktree) is removed.
+    // (and with it the rebase state git keeps per worktree) is removed,
+    // and say on the record that that is what happened.
     try {
-      if (rebaseInProgress(line.workdir)) abortRebase(line.workdir);
+      if (rebaseInProgress(line.workdir)) {
+        abortRebase(line.workdir);
+        if (stopped !== undefined) {
+          recordStop(recordHome, taskId, stopped, { left: "aborted", reason: "round-failed" });
+        }
+      }
     } catch {
       // Teardown below force-removes the worktree, which takes the
       // rebase state with it and leaves the branch where it was anyway -

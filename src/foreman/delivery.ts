@@ -5,6 +5,9 @@
 
 import type { GateResult } from "../../contract/surface.ts";
 import type { RebaseConflict } from "../line/index.ts";
+// Type only, so this stays a one-way runtime dependency: fix-rebase.ts
+// calls the builder below, not the other way round.
+import type { ConflictReportReason } from "./fix-rebase.ts";
 import type { Delivery, Inspection } from "../inspector/types.ts";
 import { gateForRecord } from "./attempts.ts";
 import type { CapStop } from "./attempts.ts";
@@ -312,19 +315,20 @@ export function buildNothingChangedDelivery(ctx: {
 
 /**
  * A `Delivery` for a fix round whose branch could not be brought up to
- * origin's current default branch (issue #235): the rebase conflicted,
- * and the conflict is handed to the Client as `inspection-red` so he can
- * rule `fix` with instructions for resolving it. Red rather than a
- * failure report because this is work waiting on his judgment, not the
- * machine having failed at something it could retry - `deliveredState`
- * puts `inspection-red` in front of him, which is the whole point.
+ * origin's current default branch (issue #235): the round's own worker
+ * was handed the stopped rebase with the Client's note and the conflict
+ * is still unresolved, so it goes to him as `inspection-red` to rule on.
+ * Red rather than a failure report because this is work waiting on his
+ * judgment, not the machine having failed at something it could retry -
+ * `deliveredState` puts `inspection-red` in front of him, which is the
+ * whole point.
  *
  * The branch is always back at its own last commit by the time this is
- * built (`src/line/rebase.ts` aborts before the report is written), so
- * nothing was rewritten and the `files` diff still describes the task's
- * own work. `evidence` carries the conflict markers themselves, capped
- * per `MAX_CONFLICT_LINES_PER_FILE`/`_TOTAL` and saying so where a cap
- * cut something.
+ * built (`fix-rebase.ts`'s `continueStoppedRebase` aborts before the
+ * report is written), so nothing was rewritten and the `files` diff still
+ * describes the task's own work. `evidence` carries the conflict markers
+ * themselves, capped per `MAX_CONFLICT_LINES_PER_FILE`/`_TOTAL` and
+ * saying so where a cap cut something.
  */
 export function buildRebaseConflictDelivery(ctx: {
   branch: string;
@@ -333,22 +337,38 @@ export function buildRebaseConflictDelivery(ctx: {
   /** origin's default branch name, e.g. "main". */
   base: string;
   conflict: RebaseConflict;
-  /** True when a worker was already handed this conflict with the
-   * Client's own instructions and it is still unresolved - a different
-   * sentence, since "give a fix verdict with instructions" is no longer
-   * news at that point. */
-  afterWorker: boolean;
+  /** Why the host stopped trying - the worker left markers behind, the
+   * rebase kept stopping on fresh conflicts past the round's ceiling, or
+   * the round itself ended underneath it. Three different sentences: the
+   * first is about this worker's resolution, the second about a branch
+   * that has drifted too far to replay at all, the third about nothing to
+   * do with the conflict. */
+  reason: ConflictReportReason;
+  /** How many times this round's rebase stopped on a conflict - the
+   * number itself, so this wording never has to name the ceiling
+   * `fix-rebase.ts` owns. */
+  stops: number;
 }): Delivery {
   const count = ctx.conflict.files.length;
   const files = `${count} file${count === 1 ? "" : "s"}`;
-  const summary = ctx.afterWorker
-    ? `Rebasing \`${ctx.branch}\` onto origin/${ctx.base} still conflicts in ${files} after the worker's attempt.`
-    : `Rebasing \`${ctx.branch}\` onto origin/${ctx.base} conflicts in ${files}.`;
-  const instruction = ctx.afterWorker
-    ? "The worker had your note and the conflicted file list and did not resolve every marker. Give a fix " +
-      "verdict with more specific instructions to hand it the stopped rebase again, or rule wrong to close it."
-    : "Give a fix verdict saying how to resolve these conflicts: that round re-attempts the rebase, hands " +
-      "the worker the stopped rebase with your note, and the host stages and continues it afterwards.";
+  const summary =
+    ctx.reason === "markers-remain"
+      ? `Rebasing \`${ctx.branch}\` onto origin/${ctx.base} still conflicts in ${files} after the worker's attempt.`
+      : ctx.reason === "too-many-stops"
+      ? `Rebasing \`${ctx.branch}\` onto origin/${ctx.base} stopped on a conflict ${ctx.stops} times in one ` +
+        `round, and ${files} are still conflicted.`
+      : `Rebasing \`${ctx.branch}\` onto origin/${ctx.base} was still unfinished when this round stopped, ` +
+        `with ${files} conflicted.`;
+  const instruction =
+    ctx.reason === "markers-remain"
+      ? "The worker had your note and the conflicted file list and did not resolve every marker. Give a fix " +
+        "verdict with more specific instructions to hand it the stopped rebase again, or rule wrong to close it."
+      : ctx.reason === "too-many-stops"
+      ? "The worker resolved every stop it was handed and the rebase stopped on yet another commit. Give a fix " +
+        "verdict saying how to resolve this branch against origin, or rule wrong to close it and start the work " +
+        "again from today's default branch."
+      : "This round stopped for a reason of its own before the rebase could be finished - the record says " +
+        "which. Give a fix verdict once that is cleared, and the round starts by rebasing afresh.";
   return {
     outcome: "inspection-red",
     confidence: 0,

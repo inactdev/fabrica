@@ -147,16 +147,17 @@ unreadable worktree list makes it return "nobody holds it" and fall
 through to `git worktree add`, which then raises its own `cut-failed`
 exactly as before. A better message is not worth a new way to fail.
 
-## `rebaseOntoOriginDefault(line, { onConflict })` (issue #235)
+## `rebaseOntoOriginDefault(line)` (issue #235)
 
 Replays `line`'s own commits on top of origin's *current* default branch,
 in `line`'s own worktree, with git and nothing else. A fix round ruled
 days after the task ran would otherwise hand Inspector (and a reviewer) a
 branch forked from a commit the project has long since moved past; this
 is what keeps it current. `src/foreman/fix-rebase.ts` owns the policy
-around it — when it runs, which conflict is reported and which is handed
-to a worker — and `src/foreman/README.md`'s own section is where that
-lives. This section is the git.
+around it — when it runs, how many times a conflict goes back to the
+round's worker, and when the host gives up — and
+`src/foreman/README.md`'s own section is where that lives. This section
+is the git.
 
 **Why it lives here, next to `cut.ts`.** `fetchOriginDefaultBranch` is
 already the one place that answers "which branch does a task's base
@@ -169,8 +170,8 @@ expected — matters more here than anywhere else in it: a wrong path
 costs a history, not a file.
 
 **Three results, no fourth.** A conflict is a *result*, not a
-`LineError`: the caller turns it into a delivery the Client rules on.
-Only a rebase that failed for some other reason throws
+`LineError`: it leaves the rebase stopped for the caller to finish or
+abort. Only a rebase that failed for some other reason throws
 (`rebase-failed`), and that is told apart from a conflict by asking git —
 a rebase is in progress *and* has unmerged paths — never by reading its
 wording.
@@ -183,13 +184,15 @@ wording.
   that tip. The caller must pin a delivery's `files` diff to it; against
   the old base, the diff would list everything origin itself changed as
   this task's work.
-- `conflicted` — carries every conflicted path git named, those files'
-  marker hunks (capped, below), and `left`:
-  - `"aborted"` (`onConflict: "abort"`) — `git rebase --abort`, so the
-    branch is back at its own last commit and nothing is in flight.
-  - `"stopped"` (`onConflict: "stop"`) — the rebase stays in progress
-    with the markers in the working tree, for a worker that has been
-    given instructions to resolve them in place.
+- `conflicted` — carries every conflicted path git named and those files'
+  marker hunks (capped, below), and leaves the rebase **stopped**: still
+  in progress, with the markers in the working tree. That is the one
+  state both of the caller's next steps need — a worker resolves the
+  markers in place and `finishRebase` continues, or `abortRebase` puts
+  the branch back at its own last commit. Nothing here chooses between
+  them; there is deliberately no "abort it for me" mode, since a caller
+  that wants the branch back can say so in one call and a caller that
+  does not must never have the markers thrown away under it.
 
 **What is forced onto every history-writing call**, beyond what
 `src/foreman/commit.ts` already forces for the same reasons (a throwaway
@@ -218,7 +221,9 @@ working tree (`markers-remain`): committing `<<<<<<<` onto the branch
 would hand Inspector and the Client something strictly worse than an
 honest report that the conflict is unresolved. A later commit of the same
 rebase can also conflict on its own, which no worker has been shown yet
-(`new-conflict`). Either way the caller aborts and reports.
+(`new-conflict`). Either way the rebase is left stopped for the caller to
+decide: `fix-rebase.ts` hands a `new-conflict` straight back to the same
+worker and aborts on `markers-remain`.
 
 Two details worth knowing before changing it:
 

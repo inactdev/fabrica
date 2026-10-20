@@ -112,14 +112,16 @@ export type FabricaEventName =
    * who stopped it (the Tailscale login), and the worker's last
    * recorded activity at that moment. */
   | "stopped-by-owner"
-  /** The host-side rebase a fix round starts with (issue #235) hit a
-   * conflict. Details: `{ base, baseCommit, files, left }` - origin's
-   * default branch and the commit it pointed at, the conflicted paths,
-   * and whether the rebase was aborted back to the branch's own last
-   * commit or left stopped for a worker to resolve in place. Purely the
-   * record saying what the host did; no decision reads it (the one that
-   * needs this reads the delivery's own `rebaseConflict` - see
-   * `src/foreman/queries.ts`'s `DeliveredDetails`). */
+  /** The host-side rebase a fix round starts with (issue #235) stopped on
+   * a conflict - one event per stop, and one more wherever the host
+   * aborted. Details: `{ base, baseCommit, files, stop, left, reason? }`
+   * - origin's default branch and the commit it pointed at, the
+   * conflicted paths, which stop of this round's rebase it is, whether it
+   * was left stopped for the round's worker or aborted back to the
+   * branch's own last commit, and why where there is a why
+   * (`"new-conflict"`, `"markers-remain"`, `"too-many-stops"`,
+   * `"round-ended"`, `"round-failed"` - see `src/foreman/fix-rebase.ts`).
+   * Purely the record saying what the host did; no decision reads it. */
   | "rebase-conflicted"
   /** Issue #189's pause rule refused to START anything - a new task, a
    * resumed round, or a fix round - because a subscription meter was

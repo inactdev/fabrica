@@ -15,9 +15,11 @@
 // `git rebase` rewrites commits, so a wrong path is not a lost file but
 // a lost history.
 //
-// A conflict is a RESULT here, not a LineError: the caller
-// (src/foreman/fix-rebase.ts) turns it into a delivery the Client rules
-// on. Only a rebase that failed for some other reason throws.
+// A conflict is a RESULT here, not a LineError: it leaves the rebase
+// stopped in the worktree with the markers in place, and the caller
+// (src/foreman/fix-rebase.ts) decides what happens next - hand it to the
+// round's worker to resolve, or abort and report. Only a rebase that
+// failed for some other reason throws.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -86,7 +88,9 @@ export interface RebaseConflict {
 export interface RebaseOutcome {
   /** "already-current": the branch already contains origin's tip, so
    * nothing was rebased. "rebased": origin's tip is now the branch's
-   * fork point. "conflicted": see `conflict` and `left`. */
+   * fork point. "conflicted": the rebase is still in progress in the
+   * worktree, stopped on the conflict in `conflict`, with the markers in
+   * the working tree - it is the caller's to finish or abort. */
   status: "already-current" | "rebased" | "conflicted";
   /** origin's default branch name, e.g. "main" - never assumed. */
   base: string;
@@ -96,11 +100,6 @@ export interface RebaseOutcome {
   baseCommit: string;
   /** Set exactly when `status` is "conflicted". */
   conflict?: RebaseConflict;
-  /** Set exactly when `status` is "conflicted": "aborted" means the
-   * branch is back at its pre-rebase commit and nothing is in flight;
-   * "stopped" means the rebase is still in progress in the worktree with
-   * the markers in place, waiting for whoever asked for that. */
-  left?: "aborted" | "stopped";
 }
 
 /** What `finishRebase` found. "conflicted" carries why: the worker left
@@ -356,18 +355,13 @@ function requireRebasableLine(line: ProductionLine): void {
  * rewriting the branch's commits for no gain would change every sha a
  * reviewer has already looked at.
  *
- * `onConflict` decides what a conflict leaves behind, and the caller
- * decides which to ask for (see src/foreman/fix-rebase.ts):
- * - `"abort"` - back to the pre-rebase commit; the markers live only in
- *   the returned `conflict`, for a report the Client rules on.
- * - `"stop"` - the rebase stays in progress with the markers in the
- *   working tree, so a worker given the Client's instructions can resolve
- *   them in place and the host can then finish the rebase itself.
+ * A conflict leaves the rebase STOPPED, with the markers in the working
+ * tree: that is the one state both of its callers' next steps need - the
+ * round's own worker resolves the markers in place and `finishRebase`
+ * continues, or `abortRebase` puts the branch back. Nothing here decides
+ * between those (see src/foreman/fix-rebase.ts).
  */
-export function rebaseOntoOriginDefault(
-  line: ProductionLine,
-  opts: { onConflict: "abort" | "stop" }
-): RebaseOutcome {
+export function rebaseOntoOriginDefault(line: ProductionLine): RebaseOutcome {
   requireRebasableLine(line);
   if (rebaseInProgress(line.workdir)) {
     throw new LineError(
@@ -410,12 +404,7 @@ export function rebaseOntoOriginDefault(
     );
   }
 
-  const conflict = describeConflict(line.workdir, files);
-  if (opts.onConflict === "abort") {
-    abortRebase(line.workdir);
-    return { status: "conflicted", base, baseCommit, conflict, left: "aborted" };
-  }
-  return { status: "conflicted", base, baseCommit, conflict, left: "stopped" };
+  return { status: "conflicted", base, baseCommit, conflict: describeConflict(line.workdir, files) };
 }
 
 /** True when the index holds nothing the next commit could record - so

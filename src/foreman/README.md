@@ -882,24 +882,26 @@ each round, not only the first — origin moves between rounds too — and
 does nothing at all when the branch already contains origin's tip, so a
 reviewer's shas are never churned for no gain.
 
-**A conflict is the Client's to rule on, and he sees it before a worker
-does.** The first conflict a task hits is aborted straight back to the
-branch's own last commit and delivered as `inspection-red`, with every
-conflicted file and its marker hunks as the delivery's `evidence`
-(capped — see `src/line/README.md`). No worker runs in that round and
-nothing is spent. `inspection-red` rather than a failure report because
-`deliveredState` puts it in front of him, which is the point: this is
-work waiting on his judgment, not the machine failing at something it
-could retry. The delivery deliberately carries **no** `inspection`
-field: that field means "this branch was handed to Inspector"
-(`src/inspector/types.ts`), and this branch never was.
+**A conflict is handled in the round it happens in, in one step.** The
+rebase is left *stopped* — still in progress, markers in the working tree
+— and this same round's worker is handed the Client's own note *and* the
+conflicted file list in one brief
+(`fix-rebase.ts`'s `rebaseConflictInstructions`). It resolves the markers
+in place; once it returns, the host stages everything and continues the
+rebase itself (`finishRebase`, called from `runAttempts`' `beforeCommit`
+hook). A round that ends with the rebase finished is an ordinary round
+from there on: committed, judged, delivered.
 
-**The round he rules next hands the stopped rebase to the worker.** That
-round re-attempts the rebase and, if it conflicts again, leaves it
-*stopped* with the markers in the working tree. The worker gets his note
-plus the conflicted file list and resolves the markers in place; once it
-returns, the host stages everything and continues the rebase itself. Two
-consequences of doing it that way, both deliberate:
+There is deliberately **no** "report the conflict first, hand it to a
+worker only after he has ruled on it" step. That is how this started
+(the first conflict was aborted and delivered as `inspection-red` with no
+worker run at all) and the Client replaced it: it cost him a whole round
+to say nothing a worker could not already be told, and it made every
+round's shape depend on reading whether the previous delivery happened to
+be a conflict report. Nothing branches on that now — **do not
+reintroduce the two-round shape.**
+
+Two consequences of letting the host finish the rebase, both deliberate:
 
 - The rebase's own commits keep their original messages — the host does
   not commit this round's work separately, because `git rebase
@@ -911,20 +913,47 @@ consequences of doing it that way, both deliberate:
   "the host stages everything", and the brief tells the worker plainly
   that resolving the conflict is the job.
 
-Markers still left behind, or a later commit of the same rebase
-conflicting afresh, aborts and delivers `inspection-red` again with the
-remaining markers — differently worded, since "give a fix verdict with
-instructions" is no longer news at that point.
+**A rebase that stops again goes back to the same warm worker, in the
+same round.** `continueStoppedRebase` is the one place that decides,
+every time `finishRebase` comes back conflicted:
 
-**How a round knows which of the two it is.** The delivery the Client
-just ruled on carries `rebaseConflict` (`queries.ts`'s
-`DeliveredDetails`) exactly when it *was* a conflict report. That is
-precisely "he has seen these markers and this note answers them", and it
-goes stale on its own: the next ordinary delivery carries no such field,
-so a fresh conflict in some later round is reported to him first rather
-than handed to a worker with an unrelated note. A `"rebase-conflicted"`
-event (`src/inspector/types.ts`) lands for every conflict, but purely as
-the record saying what the host did — no decision reads it.
+- `new-conflict` (a later commit of the same rebase conflicting on its
+  own) — the rebase is left stopped again and `verdict.ts` calls
+  `runAttempts` once more, same session, with the new conflicted file
+  list, until the rebase finishes. Up to `MAX_REBASE_STOPS_PER_ROUND`
+  (5) stops; past that it is `too-many-stops` below. The ceiling is not a
+  budget — a `fix` draws from none (issue #65) — it is there so a branch
+  that has drifted too far to replay reaches the Client instead of
+  looping.
+- `markers-remain` — the worker had his note and the file list and left a
+  marker behind. Never handed back in the same round: the next
+  instruction it needs is his, not another copy of the same one.
+- past the ceiling, or markers left behind — `git rebase --abort`, so the
+  branch is provably back at its own last commit with a clean tree, and
+  the surviving markers are delivered as `inspection-red` (every
+  conflicted file and its marker hunks as the delivery's `evidence`,
+  capped — see `src/line/README.md`). `inspection-red` rather than a
+  failure report because `deliveredState` puts it in front of him, which
+  is the point: this is work waiting on his judgment, not the machine
+  failing at something it could retry. The delivery deliberately carries
+  **no** `inspection` field: that field means "this branch was handed to
+  Inspector" (`src/inspector/types.ts`), and this branch never was.
+
+**A stopped rebase never outlives its round.** Whatever ends the round
+ends the rebase with it: a spending cap or the pause rule stopping the
+loop aborts it before anything is delivered (`"round-ended"`, so the
+report says plainly that the conflict is not what stopped the round), and
+a round that throws mid-rebase — an unreachable brain, a worker that dies
+— aborts it in `runFixRound`'s `finally` (`"round-failed"`). The next
+round must never find one in flight: `rebaseOntoOriginDefault` refuses
+outright rather than guessing what it was for.
+
+Every stop and every abort lands on the record as a
+`"rebase-conflicted"` event (`src/inspector/types.ts`) carrying `stop`,
+`left` (`"stopped"`/`"aborted"`) and, where there is one, the reason.
+Purely the record saying what the host did — no decision reads it, and
+the delivery's own `rebaseConflict` field (`queries.ts`'s
+`DeliveredDetails`) is bookkeeping for the same reason.
 
 **The seam this needed in `attempts.ts`.** Finishing the rebase has to
 happen after `work()` returns and *before* the attempt's own commit,
@@ -938,6 +967,19 @@ about the branch the Client has to rule on either way, and a cap-stopped
 report would tell him to raise a cap when the real blocker is a conflict.
 A cap stop in the same round still lands on the record as its own event,
 so rule 10 loses nothing.
+
+**Why the hand-back loop is `verdict.ts`'s and not `runAttempts`'.** Each
+pass over a stopped rebase is a full `runAttempts` call of its own — one
+attempt, same session (`initialSession`), attempt numbers continuing from
+`priorReceipts.length` plus the passes already made. That keeps rule 3's
+counted loop exactly as it was (nothing uncounted loops inside it) and
+gives every worker call its own `Receipt`, so rule 10's spend stays
+derived from the record and a per-task cap still binds *between* passes —
+`spendLimitsFor` is re-read per pass, and a cap or meter stop ends the
+round instead of calling the worker again. The passes' receipts and
+declared gate changes are carried into `recordRoundResult` as
+`priorReceipts`/`priorGateChanges`, so the delivery accounts for all of
+them and not just the last.
 
 **What `baseCommit` means from then on.** After a successful rebase,
 origin's tip *is* the branch's fork point, so that is what the round's

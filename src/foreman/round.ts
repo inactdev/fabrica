@@ -131,8 +131,9 @@ export function recordRoundResult(
   }
 
   // Issue #235: the worker was handed a stopped rebase and the host could
-  // not finish it. The rebase is already aborted (`finishRebase`'s caller
-  // in verdict.ts), so the branch is back at its own last commit and
+  // not finish it. The rebase is already aborted
+  // (`fix-rebase.ts`'s `continueStoppedRebase`), so the branch is back at
+  // its own last commit and
   // `ctx.baseCommit` is its original fork point again - which is why
   // nothing is committed here: whatever the worker left in the worktree
   // was either reset by the abort or is an untracked stray, and putting
@@ -151,7 +152,8 @@ export function recordRoundResult(
       receipts: allReceipts,
       totalAttempts: ctx.totalAttempts,
       declaredGateChanges,
-      afterWorker: true,
+      reason: lastJudgement.reason,
+      stops: lastJudgement.stops,
     });
     if (capStop) recordCapStop(recordHome, taskId, capStop, "a rebase conflict stopped this round");
     return { kind: "recorded", outcome: "inspection-red" };
