@@ -325,6 +325,41 @@ it, by looking up the real figure and recording it by hand with
 to the AI you talk to for the same reason `fabrica verdict` and
 `fabrica answer` are.
 
+## Subscription limits
+
+Money caps cannot see a flat-rate subscription: filling a week's quota
+costs nothing, so a task can run the whole week down without a cent of
+metered spend appearing anywhere. So the two meters the model provider
+reports - how much of its **5-hour** and **7-day** windows the account
+has used - are recorded on every receipt and shown by `fabrica status`
+and the phone review page:
+
+    subscription meters: 5h 7%, 7d 64% (new work stops above 70% of the week, running work above 90%)
+
+and a plain pause rule, in its own `projects.toml` table, decides what
+to do about them:
+
+    [pause]
+    sevenDayRefusePercent = 70   # above this, no new work starts
+    sevenDayStopPercent   = 90   # above this, work already running is stopped
+    fiveHourRefusePercent = 90   # above this, no new work starts
+
+Those are the defaults; with no `[pause]` table at all, they still
+apply. The 7-day window is the one that stops work already in flight -
+the 5-hour one refills within hours, so stopping a running attempt for
+it would throw away more than it saves. A task stopped this way is
+**not** a failure: it is delivered as `paused-by-meter`, says so on
+`fabrica status`, and waits for you - nothing restarts by itself. Give
+it a `fabrica verdict <id> fix` once the window has rolled forward, or
+raise the threshold to continue now.
+
+If the meters cannot be read - no reading yet, or the last one is over
+an hour old - nothing is refused and `fabrica status` says exactly
+that. A number nobody could read never stops work.
+
+The dollar caps above are unchanged by any of this, and still bind on
+real, metered spend only.
+
 ## What a task may reach on the network
 
 A Worker's container has no route to the internet at all. Everything it

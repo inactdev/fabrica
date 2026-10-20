@@ -20,6 +20,11 @@ export type ForemanErrorCode =
   | "already-answered"
   | "missing-answer"
   | "cap-refused"
+  /** Issue #189's pause rule refused to start anything: a subscription
+   * meter is past its refuse threshold. Carries the numbers and the
+   * threshold in its message. Not a cap refusal - that one is about
+   * dollars, this one about a flat-rate subscription's own window. */
+  | "meter-refused"
   | "spend-unknown"
   | "invalid-cost"
   | "nothing-to-record"

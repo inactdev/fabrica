@@ -148,6 +148,15 @@ Each entry holds three fields:
 - `text` - the content itself, in whatever form makes sense for that
   kind of chunk.
 
+Two kinds are reserved, both carrying JSON in `text` rather than prose,
+because `Brain.work()`'s ratified return shape has no field for either
+and reshaping that seam for bookkeeping would be a contract change:
+`"usage"` (rule 10's cost - see `contract/surface.ts`) and, since issue
+#189, `"meters"`, whose text is a `MeterReading`. Whatever assembles the
+Receipt reads both back out (`src/foreman/spend.ts`,
+`src/foreman/meters.ts`). Nothing else about an entry is ever parsed to
+make a decision.
+
 For example, an adapter running a tool call and reading its result might
 produce:
 
@@ -168,6 +177,47 @@ An adapter whose underlying tool already emits structured output (see
 to its own entry directly. A text-only adapter that only gets one blob of
 output back wraps that whole blob as a single entry - one array element
 is a valid transcript, never an error.
+
+## The subscription meters: `meters.ts` (issue #189)
+
+A second workdir-keyed side channel, built exactly like
+`relay-health.ts` above and for the same reason: an adapter has
+something the Foreman needs *during* a call, and `Brain`'s ratified
+signature (brief/workdir/opts) must not grow a parameter for it.
+
+What it carries is a `MeterReading` - how much of the model provider's
+5-hour and 7-day windows this account has used, as percentages of each
+window, with the time the reading was taken. Either may be `null`,
+which means "nobody could say", never 0%: an unreported quota and an
+empty one are opposite facts, and everything downstream treats null as
+"refuse nothing".
+
+An adapter that can report them calls `registerMeterSource(workdir,
+{ reading, pause })` for the life of its `work()` call:
+
+- `reading()` answers with whatever has already arrived. It is called
+  from the Foreman's heartbeat timer, so it must not throw, must not
+  block, and must not go and ask anybody - it reports, it does not
+  fetch.
+- `pause()` stops that call's worker **gracefully**, and is what the
+  Foreman calls when a meter is past its stop threshold. Deciding is
+  deliberately not the adapter's job: the thresholds are the Client's,
+  in `projects.toml`'s `[pause]` table, and
+  `src/foreman/meters.ts` owns the rule.
+
+An adapter that cannot report them registers nothing, and
+`readMeters`/`pauseWorker` then honestly answer "unknown"/"nothing to
+ask" - a `Brain` is complete without this.
+
+Where the numbers actually come from is adapter-only knowledge (rule 8
+again): the reference adapter reads them off the provider's own HTTP
+response headers at the task's relay, since the worker CLI's own
+non-interactive output carries neither number - see
+the reference CLI adapter's own document under `adapters/`, and
+`notes/20261020-do-fabrica-issue-189-as-written-closing-i3.md`. The
+same reading is also pushed onto the transcript as a reserved
+`kind: "meters"` entry (below), which is how it reaches the attempt's
+receipt - the same trick `"usage"` already uses for cost.
 
 ## `gateChanges`
 

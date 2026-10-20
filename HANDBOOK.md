@@ -119,6 +119,15 @@ out-of-memory kill, a stopped machine), and it will not move again on
 its own. Say that plainly — it's the one thing on that listing he can't
 infer from the rest of the line.
 
+The listing's second line carries the two subscription meters — how much
+of the model provider's 5-hour and 7-day windows the account has used.
+Mention it when it matters: when that line says new work is paused
+(nothing he asks for will start until the window rolls forward or he
+raises the threshold in `projects.toml`), or when the week is close to
+it. A row marked "PAUSED BY THE SUBSCRIPTION METER" is not a failure —
+the work so far is committed and it is waiting on his `fix` verdict,
+exactly like any delivery. Nothing restarts by itself.
+
 ### 3. A worker asks a question
 
 A task that's materially ambiguous stops before any work starts and

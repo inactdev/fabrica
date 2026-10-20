@@ -452,6 +452,21 @@ Issue #12 - the Client's eyes on a detached task, without reading record
 files himself. All three are strictly read-only over the record; none of
 them can reach a running worker.
 
+- **`status`** opens with two global lines before any task row: the
+  day's spend against `[caps].perDayUsd` (issues #81/#110), and - issue
+  #189 - the two **subscription meters**, "subscription meters: 5h 7%,
+  7d 64%", with the pause rule's own thresholds beside them. Both read
+  the same numbers the rules themselves decide with
+  (`daySpend` for the cap, `latestMeterReading`/`standingOf`/
+  `refusalFor` for the meters), so this listing can never show a figure
+  that disagrees with what actually gates new work. The meters line says
+  "NEW WORK PAUSED", with the reason, when the week is past its refuse
+  threshold; when no usable reading exists it shows what it has and says
+  the rule is therefore refusing nothing, so a pause rule that is
+  currently doing nothing never looks like one that is watching. A task
+  a meter stopped mid-round is listed like any other delivery - it waits
+  on the Client's `fix` verdict - with the pause named on its own line
+  ("PAUSED BY THE SUBSCRIPTION METER: ..."), never as a failure.
 - **`status`** lists every open task, one line each: id, project, state,
   age, cost (`cost: unknown` for unmeasured spend, never a silent $0, and
   `cost: no attempts yet` before any attempt ran). A `delivered` task is flagged as awaiting the Client's verdict -

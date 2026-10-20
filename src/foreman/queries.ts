@@ -6,8 +6,7 @@
 
 import { readEvents, readEventsForTask } from "../record/index.ts";
 import type { FabricaEvent, FabricaEventName } from "../record/index.ts";
-import type { Receipt } from "../../contract/surface.ts";
-import type { Delivery, FabricaTask } from "../inspector/types.ts";
+import type { Delivery, FabricaTask, Receipt } from "../inspector/types.ts";
 import { deliveredState } from "./delivery.ts";
 
 export function eventsOf(recordHome: string, taskId: string): FabricaEvent[] {

@@ -18,6 +18,8 @@ import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
+import { registerMeterSource } from "../meters.ts";
+import type { MeterReading } from "../meters.ts";
 import { registerRelayHealthProbe } from "../relay-health.ts";
 import { currentTaskNetwork } from "../task-network.ts";
 import { GITHUB_HOSTS, RelayError, relayLimitsFor, startContainerizedRelay, tunnelAllowlistFor } from "../../relay/index.ts";
@@ -61,6 +63,57 @@ const HOST_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
 const ANTHROPIC_HOST = "api.anthropic.com";
 const ANTHROPIC_AUTH_HEADER = "authorization";
 
+// Issue #189, the subscription meters. This binary's non-interactive
+// output carries neither number - verified by running it, see
+// notes/20261020-do-fabrica-issue-189-as-written-closing-i3.md - and
+// the CLI's own status line does not read them from any output stream
+// either: it builds `rate_limits.five_hour.used_percentage` in-process
+// from exactly these two response headers, as
+// `used_percentage = utilization * 100`.
+//
+// Read live through the relay on 2026-10-20, not guessed:
+//
+//   anthropic-ratelimit-unified-5h-utilization: 0.07
+//   anthropic-ratelimit-unified-7d-utilization: 0.64
+//
+// so the value is a fraction of 1 and 0.64 is 64% of the week. Only
+// this directory may name a provider's own header (CONTRACT rule 8),
+// which is why the relay is told *which* headers to watch rather than
+// knowing any itself, and why the 0..1 convention is converted to a
+// percentage here rather than anywhere host-side.
+const FIVE_HOUR_UTILIZATION_HEADER = "anthropic-ratelimit-unified-5h-utilization";
+const SEVEN_DAY_UTILIZATION_HEADER = "anthropic-ratelimit-unified-7d-utilization";
+const METER_HEADERS = [FIVE_HOUR_UTILIZATION_HEADER, SEVEN_DAY_UTILIZATION_HEADER];
+
+/** One header's `utilization` value as a percentage, or null when it was
+ * absent or not a number this can trust. A header the provider did not
+ * send is never read as 0: an empty quota and an unreported one are
+ * opposite facts, and everything downstream treats null as "nobody
+ * knows" (see `../meters.ts`). */
+export function percentFromUtilization(raw: string | undefined): number | null {
+  if (raw === undefined) return null;
+  // `Number("")` and `Number("  ")` are both 0, which would read as an
+  // entirely empty quota - the opposite of "the provider sent nothing
+  // readable". Checked before the conversion, not after.
+  if (raw.trim() === "") return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return value * 100;
+}
+
+/** The relay's latest watched-header reading, as a `MeterReading` - or
+ * undefined when none has arrived (no relay on this call, no API
+ * response yet, or neither header present on one). */
+export function meterReadingFrom(
+  observed: { headers: Record<string, string>; observedAt: string } | undefined
+): MeterReading | undefined {
+  if (observed === undefined) return undefined;
+  const fiveHourPercent = percentFromUtilization(observed.headers[FIVE_HOUR_UTILIZATION_HEADER]);
+  const sevenDayPercent = percentFromUtilization(observed.headers[SEVEN_DAY_UTILIZATION_HEADER]);
+  if (fiveHourPercent === null && sevenDayPercent === null) return undefined;
+  return { observedAt: observed.observedAt, fiveHourPercent, sevenDayPercent };
+}
+
 /** What `connectThroughRelay` hands back to `ask()`/`work()`: the extra
  * env to merge over the caller's own (with `HOST_TOKEN_VAR` already
  * removed), the container network to run on, and a teardown to run once
@@ -78,6 +131,13 @@ interface RelayedNetwork {
    * takes to notice. Absent on an unrelayed run: there is no relay to
    * lose. */
   relayFailure?: () => string | undefined;
+  /** The relay's latest reading of the two subscription-meter headers
+   * (issue #189), or undefined when it has none yet. `work()` hands
+   * this to the Foreman through `../meters.ts`, which is what lets the
+   * 7-day window stop an attempt mid-flight rather than only at its
+   * boundary. Absent on an unrelayed run: nothing is watching a
+   * response there. */
+  meterReading?: () => MeterReading | undefined;
   teardown: () => Promise<void>;
 }
 
@@ -147,6 +207,12 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
       tunnelAllowlist: tunnelAllowlistFor(BASE_TUNNEL_HOSTS, policy),
       maxRequestBytes: limits.maxRequestBytes,
       maxCallsPerTask: limits.maxCallsPerTask,
+      // Issue #189: the only machine-readable source of the two
+      // subscription meters anywhere is the upstream's own response
+      // headers, and the relay is the one thing host-side that sees
+      // them. Reading two values off a response Fabrica already
+      // forwards costs nothing and asks the provider nothing extra.
+      observedResponseHeaders: METER_HEADERS,
       gateway: {
         host: ANTHROPIC_HOST,
         credential: { header: ANTHROPIC_AUTH_HEADER, fakeValue: placeholder, realValue: `Bearer ${realToken}` },
@@ -191,6 +257,7 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
     },
     network: { isolatedNetwork: isolatedNetworkName },
     relayFailure: relay.failure,
+    meterReading: () => meterReadingFrom(relay.observedHeaders()),
     teardown: async () => {
       // Order matters: the relay container must be stopped (detaching
       // it from the isolated network) before that network can be
@@ -215,6 +282,7 @@ async function prepareNetwork(env: Record<string, string> | undefined): Promise<
   network: "allowed" | { isolatedNetwork: string };
   env?: Record<string, string>;
   relayFailure?: () => string | undefined;
+  meterReading?: () => MeterReading | undefined;
   teardown: () => Promise<void>;
 }> {
   const realToken = env?.[HOST_TOKEN_VAR];
@@ -226,6 +294,7 @@ async function prepareNetwork(env: Record<string, string> | undefined): Promise<
     network: relayed.network,
     env: { ...rest, ...relayed.env },
     relayFailure: relayed.relayFailure,
+    meterReading: relayed.meterReading,
     teardown: relayed.teardown,
   };
 }
@@ -677,12 +746,39 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       // "ConnectionRefused" - see the probe below.
       let relayGone: string | undefined;
       let unregisterProbe = () => {};
+      // Issue #189: the last meter reading this call saw, kept so the
+      // transcript entry below can carry it after the relay is gone.
+      let lastMeterReading: MeterReading | undefined;
+      let unregisterMeters = () => {};
       try {
         prepared = await prepareNetwork(opts.env);
         // Named only so it can be stopped from outside this call, which
         // is the whole point of the probe below.
         const boxName = `fabrica-worker-box-${randomUUID().replace(/-/g, "")}`;
         const stopBox = new AbortController();
+        const pauseBox = new AbortController();
+        const meterReading = prepared.meterReading;
+        if (meterReading !== undefined) {
+          // Issue #189's two halves of this adapter's own job: report
+          // the readings it gets from its relay, and know how to stop
+          // its own box when the Foreman decides a meter is past its
+          // threshold. Deciding is deliberately not here - the
+          // thresholds are the Client's, in projects.toml, and nothing
+          // under src/brain/adapters/ should be making that call.
+          //
+          // `pauseBox`, not `stopBox`: a pause is a graceful stop
+          // (SIGTERM, then SIGKILL after a grace), the same shape the
+          // Client's own stop of a task uses, rather than the immediate
+          // force-remove a doomed box gets.
+          unregisterMeters = registerMeterSource(workdir, {
+            reading: () => {
+              const reading = meterReading();
+              if (reading !== undefined) lastMeterReading = reading;
+              return reading;
+            },
+            pause: () => pauseBox.abort(),
+          });
+        }
         const relayFailure = prepared.relayFailure;
         if (relayFailure !== undefined) {
           // The Foreman's heartbeat calls this every tick while this
@@ -710,6 +806,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
           onStdout,
           containerName: boxName,
           stopSignal: stopBox.signal,
+          gracefulStopSignal: pauseBox.signal,
         }));
       } catch (err) {
         if (err instanceof ContainmentError || err instanceof RelayError) {
@@ -721,6 +818,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
         throw err;
       } finally {
         unregisterProbe();
+        unregisterMeters();
         rmSync(sanitizedConfigDir, { recursive: true, force: true });
         await prepared?.teardown();
       }
@@ -797,6 +895,23 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
           costBasis: "subscription-estimate",
         }),
       });
+
+      // Issue #189: the subscription meters, as one more reserved
+      // transcript entry, for exactly the reason `usage` above is one -
+      // `Brain.work()`'s ratified return shape has no field for either,
+      // and reshaping that seam for this would be a contract change for
+      // a piece of bookkeeping. Read once more here, after the relay's
+      // own watcher has drained its last log lines in `teardown`, so
+      // this is the freshest reading of the call rather than whatever
+      // the last heartbeat tick happened to catch.
+      const finalMeterReading = prepared?.meterReading?.() ?? lastMeterReading;
+      if (finalMeterReading !== undefined) {
+        transcript.push({
+          occurredAt: new Date().toISOString(),
+          kind: "meters",
+          text: JSON.stringify(finalMeterReading),
+        });
+      }
 
       const writeup = writeupFrom(result.structured_output);
       return {

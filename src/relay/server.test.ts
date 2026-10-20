@@ -260,3 +260,150 @@ test("a worker that abandons a gateway request mid-flight cannot take the relay 
     await provider.close();
   }
 });
+
+// Issue #189: watching a response header. The relay is the only thing
+// host-side that ever sees a provider's response, which is the only
+// place the subscription meters exist at all - so it reads named
+// headers back out and reports them, without interpreting them and
+// without touching what it forwards.
+
+const FIVE_HOUR = "x-test-5h-utilization";
+const SEVEN_DAY = "x-test-7d-utilization";
+
+test("observed response headers: the named headers' values are reported, and nothing else is", async () => {
+  const provider = await startFakeProvider({
+    responseHeaders: () => ({ [FIVE_HOUR]: "0.07", [SEVEN_DAY]: "0.64", "x-test-unwatched": "secret" }),
+  });
+  const seen: Record<string, string>[] = [];
+  const relay = await startRelay({
+    tunnelAllowlist: [],
+    gateway: { host: "127.0.0.1", port: provider.port, tls: false },
+    observedResponseHeaders: [FIVE_HOUR, SEVEN_DAY],
+    onObservedHeaders: (headers) => seen.push(headers),
+  });
+
+  try {
+    const res = await requestThroughGateway(relay.port, {});
+    assert.equal(res.status, 200);
+    assert.deepEqual(seen, [{ [FIVE_HOUR]: "0.07", [SEVEN_DAY]: "0.64" }]);
+  } finally {
+    await relay.close();
+    await provider.close();
+  }
+});
+
+test("observed response headers: the response reaches the worker untouched - this reads, it never strips", async () => {
+  const provider = await startFakeProvider({
+    body: "provider said hi",
+    responseHeaders: () => ({ [SEVEN_DAY]: "0.64" }),
+  });
+  const relay = await startRelay({
+    tunnelAllowlist: [],
+    gateway: { host: "127.0.0.1", port: provider.port, tls: false },
+    observedResponseHeaders: [SEVEN_DAY],
+    onObservedHeaders: () => {},
+  });
+
+  try {
+    const res = await new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }>((resolve, reject) => {
+      const req = http.request({ host: "127.0.0.1", port: relay.port, method: "POST", path: "/v1/messages" }, (r) => {
+        const chunks: Buffer[] = [];
+        r.on("data", (c: Buffer) => chunks.push(c));
+        r.on("end", () => resolve({ status: r.statusCode ?? 0, headers: r.headers, body: Buffer.concat(chunks).toString("utf8") }));
+      });
+      req.on("error", reject);
+      req.end("body");
+    });
+    assert.equal(res.headers[SEVEN_DAY], "0.64");
+    assert.equal(res.body, "provider said hi");
+  } finally {
+    await relay.close();
+    await provider.close();
+  }
+});
+
+test("observed response headers: reported only when a value actually changes", async () => {
+  // The host side re-reads this relay's whole log on a timer
+  // (container/launch.ts), so one line per response would be thousands
+  // of identical lines for a task that makes thousands of calls.
+  const values = ["0.60", "0.60", "0.61"];
+  const provider = await startFakeProvider({
+    responseHeaders: (call) => ({ [SEVEN_DAY]: values[call - 1] ?? "0.61" }),
+  });
+  const seen: Record<string, string>[] = [];
+  const relay = await startRelay({
+    tunnelAllowlist: [],
+    gateway: { host: "127.0.0.1", port: provider.port, tls: false },
+    observedResponseHeaders: [SEVEN_DAY],
+    onObservedHeaders: (headers) => seen.push(headers),
+  });
+
+  try {
+    for (let i = 0; i < 3; i++) await requestThroughGateway(relay.port, {});
+    assert.deepEqual(seen, [{ [SEVEN_DAY]: "0.60" }, { [SEVEN_DAY]: "0.61" }]);
+  } finally {
+    await relay.close();
+    await provider.close();
+  }
+});
+
+test("observed response headers: a response carrying none of them reports nothing", async () => {
+  const provider = await startFakeProvider({});
+  const seen: Record<string, string>[] = [];
+  const relay = await startRelay({
+    tunnelAllowlist: [],
+    gateway: { host: "127.0.0.1", port: provider.port, tls: false },
+    observedResponseHeaders: [SEVEN_DAY],
+    onObservedHeaders: (headers) => seen.push(headers),
+  });
+
+  try {
+    await requestThroughGateway(relay.port, {});
+    assert.deepEqual(seen, []);
+  } finally {
+    await relay.close();
+    await provider.close();
+  }
+});
+
+test("observed response headers: a listener that throws costs the reading, never the relay", async () => {
+  // Same rule as every other reporting path in here: serving never
+  // depends on reporting (see server.mjs's header).
+  const provider = await startFakeProvider({ body: "still served", responseHeaders: () => ({ [SEVEN_DAY]: "0.64" }) });
+  const relay = await startRelay({
+    tunnelAllowlist: [],
+    gateway: { host: "127.0.0.1", port: provider.port, tls: false },
+    observedResponseHeaders: [SEVEN_DAY],
+    onObservedHeaders: () => {
+      throw new Error("reporting blew up");
+    },
+  });
+
+  try {
+    const first = await requestThroughGateway(relay.port, {});
+    assert.equal(first.body, "still served");
+    const second = await requestThroughGateway(relay.port, {});
+    assert.equal(second.status, 200, "the relay is still serving after a throwing listener");
+  } finally {
+    await relay.close();
+    await provider.close();
+  }
+});
+
+test("observed response headers: nothing watched means nothing reported, and the relay behaves exactly as before", async () => {
+  const provider = await startFakeProvider({ responseHeaders: () => ({ [SEVEN_DAY]: "0.64" }) });
+  const seen: Record<string, string>[] = [];
+  const relay = await startRelay({
+    tunnelAllowlist: [],
+    gateway: { host: "127.0.0.1", port: provider.port, tls: false },
+    onObservedHeaders: (headers) => seen.push(headers),
+  });
+
+  try {
+    await requestThroughGateway(relay.port, {});
+    assert.deepEqual(seen, []);
+  } finally {
+    await relay.close();
+    await provider.close();
+  }
+});

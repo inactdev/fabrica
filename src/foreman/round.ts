@@ -15,12 +15,19 @@ import type { CheckMode } from "./judge.ts";
 import { commitWorktreeChanges } from "./commit.ts";
 import { renderCommitMessage } from "./pr-body.ts";
 import type { AttemptLoopResult } from "./attempts.ts";
-import { buildDelivery, buildCommitFailureDelivery, buildNothingChangedDelivery, renderDeliveryMarkdown } from "./delivery.ts";
+import {
+  buildDelivery,
+  buildCommitFailureDelivery,
+  buildNothingChangedDelivery,
+  buildPausedByMeterDelivery,
+  renderDeliveryMarkdown,
+} from "./delivery.ts";
+import { recordMeterPause } from "./meters.ts";
 import { deliverRebaseConflict } from "./fix-rebase.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf, recordCapStop, spendUnknownUnderCap } from "./caps.ts";
-import type { Caps, ProductionLine, Receipt } from "../../contract/surface.ts";
-import type { Delivery } from "../inspector/types.ts";
+import type { Caps, ProductionLine } from "../../contract/surface.ts";
+import type { Delivery, Receipt } from "../inspector/types.ts";
 
 /** Rule 9's declaration travels across rounds: a fix round that leaves an
  * earlier round's declared gate change alone must not lose that
@@ -68,8 +75,16 @@ export function recordRoundResult(
   },
   attempts: AttemptLoopResult
 ): RoundRecordResult {
-  const { receipts: newReceipts, lastGate, lastJudgement, declaredGateChanges: roundGateChanges, capStop, finalMessage, writeup } =
-    attempts;
+  const {
+    receipts: newReceipts,
+    lastGate,
+    lastJudgement,
+    declaredGateChanges: roundGateChanges,
+    capStop,
+    meterStop,
+    finalMessage,
+    writeup,
+  } = attempts;
 
   // Inspector reached no verdict: recorded as such, never as red, and
   // nothing is delivered for a Client ruling.
@@ -78,6 +93,42 @@ export function recordRoundResult(
   const declaredGateChanges = mergeGateDeclarations(ctx.priorGateChanges, roundGateChanges);
   const priorReceipts = ctx.priorReceipts ?? [];
   const allReceipts = [...priorReceipts, ...newReceipts];
+
+  // Issue #189: the pause rule stopped an attempt mid-flight. Handled
+  // before every branch below, for the same reason the rebase conflict
+  // is: this is THE fact about the round, and nothing else here can
+  // describe it - there is no judgement, no check output and no
+  // write-up, because the attempt never got to the end of its own work.
+  // `attempts.ts` already committed whatever the worker had done, so
+  // the branch and the `files` diff below describe the same reality
+  // every other outcome's do. A cap stop in the same round would be
+  // double-reported, so it is deliberately not: the attempt that was
+  // cut short is the one the pause explains.
+  if (meterStop !== undefined) {
+    const delivery = buildPausedByMeterDelivery({
+      attempts: allReceipts.length,
+      branch: line.branch,
+      files: diffFiles(line.project, line.branch, ctx.baseCommit),
+      declaredGateChanges,
+      pause: meterStop,
+    });
+    validateDelivery(delivery);
+    recordMeterPause(recordHome, taskId, meterStop);
+    writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
+    appendEvent(recordHome, {
+      taskId,
+      name: "delivered",
+      details: {
+        outcome: delivery.outcome,
+        delivery,
+        receipts: allReceipts,
+        project: line.project,
+        totalAttempts: ctx.totalAttempts,
+        baseCommit: ctx.baseCommit,
+      },
+    });
+    return { kind: "recorded", outcome: delivery.outcome };
+  }
 
   // Issue #235: the worker was handed a stopped rebase and the host could
   // not finish it. The rebase is already aborted (`finishRebase`'s caller

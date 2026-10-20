@@ -215,6 +215,22 @@ any more (follow-up to issue #202, "show every task waiting on me"):
   not one per question), and one button, send. This is what lets a
   phone - and, later, Amy - unblock a worker without a terminal.
 
+Above the list, in the toolbar, sit the two **subscription meters**
+(issue #189): how much of the model provider's 5-hour and 7-day windows
+the account has used, and what the pause rule makes of them right now
+("PAUSED" with the reason when the week is past its refuse threshold; a
+plain statement that no usable reading exists when there is none). They
+are here because this is the page where the Client decides whether to
+spend a round, and a flat-rate subscription's own windows are the one
+budget no dollar figure on any page can show - filling the week costs
+nothing. `record-view.ts`'s `getMeters` reads them through the same
+`standingOf`/`refusalFor`/`pauseRuleFor` functions the pause rule
+itself decides with (`src/foreman/meters.ts`), so this page and
+`fabrica status` can never show different numbers. A task a meter
+stopped mid-round shows up as an ordinary delivered card: it is waiting
+on the Client's own `fix` verdict, which is exactly what a delivery
+means here, and never reads as a failure.
+
 Below that list sits a second, separate one (issue #203): **Running** -
 the tasks currently working, each with what it is, where, how long it
 has been going, what it has spent, and the worker's own last transcript
@@ -415,6 +431,12 @@ which the worker/model and checks columns read; its process half,
 `findTaskProcess`/`stopTaskProcess`, is imported straight from
 `src/cli/task-process.ts` under the same established exception
 `runningCopyCommit` and `spawnDetachedResume` already use.
+
+Issue #189's meters line added `describeMeters`, `latestMeterReading`,
+`pauseRuleFor`, `refusalFor` and `standingOf` (plus the `MeterStanding`
+type) to `src/index.ts` - the pause rule's own decision functions, so
+this page shows the same numbers that gate new work rather than a second
+reading of the same receipts.
 
 The answer route added nothing to that list: `recordAnswerDecision` has
 been on `src/index.ts` since issue #123 split the CLI's answer command

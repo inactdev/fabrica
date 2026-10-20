@@ -489,17 +489,68 @@ registry a project lists has to be on the *tunnel* allowlist, and why
 the box needs no DNS of its own to reach it: a proxy client sends the
 host name in the `CONNECT` line and lets the relay resolve it.
 
+## Watching a response header (issue #189)
+
+The relay is the only thing on Fabrica's side of the wire that ever
+sees a provider's **response**. That turned out to matter: issue #189
+asked for the two subscription meters (how much of the provider's
+5-hour and 7-day windows a flat-rate account has used), and the worker
+CLI's own non-interactive output carries neither number. The only
+machine-readable source anywhere is the upstream's own response
+headers - the same place the CLI's interactive status line gets them
+from, which builds `rate_limits.five_hour.used_percentage` in-process
+out of exactly those headers. See
+`notes/20261020-do-fabrica-issue-189-as-written-closing-i3.md` for the
+evidence, including the live header capture.
+
+So gateway mode can be asked to watch response headers **by name**:
+
+```
+observedResponseHeaders: ["some-provider-header", "another"],
+onObservedHeaders: (headers) => { /* { name: rawValue } */ },
+```
+
+Three deliberate properties:
+
+- **The relay knows no provider.** It never names a header, never
+  parses a value, and has no idea what scale one is on. The caller
+  supplies the names and does the interpreting, because a provider's
+  header names are adapter-only knowledge (CONTRACT rule 8 fails on a
+  vendor's name anywhere under `src/` outside
+  `src/brain/adapters/`). Values are reported as raw strings.
+- **It reads; it never rewrites.** The response is forwarded to the
+  worker byte for byte, headers included, exactly as before. Only the
+  named headers are ever reported - never a whole response's header
+  set.
+- **Only on change.** `onObservedHeaders` fires when a watched value
+  actually moves, not once per response. The host side reads this
+  relay's whole log on a timer (`container/launch.ts`), so a line per
+  response would be thousands of identical lines for a task that makes
+  thousands of calls. This is the same shape the provider's own CLI
+  uses for its `rate_limit_event` stream line: emitted when the
+  information changes.
+
+Tunnel mode is deliberately exempt: a `CONNECT` tunnel is raw bytes
+this relay never looks inside, so there are no headers in it to read.
+
+In the container, a reading leaves on stdout as
+`protocol.mjs`'s `HEADERS_MARKER`, and `launch.ts`'s watcher keeps the
+latest in memory for the handle's `observedHeaders()` - deliberately
+*not* written to the record from there. A reading becomes a recorded
+fact only once it lands on an attempt's receipt, which is the Foreman's
+job (`src/foreman/meters.ts`).
+
 ## Files
 
 | File | What it is |
 | --- | --- |
-| `types.ts` | `AllowedHost`, `CredentialSwap`, `GatewayTarget`, `RefusalDetails`, `RelayOptions`, `RelayHandle` - this module's own configuration shapes, not shared with `contract/surface.ts` except by `FabricaEventName` gaining `"network-refused"` there. |
+| `types.ts` | `AllowedHost`, `CredentialSwap`, `GatewayTarget`, `ObservedHeaders`, `RefusalDetails`, `RelayOptions`, `RelayHandle` - this module's own configuration shapes, not shared with `contract/surface.ts` except by `FabricaEventName` gaining `"network-refused"` there. |
 | `allowlist.mjs` | `GITHUB_HOSTS` and `isAllowedTarget` - hostname matching (exact or one level of `*.` wildcard, optional port), used by tunnel mode. |
 | `limits.mjs` | `DEFAULT_MAX_REQUEST_BYTES` (10 MB) and `DEFAULT_MAX_CALLS_PER_TASK` (2000). Plain JavaScript, because `server.mjs` runs inside the container with a stock `node`. |
 | `policy.ts` | `parseAllowedHost`, `tunnelAllowlistFor`, `relayLimitsFor` - a project's declaration composed with the caller's base hosts and the defaults. Pure; no I/O. |
 | `server.mjs` | `startRelay` - the relay itself: the `CONNECT` tunnel handler and the gateway forwarder, plus the `onRefusal` report. Writes nothing and cannot be killed by a refusal - read "The relay cannot be killed by a refusal, and never writes the record" above before changing it. Runs identically whether started in-process (this module's own fast tests) or inside `container/`'s own container. |
 | `errors.mjs` | `RelayError` - `"invalid-config"` (a malformed `GatewayTarget`) and `"listen-failed"` (also used for a container that never starts or never confirms it's listening). |
-| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side, including the watcher that appends refusals and notices a relay that is gone), `protocol.mjs` (the two lines the container says out loud, one definition for both sides), `entrypoint.mjs` (runs inside the container), `bootstrap.mjs` (the container's command), `runtime-imports.test.ts` (proves the container's files need nothing but plain `node`, and that a refusal leaves on stdout), `launch.test.ts` + `helpers/fake-docker.mjs` (the daemon-free proof of the failure paths and of the watcher - see "A failed launch removes its container" and "Noticing a relay that is gone" below). |
+| `container/` | Runs the relay as its own Docker container instead of a host process - see "Why the relay is the container with two networks" above. `types.ts` (`ContainerizedRelayOptions`/`Handle`, the fixed in-container port), `launch.ts` (`startContainerizedRelay` - the host side, including the watcher that appends refusals and notices a relay that is gone), `protocol.mjs` (the three lines the container says out loud, one definition for both sides), `entrypoint.mjs` (runs inside the container), `bootstrap.mjs` (the container's command), `runtime-imports.test.ts` (proves the container's files need nothing but plain `node`, and that a refusal leaves on stdout), `launch.test.ts` + `helpers/fake-docker.mjs` (the daemon-free proof of the failure paths and of the watcher - see "A failed launch removes its container" and "Noticing a relay that is gone" below). |
 | `helpers/fake-provider.ts` | Test-only: a plain-HTTP stand-in for "the model provider," recording every request it receives so a test can assert on exactly what crossed the wire. |
 | `helpers/collect-refusals.ts` | Test-only: collects what an in-process relay reports to `onRefusal`, for tests that used to read `events.jsonl` instead. |
 | `server.test.ts` | The fake-worker/fake-provider proof: gateway credential swap, tunnel allow/refuse, what a refusal reports, and the 2026-10-18 crash sequence (a refusal must not cost the next request). |

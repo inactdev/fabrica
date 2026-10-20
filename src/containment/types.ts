@@ -106,6 +106,21 @@ export interface RunContainedOptions {
    * `containerName`: without one there is nothing to name to docker, and
    * aborting then does nothing. */
   stopSignal?: AbortSignal;
+  /** Aborting this stops the run too, but gracefully: `docker stop`,
+   * which sends the container's own process SIGTERM and then SIGKILL
+   * after `--time` seconds (`GRACEFUL_STOP_SECONDS`), instead of
+   * `stopSignal`'s immediate force-remove. Same requirement of a
+   * `containerName`, and the same settling path - the attached client
+   * exits once the container is gone.
+   *
+   * Exists for issue #189: a subscription meter past its stop threshold
+   * must stop an attempt "gracefully, at the next safe point, the same
+   * SIGTERM-then-SIGKILL path the owner's stop uses" (Client's
+   * clarification), which is a different thing from `stopSignal`'s
+   * "this box is doomed, end the call now". Both may be set; whichever
+   * fires first decides, and the other's abort is then a no-op on a
+   * container that is already going away. */
+  gracefulStopSignal?: AbortSignal;
 }
 
 export interface ContainedRunResult {

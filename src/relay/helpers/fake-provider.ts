@@ -23,7 +23,17 @@ export interface FakeProviderHandle {
   close(): Promise<void>;
 }
 
-export async function startFakeProvider(opts: { status?: number; body?: string } = {}): Promise<FakeProviderHandle> {
+export async function startFakeProvider(
+  opts: {
+    status?: number;
+    body?: string;
+    /** Response headers this provider sends back, by request count
+     * (1-based) - a provider whose own rate-limit headers move between
+     * responses, which is the shape issue #189's reading comes from.
+     * Omitted, only content-type is sent. */
+    responseHeaders?: (call: number) => Record<string, string>;
+  } = {}
+): Promise<FakeProviderHandle> {
   const requests: FakeProviderRequest[] = [];
 
   const server = http.createServer((req, res) => {
@@ -31,7 +41,10 @@ export async function startFakeProvider(opts: { status?: number; body?: string }
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
       requests.push({ method: req.method, url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") });
-      res.writeHead(opts.status ?? 200, { "content-type": "text/plain" });
+      res.writeHead(opts.status ?? 200, {
+        "content-type": "text/plain",
+        ...(opts.responseHeaders?.(requests.length) ?? {}),
+      });
       res.end(opts.body ?? "ok");
     });
   });

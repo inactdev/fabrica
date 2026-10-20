@@ -4,8 +4,9 @@ import type {
   FabricaEvent as ContractFabricaEvent,
   FabricaEventName as ContractFabricaEventName,
   FabricaTask as ContractFabricaTask,
-  Receipt,
+  Receipt as ContractReceipt,
 } from "../../contract/surface.ts";
+import type { MeterReading } from "../brain/meters.ts";
 
 /** Inspector's independent verdict after Fabrica's own checks are green.
  * `refused` is deliberately separate from `red`: no verdict was reached. */
@@ -40,13 +41,46 @@ export interface Inspector {
   prepare?(): void;
 }
 
+/** One attempt's receipt, extended with what issue #189 asks every
+ * receipt to record: the two subscription meters as they stood when the
+ * attempt ran. Widened here rather than in `contract/surface.ts` for
+ * the same reason `Delivery` and `FabricaEventName` below are - this
+ * file is the one place that widening happens, the contract is a path
+ * `rule9-gate.yml` protects, and a meter reading is Fabrica's own
+ * bookkeeping about the Client's subscription, not a new promise about
+ * a seam. Every reader in `src/` imports Receipt from here. */
+export type Receipt = Omit<ContractReceipt, "outcome"> & {
+  /** Both meters as the attempt's own worker last saw them, or null
+   * when no reading was available at all - a worker whose brain cannot
+   * report them, or one that never got a reading before it finished.
+   * Null is "nobody knows", never "0%": the pause rule treats an
+   * unknown reading as refusing nothing (Client's clarification: fail
+   * open), and recording it as zero would both hide that and read as a
+   * fresh, empty quota. */
+  meters: MeterReading | null;
+  /** "paused-by-meter" (issue #189): a subscription meter past its stop
+   * threshold stopped this attempt mid-flight. Deliberately its own
+   * outcome and never "failed" (Client's clarification) - the work was
+   * going fine, the week's quota was not. */
+  outcome: ContractReceipt["outcome"] | "paused-by-meter";
+};
+
 export type Delivery = Omit<ContractDelivery, "outcome"> & {
   /** "not-verified": self-tested, but the worker's box could not run the
    * check at all - nothing judged the work, which is not the same as red.
    * "nothing-changed": a fix round's worker left the branch exactly where
    * it already was - no new commit, so nothing was handed to a check or
-   * Inspector at all (two fixes in the fix-round path). */
-  outcome: ContractDelivery["outcome"] | "inspection-red" | "not-verified" | "nothing-changed";
+   * Inspector at all (two fixes in the fix-round path).
+   * "paused-by-meter": a subscription meter past its stop threshold
+   * stopped the round in flight (issue #189) - like "cap-stopped", a
+   * limit stopping the work, which is not the same as the work having
+   * failed, and it waits on the Client's own `fix` verdict to resume. */
+  outcome:
+    | ContractDelivery["outcome"]
+    | "inspection-red"
+    | "not-verified"
+    | "nothing-changed"
+    | "paused-by-meter";
   /** Present only when this branch was handed to Inspector. */
   inspection?: Inspection;
 };
@@ -86,7 +120,19 @@ export type FabricaEventName =
    * record saying what the host did; no decision reads it (the one that
    * needs this reads the delivery's own `rebaseConflict` - see
    * `src/foreman/queries.ts`'s `DeliveredDetails`). */
-  | "rebase-conflicted";
+  | "rebase-conflicted"
+  /** Issue #189's pause rule refused to START anything - a new task, a
+   * resumed round, or a fix round - because a subscription meter was
+   * past its refuse threshold. Details:
+   * `src/foreman/meters.ts`'s `MeterRefusedDetails`. Nothing ran; the
+   * same shape rule 10's `"cap-refused"` has, kept as its own name
+   * because a full week's quota is not a dollar cap and the record
+   * should not say it was. */
+  | "meter-refused"
+  /** Issue #189's pause rule stopped an attempt that was already
+   * running. Details: `src/foreman/meters.ts`'s `MeterPausedDetails`.
+   * The counterpart of rule 10's `"cap-stopped"`. */
+  | "meter-paused";
 
 export interface FabricaEvent extends Omit<ContractFabricaEvent, "name"> {
   name: FabricaEventName;

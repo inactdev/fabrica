@@ -20,6 +20,7 @@ import type { Brain, BrainAskResult } from "../brain/index.ts";
 import { networkPolicyFor } from "./network-policy.ts";
 import { ForemanError } from "./errors.ts";
 import { requireRoomToStart } from "./caps.ts";
+import { requireMeterRoomToStart } from "./meters.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
 import type { Caps } from "../../contract/surface.ts";
 
@@ -138,6 +139,12 @@ export async function registerAndAsk(
     // on a metered brain. Registered first so the refusal, with its
     // numbers, lands on this task's own record (`fabrica log <id>`).
     requireRoomToStart(recordHome, taskId, opts.caps, { project: opts.project });
+
+    // Issue #189, right behind it and for the same reason: a flat-rate
+    // subscription's own window is something no dollar cap can see, so
+    // it is checked separately. Fails open on a reading nobody could
+    // use (see meters.ts) - never refuses on an unread number.
+    requireMeterRoomToStart(recordHome, taskId, { project: opts.project });
 
     // A task must never look started when its very first step never ran -
     // "ask-failed" is what lets an outside observer (fabrica do's own

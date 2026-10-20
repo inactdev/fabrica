@@ -9,6 +9,7 @@ import type { Delivery, Inspection } from "../inspector/types.ts";
 import { gateForRecord } from "./attempts.ts";
 import type { CapStop } from "./attempts.ts";
 import { formatUsd, SPEND_UNKNOWN_LINE } from "./spend.ts";
+import { formatPercent } from "./meters.ts";
 import { SELF_TESTED } from "./judge.ts";
 import { describeInvalidWriteup } from "./pr-body.ts";
 
@@ -18,7 +19,14 @@ export function deliveredState(outcome: Delivery["outcome"] | undefined): "deliv
   return outcome === "done" ||
     outcome === "inspection-red" ||
     outcome === "not-verified" ||
-    outcome === "nothing-changed"
+    outcome === "nothing-changed" ||
+    // Issue #189: a meter pause waits on the Client's own `fix` verdict
+    // to resume (nothing resumes it by itself, Client's clarification),
+    // which is exactly what "delivered" already means here - and it is
+    // explicitly never a failure. `fabrica status` names the pause on
+    // the line itself, so "delivered" never has to stand in for the
+    // reason.
+    outcome === "paused-by-meter"
     ? "delivered"
     : "failed";
 }
@@ -185,6 +193,48 @@ function buildCapStoppedDelivery(ctx: {
     evidence: ctx.lastGate ? gateForRecord(ctx.lastGate).output : "",
     assumptions: "",
     gaps,
+    branch: ctx.branch,
+    files: ctx.files,
+    gateChanges: ctx.declaredGateChanges ?? "",
+  };
+}
+
+/**
+ * A `Delivery` for a round the pause rule stopped in flight (issue
+ * #189): the 7-day subscription window was past its stop threshold, so
+ * the attempt was stopped gracefully rather than run the week down.
+ *
+ * Worded, deliberately, the way `buildCapStoppedDelivery` words its
+ * own: a limit stopped the work, which is not the same as the work
+ * having failed (Client's clarification: "recorded as its own outcome,
+ * paused-by-meter, never as a failure"). Nothing resumes it by itself -
+ * the Client's `fix` verdict does, once the window has rolled forward
+ * or he has raised the threshold. There is no check output to report,
+ * honestly, because nothing was ever judged.
+ */
+export function buildPausedByMeterDelivery(ctx: {
+  attempts: number;
+  branch: string;
+  files: string[];
+  declaredGateChanges: string | undefined;
+  pause: { usedPercent: number; thresholdPercent: number; attempt: number; message: string; workerStopped: boolean };
+}): Delivery {
+  const stopped = ctx.pause.workerStopped
+    ? `The worker was stopped gracefully during attempt ${ctx.pause.attempt}.`
+    : `Nothing could be asked to stop the worker, so attempt ${ctx.pause.attempt} ran to its own end; the ` +
+      `round stopped there.`;
+  return {
+    outcome: "paused-by-meter",
+    confidence: 0,
+    summary: ctx.pause.message,
+    evidence:
+      `7-day subscription window: ${formatPercent(ctx.pause.usedPercent)} used, stop threshold ` +
+      `${formatPercent(ctx.pause.thresholdPercent)}. ${stopped} Nothing was handed to a check or to Inspector.`,
+    assumptions: "",
+    gaps:
+      `A limit stopped this task, not its work. Whatever the worker had done is committed on ` +
+      `\`${ctx.branch}\`, unreviewed and unchecked. Nothing restarts by itself: give a fix verdict once the ` +
+      `window has rolled forward, or raise [pause].sevenDayStopPercent in projects.toml to continue now.`,
     branch: ctx.branch,
     files: ctx.files,
     gateChanges: ctx.declaredGateChanges ?? "",

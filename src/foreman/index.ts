@@ -33,3 +33,16 @@ export {
   unmeasuredSpend,
 } from "./spend.ts";
 export { requireGitRoot } from "./task-failure.ts";
+// Issue #189's pause rule: the thresholds, the readings, and the
+// wording `fabrica status` and the review page both show.
+export {
+  describeMeters,
+  formatPercent,
+  latestMeterReading,
+  meterPauseOf,
+  METER_READING_MAX_AGE_MS,
+  pauseRuleFor,
+  refusalFor,
+  standingOf,
+} from "./meters.ts";
+export type { MeterPausedDetails, MeterRefusedDetails, MeterStanding } from "./meters.ts";

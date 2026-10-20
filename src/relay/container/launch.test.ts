@@ -271,3 +271,66 @@ test("a deliberately closed relay is not a failure", async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(relay.failure(), undefined);
 });
+
+test("a header reading the relay reports on stdout reaches the host side, latest first (issue #189)", async (t) => {
+  const listening = "FABRICA-RELAY-LISTENING 8090\n";
+  const first = 'FABRICA-RELAY-HEADERS {"x-5h":"0.07","x-7d":"0.64"}\n';
+  const second = 'FABRICA-RELAY-HEADERS {"x-5h":"0.09","x-7d":"0.65"}\n';
+  const docker = fakeDocker(t, {
+    logsOutputs: [
+      listening,
+      // Half a line, with no newline yet: withheld, exactly as a
+      // half-written refusal is.
+      `${listening}FABRICA-RELAY-HEADERS {"x-5h":"0.0`,
+      `${listening}${first}`,
+      `${listening}${first}${second}`,
+    ],
+    inspectOutput: "172.30.0.2\n",
+  });
+
+  // The header names reach the container through its own config, the
+  // same way its allowlist does - the relay knows no provider.
+  const relay = await startContainerizedRelay({
+    ...launchOptions(docker.recordHome),
+    observedResponseHeaders: ["x-5h", "x-7d"],
+    watchIntervalMs: 5,
+  });
+  try {
+    const run = docker.calls().find((call) => call[0] === "run")!;
+    const envFile = run[run.indexOf("--env-file") + 1]!;
+    assert.match(readFileSync(envFile, "utf8"), /"observedResponseHeaders":\["x-5h","x-7d"\]/);
+
+    assert.equal(relay.observedHeaders(), undefined, "nothing is reported before a reading arrives");
+    await waitFor(() => relay.observedHeaders() !== undefined);
+    assert.deepEqual(relay.observedHeaders()!.headers, { "x-5h": "0.07", "x-7d": "0.64" });
+    assert.ok(Date.parse(relay.observedHeaders()!.observedAt) > 0, "a reading is stamped when the host read it");
+
+    await waitFor(() => relay.observedHeaders()!.headers["x-7d"] === "0.65");
+
+    // A reading is never a record event: it becomes a recorded fact only
+    // once it lands on an attempt's receipt, which is the Foreman's job.
+    assert.equal(readEventsForTask(docker.recordHome, "t1").length, 0);
+  } finally {
+    await relay.close();
+  }
+});
+
+test("an unreadable header line is dropped, not stored as a reading nobody can use", async (t) => {
+  const listening = "FABRICA-RELAY-LISTENING 8090\n";
+  const docker = fakeDocker(t, {
+    logsOutputs: [listening, `${listening}FABRICA-RELAY-HEADERS {not json}\nFABRICA-RELAY-HEADERS ["an","array"]\n`],
+    inspectOutput: "172.30.0.2\n",
+  });
+
+  const relay = await startContainerizedRelay({
+    ...launchOptions(docker.recordHome),
+    observedResponseHeaders: ["x-7d"],
+    watchIntervalMs: 5,
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(relay.observedHeaders(), undefined);
+  } finally {
+    await relay.close();
+  }
+});

@@ -54,6 +54,7 @@ import { RelayError } from "./errors.mjs";
 
 /** @typedef {import("./types.ts").RelayOptions} RelayOptions */
 /** @typedef {import("./types.ts").RelayHandle} RelayHandle */
+/** @typedef {import("./types.ts").ObservedHeaders} ObservedHeaders */
 
 /** One line on the relay's own log - its stderr, which `docker logs`
  * carries out of the container. The only reporting channel that is
@@ -127,6 +128,45 @@ export async function startRelay(opts) {
       opts.onRefusal?.({ host, port, ...extra });
     } catch (err) {
       logProblem(`could not report the refusal of ${host}:${port}: ${describe(err)}`);
+    }
+  };
+
+  // Issue #189: the names of the response headers this relay watches,
+  // lowercased once here so every response is a plain map lookup rather
+  // than a case-insensitive scan, and the last values reported - a
+  // reading is only reported when one of them actually changed (see
+  // RelayOptions.observedResponseHeaders).
+  const watchedHeaders = (opts.observedResponseHeaders ?? []).map((name) => name.toLowerCase());
+  /** @type {ObservedHeaders} */
+  let lastObserved = {};
+
+  /** Reports this response's watched headers, if any of them moved.
+   * Never throws: this runs on the upstream response's own event
+   * callback, where a throw exits the relay and silently takes the
+   * worker's network with it (see this file's header).
+   * @param {import("node:http").IncomingHttpHeaders} headers */
+  const reportObservedHeaders = (headers) => {
+    try {
+      if (watchedHeaders.length === 0 || opts.onObservedHeaders === undefined) return;
+      /** @type {ObservedHeaders} */
+      const observed = {};
+      for (const name of watchedHeaders) {
+        const value = headers[name];
+        // A repeated header arrives as an array; nothing watched here is
+        // repeatable, and joining is a more honest reading than picking
+        // one silently.
+        if (typeof value === "string") observed[name] = value;
+        else if (Array.isArray(value)) observed[name] = value.join(", ");
+      }
+      const names = Object.keys(observed);
+      if (names.length === 0) return;
+      const changed =
+        names.length !== Object.keys(lastObserved).length || names.some((name) => lastObserved[name] !== observed[name]);
+      if (!changed) return;
+      lastObserved = observed;
+      opts.onObservedHeaders(observed);
+    } catch (err) {
+      logProblem(`could not report observed response headers: ${describe(err)}`);
     }
   };
 
@@ -211,6 +251,11 @@ export async function startRelay(opts) {
       { host: gateway.host, port: gateway.port ?? 443, method: req.method, path: req.url, headers },
       (upstreamRes) => {
         upstreamRes.on("error", () => {});
+        // Before the response is forwarded, so a client that resets the
+        // connection the instant it has its headers cannot cost the
+        // reading. Forwarded untouched either way: this reads, it never
+        // strips or rewrites a response header.
+        reportObservedHeaders(upstreamRes.headers);
         res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
         upstreamRes.pipe(res);
       }

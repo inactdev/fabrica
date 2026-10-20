@@ -39,6 +39,22 @@ export {
   taskSpend,
   unmeasuredSpend,
 } from "./foreman/index.ts";
+// Issue #189's pause rule, for `fabrica status` and the live view's
+// review page - both show the two subscription meters, and both read
+// them from the same functions the rule itself decides with, so neither
+// can show a number that disagrees with what gates new work.
+export {
+  describeMeters,
+  formatPercent,
+  latestMeterReading,
+  meterPauseOf,
+  METER_READING_MAX_AGE_MS,
+  pauseRuleFor,
+  refusalFor,
+  standingOf,
+} from "./foreman/index.ts";
+export type { MeterPausedDetails, MeterRefusedDetails, MeterStanding } from "./foreman/index.ts";
+export type { MeterReading } from "./brain/index.ts";
 export type { TaskFollower, TaskProgress } from "./foreman/index.ts";
 export type { TranscriptEntry, WorkerWriteup } from "../contract/surface.ts";
 export type {
@@ -48,6 +64,11 @@ export type {
   FabricaEventName,
   Inspection,
   Inspector,
+  // Issue #189: the receipt every reader in src/ and every integration
+  // uses - the contract's own shape plus the two subscription meters
+  // and the "paused-by-meter" outcome (see src/inspector/types.ts for
+  // why the widening lives there).
+  Receipt,
 } from "./inspector/types.ts";
 export { validateDelivery, diffFiles, DeliveryError } from "./delivery/index.ts";
 export type { DeliveryErrorCode } from "./delivery/index.ts";
@@ -60,15 +81,15 @@ export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerToke
 export { relayImageStatus } from "./relay/index.ts";
 export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
 export { requireGitRoot } from "./foreman/index.ts";
-export type { Brain, Caps, GateResult, Receipt } from "../contract/surface.ts";
+export type { Brain, Caps, GateResult } from "../contract/surface.ts";
 export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
 
 // Config: the record home's project registry and caps (SPEC.md
 // "Config"), needed by the CLI to resolve `--project <path-or-name>`
 // before it ever calls createForeman.
-export { loadConfig, projectsTomlPath, requireProject } from "./config/index.ts";
+export { loadConfig, projectsTomlPath, requireProject, DEFAULT_PAUSE_RULE } from "./config/index.ts";
 export { ConfigError } from "./config/index.ts";
-export type { ConfigErrorCode, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
+export type { ConfigErrorCode, PauseRule, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
 
 // `fabrica register` (src/cli/register-command.ts): the one command
 // allowed to push, because it runs as the Client and only ever creates a

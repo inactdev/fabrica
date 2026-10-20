@@ -6,9 +6,13 @@
 // run in full regardless of how early a check goes green: a number given
 // is a number honored, not a ceiling the code is free to cut short.
 
-import { probeRelayHealth, registerLiveTranscriptListener } from "../brain/index.ts";
-import type { Brain, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../brain/index.ts";
-import type { GateResult, Receipt } from "../../contract/surface.ts";
+import { pauseWorker, probeRelayHealth, readMeters, registerLiveTranscriptListener } from "../brain/index.ts";
+import type { Brain, BrainWorkResult, MeterReading, TranscriptEntry, WorkerWriteup } from "../brain/index.ts";
+import type { GateResult } from "../../contract/surface.ts";
+import type { Receipt } from "../inspector/types.ts";
+import type { PauseRule } from "../config/index.ts";
+import { meterReadingFromTranscript, pauseMessage, standingOf, stopFor } from "./meters.ts";
+import type { MeterPausedDetails } from "./meters.ts";
 import type { Judge, Judgement } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { costFromTranscript } from "./spend.ts";
@@ -39,6 +43,10 @@ export interface AttemptLoopResult {
   /** Set when rule 10 stopped the loop before it would otherwise have
    * ended - the last receipt's outcome is then "cap-stopped". */
   capStop?: CapStop;
+  /** Issue #189: set when the pause rule stopped an attempt mid-flight
+   * - the last receipt's outcome is then "paused-by-meter", nothing was
+   * judged, and the round delivers as "paused-by-meter". */
+  meterStop?: MeterPausedDetails;
   /** The last attempt's write-up, resolved to something committable
    * either way (the worker's own, or a fallback naming what was wrong) -
    * never the task's own words. What do.ts/verdict.ts commit onto the
@@ -69,6 +77,17 @@ export interface AttemptSpendLimits {
   capsActive: boolean;
   perTaskUsd?: number;
   priorMeteredUsd: number;
+}
+
+/** Issue #189's pause rule inside the loop: the thresholds, and the
+ * clock to judge a reading's age against. Omitted, meters are still
+ * recorded on every receipt (that is unconditional) but nothing ever
+ * stops an attempt for them. */
+export interface AttemptPauseRule {
+  rule: PauseRule;
+  /** Test seam - defaults to `Date.now`. A test drives a stale reading
+   * past `METER_READING_MAX_AGE_MS` by moving this, not by waiting. */
+  now?: () => number;
 }
 
 export async function runAttempts(opts: {
@@ -112,6 +131,9 @@ export async function runAttempts(opts: {
   relayGoneGraceMs?: number;
   /** Omitted, nothing about money stops the loop. */
   spendLimits?: AttemptSpendLimits;
+  /** Issue #189. Omitted, nothing about the subscription meters stops
+   * the loop - they are still read and recorded either way. */
+  pauseRule?: AttemptPauseRule;
   /** Fires with each attempt's receipt the moment it exists, so its
    * spend is on the record even while the task is still running. */
   onReceipt?: (receipt: Receipt) => void;
@@ -145,6 +167,7 @@ export async function runAttempts(opts: {
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
     relayGoneGraceMs,
     spendLimits,
+    pauseRule,
     onReceipt,
     beforeCommit,
     commitLabel,
@@ -159,6 +182,7 @@ export async function runAttempts(opts: {
   let declaredGateChanges: string | undefined;
   let spentUsd = spendLimits?.priorMeteredUsd ?? 0;
   let capStop: CapStop | undefined;
+  let meterStop: MeterPausedDetails | undefined;
   let lastFinalMessage: FinalMessageForCommit | undefined;
   let lastWriteup: WorkerWriteup | undefined;
   // True while the branch's last commit is this loop's own, carrying a
@@ -198,10 +222,58 @@ export async function runAttempts(opts: {
       liveEntries.push(entry);
       onTranscriptEntry?.(entry);
     });
-    let workResult: BrainWorkResult;
+    // Issue #189: the latest subscription-meter reading this attempt's
+    // worker has reported, read on the heartbeat's own tick. Kept here
+    // because the adapter's meter source only exists for as long as its
+    // `work()` call does - by the time that call has settled there is
+    // nothing left to ask, so the last tick's answer is what a paused
+    // attempt's receipt has to be built from.
+    let tickReading: MeterReading | undefined;
+    // Runs on the heartbeat interval, from a timer: it must never throw
+    // (withHeartbeat swallows it, but a silent swallow is not a reason
+    // to be careless) and never block. Reading and deciding only - the
+    // record is written by the caller, once, after the loop.
+    const readAndJudgeMeters = (): void => {
+      const reading = readMeters(workdir);
+      if (reading !== undefined) tickReading = reading;
+      if (pauseRule === undefined || meterStop !== undefined) return;
+      const now = pauseRule.now?.() ?? Date.now();
+      const over = stopFor(standingOf(reading ?? null, now), pauseRule.rule);
+      if (over === undefined) return;
+      // Decided first, acted on second: the decision is the fact, and a
+      // worker that cannot be stopped must not make it look as though
+      // nothing was decided. `pauseWorker` asks the adapter to stop its
+      // own box gracefully (SIGTERM, then SIGKILL after a grace) - so
+      // the `work()` call being awaited above ends by itself shortly
+      // after this, and this loop then takes the paused path below.
+      // `workerStopped: false` means that ask could not be carried out
+      // - the adapter's own `pause()` threw - and the record says so
+      // rather than claiming a stop that never happened. There is no
+      // "nothing was registered" case to worry about here: a reading
+      // only ever comes from a registered source, so a decision can
+      // only be reached where there is something to ask.
+      meterStop = {
+        attempt,
+        usedPercent: over.usedPercent,
+        thresholdPercent: over.thresholdPercent,
+        observedAt: over.observedAt,
+        message: pauseMessage(over.usedPercent, over.thresholdPercent),
+        workerStopped: pauseWorker(workdir),
+      };
+    };
+
+    const tick =
+      onHeartbeat === undefined && pauseRule === undefined
+        ? undefined
+        : () => {
+            onHeartbeat?.(attempt);
+            readAndJudgeMeters();
+          };
+
+    let workResult: BrainWorkResult | undefined;
     try {
       workResult = await withHeartbeat(
-        onHeartbeat && (() => onHeartbeat(attempt)),
+        tick,
         heartbeatIntervalMs,
         () => brain.work(thisBrief, workdir, Object.keys(workOpts).length > 0 ? workOpts : undefined),
         // Every tick also asks whether this box's own network is still
@@ -213,16 +285,96 @@ export async function runAttempts(opts: {
         // with what the relay watcher said.
         { probe: () => probeRelayHealth(workdir), ...(relayGoneGraceMs === undefined ? {} : { graceMs: relayGoneGraceMs }) }
       );
+    } catch (err) {
+      // Issue #189: a worker stopped by the pause rule normally ends by
+      // reporting its own box going away, which is not a failure of
+      // anything - the stop was Fabrica's own doing, decided a moment
+      // earlier. Swallowed only in that case; every other error is the
+      // attempt's real failure and still propagates.
+      if (meterStop === undefined) throw err;
     } finally {
       unregisterLiveTranscript();
     }
-    session = workResult.session ?? session;
-    // liveEntries is always a prefix of workResult.transcript, in the
+
+    // The paused path: nothing is judged, nothing is handed to a check
+    // or to Inspector, and whatever the worker had done by then is
+    // committed with a fallback message so it survives the
+    // ProductionLine's teardown for the fix round the Client can ask
+    // for. The same shape an invalid write-up already has, for the same
+    // reason: there is no write-up to commit with, because the worker
+    // never got to the end of its own work.
+    //
+    // Named limit: a worker that resolves in the same instant the pause
+    // trips - the tick decides, the SIGTERM is away, and `work()`
+    // settles before it lands - is reported as paused all the same, and
+    // its write-up is not used. That costs the Client one `fix` verdict
+    // and nothing else: this attempt's changes are committed on the
+    // branch either way, exactly as they would have been. Preferring
+    // the resolved result instead would mean a second kind of paused
+    // round, one that reports an ordinary outcome, through `round.ts`'s
+    // single tail - more branching there than a window this narrow,
+    // with no work lost in it, is worth.
+    if (meterStop !== undefined) {
+      const durationMs = Date.now() - t0;
+      const transcript = workResult?.transcript ?? liveEntries;
+      for (const entry of transcript.slice(liveEntries.length)) onTranscriptEntry?.(entry);
+      session = workResult?.session ?? session;
+      // Not `finalMessageFor(undefined, ...)`: that renders "write-up
+      // invalid: the worker returned no write-up", which would be a lie
+      // about why there is no write-up here. The worker was stopped; it
+      // never reached the end of its own work. `ok: false` all the same
+      // - this is Fabrica's own wording, not a worker's, so it is never
+      // published or handed to Inspector.
+      const finalMessage: FinalMessageForCommit = {
+        title: `${fallbackTitle} (paused by the subscription meter)`,
+        body: `${meterStop.message} Whatever the worker had done is kept in this commit, unreviewed.`,
+        ok: false,
+      };
+      lastFinalMessage = finalMessage;
+      lastWriteup = undefined;
+      lastJudgement = { kind: "paused-by-meter" };
+      try {
+        commitWorktreeChanges(workdir, renderCommitMessage(finalMessage), { amend: unpublishedFallbackCommit });
+      } catch (err) {
+        // A commit that cannot happen must not turn a pause into an
+        // exception: the pause is still the fact, and round.ts's report
+        // names the branch either way. The host-failure path
+        // (round.ts's own commit) will report it if it persists.
+        if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
+      }
+      const { costUsd, costBasis } = costFromTranscript(transcript);
+      if (costUsd !== null && costBasis === "metered") spentUsd += costUsd;
+      const receipt: Receipt = {
+        task: taskId,
+        attempt,
+        brain: brain.name,
+        model: brain.model,
+        startedAt,
+        durationMs,
+        costUsd,
+        costUnknown: costUsd === null,
+        costBasis,
+        meters: meterReadingFromTranscript(transcript) ?? tickReading ?? null,
+        session: session ?? null,
+        reasoningEffort: null,
+        checks: null,
+        outcome: "paused-by-meter",
+      };
+      receipts.push(receipt);
+      onReceipt?.(receipt);
+      break;
+    }
+
+    // Settled, and not paused: the only way past the two branches above
+    // is `brain.work()` having resolved.
+    const work = workResult!;
+    session = work.session ?? session;
+    // liveEntries is always a prefix of work.transcript, in the
     // same order, by construction - a streaming adapter builds both
     // from the same stream in the same loop - so the remainder is
     // exactly what was never delivered live.
-    for (const entry of workResult.transcript.slice(liveEntries.length)) onTranscriptEntry?.(entry);
-    if (workResult.gateChanges) declaredGateChanges = workResult.gateChanges;
+    for (const entry of work.transcript.slice(liveEntries.length)) onTranscriptEntry?.(entry);
+    if (work.gateChanges) declaredGateChanges = work.gateChanges;
 
     const durationMs = Date.now() - t0;
     // Every attempt is committed the moment work() returns (Client ruling
@@ -234,9 +386,9 @@ export async function runAttempts(opts: {
     // write-up - instead of an empty commit or re-handing the same one.
     // An attempt whose write-up is missing or invalid is red on that
     // alone, never judged, and its reason is what the next brief quotes.
-    const finalMessage = finalMessageFor(workResult.writeup, fallbackTitle);
+    const finalMessage = finalMessageFor(work.writeup, fallbackTitle);
     lastFinalMessage = finalMessage;
-    lastWriteup = finalMessage.ok ? workResult.writeup : undefined;
+    lastWriteup = finalMessage.ok ? work.writeup : undefined;
     // Issue #235: a host-side git step that has to happen between the
     // worker returning and this attempt being committed. When it reports
     // a failure, that IS this attempt's judgement - nothing is committed
@@ -261,7 +413,7 @@ export async function runAttempts(opts: {
         : commitError !== undefined
         ? { kind: "commit-failed", error: commitError }
         : finalMessage.ok
-          ? await judge(attempt, workResult.gateChanges, finalMessage)
+          ? await judge(attempt, work.gateChanges, finalMessage)
           : {
               kind: "verdict",
               gate: { green: false, output: describeInvalidWriteup(finalMessage.reason!) },
@@ -271,7 +423,7 @@ export async function runAttempts(opts: {
     lastJudgement = judgement;
     if (gate) lastGate = gate;
 
-    const { costUsd, costBasis } = costFromTranscript(workResult.transcript);
+    const { costUsd, costBasis } = costFromTranscript(work.transcript);
     // Issue #188: only metered spend counts toward the running total a
     // per-task cap checks against - a subscription estimate is recorded
     // on the receipt but never moves this number.
@@ -286,6 +438,12 @@ export async function runAttempts(opts: {
       costUsd,
       costUnknown: costUsd === null,
       costBasis,
+      // Issue #189: every receipt records both subscription meters. The
+      // worker's own reading out of its transcript is the authoritative
+      // one for this attempt; the last heartbeat tick's is the fallback
+      // for a brain that reports readings live but nothing at the end,
+      // and null means nobody could say - never 0%.
+      meters: meterReadingFromTranscript(work.transcript) ?? tickReading ?? null,
       session: session ?? null,
       reasoningEffort: null,
       checks: gate ? gateForRecord(gate) : null,
@@ -319,6 +477,7 @@ export async function runAttempts(opts: {
     declaredGateChanges,
     finalMessage: lastFinalMessage!,
     ...(capStop ? { capStop } : {}),
+    ...(meterStop ? { meterStop } : {}),
     ...(lastWriteup ? { writeup: lastWriteup } : {}),
   };
 }

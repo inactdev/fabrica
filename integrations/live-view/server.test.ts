@@ -1053,3 +1053,17 @@ test("startLiveView: /api/review says whether this very request carried an ident
     await view.close();
   }
 });
+
+test("startLiveView: /api/review carries the two subscription meters for the page to show", async () => {
+  const recordHome = tempRecordHome();
+  await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${view.port}/api/review`)).json();
+    assert.equal(typeof body.meters.label, "string");
+    assert.equal(typeof body.meters.paused, "boolean");
+    assert.equal(typeof body.meters.detail, "string");
+  } finally {
+    await view.close();
+  }
+});

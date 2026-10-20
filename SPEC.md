@@ -182,13 +182,21 @@ information a single merged file destroys.
 
 ## Config
 
-`projects.toml` in the record home holds two things: the project registry
-and the caps, each under its own top-level table. Projects live under
-`[projects.<name>]`; the caps get their own table, in dollars (Contract 10):
+`projects.toml` in the record home holds the project registry, the caps,
+and the pause rule, each under its own top-level table. Projects live
+under `[projects.<name>]`; the caps get their own table, in dollars
+(Contract 10); the pause rule gets its own, in percentages of the model
+provider's own subscription windows (issue #189 — the limit no dollar
+cap can see, since filling a flat-rate week costs nothing):
 
     [caps]
     perTaskUsd = 2.5
     perDayUsd  = 20
+
+    [pause]
+    sevenDayRefusePercent = 70   # above this, no new work starts
+    sevenDayStopPercent   = 90   # above this, work already running is stopped
+    fiveHourRefusePercent = 90   # above this, no new work starts
 
     [projects.spending-app]
     path  = "~/inkling-umbrella/spending-app"
@@ -204,11 +212,14 @@ exactly what to add. No check command, no verified work, no exceptions
 (Contract 2). A task naming a project with no entry at all is refused the
 same way, naming the project and the entry to add.
 
-Every top-level table is either `[caps]` or `[projects.<name>]`; anything
-else is refused with exact instructions to move it under `[projects.<name>]`.
-Because projects and caps no longer share a namespace, a project may be
-named `caps` — `[projects.caps]` is a project like any other. Zero is a
-legal cap, not an absent one.
+Every top-level table is `[caps]`, `[pause]`, or `[projects.<name>]`;
+anything else is refused with exact instructions to move it under
+`[projects.<name>]`. Because projects and globals no longer share a
+namespace, a project may be named `caps` or `pause` —
+`[projects.caps]` is a project like any other. Zero is a legal cap, not
+an absent one. Every `[pause]` threshold has a default, so an absent
+`[pause]` table means the defaults rather than no pause rule — unlike
+the caps, where an absent table means nothing is capped.
 
 ## The delivery block
 

@@ -8,7 +8,7 @@
 // src/containment/run.ts already takes for a worker's own env.
 
 import { startRelay } from "../server.mjs";
-import { LISTENING_MARKER, REFUSAL_MARKER } from "./protocol.mjs";
+import { HEADERS_MARKER, LISTENING_MARKER, REFUSAL_MARKER } from "./protocol.mjs";
 
 const raw = process.env.FABRICA_RELAY_CONFIG;
 if (raw === undefined) {
@@ -29,6 +29,12 @@ const relay = await startRelay({
   // here costs one refusal on the record and nothing else: startRelay
   // catches it and logs it.
   onRefusal: (details) => console.log(`${REFUSAL_MARKER} ${JSON.stringify(details)}`),
+  // Issue #189: the same one-line-on-stdout channel, for the same
+  // reason - the host side owns every decision made with this, and the
+  // relay keeps no state about it beyond "what did I last say". Only the
+  // headers the caller named are ever printed, never a whole response's
+  // header set.
+  onObservedHeaders: (headers) => console.log(`${HEADERS_MARKER} ${JSON.stringify(headers)}`),
   // 0.0.0.0, not 127.0.0.1 (startRelay's own default): the worker
   // reaching this relay is a *different* container on the isolated
   // network, never this one's own loopback.
@@ -38,6 +44,7 @@ const relay = await startRelay({
   gateway: config.gateway,
   maxRequestBytes: config.maxRequestBytes,
   maxCallsPerTask: config.maxCallsPerTask,
+  observedResponseHeaders: config.observedResponseHeaders,
 });
 
 // launch.ts's waitForListening() watches for this exact line through
