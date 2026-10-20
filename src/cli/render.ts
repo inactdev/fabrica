@@ -5,6 +5,7 @@
 
 import { DEFAULT_HEARTBEAT_INTERVAL_MS, formatUsd } from "../index.ts";
 import type { FabricaEvent, FabricaTask, TranscriptEntry } from "../index.ts";
+import type { WorkerPresence } from "./task-process.ts";
 
 /** Longer than this since the last recorded event on a still-working task,
  * and silence stops meaning "progress" and starts meaning "quiet too long"
@@ -135,6 +136,38 @@ export function isQuietTooLong(state: FabricaTask["state"], events: FabricaEvent
   const elapsed = now - last.getTime();
   const hasWorkStarted = events.some((e) => e.name === "work-started");
   return elapsed > (hasWorkStarted ? QUIET_THRESHOLD_MS : PRE_WORK_QUIET_CEILING_MS);
+}
+
+/** True exactly when a real process ought to be running this task's
+ * round right now, so `status`/`watch` may go and look for it (issue
+ * #99). Two conditions, both necessary:
+ *
+ * - the state is one a worker is mid-round in ("working" or
+ *   "checking"); every other state - delivered, closed, asking, failed,
+ *   refused, stopped - is one where the round has ended or never
+ *   started, and whose pid file therefore names a process that exited
+ *   for a perfectly ordinary reason. Looking there would turn every
+ *   finished task into a "worker process not found" alarm.
+ * - THIS round's `"work-started"` has landed. A `"verdict-recorded"`
+ *   (the Client's `fix`) or `"answers-given"` after the last
+ *   `"work-started"` means the next round has been decided but its
+ *   detached process may not have started - and the pid file still
+ *   names the previous round's long-exited one, which is exactly the
+ *   false "not found" this condition exists to prevent. It is also the
+ *   Client's own ruling for the first round, where there is no earlier
+ *   pid file to be fooled by either: a task before `work-started` is
+ *   not judged at all.
+ */
+export function expectsWorkerProcess(state: FabricaTask["state"], events: FabricaEvent[]): boolean {
+  if (state !== "working" && state !== "checking") return false;
+  // A single forward pass, same shape as stateOf's - the question is
+  // which of these landed LAST, not whether each ever happened.
+  let roundStarted = false;
+  for (const event of events) {
+    if (event.name === "work-started") roundStarted = true;
+    else if (event.name === "verdict-recorded" || event.name === "answers-given") roundStarted = false;
+  }
+  return roundStarted;
 }
 
 /** Compact, human age like "3s", "12m", "4h15m", "2d3h" - dense enough for
@@ -296,6 +329,43 @@ export function formatCheckingQuietNotice(elapsedMs: number): string {
   return `checking, ${formatAge(elapsedMs)} and still not finished - not known to be stuck, not known to be fine`;
 }
 
+/** The one wording for a task whose worker's process has been looked
+ * for and is not there (issue #99) - the Client's own phrase, "worker
+ * process not found", plus the two things that follow from it. Unlike
+ * every other notice in this file it is not hedged, because this one is
+ * not an inference from silence: the task's own pid file was read and
+ * the pid it names is not running one of Fabrica's task runners, so
+ * nothing is left to append to this task's record.
+ *
+ * It deliberately names no command to run. Every other terminal-ish
+ * notice here points at one the tool will actually accept, and for this
+ * case there is none: a "working" task has no delivery, so
+ * `fabrica verdict <id> wrong` would be refused as "not-delivered".
+ * Pointing the Client at a command that bounces would be worse than
+ * pointing him nowhere.
+ *
+ * The elapsed time is "nothing has been recorded for this long", the
+ * same quantity `formatQuietNotice` reports - but, deliberately, with
+ * no `nameLastSignal` label on it: during a check the record's last
+ * event is the check's own `"started"` one, which that function labels
+ * "the check finished", and a dead worker's check is precisely what
+ * never finished. */
+export function formatWorkerGoneNotice(elapsedMs: number): string {
+  return (
+    `worker process not found - nothing is running this task and nothing has been recorded for ` +
+    `${formatAge(elapsedMs)}; it cannot move again on its own`
+  );
+}
+
+/** Shown when the worker's process could not be looked for at all
+ * (`WorkerPresence`'s "unknown") - the Client's own wording, and
+ * deliberately a caveat appended to whatever the record already said
+ * rather than a replacement for it: with no reading to go on, the
+ * record is still the best available account, and this says only that
+ * it was not confirmed against a real process. In practice this is a
+ * round that started before Fabrica wrote per-task pid files. */
+export const WORKER_LIVENESS_UNKNOWN_NOTICE = "liveness unknown (started before pid files)";
+
 /** What to say about a task's liveness right now - "checking, 2m so
  * far" for a check genuinely still in progress, the quiet alarm past a
  * ceiling (whichever wording fits: `formatCheckingQuietNotice` for
@@ -315,13 +385,56 @@ export function formatCheckingQuietNotice(elapsedMs: number): string {
  * apart from "worth printing once per transition" (the quiet alarm)
  * already have `state` and can call `isQuietTooLong` themselves for
  * that - this function only ever answers "what does it look like,"
- * never "when to show it again." */
-export function describeLiveness(state: FabricaTask["state"], events: FabricaEvent[], now: number): string | null {
+ * never "when to show it again."
+ *
+ * Issue #99 adds the one fact that is not in the record at all: whether
+ * the worker's own process is still running (`worker`, a
+ * `WorkerPresence` from `probeTaskWorker`). It belongs HERE, not in the
+ * two commands, for exactly the reason above - `status` and `watch` have
+ * to read the same sentence - so the commands decide only whether to
+ * take that reading (`expectsWorkerProcess`) and when to print it. */
+export function describeLiveness(
+  state: FabricaTask["state"],
+  events: FabricaEvent[],
+  now: number,
+  /** What a real look at the worker's own process found (issue #99), or
+   * null for "no look was taken" - either the caller doesn't check (it
+   * has no record home to check against) or `expectsWorkerProcess` said
+   * this task's round has no process to look for. Null keeps the
+   * record-only wording this function produced before issue #99, so a
+   * caller that passes nothing is unaffected. */
+  worker: WorkerPresence | null = null
+): string | null {
   if (isDeadEnd(state, events.some((event) => event.name === "delivered"))) {
     if (state !== "refused") return null;
     const last = events[events.length - 1];
     return last ? nameLastSignal(last) : "Inspector reached no verdict";
   }
+
+  // Issue #99: a verified reading of the worker's own process outranks
+  // everything derived from the record below, because it answers the
+  // one question those sentences have to leave open ("not known to be
+  // stuck, not known to be fine"). It is not combined with them either:
+  // once nothing is running the task, "quiet 3m" and "checking, 2m so
+  // far" are both descriptions of a wait that has already ended.
+  if (worker === "not-found") {
+    const last = events[events.length - 1];
+    return formatWorkerGoneNotice(last ? now - new Date(last.occurredAt).getTime() : 0);
+  }
+
+  const fromRecord = describeLivenessFromRecord(state, events, now);
+  if (worker !== "unknown") return fromRecord;
+  // No reading to add, so the record's own account stands and only
+  // carries the caveat that it is unconfirmed.
+  return fromRecord ? `${fromRecord} - ${WORKER_LIVENESS_UNKNOWN_NOTICE}` : WORKER_LIVENESS_UNKNOWN_NOTICE;
+}
+
+/** Everything `describeLiveness` can say from the record alone - the
+ * whole of what it said before issue #99 gave it a real process reading
+ * to prefer. Split out so that reading can take precedence over this
+ * (or caveat it) in one place, rather than being threaded through each
+ * of these branches. */
+function describeLivenessFromRecord(state: FabricaTask["state"], events: FabricaEvent[], now: number): string | null {
   if (state === "checking") {
     const startedAt = checkStartedAt(events);
     if (startedAt === null) return null; // defensive: shouldn't happen for a real task

@@ -12,13 +12,13 @@ import { appendFileSync, mkdtempSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createForeman } from "../index.ts";
-import { appendEvent, recordPath } from "../record/index.ts";
+import { createForeman, readEvents } from "../index.ts";
+import { appendEvent, recordPath, registerTask, writeTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runDoCommand } from "./do-command.ts";
 import { runWatchCommand } from "./watch-command.ts";
-import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS } from "./render.ts";
+import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS, QUIET_THRESHOLD_MS } from "./render.ts";
 import type { Brain } from "../index.ts";
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { withStandingQuestion } from "../foreman/standing-question.ts";
@@ -246,7 +246,10 @@ test("runWatchCommand: a task mid-check streams its real elapsed time live, neve
     ...io,
   });
 
-  const sawChecking = await waitFor(() => io.out.some((line) => /^checking, \d+s so far$/.test(line)));
+  // Matched as a prefix, not a whole line: issue #99 appends a liveness
+  // caveat to this wording for a round that wrote no pid file, which the
+  // fake runner above (helpers/fake-run-task-entry.ts) never does.
+  const sawChecking = await waitFor(() => io.out.some((line) => /^checking, \d+s so far\b/.test(line)));
   controller.abort();
   await watchPromise;
 
@@ -289,7 +292,10 @@ test("runWatchCommand: a check stuck past its own long ceiling is flagged quiet 
     io.out.some((line) => line.includes("and still not finished")),
     `expected the checking alarm, got: ${JSON.stringify(io.out)}`
   );
-  assert.ok(!io.out.some((line) => /^checking, .* so far$/.test(line)), "the plain elapsed line steps aside for the alarm");
+  assert.ok(
+    !io.out.some((line) => line.startsWith("checking, ") && line.includes(" so far")),
+    "the plain elapsed line steps aside for the alarm"
+  );
 });
 
 // Client ruling, issue #12 review finding (quiet-wording-names-
@@ -481,6 +487,140 @@ test("runWatchCommand: an Inspector refusal names no verdict and ends the watch"
   assert.equal(safetyStop.signal.aborted, false, "watch should end for a refusal, not wait for its safety stop");
   assert.ok(io.out.some((line) => line.includes("Inspector reached no verdict")));
   assert.ok(!io.out.some((line) => /failed|quiet/i.test(line)), `expected no false failure or quiet alarm, got: ${JSON.stringify(io.out)}`);
+});
+
+// Issue #99: `watch` looks at the worker's own process (its pid file,
+// verified against a real process table) instead of reading liveness off
+// the record. Client ruling: say it once, keep polling, write nothing.
+// The pid file and the process table are both supplied here, so these
+// never need a real detached worker on the machine running them.
+const RUNNER_ARGS = "node bootstrap.mjs /checkout/src/cli/run-task-entry.ts /home/.fabrica /proj task";
+
+function workingTaskWithPid(recordHome: string, pid: string): string {
+  const { id } = registerTask(recordHome, "small change");
+  appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/some/project" } });
+  appendEvent(recordHome, { taskId: id, name: "heartbeat", details: { attempt: 1 } });
+  writeTaskFile(recordHome, id, "worker.pid", pid);
+  return id;
+}
+
+test("runWatchCommand: a worker that isn't running is named once, and the watch keeps following anyway", async () => {
+  const recordHome = tempRecordHome();
+  // Above every documented pid_max: nothing can be running under it.
+  const taskId = workingTaskWithPid(recordHome, "4194304");
+
+  const io = captureIo();
+  const safetyStop = new AbortController();
+  const timer = setTimeout(() => safetyStop.abort(), 5_000);
+  const watchPromise = runWatchCommand([taskId], {
+    recordHome,
+    signal: safetyStop.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    // Re-probe on every poll, so "once" below is the latch doing its
+    // job rather than the real 15-second probe interval hiding repeats.
+    probeIntervalMs: 0,
+    listProcesses: () => [{ pid: process.pid, args: RUNNER_ARGS }],
+    ...io,
+  });
+
+  const gone = () => io.out.filter((line) => line.includes("worker process not found"));
+  const saidIt = await waitFor(() => gone().length > 0, 5_000);
+  // Long enough for dozens more polls, each of which re-probed.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const stillRunning = !safetyStop.signal.aborted;
+  safetyStop.abort();
+  clearTimeout(timer);
+  const code = await watchPromise;
+
+  assert.equal(code, 0);
+  assert.ok(saidIt, `expected the worker-gone notice, got: ${JSON.stringify(io.out)}`);
+  assert.equal(gone().length, 1, `expected it exactly once, got: ${JSON.stringify(io.out)}`);
+  assert.ok(stillRunning, "a dead worker is reported, not a reason to stop following the record");
+  assert.ok(
+    !io.out.some((line) => line.includes("not known to be stuck")),
+    `the agnostic quiet notice must not follow a definite answer, got: ${JSON.stringify(io.out)}`
+  );
+  assert.deepEqual(
+    readEvents(recordHome)
+      .filter((e) => e.taskId === taskId)
+      .map((e) => e.name),
+    ["task-received", "work-started", "heartbeat"],
+    "watch must never write to the record"
+  );
+});
+
+test("runWatchCommand: a worker-gone task that then records its own failure never reads as a signal resuming", async () => {
+  const recordHome = tempRecordHome();
+  const { id: taskId } = registerTask(recordHome, "small change");
+  // Already quiet when the watch attaches, so the suppressed quiet
+  // notice is genuinely reached - appendEvent always stamps the current
+  // time, so an old event has to be written directly.
+  const stale = Date.now() - QUIET_THRESHOLD_MS * 2;
+  for (const [offset, event] of [
+    [0, { name: "work-started", details: { project: "/some/project" } }],
+    [1_000, { name: "heartbeat", details: { attempt: 1 } }],
+  ] as const) {
+    appendFileSync(
+      recordPath(recordHome),
+      `${JSON.stringify({ occurredAt: new Date(stale + offset).toISOString(), taskId, ...event })}\n`
+    );
+  }
+  writeTaskFile(recordHome, taskId, "worker.pid", "4194304");
+
+  const io = captureIo();
+  const safetyStop = new AbortController();
+  const timer = setTimeout(() => safetyStop.abort(), 5_000);
+  const watchPromise = runWatchCommand([taskId], {
+    recordHome,
+    signal: safetyStop.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    probeIntervalMs: 0,
+    listProcesses: () => [{ pid: process.pid, args: RUNNER_ARGS }],
+    ...io,
+  });
+
+  await waitFor(() => io.out.some((line) => line.includes("worker process not found")), 5_000);
+  // What a killed worker's round eventually looks like on the record,
+  // once anything notices: the watch should end on it, saying so.
+  appendEvent(recordHome, { taskId, name: "task-failed", details: { message: "worker process died" } });
+  const code = await watchPromise;
+  clearTimeout(timer);
+
+  assert.equal(code, 0);
+  assert.equal(safetyStop.signal.aborted, false, "the failure is terminal - the watch should end on its own");
+  assert.ok(io.out.some((line) => line.includes("task failed")), `expected the terminal notice, got: ${JSON.stringify(io.out)}`);
+  assert.ok(
+    !io.out.some((line) => line.includes("signal resumed")),
+    `nothing resumed - the quiet notice this would answer was never printed, got: ${JSON.stringify(io.out)}`
+  );
+  assert.ok(!io.out.some((line) => line.includes("not known to be stuck")), "and the suppressed quiet notice stayed suppressed");
+});
+
+test("runWatchCommand: a worker that really is running is never announced - nothing to report", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = workingTaskWithPid(recordHome, String(process.pid));
+
+  const io = captureIo();
+  const controller = new AbortController();
+  const watchPromise = runWatchCommand([taskId], {
+    recordHome,
+    signal: controller.signal,
+    installSigintHandler: false,
+    pollIntervalMs: 10,
+    probeIntervalMs: 0,
+    listProcesses: () => [{ pid: process.pid, args: RUNNER_ARGS }],
+    ...io,
+  });
+  setTimeout(() => controller.abort(), 100);
+  const code = await watchPromise;
+
+  assert.equal(code, 0);
+  assert.ok(
+    !io.out.some((line) => /worker process not found|liveness unknown/.test(line)),
+    `expected nothing said about liveness, got: ${JSON.stringify(io.out)}`
+  );
 });
 
 test("runWatchCommand: a task with a real failed DELIVERY keeps polling, unlike an ask() failure", async () => {

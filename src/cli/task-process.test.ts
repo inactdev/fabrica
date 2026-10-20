@@ -18,8 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerTask, readTaskFile, writeTaskFile } from "../record/index.ts";
 import {
+  cachedProcessTable,
   commandLineMatchesTask,
   findTaskProcess,
+  probeTaskWorker,
   STOP_GRACE_MS,
   stopTaskProcess,
   writeTaskPidFile,
@@ -133,6 +135,101 @@ test("commandLineMatchesTask names exactly the three detached runners and nothin
   assert.equal(commandLineMatchesTask("node x/integrations/live-view/start.ts", "task-1"), false);
   assert.equal(commandLineMatchesTask("node x/src/cli/bin.mjs status", "task-1"), false);
   assert.equal(commandLineMatchesTask("", "task-1"), false);
+});
+
+// Issue #99: the reporting side. `status`/`watch` never signal anything,
+// so what matters here is the opposite of the tests above - not "a wrong
+// pid must never be signaled" but "a reading we don't have must never be
+// reported as a worker that's gone". Each way of not knowing gets its own
+// test, because collapsing any of them into "not-found" would put a
+// confident false alarm on the Client's status line.
+
+test("probeTaskWorker: a verified live runner reads as alive", () => {
+  const recordHome = freshHome();
+  const { id } = registerTask(recordHome, "a task");
+  writeTaskPidFile(recordHome, id);
+
+  assert.equal(probeTaskWorker(recordHome, id, { listProcesses: tableClaiming(DO_RUNNER) }), "alive");
+});
+
+test("probeTaskWorker: no pid file at all reads as unknown, never as a missing worker", () => {
+  const recordHome = freshHome();
+  const { id } = registerTask(recordHome, "a task");
+
+  // A round already in flight when pid files landed (issue #203) has
+  // none, and nothing whatsoever follows from that about its worker.
+  let consulted = false;
+  const presence = probeTaskWorker(recordHome, id, {
+    listProcesses: () => {
+      consulted = true;
+      return [{ pid: process.pid, args: DO_RUNNER }];
+    },
+  });
+
+  assert.equal(presence, "unknown");
+  assert.equal(consulted, false, "with no pid to check, there is nothing to ask the process table about");
+});
+
+test("probeTaskWorker: a pid belonging to something unrelated now reads as not-found", () => {
+  const recordHome = freshHome();
+  const { id } = registerTask(recordHome, "a task");
+  writeTaskPidFile(recordHome, id);
+
+  assert.equal(
+    probeTaskWorker(recordHome, id, { listProcesses: tableClaiming("/usr/bin/postgres -D /var/db") }),
+    "not-found"
+  );
+});
+
+test("probeTaskWorker: a dead pid reads as not-found", () => {
+  const recordHome = freshHome();
+  const { id } = registerTask(recordHome, "a task");
+  // Above every documented pid_max, so it cannot be live.
+  writeTaskFile(recordHome, id, "worker.pid", "4194304");
+
+  assert.equal(probeTaskWorker(recordHome, id, { listProcesses: tableClaiming(DO_RUNNER) }), "not-found");
+});
+
+test("probeTaskWorker: a garbled pid file reads as not-found, not parsed into something", () => {
+  const recordHome = freshHome();
+  const { id } = registerTask(recordHome, "a task");
+
+  for (const garbage of ["", "   ", "not-a-pid", "-1", "0"]) {
+    writeTaskFile(recordHome, id, "worker.pid", garbage);
+    assert.equal(
+      probeTaskWorker(recordHome, id, { listProcesses: tableClaiming(DO_RUNNER) }),
+      "not-found",
+      `"${garbage}" must not read as a live worker`
+    );
+  }
+});
+
+test("probeTaskWorker: an unusable process table reads as unknown - a missing `ps` is not a missing worker", () => {
+  const recordHome = freshHome();
+  const { id } = registerTask(recordHome, "a task");
+  writeTaskPidFile(recordHome, id);
+
+  // listProcesses (live-view-process.ts) degrades to [] when no `ps` it
+  // can use exists. An empty table is never the truth - this very
+  // process is in it - so the only honest answer is "can't tell".
+  assert.equal(probeTaskWorker(recordHome, id, { listProcesses: () => [] }), "unknown");
+});
+
+test("cachedProcessTable: reads the real table once, however many tasks ask", () => {
+  let reads = 0;
+  const table = cachedProcessTable(() => {
+    reads++;
+    return [{ pid: process.pid, args: DO_RUNNER }];
+  });
+
+  const recordHome = freshHome();
+  for (const text of ["one", "two", "three"]) {
+    const { id } = registerTask(recordHome, text);
+    writeTaskPidFile(recordHome, id);
+    assert.equal(probeTaskWorker(recordHome, id, { listProcesses: table }), "alive");
+  }
+
+  assert.equal(reads, 1, "a `fabrica status` listing must not spawn one `ps` per open task");
 });
 
 /** A throwaway child that outlives its own spawn call, leads its own

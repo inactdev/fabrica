@@ -1,12 +1,15 @@
 // Finding and signaling the detached process running one task's round
-// (issue #203's `stop`). This is `live-view-process.ts`'s discipline
-// applied to a task instead of the live view, for the same reason and
-// with the same two safeguards: a pid file the process writes about
-// itself, plus a real command-line check before anything is ever
-// signaled, because a stale pid file's number can be reused by an
-// unrelated process. Nothing here ever signals a pid it has not
-// re-verified, and nothing here ever searches for "the process that
-// looks like it might be this task."
+// (issue #203's `stop`), and - issue #99 - answering "is it still
+// alive?" for `fabrica status`/`fabrica watch` out of the same two
+// safeguards instead of out of the record alone.
+//
+// This is `live-view-process.ts`'s discipline applied to a task instead
+// of the live view, for the same reason and with the same two
+// safeguards: a pid file the process writes about itself, plus a real
+// command-line check before anything is ever signaled, because a stale
+// pid file's number can be reused by an unrelated process. Nothing here
+// ever signals a pid it has not re-verified, and nothing here ever
+// searches for "the process that looks like it might be this task."
 //
 // Why the pid file rather than a `ps` search alone: `fabrica answer`'s
 // and `fabrica verdict fix`'s detached runners both carry the task id in
@@ -17,6 +20,7 @@
 // into its own task folder is the one place that fact is known for
 // certain.
 
+import { DEFAULT_HEARTBEAT_INTERVAL_MS } from "../index.ts";
 import { readTaskFile, writeTaskFile } from "../record/index.ts";
 import { listProcesses } from "./live-view-process.ts";
 
@@ -98,6 +102,79 @@ export function findTaskProcess(
   const list = opts.listProcesses ?? listProcesses;
   const match = list().find((p) => p.pid === pid);
   return match && commandLineMatchesTask(match.args, taskId) ? { pid } : null;
+}
+
+/** What a real look at the worker's own process found (issue #99).
+ * Three values, not a boolean, because "we looked and there is nothing
+ * running this task" and "we have no way to tell" are different facts
+ * and `status`/`watch` must never report the second as the first - that
+ * would be the same inference-from-silence this issue exists to remove,
+ * just with a more confident voice. */
+export type WorkerPresence =
+  /** The task's own pid file names a live process still running one of
+   * the detached runners - `findTaskProcess` verified it. */
+  | "alive"
+  /** There is a pid file, and it does not resolve to such a process:
+   * the number is dead, belongs to something unrelated now (reuse), or
+   * cannot be parsed. Nothing is running this task. */
+  | "not-found"
+  /** No reading at all: no pid file (a round that started before
+   * `writeTaskPidFile` existed), or no usable process table to verify
+   * against. */
+  | "unknown";
+
+/** How long a repeated reader (`fabrica watch`, polling twice a second)
+ * must wait before asking the operating system again. Deliberately the
+ * heartbeat interval: a running worker reports in that often, so
+ * checking its process more frequently than it reports cannot tell the
+ * Client anything new, and `listProcesses` spawns a real `ps -A` every
+ * time it is called. */
+export const WORKER_PROBE_INTERVAL_MS = DEFAULT_HEARTBEAT_INTERVAL_MS;
+
+/**
+ * Whether the process meant to be running this task's round really is
+ * (issue #99). Deliberately built on `findTaskProcess` rather than
+ * beside it, so there is exactly one definition of "this pid is this
+ * task's worker" - the pid file plus the real command-line check - and a
+ * reporting reader can never be more trusting than the one that
+ * signals.
+ *
+ * `opts.listProcesses` replaces the real process table; a caller with
+ * several tasks to ask about (or one task to ask about repeatedly)
+ * should pass `cachedProcessTable()` so the whole listing costs one
+ * `ps`, not one per task.
+ */
+export function probeTaskWorker(recordHome: string, taskId: string, opts: FindTaskProcessOptions = {}): WorkerPresence {
+  // No pid file is not evidence of a dead worker: every round has
+  // written one since issue #203, but a round already in flight before
+  // that landed never did, and neither did one whose task folder was
+  // hand-copied. Unknown, and said as such.
+  if (readTaskFile(recordHome, taskId, "worker.pid") === null) return "unknown";
+
+  const list = opts.listProcesses ?? listProcesses;
+  const table = list();
+  // An empty process table is never the truth - this very process is in
+  // it - so it means `ps` itself was unusable (`listProcesses` degrades
+  // to [] rather than throwing, see live-view-process.ts). Nothing can
+  // be ruled out from that, and ruling the worker dead on it would
+  // report a missing tool as a missing worker.
+  if (table.length === 0) return "unknown";
+
+  return findTaskProcess(recordHome, taskId, { listProcesses: () => table }) === null ? "not-found" : "alive";
+}
+
+/** One process table, read at most once however many tasks ask for it -
+ * `fabrica status` lists every open task and would otherwise spawn a
+ * `ps -A` per line. Memoized for the life of the returned function, so
+ * a caller that wants a fresh reading makes a fresh one (or, like
+ * `fabrica watch` with its single task, just doesn't use this: one probe
+ * reads the table exactly once anyway). */
+export function cachedProcessTable(list: () => { pid: number; args: string }[] = listProcesses): () => {
+  pid: number;
+  args: string;
+}[] {
+  let table: { pid: number; args: string }[] | null = null;
+  return () => (table ??= list());
 }
 
 /** Sends one signal to the process group a verified task runner leads,
