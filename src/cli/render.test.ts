@@ -176,6 +176,54 @@ test("formatStatusLine: flags a delivered task as awaiting verdict", () => {
   assert.match(line, /fabrica verdict t1 accept\|fix\|wrong/);
 });
 
+// The base-standing mark (behind origin's default tip): formatStatusLine
+// shows `describeBaseStanding`'s string verbatim and never words it
+// itself, for the same reason it stopped deciding liveness wording - the
+// live view shows the identical string from the identical function.
+test("formatStatusLine: shows the base-standing mark verbatim on a delivered task, before the pull request link", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "delivered" },
+    {
+      project: "/proj",
+      ageMs: 60_000,
+      liveness: null,
+      hasDelivery: true,
+      baseStanding: "behind origin/main, a fix will rebase (origin last fetched 12m ago)",
+      prUrl: "https://example.test/pr/1",
+    }
+  );
+  assert.match(line, /AWAITING YOUR VERDICT/);
+  assert.match(line, /behind origin\/main, a fix will rebase \(origin last fetched 12m ago\)/);
+  assert.ok(
+    line.indexOf("behind origin/main") < line.indexOf("https://example.test/pr/1"),
+    `the mark belongs with the verdict, before the link: ${line}`
+  );
+});
+
+test("formatStatusLine: a base standing of null marks nothing at all", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "delivered" },
+    { project: "/proj", ageMs: 60_000, liveness: null, hasDelivery: true, baseStanding: null }
+  );
+  assert.match(line, /AWAITING YOUR VERDICT: fabrica verdict t1 accept\|fix\|wrong$/);
+});
+
+test("formatStatusLine: a meter-paused delivery carries the base-standing mark too", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "delivered" },
+    {
+      project: "/proj",
+      ageMs: 60_000,
+      liveness: null,
+      hasDelivery: true,
+      pausedByMeter: "the week is 91% full",
+      baseStanding: "base unknown: the branch fabrica/t1 is gone from /proj",
+    }
+  );
+  assert.match(line, /PAUSED BY THE SUBSCRIPTION METER/);
+  assert.match(line, /base unknown: the branch fabrica\/t1 is gone from \/proj/);
+});
+
 test("formatStatusLine: appends whatever describeLiveness decided, verbatim", () => {
   const line = formatStatusLine(
     { id: "t1", state: "working" },

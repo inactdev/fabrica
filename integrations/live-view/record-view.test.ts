@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEvent, appendTaskFile, recordPath, registerTask, writeTaskFile } from "../../src/record/index.ts";
 import {
+  BASE_STANDING_CACHE_MS,
   createRecordView,
   displayState,
   gateStateLabel,
@@ -194,6 +195,101 @@ test("createRecordView: before any write-up exists, the row's title falls back t
   const task = view.getState().tasks.find((t) => t.id === taskId);
   assert.equal(task?.title, "still working on it");
   assert.equal(task?.writeup, null);
+});
+
+// The base-standing mark: the one field on this view that is read from
+// git rather than from the record (it cannot come from the record - origin
+// moves after a delivery is written). The real reader is proven against
+// real repositories in src/foreman/base-standing.test.ts; these tests
+// stub it, so what they cover is what this module decides - which tasks
+// it is asked about, how often, and that one answer reaches every surface.
+function deliveredTask(recordHome: string, project = "/p", branch = "fabrica/task-1"): string {
+  const taskId = registerTask(recordHome, "fix the thing").id;
+  appendEvent(recordHome, { taskId, name: "work-started", details: { project } });
+  appendEvent(recordHome, {
+    taskId,
+    name: "delivered",
+    details: {
+      outcome: "done",
+      delivery: { branch, outcome: "done", confidence: 80, files: [], gateChanges: "", summary: "did the thing" },
+    },
+  });
+  return taskId;
+}
+
+test("createRecordView: a delivered task carries the base-standing mark it was read as", () => {
+  const recordHome = tempRecordHome();
+  const asked: { project: string | null; branch: string | null }[] = [];
+  const view = createRecordView(recordHome, {
+    baseStanding: (project, branch) => {
+      asked.push({ project, branch });
+      return "behind origin/main, a fix will rebase (origin last fetched 4m ago)";
+    },
+  });
+  const taskId = deliveredTask(recordHome, "/projects/app", "fabrica/task-9");
+
+  const task = view.getState().tasks.find((t) => t.id === taskId);
+  assert.equal(task?.baseStanding, "behind origin/main, a fix will rebase (origin last fetched 4m ago)");
+  assert.deepEqual(asked, [{ project: "/projects/app", branch: "fabrica/task-9" }], "asked about the delivery's own branch");
+});
+
+test("createRecordView: a task that is not delivered is never asked about at all", () => {
+  const recordHome = tempRecordHome();
+  let calls = 0;
+  const view = createRecordView(recordHome, {
+    baseStanding: () => {
+      calls += 1;
+      return "behind origin/main, a fix will rebase";
+    },
+  });
+  const taskId = registerTask(recordHome, "still working").id;
+  appendEvent(recordHome, { taskId, name: "work-started", details: { project: "/p" } });
+
+  const task = view.getState().tasks.find((t) => t.id === taskId);
+  assert.equal(task?.baseStanding, null);
+  assert.equal(calls, 0, "a branch nobody is being asked to rule on is not worth a git call");
+});
+
+test("createRecordView: the review card shows the exact same mark as the task view, read once", () => {
+  const recordHome = tempRecordHome();
+  let calls = 0;
+  const view = createRecordView(recordHome, {
+    baseStanding: () => {
+      calls += 1;
+      return "base unknown: the branch fabrica/task-1 is gone from /p";
+    },
+  });
+  const taskId = deliveredTask(recordHome);
+
+  const now = Date.now();
+  const row = view.getReviewRows(now).find((r) => r.id === taskId);
+  assert.ok(row && row.kind === "delivered");
+  assert.equal(
+    (row as { baseStanding: string | null }).baseStanding,
+    view.getTask(taskId, now)?.baseStanding,
+    "the card the Client rules from and the list he scans must show one string"
+  );
+  assert.equal(calls, 1, "one reading serves both, within the cache window");
+});
+
+test("createRecordView: a 2Hz poll does not ask git again every tick, and does ask again past the cache window", () => {
+  const recordHome = tempRecordHome();
+  let calls = 0;
+  const view = createRecordView(recordHome, {
+    baseStanding: () => {
+      calls += 1;
+      return `read ${calls}`;
+    },
+  });
+  const taskId = deliveredTask(recordHome);
+
+  const now = Date.now();
+  for (let tick = 0; tick < 10; tick++) view.getState(now + tick * 500);
+  assert.equal(calls, 1, `ten polls inside the cache window should be one reading, not ten (was ${calls})`);
+
+  const later = view.getState(now + BASE_STANDING_CACHE_MS + 1).tasks.find((t) => t.id === taskId);
+  assert.equal(calls, 2, "past the window it is read again - a fetch can have landed since");
+  assert.equal(later?.baseStanding, "read 2");
 });
 
 test("createRecordView: getTask returns the same view getState would, for one task id", () => {

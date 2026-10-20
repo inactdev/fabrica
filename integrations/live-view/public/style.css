@@ -293,6 +293,31 @@ main {
   text-align: right;
 }
 
+/* "behind origin/<branch>, a fix will rebase" (or "base unknown:
+   <reason>") under the delivery outcome - set only for a delivered task,
+   and empty for every other row, which `:empty` collapses away so those
+   rows look exactly as they did. Amber, like every other "this wants
+   your eye but nothing is broken" mark on these pages. It wraps: the
+   sentence names a branch and sometimes a whole reason, and cutting it
+   with an ellipsis here would leave the Client with half a fact. */
+.base-note {
+  display: block;
+  color: var(--amber);
+  text-align: right;
+  white-space: normal;
+}
+
+.base-note:empty {
+  display: none;
+}
+
+/* The same mark at table width, where a 36-pixel row has no second line
+   to give it: the outcome itself turns amber and the cell carries the
+   whole sentence as its tooltip (app.js sets the title attribute). */
+.cell.has-base-note .cell-value {
+  color: var(--amber);
+}
+
 /* The task's own title leads the card, full width, no label in front of
    it - it is the thing being identified, not a field of it. */
 .task-row .cell-task {
@@ -402,6 +427,12 @@ main {
 
   .cell-value {
     text-align: left;
+  }
+
+  /* No room for a second line in a 36px row - the tooltip and the amber
+     outcome carry it at this width (see .cell.has-base-note above). */
+  .base-note {
+    display: none;
   }
 
   .task-row .cell-task {
@@ -536,6 +567,15 @@ body.review-page main {
 
 .review-stamp {
   font-weight: 600;
+}
+
+/* The base-standing mark on a delivery's own card - amber rather than
+   .review-line's dim, since it bears directly on the accept-or-fix
+   choice the buttons below it offer, and allowed to wrap: it can carry a
+   whole reason. */
+.review-base {
+  color: var(--amber);
+  word-break: break-word;
 }
 
 .stamp-green { color: var(--green); }

@@ -138,6 +138,11 @@ function renderTask(task) {
     field("Attempt", task.attempt === null ? "no attempts yet" : `attempt ${task.attempt}`),
     field("Cost", costLine(task)),
   ];
+  // Only ever set for a delivered task whose branch is behind origin's
+  // default tip, or whose standing could not be read at all - the whole
+  // sentence comes from the server (src/foreman/base-standing.ts), the
+  // same one `fabrica status` prints.
+  if (task.baseStanding) fields.push(field("Base", task.baseStanding));
   if (task.prUrl) fields.push(field("Pull request", el("a", { href: task.prUrl }, [task.prUrl])));
   if (task.writeup) fields.push(...renderWriteup(task.writeup));
 

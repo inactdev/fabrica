@@ -7,6 +7,8 @@
 import {
   capsActive,
   daySpend,
+  deliveredBranchOf,
+  describeBaseStandingOf,
   describeMeters,
   describeTaskCost,
   describeUnmeasured,
@@ -54,6 +56,16 @@ worker has even started (its own, much shorter ceiling, since a real
 answer from the brain arrives in well under a minute). A closed task
 (verdict recorded) drops off this list - see \`fabrica log <id>\` for its
 history.
+
+A delivered task whose branch no longer contains origin's default tip
+is marked "behind origin/<branch>, a fix will rebase" - the rebase a
+\`fix\` verdict already performs before its round starts. That reading is
+taken from this machine's own git refs and writes nothing, so it is only
+as current as the last fetch (which Fabrica itself does when it cuts a
+line and before every fix round); the mark says how long ago that was.
+When it cannot be read at all - no "origin" remote, origin/HEAD unset,
+the branch or the project gone - the line says "base unknown: <reason>"
+rather than quietly implying the branch is current.
 
 For a task whose round should have a process running it, that process
 is really looked for - its own pid file, verified against what is
@@ -268,6 +280,16 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
         // Client's own fix verdict), so its line has to name what it is
         // waiting for or it reads like any other delivery.
         const pausedByMeter = meterPauseOf(recordHome, task.id)?.message;
+        // Where the delivered branch stands against origin's default
+        // branch - the one thing on this line that is read from git
+        // rather than from the record, because the record cannot know
+        // it: origin moves while a task works, and a `fix` would rebase
+        // onto it first (issue #235). Local refs only, nothing written,
+        // and only for a delivered task - the single state where that
+        // `fix` is the Client's live option. The same string the live
+        // view shows, from the same function.
+        const baseStanding =
+          task.state === "delivered" ? describeBaseStandingOf(project, deliveredBranchOf(events), now) : null;
         stdout(
           formatStatusLine(task, {
             project,
@@ -278,6 +300,7 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             failedBecause,
             refusalReason,
             prUrl: prUrlFromEvents(events),
+            baseStanding,
             ...(pausedByMeter === undefined ? {} : { pausedByMeter }),
           })
         );

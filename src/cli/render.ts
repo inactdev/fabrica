@@ -3,7 +3,7 @@
 // identically everywhere it shows up rather than three slightly different
 // home-grown formats.
 
-import { DEFAULT_HEARTBEAT_INTERVAL_MS, formatUsd } from "../index.ts";
+import { DEFAULT_HEARTBEAT_INTERVAL_MS, formatAge, formatUsd } from "../index.ts";
 import type { FabricaEvent, FabricaTask, TranscriptEntry } from "../index.ts";
 import type { WorkerPresence } from "./task-process.ts";
 
@@ -171,19 +171,11 @@ export function expectsWorkerProcess(state: FabricaTask["state"], events: Fabric
 }
 
 /** Compact, human age like "3s", "12m", "4h15m", "2d3h" - dense enough for
- * a one-line-per-task status listing. */
-export function formatAge(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) return `${totalMinutes}m`;
-  const totalHours = Math.floor(totalMinutes / 60);
-  const remMinutes = totalMinutes % 60;
-  if (totalHours < 24) return remMinutes > 0 ? `${totalHours}h${remMinutes}m` : `${totalHours}h`;
-  const days = Math.floor(totalHours / 24);
-  const remHours = totalHours % 24;
-  return remHours > 0 ? `${days}d${remHours}h` : `${days}d`;
-}
+ * a one-line-per-task status listing. Implemented in `src/foreman/age.ts`
+ * and re-exported here, where it has always been imported from: the live
+ * view's own labels need the same formatter and never import from
+ * src/cli/, so it cannot live in this file any more. */
+export { formatAge };
 
 /** One line for `fabrica status` - dense, scannable, and honest: a
  * delivered task is flagged as awaiting the Client's verdict (the single
@@ -226,6 +218,16 @@ export function formatStatusLine(
      * is explicitly never a failure - so without this the line would
      * say it is waiting without saying what for. */
     pausedByMeter?: string;
+    /** `describeBaseStanding`'s own string for this task's branch -
+     * "behind origin/<branch>, a fix will rebase" or "base unknown:
+     * <reason>" - shown verbatim, never re-worded here, since the live
+     * view shows the identical string from the identical function.
+     * Omitted (or null) when the branch contains origin's tip, which is
+     * the ordinary case and worth saying nothing about. Only ever set
+     * for a delivered task: it is the one state where a `fix` is the
+     * Client's live option, so it is the only one where "a fix will
+     * rebase" is information rather than trivia. */
+    baseStanding?: string | null;
   }
 ): string {
   const project = opts.project ?? "unknown project";
@@ -234,13 +236,17 @@ export function formatStatusLine(
 
   if (task.state === "delivered") {
     const pr = opts.prUrl ? `  pull request: ${opts.prUrl}` : "";
+    // Before the pull request link rather than after it: a long URL at
+    // the end of the line is where the eye stops, and this is a fact
+    // about the verdict being asked for, so it belongs with it.
+    const standing = opts.baseStanding ? `  ${opts.baseStanding}` : "";
     if (opts.pausedByMeter !== undefined) {
       return (
         `${base}  <- PAUSED BY THE SUBSCRIPTION METER: ${opts.pausedByMeter} - nothing restarts by itself: ` +
-        `\`fabrica verdict ${task.id} fix\` continues it${pr}`
+        `\`fabrica verdict ${task.id} fix\` continues it${standing}${pr}`
       );
     }
-    return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${pr}`;
+    return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${standing}${pr}`;
   }
   if (isDeadEnd(task.state, opts.hasDelivery)) {
     if (task.state === "failed") {

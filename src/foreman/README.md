@@ -1059,6 +1059,51 @@ task's work. An `already-current` round keeps the base it had (still an
 ancestor of the branch), and a round that aborted its rebase puts the old
 base back.
 
+### Telling the Client a delivery is behind that base, before he rules
+
+The rebase above answers "what will a `fix` do". `base-standing.ts`
+answers the question that comes first, while a delivery is sitting there
+waiting on a verdict: *is* this branch behind origin's default tip? Both
+`fabrica status` and the live view mark one that is - "behind
+origin/&lt;branch&gt;, a fix will rebase (origin last fetched Nm ago)" -
+from `describeBaseStanding`, the one renderer, so the two surfaces cannot
+word it differently.
+
+Three properties, all of them deliberate:
+
+- **It writes nothing, and it never fetches.** Four read-only git calls
+  against local refs: `git symbolic-ref --short
+  refs/remotes/origin/HEAD` for origin's default branch (never assumed
+  to be "master"), `git rev-parse --verify` on
+  `refs/remotes/origin/<base>` and `refs/heads/<branch>`, and `git
+  merge-base --is-ancestor` between them - plus a `stat` on the path
+  `git rev-parse --git-path FETCH_HEAD` names, for the freshness clause.
+  `base-standing.test.ts` snapshots the whole project folder, `.git`
+  included, around a call and asserts not one byte moved. Fetching would
+  be the more accurate answer and was ruled out: this is a reporting
+  surface read many times an hour, and it must not mutate the Client's
+  repository (or wait on his network) to report. `src/line/cut.ts` and
+  `rebase.ts` already fetch at the two moments that matter, so the mark
+  is never staler than the work it describes - and it says how old that
+  fetch was, rather than implying it is live.
+- **Local `refs/remotes/origin/HEAD`, not `git ls-remote --symref`.**
+  `cut.ts` asks the remote because it is about to cut a branch from the
+  answer. The local symref is the same fact written down: verified on
+  git 2.54.0 that `git clone` writes it and `git fetch origin` writes it
+  when missing (it is left alone once set, so `git remote set-head origin
+  -a` is the fix for a checkout whose remote default has since moved -
+  which is what the "base unknown" wording points at).
+- **A question it cannot answer is never answered anyway.** No origin
+  remote, no `origin/HEAD`, a deleted branch, a project folder that has
+  been moved away, a git that refused: each comes back as
+  `base unknown: <reason>`, one line, shown verbatim. A silent fall back
+  to "current" was explicitly ruled out - it would read as "your branch
+  is fine" on exactly the repositories where nothing is known.
+
+Only a *delivered* task is ever asked about: it is the one state where
+`fix` is the Client's live option, so it is the only one where "a fix
+will rebase" is information rather than trivia.
+
 ## Rule 10: spending caps (issue #11)
 
 **Where cost comes from.** A brain reports what one `work()` call cost on
