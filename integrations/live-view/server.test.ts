@@ -470,6 +470,71 @@ test("startLiveView: a verdict POST with the identity header records accept exac
   }
 });
 
+test("startLiveView: an optional note on accept reaches the record exactly as `fabrica verdict -m` puts it there", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "accept", note: "exactly the button I wanted" }),
+    });
+    assert.equal(res.status, 200);
+
+    // The Client's own words, on the two places a `-m` note lands: the
+    // task's human-readable verdict file and the event the rest of
+    // Fabrica reads.
+    assert.match(readTaskFile(recordHome, task.id, "verdict") ?? "", /accept: exactly the button I wanted/);
+    const recorded = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-recorded").at(-1);
+    assert.deepEqual(recorded?.details, { ruling: "accept", note: "exactly the button I wanted" });
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an accept with no note at all records no note - the empty-box case (Client ruling)", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    // What review.js sends when the box is empty: the `note` key is left
+    // off the body entirely, not sent as "".
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+    assert.equal(res.status, 200);
+
+    assert.match(readTaskFile(recordHome, task.id, "verdict") ?? "", /accept\n$/);
+    const recorded = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-recorded").at(-1);
+    assert.deepEqual(recorded?.details, { ruling: "accept", note: "" });
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: an optional note on wrong reaches the record the same way", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${view.port}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "wrong", note: "not what I asked for" }),
+    });
+    assert.equal(res.status, 200);
+
+    assert.match(readTaskFile(recordHome, task.id, "verdict") ?? "", /wrong: not what I asked for/);
+    const recorded = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-recorded").at(-1);
+    assert.deepEqual(recorded?.details, { ruling: "wrong", note: "not what I asked for" });
+  } finally {
+    await view.close();
+  }
+});
+
 test("startLiveView: a verdict POST for \"fix\" with no note is refused before anything is recorded", async () => {
   const recordHome = tempRecordHome();
   const task = await deliveredTask(recordHome);

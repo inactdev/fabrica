@@ -195,17 +195,17 @@ any more (follow-up to issue #202, "show every task waiting on me"):
   a live call out to GitHub's API: that would mean this read-only viewer
   needing its own GitHub credential and network egress for a page whose
   whole point is reviewing a handful of deliveries already sitting in
-  front of it. This card has three buttons - accept, fix (with a
-  one-line note, required), wrong (with a one-line note, optional).
+  front of it. This card has one note box and three buttons - accept,
+  fix, wrong (see "One note box per card" below).
 - **Inspector refused it, with no delivery behind the refusal** - a
   narrower card: just the title and Inspector's own report in plain
   words (never the generic "Inspector reached no verdict" placeholder
   `fabrica status` falls back to elsewhere - the actual reason matters
-  here), with one button, wrong.
+  here), with the same note box and one button, wrong.
 - **Failed before any work started** - a crash, a cap refusal, or a
   project that was never plugged in, all before a worker ever ran - the
-  same narrow card, naming the exact recorded error, with one button,
-  wrong.
+  same narrow card, naming the exact recorded error, with the same note
+  box and one button, wrong.
 - **Asked a clarifying question** - a task that stopped on SPEC.md step
   2 and is waiting on the Client's own words rather than on a ruling.
   Its card has no write-up, no stamp and no verdict buttons at all: the
@@ -242,6 +242,36 @@ the recorded questions themselves), not a status line that state has
 never carried. When nothing is waiting on the Client at all, the page
 says so in words ("Nothing waiting on you.") rather than showing an
 empty list.
+
+### One note box per card
+
+Every card that offers a verdict carries exactly one note box, visible
+up front rather than revealed by a tap, and every verdict button on that
+card reads it (Client ruling): **optional** for `accept` and `wrong`,
+**required** for `fix`. One tap still records a verdict - whatever
+happens to be typed rides along as the note, and an empty box sends the
+`note` key off the request entirely, landing on the record exactly as
+`fabrica verdict <id> accept` with no `-m` does (an empty note is never
+recorded as the Client's reaction to something). `display.ts`'s
+`noteToSend` is that one rule, unit tested there and hand-duplicated in
+`review.js` like every other function in that file. The note itself is
+the Client's own labeled reaction and goes to the same two places a
+`-m` note always has: the task's `verdict` file and the
+`verdict-recorded` event (`src/foreman/verdict.ts`).
+
+It is deliberately one box per card rather than one per button: a second
+input would mean text typed in the visible box could be silently dropped
+by whichever button was tapped, on the only page in this directory that
+records decisions. This also replaces the browser `prompt()` dialogs
+`fix` and `wrong` used to collect a note through - nothing on this page
+opens one now. Typed text survives the 2-second poll for the same reason
+a half-made decision always has: a card's DOM node is built once and
+left alone while it is on screen (`renderRows`).
+
+All three buttons stay behind one confirmation, as they each effectively
+were before (the dialog `fix` had to pass through was its own): a verdict
+closes a task or spends real money on a fresh round, and a phone is where
+a mis-tap is likeliest.
 
 Whichever button a tap is on, it records the Client's decision through
 the *exact same* pair of functions the command line calls:
