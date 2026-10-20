@@ -218,6 +218,13 @@ export function formatStatusLine(
     /** The pull request Inspector opened, if any - shown once, on a
      * delivered task's own line, never implied for any other state. */
     prUrl?: string | null;
+    /** Issue #189: set when this task's latest round was stopped by a
+     * subscription meter and nothing has moved it since
+     * (`meterPauseOf`). A paused task is "delivered" - it waits on the
+     * Client's own `fix` verdict, exactly like any other delivery, and
+     * is explicitly never a failure - so without this the line would
+     * say it is waiting without saying what for. */
+    pausedByMeter?: string;
   }
 ): string {
   const project = opts.project ?? "unknown project";
@@ -226,6 +233,12 @@ export function formatStatusLine(
 
   if (task.state === "delivered") {
     const pr = opts.prUrl ? `  pull request: ${opts.prUrl}` : "";
+    if (opts.pausedByMeter !== undefined) {
+      return (
+        `${base}  <- PAUSED BY THE SUBSCRIPTION METER: ${opts.pausedByMeter} - nothing restarts by itself: ` +
+        `\`fabrica verdict ${task.id} fix\` continues it${pr}`
+      );
+    }
     return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${pr}`;
   }
   if (isDeadEnd(task.state, opts.hasDelivery)) {

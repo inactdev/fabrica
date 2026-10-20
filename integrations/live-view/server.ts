@@ -239,6 +239,11 @@ async function handleRequest(
           rows: view.getReviewRows(),
           running: view.getRunningRows(),
           identified: identityOf(req) !== null,
+          // Issue #189: the two subscription meters, shown on this page
+          // because it is where the Client decides whether to spend a
+          // round - and a flat-rate subscription's own windows are the
+          // one budget the money figures elsewhere cannot show.
+          meters: view.getMeters(),
         })
       );
     } catch (err) {

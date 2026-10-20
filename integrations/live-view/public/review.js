@@ -464,8 +464,25 @@ async function loadReview() {
     return;
   }
   clearError();
+  renderMeters(body.meters);
   renderRows(body.rows);
   renderRunning(body.running || [], body.identified === true);
+}
+
+// Issue #189's two subscription meters, one line in the toolbar. Set as
+// text, never as markup, like everything else this page draws, and left
+// blank when the server sent none - an older server answering a newer
+// page must not leave "undefined" sitting on screen.
+function renderMeters(meters) {
+  const el = document.getElementById("meters");
+  if (!el) return;
+  if (!meters || typeof meters.label !== "string") {
+    el.textContent = "";
+    return;
+  }
+  const detail = typeof meters.detail === "string" && meters.detail !== "" ? ` · ${meters.detail}` : "";
+  const text = `${meters.paused === true ? "PAUSED · " : ""}${meters.label}${detail}`;
+  if (el.textContent !== text) el.textContent = text;
 }
 
 loadReview();

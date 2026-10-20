@@ -9,6 +9,9 @@ import { ForemanError } from "./errors.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { emitLiveTranscriptEntry } from "../brain/live-transcript.ts";
 import { registerRelayHealthProbe } from "../brain/relay-health.ts";
+import { registerMeterSource } from "../brain/meters.ts";
+import { METER_READING_MAX_AGE_MS } from "./meters.ts";
+import { DEFAULT_PAUSE_RULE } from "../config/index.ts";
 import type { Brain } from "../brain/index.ts";
 import type { Judge } from "./judge.ts";
 
@@ -415,4 +418,220 @@ test("runAttempts: a judgement with no verdict stops the loop, whatever the budg
   assert.equal(result.lastJudgement.kind, "not-verified");
   assert.equal(result.lastGate, undefined);
   assert.equal(result.receipts[0].checks, null);
+});
+
+// Issue #189: the subscription meters on every receipt, and the one
+// threshold that stops an attempt that is already running.
+
+const FRESH_READING = { observedAt: new Date().toISOString(), fiveHourPercent: 7, sevenDayPercent: 64 };
+
+/** A brain that registers a meter source the way the reference adapter
+ * does, reports `reported` on every tick, and sits in `work()` until it
+ * is asked to pause (or until `holdMs` elapses, so a test can never
+ * hang). `pauses` counts how many times it was actually asked. */
+function meteredFakeBrain(
+  reported: { observedAt: string; fiveHourPercent: number | null; sevenDayPercent: number | null },
+  opts: { holdMs?: number } = {}
+): Brain & { pauses: number; worked: number } {
+  const state = { pauses: 0, worked: 0 };
+  return {
+    name: "metered-fake",
+    model: "metered-1",
+    get pauses() {
+      return state.pauses;
+    },
+    get worked() {
+      return state.worked;
+    },
+    async ask() {
+      return { costUsd: 0 };
+    },
+    async work(_brief, workdir) {
+      state.worked += 1;
+      let paused = false;
+      const unregister = registerMeterSource(workdir, {
+        reading: () => reported,
+        pause: () => {
+          state.pauses += 1;
+          paused = true;
+        },
+      });
+      try {
+        const deadline = Date.now() + (opts.holdMs ?? 2_000);
+        while (!paused && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+      } finally {
+        unregister();
+      }
+      return {
+        transcript: [{ occurredAt: new Date().toISOString(), kind: "text", text: "worked" }],
+        session: "metered-session",
+        writeup: {
+          title: "Metered fake update",
+          why: "Testing.",
+          what: "Worked.",
+          how: "Directly.",
+          outsideChanges: "None.",
+          confidence: 90,
+          assumptions: "None.",
+          expectedOutcomes: "It lands.",
+          deviations: "None.",
+        },
+      };
+    },
+  };
+}
+
+test("runAttempts: every receipt records both subscription meters, exactly as the brain reported them", async () => {
+  const { receipts } = await runAttempts({
+    brain: fakeBrain({ meters: FRESH_READING }),
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+  });
+
+  assert.deepEqual(receipts[0].meters, FRESH_READING);
+});
+
+test("runAttempts: a brain that cannot report the meters leaves them null on the receipt, never 0", async () => {
+  const { receipts } = await runAttempts({
+    brain: fakeBrain(),
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+  });
+
+  assert.equal(receipts[0].meters, null);
+});
+
+test("runAttempts: the week past its stop threshold stops the attempt in flight - paused, never judged, never failed", async () => {
+  const brain = meteredFakeBrain({ ...FRESH_READING, sevenDayPercent: 93 });
+  let judged = 0;
+
+  const result = await runAttempts({
+    brain,
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: async () => {
+      judged += 1;
+      return { kind: "verdict", gate: { green: true, output: "ok" } };
+    },
+    totalAttempts: 3,
+    stopEarlyOnGreen: false,
+    heartbeatIntervalMs: 5,
+    pauseRule: { rule: DEFAULT_PAUSE_RULE },
+  });
+
+  assert.equal(brain.pauses >= 1, true, "the worker was actually asked to stop");
+  assert.equal(judged, 0, "a paused attempt is never handed to a check or to Inspector");
+  assert.equal(brain.worked, 1, "the loop stops - no further attempt is started");
+  assert.equal(result.meterStop?.usedPercent, 93);
+  assert.equal(result.meterStop?.thresholdPercent, 90);
+  assert.equal(result.meterStop?.workerStopped, true);
+  assert.equal(result.meterStop?.attempt, 1);
+  assert.equal(result.lastJudgement.kind, "paused-by-meter");
+  assert.equal(result.receipts.length, 1);
+  assert.equal(result.receipts[0].outcome, "paused-by-meter");
+  assert.equal(result.receipts[0].meters?.sevenDayPercent, 93);
+  assert.equal(result.receipts[0].checks, null);
+});
+
+test("runAttempts: a full 5-hour window never stops an attempt in flight - it runs to its own end", async () => {
+  const brain = meteredFakeBrain({ observedAt: new Date().toISOString(), fiveHourPercent: 99, sevenDayPercent: 20 }, { holdMs: 60 });
+
+  const result = await runAttempts({
+    brain,
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    heartbeatIntervalMs: 5,
+    pauseRule: { rule: DEFAULT_PAUSE_RULE },
+  });
+
+  assert.equal(brain.pauses, 0);
+  assert.equal(result.meterStop, undefined);
+  assert.equal(result.receipts[0].outcome, "delivered");
+});
+
+test("runAttempts: with no pause rule at all, nothing stops - the meters are still recorded", async () => {
+  const brain = meteredFakeBrain({ ...FRESH_READING, sevenDayPercent: 99 }, { holdMs: 60 });
+
+  const result = await runAttempts({
+    brain,
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    heartbeatIntervalMs: 5,
+    // Every real caller passes this (do.ts/verdict.ts), and it is what
+    // makes the loop tick at all - which is where a reading from a
+    // brain that reports only through the registry, and nothing in its
+    // transcript, is picked up.
+    onHeartbeat: () => {},
+  });
+
+  assert.equal(brain.pauses, 0);
+  assert.equal(result.meterStop, undefined);
+  assert.equal(result.receipts[0].meters?.sevenDayPercent, 99, "read on the heartbeat tick, with no entry in the transcript");
+});
+
+test("runAttempts: a stale reading stops nothing, however full the week looks", async () => {
+  const stale = {
+    observedAt: new Date(Date.now() - METER_READING_MAX_AGE_MS - 1_000).toISOString(),
+    fiveHourPercent: 99,
+    sevenDayPercent: 99,
+  };
+  const brain = meteredFakeBrain(stale, { holdMs: 60 });
+
+  const result = await runAttempts({
+    brain,
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    heartbeatIntervalMs: 5,
+    pauseRule: { rule: DEFAULT_PAUSE_RULE },
+  });
+
+  assert.equal(brain.pauses, 0);
+  assert.equal(result.meterStop, undefined);
+});
+
+test("runAttempts: a brain that registers no meter source is never paused mid-flight, whatever its transcript says", async () => {
+  // A reading only ever reaches the Foreman mid-attempt from a
+  // registered source, so a brain that registers none cannot be stopped
+  // by the pause rule in flight - its reading still reaches the receipt
+  // through the transcript, which is what a later start is judged on.
+  const brain = fakeBrain({ meters: { ...FRESH_READING, sevenDayPercent: 97 } });
+
+  const result = await runAttempts({
+    brain,
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    heartbeatIntervalMs: 5,
+    pauseRule: { rule: DEFAULT_PAUSE_RULE },
+  });
+
+  // fakeBrain resolves at once, so the heartbeat may never tick: the
+  // round completes normally and the reading lands on its receipt.
+  // Either way nothing reads as a failure.
+  assert.notEqual(result.receipts[0].outcome, "failed");
+  assert.equal(result.receipts[0].meters?.sevenDayPercent, 97);
 });

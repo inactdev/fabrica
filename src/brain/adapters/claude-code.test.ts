@@ -5,7 +5,16 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { buildAskPrompt, claudeCodeAdapter, claudeCodeCheckBox, ClaudeCodeError, resolveGitMounts, WRITEUP_JSON_SCHEMA } from "./claude-code.ts";
+import {
+  buildAskPrompt,
+  claudeCodeAdapter,
+  claudeCodeCheckBox,
+  ClaudeCodeError,
+  meterReadingFrom,
+  percentFromUtilization,
+  resolveGitMounts,
+  WRITEUP_JSON_SCHEMA,
+} from "./claude-code.ts";
 import { createProductionLine, destroyProductionLine } from "../../line/index.ts";
 import { makeFixtureHome, makeFixtureProject } from "../../line/helpers/fixture.ts";
 import { LineError } from "../../line/index.ts";
@@ -722,4 +731,61 @@ test("claude-code adapter: real binary does real work in a real worktree (capabi
   } finally {
     destroyProductionLine(line);
   }
+});
+
+// Issue #189: the subscription meters. The CLI's own non-interactive
+// output carries neither number (verified by running it - see
+// notes/20261020-do-fabrica-issue-189-as-written-closing-i3.md), so
+// they are read from the upstream's response headers at the relay, and
+// this is the one place that knows what those headers' values mean.
+
+test("percentFromUtilization: a utilization fraction becomes a whole-window percentage, the way the CLI's own status line does it", () => {
+  // Read live from the provider on 2026-10-20: the headers carry
+  // "0.07" and "0.64", and the status line renders them as
+  // used_percentage = utilization * 100.
+  // Compared with a tolerance, not pinned: 0.07 * 100 is not exactly 7
+  // in binary floating point, and the numbers are only ever shown
+  // rounded (`formatPercent`).
+  assert.ok(Math.abs(percentFromUtilization("0.07")! - 7) < 1e-9);
+  assert.ok(Math.abs(percentFromUtilization("0.64")! - 64) < 1e-9);
+  assert.equal(percentFromUtilization("0"), 0);
+  assert.equal(percentFromUtilization("1"), 100);
+});
+
+test("percentFromUtilization: an absent or unreadable header is null, never 0 - an empty window is the opposite fact", () => {
+  assert.equal(percentFromUtilization(undefined), null);
+  assert.equal(percentFromUtilization(""), null);
+  assert.equal(percentFromUtilization("not-a-number"), null);
+  assert.equal(percentFromUtilization("-0.5"), null);
+});
+
+test("meterReadingFrom: both headers become one reading, stamped when the relay's watcher read them", () => {
+  const observedAt = "2026-10-20T12:00:00.000Z";
+  const reading = meterReadingFrom({
+    observedAt,
+    headers: {
+      "anthropic-ratelimit-unified-5h-utilization": "0.10",
+      "anthropic-ratelimit-unified-7d-utilization": "0.64",
+    },
+  });
+  assert.equal(reading?.observedAt, observedAt);
+  assert.equal(Math.round(reading!.fiveHourPercent!), 10);
+  assert.equal(Math.round(reading!.sevenDayPercent!), 64);
+});
+
+test("meterReadingFrom: one window reported and not the other leaves the other null, and reports what it has", () => {
+  const reading = meterReadingFrom({
+    observedAt: "2026-10-20T12:00:00.000Z",
+    headers: { "anthropic-ratelimit-unified-7d-utilization": "0.64" },
+  });
+  assert.equal(reading?.fiveHourPercent, null);
+  assert.equal(Math.round(reading!.sevenDayPercent!), 64);
+});
+
+test("meterReadingFrom: no reading at all, and a reading with neither header, are both no reading", () => {
+  assert.equal(meterReadingFrom(undefined), undefined);
+  assert.equal(
+    meterReadingFrom({ observedAt: "2026-10-20T12:00:00.000Z", headers: { "x-something-else": "1" } }),
+    undefined
+  );
 });

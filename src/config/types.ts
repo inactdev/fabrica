@@ -35,7 +35,33 @@ export interface ProjectConfig {
   maxCallsPerTask?: number;
 }
 
+/** The pause rule (issue #189): how full the provider's own
+ * subscription windows may get before Fabrica stops asking for more.
+ * Unrelated to `Caps`, which is dollars - a flat-rate subscription's
+ * windows cost nothing to fill and so no dollar cap can ever notice
+ * them, which is the whole reason this exists next to them.
+ *
+ * Every field is a whole percentage, 0-100, and every field has a
+ * default (see `DEFAULT_PAUSE_RULE`): unlike the dollar caps, which do
+ * nothing until the Client sets one, the pause rule is always on. */
+export interface PauseRule {
+  /** Above this much of the 7-day window used, no new task, resumed
+   * round or fix round starts. Default 70. */
+  sevenDayRefusePercent: number;
+  /** Above this much of the 7-day window used, an attempt already in
+   * flight is stopped gracefully. Default 90. */
+  sevenDayStopPercent: number;
+  /** Above this much of the 5-hour window used, no new work starts.
+   * There is deliberately no 5-hour stop threshold: that window refills
+   * within hours, so stopping work already in flight for it would throw
+   * away more than it saves (Client's clarification). Default 90. */
+  fiveHourRefusePercent: number;
+}
+
 export interface FabricaConfig {
   caps: Caps;
+  /** Always present - `[pause]` is optional in projects.toml, and its
+   * absence means `DEFAULT_PAUSE_RULE`, not "no pause rule". */
+  pause: PauseRule;
   projects: Record<string, ProjectConfig>;
 }

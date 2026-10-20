@@ -102,6 +102,42 @@ test("runContained: aborting stopSignal stops the container instead of waiting t
   assert.equal(listed.trim(), "", `the box must be gone, got: ${listed}`);
 });
 
+test("runContained: aborting gracefulStopSignal stops the container with SIGTERM first, then SIGKILL", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+
+  // Issue #189: a subscription meter past its stop threshold stops an
+  // attempt "gracefully, at the next safe point, the same
+  // SIGTERM-then-SIGKILL path the owner's stop uses" (Client's
+  // clarification) - as opposed to stopSignal's immediate force-remove
+  // above. The command below traps SIGTERM and says so, which is what
+  // proves a signal was really delivered rather than the container
+  // simply being torn out from under it.
+  const name = `fabrica-test-graceful-${process.pid}`;
+  const pause = new AbortController();
+  const startedAt = Date.now();
+  setTimeout(() => pause.abort(), 500);
+
+  const result = await runContained("sh", ["-c", "trap 'echo stopping; exit 0' TERM; sleep 600 & wait"], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    containerName: name,
+    gracefulStopSignal: pause.signal,
+  });
+
+  const elapsed = Date.now() - startedAt;
+  assert.ok(elapsed < 60_000, `the run should end on the abort, not run its course - took ${elapsed}ms`);
+  assert.match(result.stdout, /stopping/, "the container got a real SIGTERM, not just a removal");
+
+  // `docker run --rm` reaps a container that exits, so nothing is left
+  // behind to keep this run's networks undeletable either.
+  const listed = execFileSync("docker", ["ps", "-a", "--filter", `name=${name}`, "--format", "{{.Names}}"], {
+    encoding: "utf8",
+  });
+  assert.equal(listed.trim(), "", `the box must be gone, got: ${listed}`);
+});
+
 test("runContained: onStdout delivers the first chunk while the process is still running, not batched at close", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const { workdir } = makeFixture();

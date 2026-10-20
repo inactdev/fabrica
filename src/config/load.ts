@@ -10,7 +10,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import * as TOML from "smol-toml";
 import { ConfigError } from "./errors.ts";
-import type { Caps, FabricaConfig, ProjectConfig } from "./types.ts";
+import type { Caps, FabricaConfig, PauseRule, ProjectConfig } from "./types.ts";
+
+/** Issue #189's defaults, as the Client gave them: "defaults 70 and 90
+ * percent of the week". The 5-hour window refuses at 90 too, and never
+ * stops work in flight - see `PauseRule`. */
+export const DEFAULT_PAUSE_RULE: PauseRule = {
+  sevenDayRefusePercent: 70,
+  sevenDayStopPercent: 90,
+  fiveHourRefusePercent: 90,
+};
 
 export function projectsTomlPath(recordHome: string): string {
   return join(recordHome, "projects.toml");
@@ -47,7 +56,7 @@ export function loadConfig(recordHome: string): FabricaConfig {
     throw new ConfigError("malformed", `${path} must contain a TOML table at its root.`);
   }
 
-  const { caps: rawCaps, projects: rawProjects, ...rest } = parsed;
+  const { caps: rawCaps, pause: rawPause, projects: rawProjects, ...rest } = parsed;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     const staleTables = extra.filter((key) => isTable(rest[key]));
@@ -68,14 +77,15 @@ export function loadConfig(recordHome: string): FabricaConfig {
     throw new ConfigError(
       "malformed",
       `${path}: ${sentences.join(" ")} Projects live under [projects.<name>] ` +
-        `and globals under [caps].`
+        `and globals under [caps] and [pause].`
     );
   }
 
   const caps = parseCaps(rawCaps, path);
+  const pause = parsePause(rawPause, path);
   const projects = parseProjects(rawProjects, path);
 
-  return { caps, projects };
+  return { caps, pause, projects };
 }
 
 /**
@@ -126,6 +136,58 @@ function parseCaps(value: unknown, path: string): Caps {
     caps.perDayUsd = requireCapUsd(perDayUsd, `${path}: [caps].perDayUsd`);
   }
   return caps;
+}
+
+/** `[pause]` (issue #189). Absent means the defaults, not "off"; a
+ * table that sets only some of the three keeps the defaults for the
+ * rest. A stop threshold below its own refuse threshold is refused
+ * outright rather than quietly accepted: it would mean "stop work
+ * already in flight before you would even refuse to start it", which
+ * can only be a mistake, and the pause rule is not a thing to have
+ * guess what was meant. */
+function parsePause(value: unknown, path: string): PauseRule {
+  if (value === undefined) return { ...DEFAULT_PAUSE_RULE };
+  if (!isTable(value)) {
+    throw new ConfigError("malformed", `${path}: [pause] must be a table.`);
+  }
+  const { sevenDayRefusePercent, sevenDayStopPercent, fiveHourRefusePercent, ...rest } = value;
+  const extra = Object.keys(rest);
+  if (extra.length > 0) {
+    throw new ConfigError(
+      "malformed",
+      `${path}: [pause] has unknown field(s): ${extra.join(", ")}. ` +
+        `Only sevenDayRefusePercent, sevenDayStopPercent and fiveHourRefusePercent are recognized.`
+    );
+  }
+  const pause: PauseRule = { ...DEFAULT_PAUSE_RULE };
+  if (sevenDayRefusePercent !== undefined) {
+    pause.sevenDayRefusePercent = requirePercent(sevenDayRefusePercent, `${path}: [pause].sevenDayRefusePercent`);
+  }
+  if (sevenDayStopPercent !== undefined) {
+    pause.sevenDayStopPercent = requirePercent(sevenDayStopPercent, `${path}: [pause].sevenDayStopPercent`);
+  }
+  if (fiveHourRefusePercent !== undefined) {
+    pause.fiveHourRefusePercent = requirePercent(fiveHourRefusePercent, `${path}: [pause].fiveHourRefusePercent`);
+  }
+  if (pause.sevenDayStopPercent < pause.sevenDayRefusePercent) {
+    throw new ConfigError(
+      "malformed",
+      `${path}: [pause].sevenDayStopPercent (${pause.sevenDayStopPercent}) is below ` +
+        `[pause].sevenDayRefusePercent (${pause.sevenDayRefusePercent}), which would stop work already running ` +
+        `before it would even refuse to start any. Raise the stop threshold, or lower the refuse one.`
+    );
+  }
+  return pause;
+}
+
+function requirePercent(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+    throw new ConfigError(
+      "malformed",
+      `${label} must be a percentage from 0 to 100, not ${String(value)}.`
+    );
+  }
+  return value;
 }
 
 function parseProject(name: string, value: unknown, path: string): ProjectConfig {

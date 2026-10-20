@@ -11,7 +11,8 @@
 // unknown everywhere, never folded into a total as $0.
 
 import type { FabricaEvent } from "../record/index.ts";
-import type { Receipt, TranscriptEntry } from "../../contract/surface.ts";
+import type { TranscriptEntry } from "../../contract/surface.ts";
+import type { Receipt } from "../inspector/types.ts";
 
 /** The daily cap's window: a rolling 24 hours ending now, not a calendar
  * day - so there is no midnight at which a day's spend resets at once. */

@@ -40,9 +40,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendEvent } from "../../record/index.ts";
 import { RelayError } from "../errors.mjs";
-import { LISTENING_MARKER, REFUSAL_MARKER } from "./protocol.mjs";
+import { HEADERS_MARKER, LISTENING_MARKER, REFUSAL_MARKER } from "./protocol.mjs";
 import { CONTAINER_RELAY_PORT } from "./types.ts";
 import type { ContainerizedRelayHandle, ContainerizedRelayOptions, RelayContainerConfig } from "./types.ts";
+import type { ObservedHeaders } from "../types.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -147,6 +148,9 @@ async function relayAddressOn(name: string, network: string): Promise<string> {
 interface RelayWatcher {
   /** Why the relay stopped serving, once that is established. */
   failure: () => string | undefined;
+  /** The latest watched-header reading, or undefined if none has come
+   * through yet (issue #189). */
+  observedHeaders: () => { headers: ObservedHeaders; observedAt: string } | undefined;
   /** Drains one last time (so a refusal from the final moments still
    * reaches the record), then stops polling. */
   stop: () => Promise<void>;
@@ -163,6 +167,11 @@ interface RelayWatcher {
  *   refusal could kill it (see server.mjs's header); out here, a failed
  *   append is one line on stderr and nothing else - the worker's network
  *   does not depend on it.
+ * - Every new `HEADERS_MARKER` line replaces the latest watched-header
+ *   reading (issue #189's subscription meters), kept in memory for the
+ *   handle's own `observedHeaders()` and deliberately NOT written to the
+ *   record from here: a reading only becomes a recorded fact once it
+ *   lands on an attempt's receipt, which is the Foreman's job.
  * - A read that fails `LOG_FAILURES_BEFORE_GONE` times running means
  *   docker no longer knows this container: `docker run --rm` reaps one
  *   that exited, taking its name with it (the same fact
@@ -186,6 +195,7 @@ function watchRelayContainer(
   let consumedChars = 0;
   let logFailures = 0;
   let failure: string | undefined;
+  let observed: { headers: ObservedHeaders; observedAt: string } | undefined;
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
 
@@ -212,6 +222,26 @@ function watchRelayContainer(
     const fresh = complete.slice(consumedChars);
     consumedChars = complete.length;
     for (const line of fresh.split("\n")) {
+      if (line.startsWith(`${HEADERS_MARKER} `)) {
+        // Issue #189. An unparseable reading is dropped rather than
+        // stored as something a caller would then have to defend
+        // against: an absent reading already means "unknown" everywhere
+        // downstream, which is the honest answer for a line nobody can
+        // read. `observedAt` is the host's own clock - what matters to
+        // the staleness check that reads it is how long ago THIS process
+        // saw the value, and the container has no synchronized clock of
+        // its own to prefer.
+        try {
+          const headers = JSON.parse(line.slice(HEADERS_MARKER.length + 1)) as ObservedHeaders;
+          if (headers !== null && typeof headers === "object" && !Array.isArray(headers)) {
+            observed = { headers, observedAt: new Date().toISOString() };
+          }
+        } catch {
+          // Never expected - the relay writes this line with
+          // JSON.stringify - and never worth more than skipping.
+        }
+        continue;
+      }
       if (!line.startsWith(`${REFUSAL_MARKER} `)) continue;
       const payload = line.slice(REFUSAL_MARKER.length + 1);
       let details: Record<string, unknown>;
@@ -255,6 +285,7 @@ function watchRelayContainer(
 
   return {
     failure: () => failure,
+    observedHeaders: () => observed,
     stop: async () => {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
@@ -282,6 +313,7 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
     gateway: opts.gateway,
     maxRequestBytes: opts.maxRequestBytes,
     maxCallsPerTask: opts.maxCallsPerTask,
+    observedResponseHeaders: opts.observedResponseHeaders,
   };
 
   // --env-file, not `-e`: the config carries the real credential
@@ -355,6 +387,7 @@ export async function startContainerizedRelay(opts: ContainerizedRelayOptions): 
       host,
       port: CONTAINER_RELAY_PORT,
       failure: watcher.failure,
+      observedHeaders: watcher.observedHeaders,
       close: async () => {
         // The watcher stops first, and drains once on its way out: a
         // refusal from the relay's last moments still reaches the

@@ -21,6 +21,7 @@ import { registerAndAsk } from "./ask.ts";
 import { networkPolicyFor } from "./network-policy.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { recordReceipt, spendLimitsFor } from "./caps.ts";
+import { pauseRuleFor } from "./meters.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { FabricaTask } from "../inspector/types.ts";
 import type { Inspector } from "../inspector/index.ts";
@@ -228,6 +229,11 @@ async function productionRound(
         totalAttempts,
         stopEarlyOnGreen: !explicitAttempts,
         spendLimits: spendLimitsFor(recordHome, taskId, caps),
+        // Issue #189: the thresholds that stop an attempt already
+        // running. Read from projects.toml here rather than threaded in
+        // like `caps`, since the pause rule has no "unset" - a record
+        // home with no projects.toml still has one, at its defaults.
+        pauseRule: { rule: pauseRuleFor(recordHome) },
         onReceipt: (receipt) => recordReceipt(recordHome, receipt),
         onHeartbeat: (attempt) => {
           appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });

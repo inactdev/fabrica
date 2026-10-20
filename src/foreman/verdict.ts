@@ -29,8 +29,9 @@ import { recordRoundResult } from "./round.ts";
 import { deliverRebaseConflict, rebaseConflictInstructions, rebaseForFixRound } from "./fix-rebase.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { recordReceipt, requireRoomToStart, spendLimitsFor } from "./caps.ts";
-import type { Caps, Receipt } from "../../contract/surface.ts";
-import type { Inspector } from "../inspector/types.ts";
+import { pauseRuleFor, requireMeterRoomToStart } from "./meters.ts";
+import type { Caps } from "../../contract/surface.ts";
+import type { Inspector, Receipt } from "../inspector/types.ts";
 import type { CheckBox } from "../brain/index.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
@@ -160,7 +161,17 @@ export function recordVerdictDecision(
   // Rule 10: a fix spends money, so it is held to the caps like any new
   // start - checked before the verdict is recorded, so a refused fix can
   // simply be asked for again once there is room.
-  if (ruling === "fix") requireRoomToStart(recordHome, taskId, opts.caps, { project: latestDeliveredDetails(recordHome, taskId)?.project });
+  // Issue #189: and the pause rule too - including on a fix the Client
+  // is ruling to resume a task the pause rule itself stopped. That is
+  // deliberate rather than an awkward edge: his fix is what restarts a
+  // paused task, and it restarts it only once there is room again (or
+  // once he has raised the threshold), which is the whole point of
+  // there being no automatic resume.
+  if (ruling === "fix") {
+    const project = latestDeliveredDetails(recordHome, taskId)?.project;
+    requireRoomToStart(recordHome, taskId, opts.caps, { project });
+    requireMeterRoomToStart(recordHome, taskId, { project });
+  }
 
   // Write the human-readable verdict file before the record event that
   // closes (or reopens) the loop on it — same principle as the
@@ -391,6 +402,10 @@ async function runFixRound(
         totalAttempts: 1,
         stopEarlyOnGreen: true,
         spendLimits: spendLimitsFor(recordHome, taskId, caps),
+        // Issue #189: a fix round is held to the same stop threshold as
+        // any other - see do.ts for why this is read here rather than
+        // threaded in like `caps`.
+        pauseRule: { rule: pauseRuleFor(recordHome) },
         onReceipt: (receipt) => recordReceipt(recordHome, receipt),
         initialSession: lastSession,
         startAttempt: priorReceipts.length + 1,

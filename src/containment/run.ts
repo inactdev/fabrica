@@ -14,6 +14,14 @@ import { caffeinated } from "./caffeinate.ts";
 import { ContainmentError } from "./errors.ts";
 import type { ContainedRunResult, ReadOnlyMount, RunContainedOptions } from "./types.ts";
 
+/** How long a gracefully-stopped container gets between its SIGTERM and
+ * its SIGKILL (`RunContainedOptions.gracefulStopSignal`). Ten seconds,
+ * the same grace `src/cli/task-process.ts`'s `STOP_GRACE_MS` gives a
+ * task's own process - one idea of "long enough to shut down on your
+ * own", not two. Not imported from there: that module reads the real
+ * process table through `ps`, which nothing in src/containment needs. */
+export const GRACEFUL_STOP_SECONDS = 10;
+
 export async function runContained(
   command: string,
   args: string[],
@@ -173,6 +181,25 @@ export async function runContained(
         const stop = () => void execFile("docker", ["rm", "-f", opts.containerName!], () => {});
         if (opts.stopSignal.aborted) stop();
         else opts.stopSignal.addEventListener("abort", stop, { once: true });
+      }
+
+      // Issue #189's graceful stop: `docker stop`, which is SIGTERM and
+      // then SIGKILL after `--time` seconds - the same two-signal shape
+      // the Client's own stop uses on a task's process
+      // (src/cli/task-process.ts). The container exits and its `--rm`
+      // reaps it, which settles this promise through `close` above just
+      // as the force-remove does. Swallowed the same way: the container
+      // may already be gone, and what matters is the reason the caller
+      // asked.
+      if (opts.gracefulStopSignal !== undefined && opts.containerName !== undefined) {
+        const stopGracefully = () =>
+          void execFile(
+            "docker",
+            ["stop", "--time", String(GRACEFUL_STOP_SECONDS), opts.containerName!],
+            () => {}
+          );
+        if (opts.gracefulStopSignal.aborted) stopGracefully();
+        else opts.gracefulStopSignal.addEventListener("abort", stopGracefully, { once: true });
       }
     });
   } finally {

@@ -29,7 +29,21 @@ const OUTCOMES: ReadonlySet<Delivery["outcome"]> = new Set([
   "cap-stopped",
   "not-verified",
   "nothing-changed",
+  // Issue #189: a subscription meter past its stop threshold stopped
+  // the round. Listed here like any other outcome - the whole point of
+  // this validator is that nothing Fabrica built reaches the Client
+  // unless its shape is one this side actually knows.
+  "paused-by-meter",
 ]);
+
+/** The permitted outcomes, worded once for both messages below: a
+ * hand-written list beside this set would name the wrong permitted
+ * values in the very error that rejects a value for not being one of
+ * them - which is exactly what happened when "paused-by-meter" was
+ * added to the set above. */
+const OUTCOMES_PHRASE = `must be ${[...OUTCOMES]
+  .map((outcome) => `"${outcome}"`)
+  .reduce((phrase, name, index, all) => (index === all.length - 1 ? `${phrase}, or ${name}` : index === 0 ? name : `${phrase}, ${name}`), "")}`;
 const INSPECTION_VERDICTS = new Set(["green", "red", "refused"]);
 
 // The string-valued fields: required, but an empty string is a legitimate
@@ -46,13 +60,13 @@ export function validateDelivery(value: unknown): asserts value is Delivery {
   if (d.outcome === undefined) {
     throw new DeliveryError(
       "malformed",
-      'delivery is missing required field "outcome" (must be "done", "failure-report", "inspection-red", "cap-stopped", "not-verified", or "nothing-changed")'
+      `delivery is missing required field "outcome" (${OUTCOMES_PHRASE})`
     );
   }
   if (typeof d.outcome !== "string" || !OUTCOMES.has(d.outcome as Delivery["outcome"])) {
     throw new DeliveryError(
       "malformed",
-      `delivery's "outcome" field is invalid (must be "done", "failure-report", "inspection-red", "cap-stopped", "not-verified", or "nothing-changed")`
+      `delivery's "outcome" field is invalid (${OUTCOMES_PHRASE})`
     );
   }
 

@@ -7,17 +7,24 @@
 import {
   capsActive,
   daySpend,
+  describeMeters,
   describeTaskCost,
   describeUnmeasured,
   earlyStopKindOf,
   eventsByTask,
   formatUsd,
   hasAttempts,
+  latestMeterReading,
+  meterPauseOf,
+  pauseRuleFor,
+  refusalFor,
   SPEND_UNKNOWN_LINE,
+  standingOf,
   stateOf,
   taskSpend,
   unmeasuredSpend,
 } from "../index.ts";
+import type { MeterStanding, PauseRule } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { resolveRecordHome } from "./record-home.ts";
@@ -66,6 +73,16 @@ subscription's own notional figure (e.g. the reference adapter's Max
 plan) is never folded into that $X: it's named separately, with a "~",
 as "(+ ~$Z subscription-estimate, not counted against the cap)" - real,
 metered dollars are the only thing the cap ever binds on.
+
+A second opening line carries the two subscription meters (issue #189) -
+"subscription meters: 5h 7%, 7d 64%" - with the pause rule's own
+thresholds beside them, because a flat-rate subscription's windows cost
+no dollars and so nothing in the line above can show them. When the
+7-day window is past its refuse threshold, that line says new work is
+paused; when no usable reading exists at all, it says so and that the
+rule is therefore refusing nothing. A task a meter stopped mid-round is
+listed like any other delivery - it waits on your fix verdict - with the
+pause named on its own line.
 
 Every line carries the task's cost so far - "cost: unknown" when an
 attempt's spend was never measured, never a silent $0. While a spending
@@ -143,6 +160,14 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     // actually gates new work.
     stdout(formatDaySpendLine(daySpend(allEvents, now), caps.perDayUsd));
 
+    // Issue #189: the two subscription meters, right under the money -
+    // read with the same functions the pause rule itself decides with
+    // (`latestMeterReading`/`standingOf`/`refusalFor`), so this listing
+    // can never show a number that disagrees with what actually gates
+    // new work. A flat-rate subscription's windows cost no dollars, so
+    // nothing above this line can show them.
+    stdout(formatMetersLine(standingOf(latestMeterReading(allEvents), now), pauseRuleFor(recordHome)));
+
     // Rule 10 (issue #11, Client ruling 2026-10-08): derived from the
     // record on every run, closed tasks included, so the block survives
     // a restart and is shown until the real cost is recorded.
@@ -218,6 +243,10 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
         const stop = earlyStopKindOf(events);
         const failedBecause = stop?.kind === "failed" ? stop.reason : undefined;
         const refusalReason = stop?.kind === "refused" ? stop.reason : undefined;
+        // Issue #189: a paused task is "delivered" (it waits on the
+        // Client's own fix verdict), so its line has to name what it is
+        // waiting for or it reads like any other delivery.
+        const pausedByMeter = meterPauseOf(recordHome, task.id)?.message;
         stdout(
           formatStatusLine(task, {
             project,
@@ -228,6 +257,7 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             failedBecause,
             refusalReason,
             prUrl: prUrlFromEvents(events),
+            ...(pausedByMeter === undefined ? {} : { pausedByMeter }),
           })
         );
       }
@@ -263,5 +293,18 @@ function formatDaySpendLine(spend: { meteredUsd: number; subscriptionUsd: number
   return spend.subscriptionUsd > 0
     ? `${base} (+ ~${formatUsd(spend.subscriptionUsd)} subscription-estimate, not counted against the cap)`
     : base;
+}
+
+/** Issue #189: the second line this listing opens with - both
+ * subscription meters, and what the pause rule makes of them right now.
+ * Says plainly when the reading is unusable, and why: a pause rule that
+ * is currently refusing nothing must never look like one that is
+ * watching (fail open, but never fail quiet). */
+function formatMetersLine(standing: MeterStanding, rule: PauseRule): string {
+  const base = `subscription meters: ${describeMeters(standing)}`;
+  if (!standing.usable) return `${base} - the pause rule is refusing nothing: ${standing.unknownBecause}`;
+  const refusal = refusalFor(standing, rule);
+  if (refusal !== undefined) return `${base}  <- NEW WORK PAUSED: ${refusal.message}`;
+  return `${base} (new work stops above ${rule.sevenDayRefusePercent}% of the week, running work above ${rule.sevenDayStopPercent}%)`;
 }
 

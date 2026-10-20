@@ -32,15 +32,19 @@ function captureIo() {
   return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
 }
 
-// Issues #81/#110: every successful run now opens with a "spent in the
-// last 24 hours" line and may close with a "blocked edit attempts on
-// record" one - neither is a task row. Tests written before those
-// existed assert on task rows by position; this strips both so those
-// assertions don't have to be reindexed by hand, while the lines
-// themselves get their own dedicated tests below.
+// Issues #81/#110/#189: every successful run now opens with a "spent in
+// the last 24 hours" line and a "subscription meters" one, and may close
+// with a "blocked edit attempts on record" line - none of them is a task
+// row. Tests written before those existed assert on task rows by
+// position; this strips them all so those assertions don't have to be
+// reindexed by hand, while the lines themselves get their own dedicated
+// tests below.
 function taskRows(out: string[]): string[] {
   return out.filter(
-    (line) => !line.startsWith("spent in the last 24 hours:") && !line.startsWith("blocked edit attempts on record:")
+    (line) =>
+      !line.startsWith("spent in the last 24 hours:") &&
+      !line.startsWith("subscription meters:") &&
+      !line.startsWith("blocked edit attempts on record:")
   );
 }
 
@@ -634,4 +638,139 @@ test("runStatusCommand: the spend line names a subscription estimate separately,
     io.out[0],
     "spent in the last 24 hours: $1.00 of $5.00 (+ ~$50.00 subscription-estimate, not counted against the cap)"
   );
+});
+
+// Issue #189: the subscription meters, shown with the same numbers the
+// pause rule itself decides with.
+
+/** One receipt's worth of meter reading on the record - the only place
+ * a reading ever lands. */
+function recordReading(
+  recordHome: string,
+  taskId: string,
+  meters: { observedAt: string; fiveHourPercent: number | null; sevenDayPercent: number | null }
+): void {
+  appendEvent(recordHome, {
+    taskId,
+    name: "task-received",
+  });
+  appendEvent(recordHome, {
+    taskId,
+    name: "receipt-recorded",
+    details: {
+      receipt: {
+        task: taskId,
+        attempt: 1,
+        brain: "fake",
+        model: "fake-1",
+        startedAt: meters.observedAt,
+        durationMs: 1,
+        costUsd: 0,
+        costUnknown: false,
+        costBasis: "subscription-estimate",
+        meters,
+        session: null,
+        reasoningEffort: null,
+        checks: null,
+        outcome: "delivered",
+      },
+    },
+  });
+}
+
+test("runStatusCommand: the meters line shows both windows and the pause rule's thresholds", async () => {
+  const recordHome = tempRecordHome();
+  const now = Date.now();
+  recordReading(recordHome, "task-read", {
+    observedAt: new Date(now - 60_000).toISOString(),
+    fiveHourPercent: 7,
+    sevenDayPercent: 64,
+  });
+
+  const io = captureIo();
+  assert.equal(await runStatusCommand([], { recordHome, now, ...io }), 0);
+
+  const line = io.out.find((l) => l.startsWith("subscription meters:"));
+  assert.ok(line, io.out.join("\n"));
+  assert.match(line!, /5h 7%, 7d 64%/);
+  assert.match(line!, /new work stops above 70% of the week, running work above 90%/);
+});
+
+test("runStatusCommand: the meters line says new work is paused when the week is over its threshold", async () => {
+  const recordHome = tempRecordHome();
+  const now = Date.now();
+  recordReading(recordHome, "task-read", {
+    observedAt: new Date(now - 60_000).toISOString(),
+    fiveHourPercent: 20,
+    sevenDayPercent: 77,
+  });
+
+  const io = captureIo();
+  await runStatusCommand([], { recordHome, now, ...io });
+
+  const line = io.out.find((l) => l.startsWith("subscription meters:"))!;
+  assert.match(line, /NEW WORK PAUSED/);
+  assert.match(line, /77% of the 7-day window/);
+});
+
+test("runStatusCommand: with no reading at all, the meters line says so and that nothing is being refused", async () => {
+  const io = captureIo();
+  await runStatusCommand([], { recordHome: tempRecordHome(), ...io });
+
+  const line = io.out.find((l) => l.startsWith("subscription meters:"))!;
+  assert.match(line, /not read yet/);
+  assert.match(line, /refusing nothing/);
+});
+
+test("runStatusCommand: a stale reading is shown but explicitly not acted on", async () => {
+  const recordHome = tempRecordHome();
+  const now = Date.now();
+  recordReading(recordHome, "task-read", {
+    observedAt: new Date(now - 6 * 60 * 60 * 1000).toISOString(),
+    fiveHourPercent: 99,
+    sevenDayPercent: 99,
+  });
+
+  const io = captureIo();
+  await runStatusCommand([], { recordHome, now, ...io });
+
+  const line = io.out.find((l) => l.startsWith("subscription meters:"))!;
+  assert.match(line, /5h 99%, 7d 99%/, "the numbers are still shown - hiding them would hide the problem");
+  assert.match(line, /too stale to judge by/);
+  assert.doesNotMatch(line, /NEW WORK PAUSED/);
+});
+
+test("runStatusCommand: a task a meter paused reads as waiting on the Client, with the pause named", async () => {
+  const recordHome = tempRecordHome();
+  const now = Date.now();
+  const taskId = "task-paused";
+  appendEvent(recordHome, { taskId, name: "task-received" });
+  appendEvent(recordHome, { taskId, name: "work-started", details: { project: "/repos/demo" } });
+  appendEvent(recordHome, {
+    taskId,
+    name: "meter-paused",
+    details: {
+      attempt: 1,
+      usedPercent: 93,
+      thresholdPercent: 90,
+      observedAt: new Date(now).toISOString(),
+      message: "Paused by the subscription meter: 93% of the 7-day window is used, past the 90% this task stops at.",
+      workerStopped: true,
+    },
+  });
+  appendEvent(recordHome, {
+    taskId,
+    name: "delivered",
+    details: { outcome: "paused-by-meter", project: "/repos/demo" },
+  });
+
+  const io = captureIo();
+  await runStatusCommand([], { recordHome, now, ...io });
+
+  const row = taskRows(io.out).find((l) => l.includes(taskId))!;
+  assert.match(row, /delivered/, "a pause waits on the Client's verdict, exactly like any delivery");
+  assert.match(row, /PAUSED BY THE SUBSCRIPTION METER/);
+  assert.match(row, /93% of the 7-day window/);
+  assert.match(row, new RegExp(`fabrica verdict ${taskId} fix`));
+  assert.doesNotMatch(row, /FAILED/, "a pause is never a failure (Client's clarification)");
 });

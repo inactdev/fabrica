@@ -51,7 +51,13 @@ export type Judgement =
    * commit of the same rebase conflicted afresh. The rebase is aborted by
    * the time this is returned, so the branch is back at its own last
    * commit; nothing was committed and nothing was judged. */
-  | { kind: "rebase-conflicted"; base: string; reason: "markers-remain" | "new-conflict"; conflict: RebaseConflict };
+  | { kind: "rebase-conflicted"; base: string; reason: "markers-remain" | "new-conflict"; conflict: RebaseConflict }
+  /** Issue #189: a subscription meter past its stop threshold stopped
+   * this attempt mid-flight, so nothing was ever handed to a check or
+   * to Inspector. `round.ts` branches on `attempts.meterStop` itself
+   * (which carries the numbers); this exists so the loop's own
+   * `lastJudgement` is never a judgement that did not happen. */
+  | { kind: "paused-by-meter" };
 
 export type Judge = (attempt: number, gateChanges: string | undefined, finalMessage: FinalMessageForCommit) => Promise<Judgement>;
 

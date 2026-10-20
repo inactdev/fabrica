@@ -33,6 +33,7 @@ import { runProductionRound } from "./do.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import type { AskedDetails } from "./ask.ts";
 import { requireRoomToStart } from "./caps.ts";
+import { requireMeterRoomToStart } from "./meters.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { CheckBox } from "../brain/index.ts";
 import type { FabricaTask, Inspector } from "../inspector/types.ts";
@@ -129,6 +130,9 @@ export function recordAnswerDecision(
   // task exactly as resumable as it was, so the same `fabrica answer`
   // works once there is room again.
   requireRoomToStart(recordHome, taskId, opts.caps, { project: details.project });
+  // Issue #189's pause rule, the same way and for the same reason: a
+  // refused resume leaves the task as resumable as it was.
+  requireMeterRoomToStart(recordHome, taskId, { project: details.project });
 
   // Write the human-readable record before the record event that resumes
   // the task on it - same principle as verdict.ts writing the "verdict"

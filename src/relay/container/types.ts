@@ -4,7 +4,7 @@
 // with contract/surface.ts - same as src/relay/types.ts, this is
 // plumbing, not a promise to the Client.
 
-import type { AllowedHost, GatewayTarget } from "../types.ts";
+import type { AllowedHost, GatewayTarget, ObservedHeaders } from "../types.ts";
 
 /** The fixed port the relay always listens on inside its own container.
  * Fixed rather than OS-assigned: nothing else shares that container's
@@ -42,6 +42,11 @@ export interface RelayContainerConfig {
    * inside the container, not only one started in-process. */
   maxRequestBytes?: number;
   maxCallsPerTask?: number;
+  /** `RelayOptions.observedResponseHeaders` (issue #189) - carried
+   * through so the names the calling adapter chose reach the relay
+   * running inside the container, which is the only place that sees an
+   * upstream response at all. */
+  observedResponseHeaders?: string[];
 }
 
 export interface ContainerizedRelayOptions {
@@ -66,6 +71,9 @@ export interface ContainerizedRelayOptions {
    * defaults apply. */
   maxRequestBytes?: number;
   maxCallsPerTask?: number;
+  /** See `RelayContainerConfig` above - the response headers this
+   * relay's readings are taken from (issue #189). */
+  observedResponseHeaders?: string[];
   /** Defaults to `RELAY_IMAGE` (launch.ts) - overridable for tests. */
   image?: string;
   /** How long to wait for the container's own `FABRICA-RELAY-LISTENING`
@@ -105,5 +113,16 @@ export interface ContainerizedRelayHandle {
    * than the minutes a worker takes to notice its own
    * `ConnectionRefused` (observed 2026-10-18: four of them). */
   failure(): string | undefined;
+  /** The most recent reading of the response headers this relay was
+   * asked to watch (issue #189), with the host-side time the watcher
+   * read it - `undefined` until one has arrived (no headers watched, no
+   * gateway response yet, or none of them present on it). Values are
+   * raw and uninterpreted; the caller that named the headers is the one
+   * that knows what they mean.
+   *
+   * Readings arrive through the same `docker logs` watcher refusals do,
+   * so one lands about `watchIntervalMs` after the response it came
+   * from - a second by default. */
+  observedHeaders(): { headers: ObservedHeaders; observedAt: string } | undefined;
   close(): Promise<void>;
 }

@@ -6,7 +6,8 @@
 // Client sees - before it is thrown.
 
 import { appendEvent, readEvents, readEventsForTask } from "../record/index.ts";
-import type { Caps, Receipt } from "../../contract/surface.ts";
+import type { Caps } from "../../contract/surface.ts";
+import type { Receipt } from "../inspector/types.ts";
 import { ForemanError } from "./errors.ts";
 import { markRecorded } from "./task-failure.ts";
 import type { AttemptSpendLimits, CapStop } from "./attempts.ts";

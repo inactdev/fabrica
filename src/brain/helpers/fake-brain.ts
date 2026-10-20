@@ -6,6 +6,7 @@
 // session id continues that session's history rather than restarting it.
 
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
+import type { MeterReading } from "../meters.ts";
 
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
@@ -59,6 +60,11 @@ export function fakeBrain(
      * a valid one so ordinary tests still see a "done" delivery without
      * constructing it themselves; null returns none at all. */
     writeup?: WorkerWriteup | null;
+    /** Issue #189: the subscription-meter reading each work() call
+     * reports, on a "meters" transcript entry (../meters.ts). Omitted,
+     * no entry is emitted at all - a brain that cannot report them,
+     * which every receipt then records as `meters: null`. */
+    meters?: MeterReading;
   } = {}
 ): FakeBrainHandle {
   let calls = 0;
@@ -130,6 +136,13 @@ export function fakeBrain(
           occurredAt: new Date().toISOString(),
           kind: "usage",
           text: JSON.stringify({ totalCostUsd: costUsd, ...(opts.costBasis ? { costBasis: opts.costBasis } : {}) }),
+        });
+      }
+      if (opts.meters !== undefined) {
+        transcript.push({
+          occurredAt: new Date().toISOString(),
+          kind: "meters",
+          text: JSON.stringify(opts.meters),
         });
       }
       const result: BrainWorkResult = {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "./load.ts";
+import { DEFAULT_PAUSE_RULE, loadConfig } from "./load.ts";
 import { ConfigError } from "./errors.ts";
 import { makeTestHome } from "./helpers/test-home.ts";
 
@@ -365,4 +365,64 @@ test("loadConfig: an unknown project field still names every field that is recog
       return true;
     }
   );
+});
+
+// Issue #189's [pause] table: the subscription meters' thresholds.
+
+test("loadConfig: no [pause] table at all still yields the pause rule's defaults, not nothing", () => {
+  const home = makeTestHome(`[caps]\nperDayUsd = 25\n`);
+  assert.deepEqual(loadConfig(home).pause, DEFAULT_PAUSE_RULE);
+  assert.equal(loadConfig(home).pause.sevenDayRefusePercent, 70);
+  assert.equal(loadConfig(home).pause.sevenDayStopPercent, 90);
+  assert.equal(loadConfig(home).pause.fiveHourRefusePercent, 90);
+});
+
+test("loadConfig: a [pause] table overrides only the thresholds it names", () => {
+  const home = makeTestHome(`[pause]\nfiveHourRefusePercent = 50\n`);
+  const { pause } = loadConfig(home);
+  assert.equal(pause.fiveHourRefusePercent, 50);
+  assert.equal(pause.sevenDayRefusePercent, DEFAULT_PAUSE_RULE.sevenDayRefusePercent);
+  assert.equal(pause.sevenDayStopPercent, DEFAULT_PAUSE_RULE.sevenDayStopPercent);
+});
+
+test("loadConfig: a pause threshold outside 0-100 is refused as malformed", () => {
+  for (const bad of ["101", "-1", '"70"']) {
+    assert.throws(
+      () => loadConfig(makeTestHome(`[pause]\nsevenDayRefusePercent = ${bad}\n`)),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /percentage from 0 to 100/);
+        return true;
+      }
+    );
+  }
+});
+
+test("loadConfig: a stop threshold below the refuse threshold is refused - it could only be a mistake", () => {
+  assert.throws(
+    () => loadConfig(makeTestHome(`[pause]\nsevenDayRefusePercent = 80\nsevenDayStopPercent = 60\n`)),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /below \[pause\].sevenDayRefusePercent/);
+      return true;
+    }
+  );
+});
+
+test("loadConfig: an unknown [pause] field names every field that is recognized", () => {
+  assert.throws(
+    () => loadConfig(makeTestHome(`[pause]\nsevenDayPercent = 70\n`)),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /sevenDayRefusePercent, sevenDayStopPercent and fiveHourRefusePercent/);
+      return true;
+    }
+  );
+});
+
+test("loadConfig: [pause] is a known top-level table, never reported as a stale project", () => {
+  // Before issue #189 this would have been refused as an unknown
+  // top-level table and suggested for renaming to [projects.pause].
+  assert.doesNotThrow(() => loadConfig(makeTestHome(`[pause]\nsevenDayRefusePercent = 70\n`)));
 });

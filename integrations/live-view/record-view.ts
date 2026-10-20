@@ -16,13 +16,18 @@ import {
   daySpend,
   deliveryOf,
   describeTaskCost,
+  describeMeters,
   earlyStopKindOf,
   finalMessageFor,
   followTask,
   formatUsd,
   hasAttempts,
+  latestMeterReading,
   loadConfig,
+  pauseRuleFor,
   readTaskFile,
+  refusalFor,
+  standingOf,
   stateOf,
   taskSpend,
 } from "../../src/index.ts";
@@ -194,6 +199,22 @@ export interface LiveViewState {
   now: number;
   spend: SpendView;
   tasks: TaskView[];
+}
+
+/** Issue #189's two subscription meters, for the phone review page -
+ * the one number a flat-rate subscription's spend view cannot show,
+ * since filling the week costs no dollars. Read through the same
+ * functions the pause rule decides with, so the phone and `fabrica
+ * status` can never show different numbers. */
+export interface MetersView {
+  /** Both meters in one phrase ("5h 7%, 7d 64%"), or "not read yet". */
+  label: string;
+  /** True when the pause rule would refuse a new start right now. */
+  paused: boolean;
+  /** Why, when `paused` - or why no reading could be used, when the
+   * rule is currently refusing nothing on an unknown number. Empty when
+   * both meters are read and under their thresholds. */
+  detail: string;
 }
 
 /** One row of the phone review page (issue #202, extended by the
@@ -801,7 +822,30 @@ export function createRecordView(recordHome: string) {
     return rows;
   }
 
-  return { getState, getTask, getTranscript, getReviewRows, getRunningRows };
+  /** Issue #189: the two subscription meters as the record last saw
+   * them, with what the pause rule makes of them. Reads every task's
+   * events through the same per-task follower cache the rest of this
+   * module uses - the windows belong to the Client's account, not to
+   * one task, so the latest reading anywhere is the current one. */
+  function getMeters(now: number = Date.now()): MetersView {
+    const allEvents = discoverTaskIds(recordHome).flatMap((id) => followerFor(id).read().events);
+    const standing = standingOf(latestMeterReading(allEvents), now);
+    if (!standing.usable) {
+      return {
+        label: describeMeters(standing),
+        paused: false,
+        detail: `the pause rule is refusing nothing: ${standing.unknownBecause}`,
+      };
+    }
+    const refusal = refusalFor(standing, pauseRuleFor(recordHome));
+    return {
+      label: describeMeters(standing),
+      paused: refusal !== undefined,
+      detail: refusal?.message ?? "",
+    };
+  }
+
+  return { getState, getTask, getTranscript, getReviewRows, getRunningRows, getMeters };
 }
 
 export type RecordView = ReturnType<typeof createRecordView>;

@@ -34,7 +34,8 @@
 import { appendEvent, writeTaskFile } from "../record/index.ts";
 import { rebaseOntoOriginDefault } from "../line/index.ts";
 import type { RebaseConflict } from "../line/index.ts";
-import type { ProductionLine, Receipt } from "../../contract/surface.ts";
+import type { ProductionLine } from "../../contract/surface.ts";
+import type { Receipt } from "../inspector/types.ts";
 import { buildRebaseConflictDelivery, renderDeliveryMarkdown } from "./delivery.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf } from "./caps.ts";

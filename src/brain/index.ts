@@ -4,6 +4,8 @@ export { defaultBrainAdapter, defaultCheckBox } from "./adapters/index.ts";
 export { registerLiveTranscriptListener } from "./live-transcript.ts";
 export { probeRelayHealth, registerRelayHealthProbe } from "./relay-health.ts";
 export type { RelayHealthProbe } from "./relay-health.ts";
+export { pauseWorker, readMeters, registerMeterSource } from "./meters.ts";
+export type { MeterReading, MeterSource } from "./meters.ts";
 export { currentTaskNetwork, withTaskNetwork } from "./task-network.ts";
 export type { TaskNetworkPolicy } from "./task-network.ts";
 export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerTokenStatus } from "./adapters/doctor-checks.ts";

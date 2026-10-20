@@ -525,6 +525,84 @@ caps. This is hardcoded for this adapter, not detected from `claude auth
 status` at runtime - v1 only ever runs this adapter against the Client's
 own subscription (ROADMAP.md), so there is no live case to detect yet.
 
+## The subscription meters: not in this CLI's output at all (issue #189)
+
+Issue #189 asked for the two subscription meters the CLI reports - the
+5-hour and 7-day **used percentages** - "read from the CLI's own output
+the way the Client's status line reads
+`rate_limits.five_hour.used_percentage`", and said to find where they
+really are if the non-interactive output does not carry them.
+
+It does not. Run for real against 2.1.222 in a worker box:
+
+```
+claude -p "Reply with exactly: ok" --output-format stream-json --verbose
+```
+
+emits exactly three lines - `system`/`init`, `assistant`, and the
+terminal `result` - and none of them carries a rate-limit field of any
+kind. The `result` line's fields are the ones this file already
+documents: `total_cost_usd`, `usage`, `modelUsage`, `session_id`,
+`duration_ms`, `permission_denials`.
+
+There **is** a `rate_limit_event` stream-json line type (this adapter
+already drops it as harness chatter, see the transcript-mapping table
+above), but it is not the answer either: it never appeared in a real
+`-p` run, and its payload carries one window at a time, not both -
+`{ status, resetsAt?, rateLimitType?: "five_hour" | "seven_day" | ...,
+utilization?, ... }`, "emitted when rate limit info changes". One
+`rateLimitType` and one `utilization` per event, whichever claim is
+representative at that moment.
+
+**Where they actually live: the API's response headers.** The status
+line does not read them from any output stream either - the CLI builds
+`rate_limits.five_hour.used_percentage` in-process from the response
+headers of every API call it makes, as
+`used_percentage = utilization * 100`. Captured live on 2026-10-20
+through Fabrica's own relay:
+
+```
+anthropic-ratelimit-unified-5h-utilization: 0.07
+anthropic-ratelimit-unified-5h-reset: 1792515000
+anthropic-ratelimit-unified-5h-status: allowed
+anthropic-ratelimit-unified-7d-utilization: 0.64
+anthropic-ratelimit-unified-7d-reset: 1792566000
+anthropic-ratelimit-unified-7d-status: allowed
+anthropic-ratelimit-unified-representative-claim: five_hour
+```
+
+`utilization` is a fraction of 1, which is why the CLI multiplies by
+100: `0.64` is 64% of the week.
+
+So this adapter asks its task's relay to watch those two headers
+(`observedResponseHeaders`, `src/relay/README.md`'s "Watching a
+response header") - the relay is the only thing host-side that sees a
+provider's response at all, it is already in the path for every call,
+and reading two header values costs no extra API call and no
+interactive session. `percentFromUtilization`/`meterReadingFrom` here
+do the `* 100`, because the 0..1 convention is the provider's, not
+Fabrica's; the relay reports raw strings and names no header itself
+(CONTRACT rule 8).
+
+The reading reaches the Foreman two ways, both deliberate:
+
+- **Live, during the call**, through `../meters.ts`'s workdir-keyed
+  source, so the 7-day window passing its stop threshold can stop *this*
+  attempt rather than only the next one. The same registration hands
+  the Foreman a `pause()` that stops this call's box gracefully -
+  `runContained`'s `gracefulStopSignal` (`docker stop`: SIGTERM, then
+  SIGKILL after a grace), not `stopSignal`'s force-remove, because a
+  pause is not a doomed box.
+- **Once, at the end**, as a `kind: "meters"` transcript entry carrying
+  the `MeterReading` as JSON - exactly the trick the `"usage"` entry
+  above uses, and for the same reason. Read after the relay's own
+  watcher has drained its last log lines, so it is the freshest reading
+  of the call. This is what lands on the attempt's receipt.
+
+What this cannot do: report a meter for an account the provider sends no
+such header for. Both fields are then `null`, which every reader treats
+as "unknown" and the pause rule treats as "refuse nothing" - never 0%.
+
 ## `writeup` and `--json-schema`
 
 Every `work()` call passes `--json-schema` with `WRITEUP_JSON_SCHEMA`: an

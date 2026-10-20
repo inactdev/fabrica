@@ -59,6 +59,15 @@ export interface GatewayTarget {
  * ever done with it. */
 export type RefusalDetails = Record<string, unknown>;
 
+/** The values of the response headers a caller asked this relay to watch
+ * (`RelayOptions.observedResponseHeaders`), as they last came back from
+ * the gateway's upstream - header name (lowercased) to raw value, with
+ * only the names that were actually present. Nothing here interprets
+ * them: what the names mean, and what scale their values are on, is the
+ * caller's own knowledge (CONTRACT rule 8 - a provider's header names
+ * can only be written down inside `src/brain/adapters/`). */
+export type ObservedHeaders = Record<string, string>;
+
 export interface RelayOptions {
   /** Where a refusal goes. Called with nothing else expected of it - a
    * listener that throws is logged on the relay's own stderr and
@@ -75,6 +84,22 @@ export interface RelayOptions {
    * refusals on stdout and `container/launch.ts` appends the event on
    * the host side, where a failed write costs one log line. */
   onRefusal?: (details: RefusalDetails) => void;
+  /** Response headers, by name (matched case-insensitively, as HTTP
+   * headers already are), whose values this relay reports back out of
+   * every gateway response - issue #189, the subscription meters, whose
+   * only machine-readable source anywhere is the upstream's own response
+   * headers (see `src/relay/README.md`'s "Watching a response header").
+   * Tunnel traffic is deliberately exempt: a CONNECT tunnel is raw bytes
+   * the relay never looks inside, so there are no headers in it to read.
+   * Omitted, nothing is watched and nothing is reported. */
+  observedResponseHeaders?: string[];
+  /** Where an observed-header reading goes, and only when at least one
+   * watched header's value has CHANGED since the last report - a reading
+   * per response would be thousands of identical lines through
+   * `container/launch.ts`'s log watcher, which re-reads the whole log on
+   * a timer. Guarded exactly like `onRefusal`: a listener that throws is
+   * logged and dropped, because serving never depends on reporting. */
+  onObservedHeaders?: (headers: ObservedHeaders) => void;
   /** Host-side port to listen on. Omitted (the default, 0) asks the OS
    * for any free port - read back from the returned handle. A caller
    * that needs the same port across a restart (none do yet) can pin

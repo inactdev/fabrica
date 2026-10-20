@@ -593,3 +593,91 @@ test("a task the Client stopped is finished, not running, and never waiting on h
   assert.deepEqual(view.getRunningRows(), []);
   assert.deepEqual(view.getReviewRows(), []);
 });
+
+// Issue #189: the two subscription meters on the phone review page -
+// the one budget a flat-rate subscription's own spend figures cannot
+// show, since filling the week costs no dollars.
+
+function recordMeterReading(
+  recordHome: string,
+  taskId: string,
+  meters: { observedAt: string; fiveHourPercent: number | null; sevenDayPercent: number | null }
+): void {
+  appendEvent(recordHome, { taskId, name: "task-received" });
+  appendEvent(recordHome, {
+    taskId,
+    name: "receipt-recorded",
+    details: {
+      receipt: {
+        task: taskId,
+        attempt: 1,
+        brain: "fake",
+        model: "fake-1",
+        startedAt: meters.observedAt,
+        durationMs: 1,
+        costUsd: 0,
+        costUnknown: false,
+        costBasis: "subscription-estimate",
+        meters,
+        session: null,
+        reasoningEffort: null,
+        checks: null,
+        outcome: "delivered",
+      },
+    },
+  });
+}
+
+test("getMeters: shows both windows, with what the pause rule makes of them", () => {
+  const recordHome = tempRecordHome();
+  const now = Date.now();
+  const { id } = registerTask(recordHome, "a job");
+  recordMeterReading(recordHome, id, {
+    observedAt: new Date(now - 30_000).toISOString(),
+    fiveHourPercent: 7,
+    sevenDayPercent: 64,
+  });
+
+  const meters = createRecordView(recordHome).getMeters(now);
+  assert.equal(meters.label, "5h 7%, 7d 64%");
+  assert.equal(meters.paused, false);
+  assert.equal(meters.detail, "");
+});
+
+test("getMeters: says new work is paused, with the reason, once the week is over its threshold", () => {
+  const recordHome = tempRecordHome();
+  const now = Date.now();
+  const { id } = registerTask(recordHome, "a job");
+  recordMeterReading(recordHome, id, {
+    observedAt: new Date(now - 30_000).toISOString(),
+    fiveHourPercent: 20,
+    sevenDayPercent: 81,
+  });
+
+  const meters = createRecordView(recordHome).getMeters(now);
+  assert.equal(meters.paused, true);
+  assert.match(meters.detail, /81% of the 7-day window/);
+});
+
+test("getMeters: with no reading, says so and that the rule is refusing nothing", () => {
+  const meters = createRecordView(tempRecordHome()).getMeters(Date.now());
+  assert.equal(meters.label, "not read yet");
+  assert.equal(meters.paused, false);
+  assert.match(meters.detail, /refusing nothing/);
+});
+
+test("getMeters: a stale reading is shown but never acted on", () => {
+  const recordHome = tempRecordHome();
+  const now = Date.now();
+  const { id } = registerTask(recordHome, "a job");
+  recordMeterReading(recordHome, id, {
+    observedAt: new Date(now - 8 * 60 * 60 * 1000).toISOString(),
+    fiveHourPercent: 99,
+    sevenDayPercent: 99,
+  });
+
+  const meters = createRecordView(recordHome).getMeters(now);
+  assert.equal(meters.label, "5h 99%, 7d 99%");
+  assert.equal(meters.paused, false);
+  assert.match(meters.detail, /too stale/);
+});
