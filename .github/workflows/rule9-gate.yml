@@ -39,6 +39,25 @@
 # runs AFTER the contract pass so a contract test keeps the contract
 # message above, rather than being described only as a test change.
 #
+# That pass now defers to Inspector's own judgment where Inspector has
+# one: the examiner posts a commit status named "inspector-tests" on the
+# pull request's head commit (Inspector's own repository owns that
+# posting - nothing here posts it, exactly as with the "inspector"
+# status the inspector-stamp job below relays), and a `success` there
+# clears every changed `*.test.ts` in the pull request at once. The
+# judgment is per commit by design, not per file: the examiner reads the
+# whole proposed change, so there is nothing per-file for this gate to
+# split apart. Everything else stays red exactly as before - a failure,
+# an error, a still-pending run, or no such status at all - because
+# pending means something went wrong rather than "not yet": this gate
+# re-runs on every push to the branch, and Inspector posts its statuses
+# before it moves the branch. And a status that cannot be READ at all
+# (network, rate limit, permissions, a malformed response) fails closed
+# with its own message, never silently as a clearance. Both the
+# clearance and the fail-closed read live only in this third pass; rule
+# 9's own pass and the contract pass above are untouched by it and must
+# stay that way - neither is Inspector's to clear.
+#
 # SAFETY-CRITICAL - read before editing this file:
 #
 # This job runs on `pull_request_target`, not `pull_request`, so GitHub
@@ -105,12 +124,23 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
+      # Issue #96's test pass asks the commit-status API for Inspector's
+      # "inspector-tests" verdict on the head commit. Read-only, and the
+      # same minimum scope the inspector-stamp job below declares for the
+      # same endpoint - never the default token scope.
+      statuses: read
     steps:
       - name: Block merge — protected path touched (CONTRACT rule 9)
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # The pull request's own head commit - the commit Inspector's
+          # examiner posts its verdict against, and the only ref this job
+          # ever reads a status for. Never a merge ref and never a
+          # checked-out one, since nothing from the branch is checked out
+          # here at all.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           # The pull request's own count of changed files, straight from
           # the event payload GitHub supplies - not from the branch, and
           # not subject to the listing cap the step checks it against.
@@ -136,12 +166,13 @@ jobs:
           CONTRACT_PROTECTED_PATHS: |
             contract/**
             CONTRACT.md
-          # Issue #96: tests define what "correct" means. Until Inspector's
-          # examiner exists (inactdev/inspector#7), every test change needs
-          # the Client's direct review. This is a temporary stopgap, tracked
-          # by github.com/inactdev/fabrica/issues/96, and must be removed
-          # when the examiner lands. It follows the contract pass below so
-          # contract tests retain the contract-specific message.
+          # Issue #96: tests define what "correct" means. A changed test
+          # file here is cleared only by Inspector's examiner reporting
+          # success on this head commit; otherwise it still needs the
+          # Client's direct review. This is a temporary stopgap, tracked by
+          # github.com/inactdev/fabrica/issues/96, and must be removed when
+          # the examiner fully replaces it. It follows the contract pass
+          # below so contract tests retain the contract-specific message.
           TEST_PROTECTED_PATHS: |
             *.test.ts
         run: |
@@ -231,22 +262,65 @@ jobs:
           done <<< "$CONTRACT_PROTECTED_PATHS"
 
           # Issue #96 deliberately follows the contract loop: contract tests
-          # are contract changes first, while every other test change needs
-          # the Client's review until Inspector's examiner exists.
+          # are contract changes first, while every other test change is
+          # Inspector's examiner's to clear - and, failing that, the
+          # Client's to review.
+          #
+          # This pass only NAMES the first changed test file; it does not
+          # decide. The verdict comes from the examiner's commit status
+          # below, and it is read only if something was actually named -
+          # a pull request that touches no test at all must never be
+          # failed by a hiccup reading a status it has no use for.
+          touched_test=""
           while IFS= read -r pattern; do
             [ -n "$pattern" ] || continue
             while IFS=$'\t' read -r file previous_file; do
               for candidate in "$file" "$previous_file"; do
                 [ -n "$candidate" ] || continue
                 if [[ "$candidate" == $pattern ]]; then
-                  echo "::error::This pull request touches \"$candidate\", a test change that changes what Fabrica considers correct. Until Inspector's examiner exists, the Client must review and merge every test change directly (github.com/inactdev/fabrica/issues/96)."
-                  exit 1
+                  touched_test="$candidate"
+                  # Out of all three loops - the `for`, the file loop and
+                  # the pattern loop. Every one of them runs in this same
+                  # shell (here-strings, not pipes), so the assignment
+                  # above survives.
+                  break 3
                 fi
               done
             done <<< "$touched"
           done <<< "$TEST_PROTECTED_PATHS"
 
-          echo "No protected path touched."
+          if [ -n "$touched_test" ]; then
+            # The combined-status endpoint already resolves to the latest
+            # status per context, so this is the examiner's most recent
+            # word on this head commit, not a stale one - the same call
+            # and the same reasoning as the inspector-stamp job's.
+            #
+            # The exit status is captured and branched on explicitly
+            # rather than left to `bash -e`: an unreadable status must
+            # fail with its own message naming the real problem, and must
+            # never be mistaken for the empty output a context that
+            # simply posted nothing produces, which means something quite
+            # different.
+            if ! tests_state=$(gh api "repos/$REPO/commits/$HEAD_SHA/status" --jq '.statuses[]? | select(.context == "inspector-tests") | .state'); then
+              echo "::error::Could not read the \"inspector-tests\" status on $HEAD_SHA, so this pull request's change to \"$touched_test\" cannot be cleared by Inspector's examiner (github.com/inactdev/fabrica/issues/96). Failing closed rather than passing an unjudged test change - re-run this check once the API is reachable again, or have the Client review and deliberately override it."
+              exit 1
+            fi
+
+            if [ "$tests_state" = "success" ]; then
+              echo "Inspector's examiner reported success on $HEAD_SHA; this pull request's test changes (first: \"$touched_test\") are cleared."
+            elif [ -z "$tests_state" ]; then
+              echo "::error::This pull request touches \"$touched_test\", a test change that changes what Fabrica considers correct, and Inspector's examiner has posted no \"inspector-tests\" status on $HEAD_SHA at all. With no judgment to honor, the Client must review and merge this test change directly (github.com/inactdev/fabrica/issues/96)."
+              exit 1
+            else
+              echo "::error::This pull request touches \"$touched_test\", a test change that changes what Fabrica considers correct, and Inspector's examiner reported \"$tests_state\" on $HEAD_SHA rather than success. Only its success clears a test change; otherwise the Client must review and merge it directly (github.com/inactdev/fabrica/issues/96)."
+              exit 1
+            fi
+          fi
+
+          # Reached either because nothing protected was touched at all, or
+          # because the only protected thing touched was a test change
+          # Inspector's examiner already cleared above.
+          echo "No protected path blocks this pull request."
 
   # "inspector stamp" - a required-status-check gate that relays
   # Inspector's own verdict onto the pull request itself. Inspector posts

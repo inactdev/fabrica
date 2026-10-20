@@ -14,6 +14,15 @@
 // is to read the workflow's own source and check its pattern list — the
 // same "the file itself is the answer key" spirit as rule7's watchdog
 // test, applied to a CI file instead of a contract/*.test.ts file.
+//
+// Issue #96's test pass additionally honors Inspector's own judgment: a
+// changed `*.test.ts` is cleared when the pull request's head commit
+// carries an `inspector-tests` commit status of `success`, and stays red
+// for every other state, for no such status at all, and — fail closed —
+// for a status that cannot be read. The assertions below pin all four
+// outcomes, pin that the clearance touches neither rule 9's own pass nor
+// the contract pass, and pin that the status is consulted only once a test
+// file has really changed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -56,7 +65,7 @@ function readBlockScalarLines(source: string, key: string): string[] | null {
   return lines;
 }
 
-test("rule9-gate.yml protects contract paths and separately blocks non-contract test changes", () => {
+test("rule9-gate.yml protects contract paths and gates non-contract test changes on Inspector", () => {
   const source = readFileSync(workflowPath, "utf8");
 
   // The job name is load-bearing (wired into required-status-check
@@ -73,6 +82,66 @@ test("rule9-gate.yml protects contract paths and separately blocks non-contract 
   // (The word appears in the file's own safety-critical prose warning
   // against adding one; only an actual `uses:` step would be real.)
   assert.doesNotMatch(source, /uses:\s*actions\/checkout/, "must never check out PR content");
+
+  // Everything below reads the rule 9 job in isolation: the file carries a
+  // second job (inspector-stamp) that legitimately reads a commit status
+  // too, so an assertion anchored to the whole file could be satisfied by
+  // that job and prove nothing about this one.
+  const jobStart = source.indexOf("  block-protected-path-change:");
+  const jobEnd = source.indexOf("\n  inspector-stamp:");
+  assert.ok(jobStart >= 0, "no block-protected-path-change job found in rule9-gate.yml");
+  assert.ok(jobEnd > jobStart, "no inspector-stamp job found after it to bound the rule 9 job");
+  const ruleNineJob = source.slice(jobStart, jobEnd);
+
+  // The test pass reads a commit status, so the job needs that scope -
+  // and only read scopes, never the default token's.
+  assert.match(ruleNineJob, /statuses:\s*read/, "the job must request statuses: read");
+  assert.doesNotMatch(
+    ruleNineJob,
+    /:\s*write\b/,
+    "the job must request no write scope - it only ever reads"
+  );
+  assert.match(
+    ruleNineJob,
+    /pull-requests:\s*read/,
+    "the job must still request pull-requests: read for the changed-file listing"
+  );
+
+  // Rule 9's own pass must stay exactly what it was: one unconditional
+  // failure the moment a protected path appears, with nothing about
+  // Inspector in it. Nothing clears a rule 9 violation.
+  const ruleNineLoop = source.match(
+    /while IFS= read -r pattern; do\n(?:(?!while IFS= read -r pattern; do)[\s\S])*?done <<< "\$PROTECTED_PATHS"/
+  );
+  assert.ok(ruleNineLoop, "no loop over PROTECTED_PATHS found in rule9-gate.yml");
+  const ruleNineErrors = [...ruleNineLoop[0].matchAll(/::error::([^\n]*)/g)].map(
+    (match) => match[1]
+  );
+  assert.equal(
+    ruleNineErrors.length,
+    1,
+    "the PROTECTED_PATHS loop must emit exactly one failure message"
+  );
+  assert.match(
+    ruleNineErrors[0],
+    /CONTRACT rule 9/,
+    "rule 9's own failure message must still name rule 9"
+  );
+  assert.doesNotMatch(
+    ruleNineLoop[0],
+    /inspector/i,
+    "rule 9's own pass must not consult Inspector - nothing clears a rule 9 violation"
+  );
+
+  const rulePatterns = readBlockScalarLines(source, "PROTECTED_PATHS");
+  assert.ok(rulePatterns, "no PROTECTED_PATHS block found in rule9-gate.yml");
+  const matchesRulePattern = (candidate: string) =>
+    rulePatterns.some((pattern) => bashGlobToRegExp(pattern).test(candidate));
+  assert.ok(matchesRulePattern("check.sh"), "check.sh must still be protected");
+  assert.ok(
+    matchesRulePattern(".github/workflows/rule9-gate.yml"),
+    "the gate must still protect its own definition"
+  );
 
   const patterns = readBlockScalarLines(source, "CONTRACT_PROTECTED_PATHS");
   assert.ok(patterns, "no CONTRACT_PROTECTED_PATHS block found in rule9-gate.yml");
@@ -129,10 +198,16 @@ test("rule9-gate.yml protects contract paths and separately blocks non-contract 
     "the contract-path failure message must say only the Client may merge it"
   );
 
-  // Issue #96 temporarily requires the Client to review every test
-  // change until Inspector's examiner exists. This third pass must stay
-  // after the contract pass: contract tests match both patterns, but the
-  // contract message is the meaningful one and must win.
+  assert.doesNotMatch(
+    contractLoop[0],
+    /inspector/i,
+    "the contract pass must not consult Inspector - a contract change is the Client's to merge"
+  );
+
+  // Issue #96's pass: a changed test file is cleared only by Inspector's
+  // examiner, and otherwise still needs the Client. This third pass must
+  // stay after the contract pass: contract tests match both patterns, but
+  // the contract message is the meaningful one and must win.
   const testPatterns = readBlockScalarLines(source, "TEST_PROTECTED_PATHS");
   assert.ok(testPatterns, "no TEST_PROTECTED_PATHS block found in rule9-gate.yml");
   assert.ok(
@@ -157,30 +232,98 @@ test("rule9-gate.yml protects contract paths and separately blocks non-contract 
   );
   assert.ok(testLoop, "no loop over TEST_PROTECTED_PATHS found in rule9-gate.yml");
 
-  const testErrors = [...testLoop[0].matchAll(/::error::([^\n]*)/g)].map((match) => match[1]);
-  assert.equal(
-    testErrors.length,
-    1,
-    "the TEST_PROTECTED_PATHS loop must emit exactly one failure message"
-  );
-  assert.match(
-    testErrors[0],
-    /test change/i,
-    "the test-path failure message must name the test change"
-  );
-  assert.match(
-    testErrors[0],
-    /only the client|client must review/i,
-    "the test-path failure message must require the Client's review"
-  );
-  assert.notEqual(
-    testErrors[0],
-    contractErrors[0],
-    "the test-path failure message must not reuse the contract-path wording"
+  // The matching loop itself only names a changed test file now; the
+  // verdict comes from Inspector's status afterwards. So the pass's
+  // messages are read from the loop plus everything after it in this job,
+  // not from the loop alone.
+  const testPass = ruleNineJob.slice(ruleNineJob.indexOf(testLoop[0]));
+  assert.doesNotMatch(
+    testLoop[0],
+    /::error::/,
+    "the matching loop must only name a changed test file, not decide its fate"
   );
 
-  const contractLoopStart = source.indexOf(contractLoop[0]);
-  const testLoopStart = source.indexOf(testLoop[0]);
+  const testErrors = [...testPass.matchAll(/::error::([^\n]*)/g)].map((match) => match[1]);
+  assert.equal(
+    testErrors.length,
+    3,
+    "the test pass must fail distinctly on a non-success status, on no status at all, and on a status it cannot read"
+  );
+  assert.equal(
+    new Set(testErrors).size,
+    3,
+    "the three test-pass failure messages must each be worded for their own cause"
+  );
+  for (const message of testErrors) {
+    assert.match(
+      message,
+      /only the client|client must review|the client review/i,
+      `every test-pass failure message must point at the Client: ${message}`
+    );
+    assert.match(
+      message,
+      /fabrica\/issues\/96/,
+      `every test-pass failure message must name the issue tracking this stopgap: ${message}`
+    );
+    assert.notEqual(
+      message,
+      contractErrors[0],
+      "no test-pass failure message may reuse the contract-path wording"
+    );
+    assert.notEqual(
+      message,
+      ruleNineErrors[0],
+      "no test-pass failure message may reuse rule 9's own wording"
+    );
+  }
+
+  // Inspector's judgment is read from the pull request head's own commit
+  // status, under exactly the context name Inspector posts.
+  assert.match(
+    testPass,
+    /context\s*==\s*"inspector-tests"/,
+    'the test pass must key on the commit status literally named "inspector-tests"'
+  );
+  assert.match(
+    testPass,
+    /repos\/\$REPO\/commits\/\$HEAD_SHA\/status/,
+    "the test pass must read the status of the pull request's own head commit"
+  );
+  assert.match(
+    source,
+    /HEAD_SHA:\s*\$\{\{\s*github\.event\.pull_request\.head\.sha\s*\}\}/,
+    "HEAD_SHA must come from the pull request's head sha, never a checked-out ref"
+  );
+
+  // Only success clears. Every other state - including a pending run -
+  // falls through to a failure above.
+  assert.match(
+    testPass,
+    /\[\s*"\$tests_state"\s*=\s*"success"\s*\]/,
+    "only an inspector-tests state of success may clear a test change"
+  );
+
+  // Fail closed: the status read's own failure is branched on explicitly,
+  // so an unreadable status can never be mistaken for a clearance.
+  assert.match(
+    testPass,
+    /if\s*!\s*tests_state=\$\(gh api/,
+    "a failed status read must be handled explicitly, not left to pass as a clearance"
+  );
+
+  // ...and the read happens only once a test file has actually changed, so
+  // a pull request touching no test is never failed by a status it has no
+  // use for.
+  const guardIndex = testPass.indexOf('if [ -n "$touched_test" ]; then');
+  const readIndex = testPass.indexOf("gh api");
+  assert.ok(guardIndex >= 0, "the status read must be guarded on a test file having changed");
+  assert.ok(
+    readIndex > guardIndex,
+    "the status read must sit inside that guard, not ahead of it"
+  );
+
+  const contractLoopStart = ruleNineJob.indexOf(contractLoop[0]);
+  const testLoopStart = ruleNineJob.indexOf(testLoop[0]);
   assert.ok(testLoopStart > contractLoopStart, "the test pass must follow the contract pass");
 
   const allErrors = [...source.matchAll(/::error::([^\n]*)/g)].map((match) => match[1]);
