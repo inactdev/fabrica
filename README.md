@@ -165,6 +165,15 @@ unmeasured spend blocking new work. `fabrica doctor --live`
 additionally spends a few cents to confirm the worker token actually
 authenticates.
 
+The **inspector** line also reports which build of Inspector you have:
+the commit the installed binary was built from, against the tip of
+Inspector's own `main`. A binary behind `main` is a `FAIL`, and the fix
+is the exact command that replaces it, pinned to that commit - run it
+and the line goes green. A binary you built yourself from a checkout
+passes with its commit named, since it may be ahead of `main`; so does
+one whose commit can't be read, or a run that can't reach GitHub at all
+(no network is not a stale binary).
+
 Two of those lines are about the network a Worker gets. **relay image**
 fails if the image the relay container runs from isn't on the machine -
 no task can start its relay without it - and prints the exact `docker
@@ -186,6 +195,12 @@ installed, a project that carries an `.inspector.json` is self-tested
 in the Worker's own box instead - but `fabrica register` writes that
 file into every project it sets up, and `fabrica do` refuses a project
 whose base commit has none, so in practice this step is worth doing.
+Keep it current the same way: `fabrica doctor`'s **inspector** line
+fails once the installed binary is behind Inspector's `main` and prints
+the `go install` that catches it up. Reading the installed binary's own
+commit uses `go version -m`, so leaving Go on `PATH` after the install
+is what lets that line say anything; without it the line reports that
+and passes.
 See `src/inspector/README.md` for the publishing boundary.
 
 ## Registering a project
