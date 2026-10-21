@@ -87,9 +87,16 @@ export function existingRegistration(
 }
 
 /**
- * Appends one `[projects.<name>]` table with `path` and `check`. Returns
- * the exact text appended, so the caller can show the Client what landed
- * in his own file rather than describing it.
+ * Appends one `[projects.<name>]` table with `path`, `check` and
+ * `onlyTouchedTests`. Returns the exact text appended, so the caller can
+ * show the Client what landed in his own file rather than describing it.
+ *
+ * `onlyTouchedTests = true` is written out even though the loader
+ * defaults it to exactly that (issue #142, Client ruling): the summary
+ * this text becomes is the one moment the Client sees his new entry, so
+ * a standing ruling that governs every task on the project is worth
+ * showing him - and an explicit line is the one he edits to turn it
+ * off.
  */
 export function appendProjectEntry(opts: {
   recordHome: string;
@@ -116,7 +123,8 @@ export function appendProjectEntry(opts: {
   const entry =
     `[projects.${opts.name}]\n` +
     `path = ${tomlString(opts.path)}\n` +
-    `check = ${tomlString(opts.check)}\n`;
+    `check = ${tomlString(opts.check)}\n` +
+    `onlyTouchedTests = true\n`;
 
   // A file not ending in a newline would otherwise glue its last line to
   // the new table header; a brand new file gets no leading blank line.

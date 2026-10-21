@@ -30,7 +30,6 @@ import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTask
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { runProductionRound } from "./do.ts";
-import { withStandingQuestion } from "./standing-question.ts";
 import type { AskedDetails } from "./ask.ts";
 import { requireRoomToStart } from "./caps.ts";
 import { requireMeterRoomToStart } from "./meters.ts";
@@ -174,9 +173,12 @@ export async function runRecordedAnswer(
   const answersText = readTaskFile(recordHome, taskId, "answers.md") ?? "";
   const brief = deriveBrief(requestText, answersText);
 
-  // brief.md keeps the task's own words; the worker's copy gets the
-  // standing question (rule 11) in front.
-  return runProductionRound(recordHome, taskId, withStandingQuestion(brief), {
+  // brief.md keeps the task's own words, and so does this: the worker's
+  // copy - the standing question rule 11 requires, plus whatever the
+  // project's own settings add (issue #142) - is built inside
+  // runProductionRound, once the project is resolved, so a resumed
+  // round and a first attempt can't resolve it differently.
+  return runProductionRound(recordHome, taskId, brief, {
     project: details.project,
     brain: opts.brain,
     totalAttempts: details.totalAttempts,

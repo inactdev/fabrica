@@ -137,7 +137,7 @@ test("runWatchCommand: streams a transcript entry that lands after watching star
 
   assert.equal(code, 0);
   assert.ok(
-    io.out.some((line) => line.includes(`slow brain did: ${withStandingQuestion("a slow task")}`)),
+    io.out.some((line) => line.includes(`slow brain did: ${withStandingQuestion("a slow task", { onlyTouchedTests: true })}`)),
     `expected the streamed transcript entry, got: ${JSON.stringify(io.out)}`
   );
   assert.ok(io.out.some((line) => line.includes("task delivered")));

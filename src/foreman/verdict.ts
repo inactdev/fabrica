@@ -28,7 +28,7 @@ import {
 import { prepareRound, skipIfUnchanged } from "./judge.ts";
 import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
-import { withStandingQuestion } from "./standing-question.ts";
+import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { runAttempts } from "./attempts.ts";
 import { mergeGateDeclarations, recordRoundResult } from "./round.ts";
@@ -285,13 +285,17 @@ export async function recordVerdict(
  * mirrors attempts.ts's correctionBrief, but from the Client's review
  * rather than a failed check. `extra` (issue #235) is anything the host
  * needs the worker to know about the state it is being handed, appended
- * after the Client's own words and still before the standing question,
- * which stays last wherever it appears. */
+ * after the Client's own words.
+ *
+ * This is the round's own words only; `workerBrief` puts the standing
+ * prefix - and, when the project asks for it, the only-touched-tests
+ * notice (issue #142) - in front of the whole thing at the call site,
+ * the same way do.ts's round does. */
 function buildFixBrief(originalBrief: string, note: string, extra?: string): string {
-  return withStandingQuestion(
+  return (
     `${originalBrief}\n\n---\n\nThe Client reviewed your previous delivery and asked for a change. ` +
-      `Keep everything that was already right, and fix exactly this:\n\n${note}` +
-      (extra ? `\n\n---\n\n${extra}` : "")
+    `Keep everything that was already right, and fix exactly this:\n\n${note}` +
+    (extra ? `\n\n---\n\n${extra}` : "")
   );
 }
 
@@ -524,19 +528,27 @@ async function runFixRound(
 
         const result = await runAttempts({
           brain,
-          // Both extras can apply at once (a round answering a refusal
-          // whose own rebase then conflicted), so they are joined rather
-          // than one winning: each describes a different part of the
-          // state this worker is being handed.
-          brief: buildFixBrief(
-            originalBrief,
-            note,
-            [
-              refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,
-              handed ? rebaseConflictInstructions(handed) : undefined,
-            ]
-              .filter((part): part is string => part !== undefined)
-              .join("\n\n---\n\n") || undefined
+          // Issue #142: the project's own settings decide whether this
+          // brief also carries the only-touched-tests ruling. Resolved
+          // here, the same way do.ts's round resolves it, so a fix round
+          // and a first attempt can never disagree about it.
+          brief: workerBrief(
+            recordHome,
+            line.project,
+            // Both extras can apply at once (a round answering a refusal
+            // whose own rebase then conflicted), so they are joined rather
+            // than one winning: each describes a different part of the
+            // state this worker is being handed.
+            buildFixBrief(
+              originalBrief,
+              note,
+              [
+                refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,
+                handed ? rebaseConflictInstructions(handed) : undefined,
+              ]
+                .filter((part): part is string => part !== undefined)
+                .join("\n\n---\n\n") || undefined
+            )
           ),
           workdir: line.workdir,
           taskId,

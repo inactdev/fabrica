@@ -54,6 +54,13 @@ wants — goes through as he phrased it. When it's not obvious which of
 these a clause is, lean toward keeping more of his exact wording rather
 than less.
 
+Don't add standing instructions of your own to the task text. "Run only
+the tests you touched" in particular is already carried by every
+registered project's settings (`onlyTouchedTests`, README.md's
+"Registering a project"), so every worker is told it on every task. If
+the Client wants the opposite for one task, his own words asking to run
+the full suite are enough — pass them through as he said them.
+
 Report the task id `fabrica do` prints. It prints immediately, before the
 work is done — say which of the three real outcomes happened (started,
 asked a question, or failed before starting), never "it's done," and
