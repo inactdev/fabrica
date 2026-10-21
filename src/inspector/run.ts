@@ -55,14 +55,14 @@ export function inspectorAdapter(command: string = "inspector", opts: InspectorA
   let childEnv: NodeJS.ProcessEnv | undefined;
   const ensureEnv = (): NodeJS.ProcessEnv => (childEnv ??= { ...baseEnv, GITHUB_TOKEN: githubToken(baseEnv) });
   return {
-    async inspect({ branch, workdir, prTitle, prBody }) {
+    async inspect({ branch, workdir, prTitle, prBody, expectedTip }) {
       let env: NodeJS.ProcessEnv;
       try {
         env = ensureEnv();
       } catch (err) {
         return { verdict: "refused", report: err instanceof Error ? err.message : String(err) };
       }
-      return runInspector(command, workdir, branch, env, prTitle, prBody);
+      return runInspector(command, workdir, branch, env, prTitle, prBody, expectedTip);
     },
     installed() {
       return commandIsInstalled(command, baseEnv);
@@ -167,11 +167,16 @@ async function runInspector(
   branch: string,
   env: NodeJS.ProcessEnv,
   prTitle?: string,
-  prBody?: string
+  prBody?: string,
+  expectedTip?: string
 ): Promise<Inspection> {
   // -branch is required by Inspector: the one branch it may publish to
   // after a green result. Without it, Inspector refuses every handoff.
   const args = ["-repo", workdir, "-branch", branch];
+  // Only when the caller has one: a publish with no lease is what
+  // Inspector has always done, and a missing expected tip must never be
+  // dressed up as an empty one, which would lease against "no branch".
+  if (expectedTip !== undefined) args.push("-expected-tip", expectedTip);
   if (prTitle !== undefined) args.push("-pr-title", prTitle);
   // prBody travels as a file, not an argument: a pull request body is
   // free-form, multi-line text, which an argv entry cannot carry safely

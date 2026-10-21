@@ -877,6 +877,44 @@ hold by construction and must keep holding:
   rebased branch stays local exactly like every other commit Fabrica
   makes.
 
+**What Fabrica does owe Inspector: the tip that publish may lease
+against** (inspector#53). A rebase rewrites the branch's commits, so
+publishing it afterwards is a *forced* push — and a forced push with
+nothing to compare against would overwrite whatever else had reached the
+published branch meanwhile. Fabrica is the only side that knows what to
+compare against, so it passes it: `inspector run -expected-tip <sha>`,
+where the sha is `origin/fabrica/<taskId>` **as the fetch immediately
+before the rebase left it** — exactly what `--force-with-lease` compares
+against on the remote (Client ruling). `src/line/rebase.ts` reads both
+that and the branch's own tip at that one moment (`RebaseOutcome.tips`);
+`fix-rebase.ts`'s `publishLeaseAfterRebase` decides, and three rules
+settle it:
+
+- **Only when the rebase actually moved the branch.** An unchanged tip is
+  a fast-forward and needs no lease. Measured around the rebase alone —
+  before this round's worker commits on top — so a round that only ever
+  worked is never mistaken for one that rebased. An `already-current`
+  round, and any round outside the fix path (`do.ts`, `answer.ts`), never
+  carries the flag.
+- **Only when origin has a copy to lease against.** A task branch nothing
+  ever published has no `origin/fabrica/<taskId>`; the flag is left off
+  and the publish goes ahead exactly as it did before. This may never
+  become a new way for a publish to fail (Client ruling) — which is also
+  why every git read behind it returns `null` instead of throwing.
+- **Never after an abort.** A rebase given up on (`markers-remain`,
+  `too-many-stops`) or ended underneath (a cap stop, the pause rule) puts
+  the branch back at its own last commit, so there is nothing rewritten
+  and nothing to lease — and those rounds reach Inspector at all.
+
+The lease is passed as a thunk through `prepareRound` → `inspectorJudge`,
+deliberately not resolved up front: on the conflict path the rebase is
+still *stopped* when the round's judge is built, and only finishes inside
+`runAttempts`' `beforeCommit`. `inspection.ts` records it on
+`"inspector-called"` (`expectedTip`, plus `localTipBeforeRebase` when the
+branch had moved on locally since it was last published — both, per the
+Client's ruling, so anyone asking why a publish refused can see what was
+expected).
+
 **Before every fix round, skipped when there is nothing to do.** It runs
 each round, not only the first — origin moves between rounds too — and
 does nothing at all when the branch already contains origin's tip, so a

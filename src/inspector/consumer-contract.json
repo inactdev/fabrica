@@ -2,6 +2,10 @@
   "flags": [
     { "name": "repo", "description": "path to the repository to inspect" },
     { "name": "branch", "description": "pull request branch to publish after a green result", "required": true },
+    {
+      "name": "expected-tip",
+      "description": "commit origin's copy of the branch is expected to be at, so a rewritten branch is published with force-with-lease; omitted when the branch was never published or was not rewritten"
+    },
     { "name": "pr-title", "description": "pull request title to open after a green result" },
     { "name": "pr-body-file", "description": "path to a file containing the pull request body" }
   ],

@@ -28,11 +28,12 @@ import { runAttempts } from "./attempts.ts";
 import { mergeGateDeclarations, recordRoundResult } from "./round.ts";
 import {
   continueStoppedRebase,
+  publishLeaseAfterRebase,
   rebaseConflictInstructions,
   rebaseForFixRound,
   recordStop,
 } from "./fix-rebase.ts";
-import type { FixRebaseStep, StoppedRebase } from "./fix-rebase.ts";
+import type { FixRebaseStep, PublishLease, StoppedRebase } from "./fix-rebase.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { recordReceipt, requireRoomToStart, spendLimitsFor } from "./caps.ts";
 import { pauseRuleFor, requireMeterRoomToStart } from "./meters.ts";
@@ -307,6 +308,12 @@ async function runFixRound(
   // abandoned if something throws mid-round.
   let stopped: StoppedRebase | undefined;
 
+  // inspector#53: what a publish of this branch may lease against, once
+  // the rebase has genuinely rewritten it. Undefined until then, and
+  // undefined again wherever the rebase is undone - a branch that was
+  // not rewritten is published exactly as it always was.
+  let lease: PublishLease | undefined;
+
   try {
     // Issue #235, before anything else this round does: bring the branch
     // up to origin's current default branch, on the host, with git only.
@@ -316,6 +323,10 @@ async function runFixRound(
     // stopped with the markers in the working tree, and the worker below
     // gets the Client's note and the conflicted file list in one brief.
     if (rebase.status === "handed-to-worker") stopped = rebase.stopped;
+    // A rebase that went through in one go is already done moving the
+    // branch, so its lease is knowable here; a stopped one's is not
+    // (below, once the host has finished it).
+    if (rebase.status === "rebased") lease = publishLeaseAfterRebase(line, rebase.tips);
 
     // After a rebase, origin's tip IS the branch's fork point, and the
     // delivery's `files` diff must be pinned to it - against the old
@@ -335,6 +346,10 @@ async function runFixRound(
       inspector,
       checkBox,
       closesIssue,
+      // Read at each handoff, not now: on the conflict path the rebase
+      // is still stopped at this point and `lease` is only settled once
+      // the host has finished it, inside `beforeCommit` below.
+      publishLease: () => lease,
     });
     // Captured before this round's worker ever runs: the branch's HEAD at
     // the exact commit the task's last round left it at (and so, in
@@ -395,10 +410,17 @@ async function runFixRound(
               // aborted; the new conflict, when it stopped again.
               if (step.status === "completed") {
                 stopped = undefined;
+                // The branch has only just stopped moving: this is the
+                // first moment its publish lease is knowable (and the
+                // last before this attempt commits on top of it).
+                lease = publishLeaseAfterRebase(line, rebase.tips);
                 return undefined;
               }
               if (step.status === "give-up") {
                 stopped = undefined;
+                // Aborted, so nothing was rewritten and there is nothing
+                // to lease - and this round publishes nothing anyway.
+                lease = undefined;
                 // Aborted: the branch is back at its own fork point, so
                 // that is what this round's delivery is pinned to again.
                 roundBaseCommit = baseCommit;
@@ -475,6 +497,7 @@ async function runFixRound(
       abortRebase(line.workdir);
       if (stopped !== undefined) recordStop(recordHome, taskId, stopped, { left: "aborted", reason: "round-ended" });
       roundBaseCommit = baseCommit;
+      lease = undefined;
     }
 
     // judge-commit-outcome-deliver-record: one shared tail (issue #182),

@@ -179,6 +179,26 @@ test("inspectorAdapter passes -pr-title and -pr-body-file, and the body file hol
   );
 });
 
+test("inspectorAdapter passes the expected tip only when the caller has one (inspector#53)", async () => {
+  const workdir = tempDir();
+  const path = join(workdir, "inspector-args.sh");
+  writeFileSync(path, '#!/bin/sh\nprintf \'%s \' "$@"\nexit 0\n');
+  chmodSync(path, 0o755);
+  const adapter = testAdapter(path);
+  const tip = "0123456789abcdef0123456789abcdef01234567";
+
+  const leased = await adapter.inspect({ branch: "fabrica/task-1", workdir, expectedTip: tip });
+  assert.equal(
+    leased.report,
+    `${flag("repo")} ${workdir} ${flag("branch")} fabrica/task-1 ${flag("expected-tip")} ${tip}`
+  );
+
+  // Omitted, not passed empty: Inspector publishes exactly as it did
+  // before this flag existed.
+  const unleased = await adapter.inspect({ branch: "fabrica/task-1", workdir });
+  assert.equal(unleased.report, `${flag("repo")} ${workdir} ${flag("branch")} fabrica/task-1`);
+});
+
 test("inspectorAdapter cleans up the pr-body temp file after Inspector exits", async () => {
   const workdir = tempDir();
   const path = join(workdir, "inspector-echo-path.sh");
