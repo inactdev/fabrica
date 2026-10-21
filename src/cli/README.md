@@ -390,8 +390,14 @@ hand or a previous `fabrica up` is detected the same way. Listening isn't
 enough on its own to reuse it, though (a merge can leave a live view
 running yesterday's code behind, serving a blank page against today's
 record shape): the already-listening one is asked for its own commit via
-its `/api/version` (the same value `detectCopy`/`runningCopyCommit` give
-`fabrica doctor`'s "checkout" line) and compared against this copy's own.
+its `/api/version` and compared against this copy's own
+(`detectCopy`/`runningCopyCommit`, the same value `fabrica doctor`'s
+"checkout" line reports). That comparison only means anything because
+`/api/version` reports the commit the live view **process** was started
+from and never re-reads the checkout afterwards
+(`integrations/live-view/server.ts`); while it did re-read it, both sides
+of this comparison were the same on-disk value, so it could never find a
+stale live view at all - see that module's README.
 The same commit → reused, its address printed, no browser opens. A
 different commit, or no answer from that endpoint at all (a non-HTTP
 listener, a timeout) → it's stopped and replaced with a fresh one, exactly
@@ -487,11 +493,25 @@ instead of being reinstalled somewhere it never lived.
 
 Once updated, it calls `refreshStaleLiveView` - the exact function
 `fabrica up`'s own Step 2 uses, pulled out of `runUpCommand` for this
-reuse rather than duplicated - to restart a live view running the old
-commit; one already current, or not listening at all, is left alone.
+reuse rather than duplicated - to bring the live view in line with the
+code that just landed. **When the commit actually changed, that restart
+is unconditional, and a live view that wasn't running at all is
+started** (Client ruling: "restart unconditionally when the commit
+changed; if none is running, start one; no opt-out flag"): the
+`/api/version` question is skipped entirely (`force`), since the caller
+just moved the code itself and no answer could change the decision, and
+`startIfStopped` turns the old "not-listening, leave it stopped" outcome
+into a fresh start. Updating must never leave the Client reading a page
+served by the code he just replaced, or with no page where he had one a
+moment earlier. When the commit did **not** change (an already-up-to-date
+pull, a reinstall of the same commit), the ordinary `/api/version`
+comparison decides exactly as it does for `fabrica up`: a live view on an
+older commit is still replaced, and one already current, or not listening
+at all, is left alone.
+
 Unlike `fabrica up`, which prints a line per step, `fabrica update`
 prints exactly one summary line: the commit before and after, whether
-the live view was restarted, and the next step,
+the live view was restarted, started or left as is, and the next step,
 `fabrica up --continue`.
 
 `fabrica update` is denied to the chat agent itself the same way
@@ -920,9 +940,9 @@ already recorded, and the response says `signaled: false`.
 | `verdict-command.ts` | Resolves the record home, calls `recordVerdictDecision` synchronously for every ruling, then - `fix` only (issue #123) - hands the round to a detached process; `VERDICT_HELP` is `verdict --help`'s text. |
 | `verdict-fix-entry.ts` | The detached fix round's real entry point: picks the default adapter, writes the task's `worker.pid` (issue #203), calls `runRecordedFix`. |
 | `cost-command.ts` | `fabrica cost <taskId> <usd>` (issue #11): parses the figure strictly and calls `Foreman.recordCost`; `COST_HELP` is `cost --help`'s text. |
-| `load-config.ts` | `loadConfigOrDefault` - `projects.toml`, or no projects and no caps when there is none yet. Shared by every command that needs caps. |
-| `doctor-command.ts` | `fabrica doctor`: runs the checks above as injectable `DoctorProbes` (tests never touch this machine's Docker, tokens or PATH) plus the per-project, caps and spend checks; `DOCTOR_HELP` is `doctor --help`'s text. |
-| `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. One `cachedProcessTable` per run backs the worker-liveness reading (issue #99), so a whole listing costs one `ps`, not one per open task. |
+| `load-config.ts` | `loadConfigOrDefault` - `projects.toml`, or no projects and no caps when there is none yet. **Throws** on a file that exists but will not parse, and must keep throwing: every command that reads caps through it (`do`, `answer`, `verdict`, `run-task`) spends real money and must refuse rather than quietly run uncapped. The Client's read-only surfaces - `doctor`, `status`, the live view - read `src/config/`'s `loadConfigOrProblem` instead, which hands back the same empty config plus the problem to print. Readers degrade loudly, spenders refuse. |
+| `doctor-command.ts` | `fabrica doctor`: runs the checks above as injectable `DoctorProbes` (tests never touch this machine's Docker, tokens or PATH) plus the per-project, caps and spend checks; `DOCTOR_HELP` is `doctor --help`'s text. A `projects.toml` that will not parse is one `FAIL projects.toml` line carrying the path, the line the parser stopped on and what it objected to, plus a `fix:` naming that line - every machine check still runs and prints, and only the three checks that genuinely need the file (projects, caps, spend) are skipped, so one broken file is one FAIL and not three. |
+| `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. One `cachedProcessTable` per run backs the worker-liveness reading (issue #99), so a whole listing costs one `ps`, not one per open task. A `projects.toml` that will not parse is printed on the listing's very first line and the listing then runs anyway (Client ruling): tasks come from the record, which needs no config, and the caps silently reading "no cap set" off an unreadable file is exactly what that line exists to prevent. Exit code stays 0 - this is a report, not a check, the same reason a task whose worker is gone doesn't fail it either. |
 | `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |
 | `watch-args.ts` | Parses `fabrica watch`'s arguments (`<taskId>`). |
@@ -936,7 +956,7 @@ already recorded, and the response says `signaled: false`.
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). Issue #99 adds the reporting side on top of that same verification, for `status`/`watch`: `probeTaskWorker` (`alive`/`not-found`/`unknown`), `cachedProcessTable`, and `WORKER_PROBE_INTERVAL_MS`. |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
-| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); the install itself is spelled once, in `npm-prefix.ts`'s `installCommandArgs`, so the message a failure prints is the command that really ran; calls `up-command.ts`'s `refreshStaleLiveView` afterward rather than a second stale-live-view check. `UPDATE_HELP` is `update --help`'s text. |
+| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); the install itself is spelled once, in `npm-prefix.ts`'s `installCommandArgs`, so the message a failure prints is the command that really ran; calls `up-command.ts`'s `refreshStaleLiveView` afterward rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
 | `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus `INSTALL_SPEC`/`installCommandArgs`, the one spelling of the documented install command, shared by `fabrica update`'s real call and every message that prints it. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |

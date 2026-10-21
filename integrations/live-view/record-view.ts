@@ -12,7 +12,6 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ConfigError,
   daySpend,
   deliveryOf,
   describeTaskCost,
@@ -23,15 +22,25 @@ import {
   formatUsd,
   hasAttempts,
   latestMeterReading,
-  loadConfig,
-  pauseRuleFor,
+  loadConfigOrProblem,
   readTaskFile,
   refusalFor,
   standingOf,
   stateOf,
   taskSpend,
 } from "../../src/index.ts";
-import type { Caps, Delivery, FabricaEvent, FabricaTask, Receipt, TaskFollower, TranscriptEntry, WorkerWriteup } from "../../src/index.ts";
+import type {
+  Caps,
+  ConfigProblem,
+  Delivery,
+  FabricaEvent,
+  FabricaTask,
+  PauseRule,
+  Receipt,
+  TaskFollower,
+  TranscriptEntry,
+  WorkerWriteup,
+} from "../../src/index.ts";
 
 /** How much of the task's own text stands in for a title before a
  * worker's write-up exists - long enough to be recognizable, short
@@ -603,17 +612,21 @@ function capsAtStart(recordHome: string, taskId: string, currentCaps: Caps): Cap
   }
 }
 
-/** A record home with no projects.toml yet has no caps at all - not an
- * error (mirrors src/cli/load-config.ts's loadConfigOrDefault, which
- * lives under src/cli/ and so isn't imported directly - see the note on
- * projectFromEvents above). */
-function loadCapsOrDefault(recordHome: string): Caps {
-  try {
-    return loadConfig(recordHome).caps;
-  } catch (err) {
-    if (err instanceof ConfigError && err.code === "not-found") return {};
-    throw err;
-  }
+/** The caps and the pause rule this viewer reads - and, when
+ * projects.toml is there but will not parse, the problem to show
+ * instead of a number.
+ *
+ * It used to rethrow that case, which turned the whole page into one
+ * "could not read the record" line: a config problem reported as a
+ * record problem, with the task list - which needs no config at all -
+ * collateral damage. A viewer degrades loudly instead (Client ruling):
+ * the defaults, plus a banner naming the file and the line.
+ * `loadConfigOrProblem` is the shared reader for exactly this posture;
+ * everything that spends money still refuses outright on the same file
+ * (see its own doc comment). */
+function readConfig(recordHome: string): { caps: Caps; pause: PauseRule; problem: ConfigProblem | null } {
+  const { config, problem } = loadConfigOrProblem(recordHome);
+  return { caps: config.caps, pause: config.pause, problem };
 }
 
 /** Every task id the record home knows about, from the one place they are
@@ -649,7 +662,7 @@ export function createRecordView(recordHome: string) {
   }
 
   function getState(now: number = Date.now()): LiveViewState {
-    const caps = loadCapsOrDefault(recordHome);
+    const { caps } = readConfig(recordHome);
     const ids = discoverTaskIds(recordHome);
 
     const perTask = ids.map((id) => {
@@ -725,7 +738,7 @@ export function createRecordView(recordHome: string) {
   function getTask(taskId: string, now: number = Date.now()): TaskView | null {
     if (!discoverTaskIds(recordHome).includes(taskId)) return null;
     const { events } = followerFor(taskId).read();
-    return buildTaskView(taskId, events, loadCapsOrDefault(recordHome), now);
+    return buildTaskView(taskId, events, readConfig(recordHome).caps, now);
   }
 
   /** The worker's transcript for one task, tailing as it grows - null for
@@ -752,7 +765,7 @@ export function createRecordView(recordHome: string) {
    * `getTranscript` already share, rather than re-reading the record a
    * second, independent way. */
   function getReviewRows(now: number = Date.now()): ReviewRow[] {
-    const caps = loadCapsOrDefault(recordHome);
+    const { caps } = readConfig(recordHome);
     const rows: ReviewRow[] = discoverTaskIds(recordHome).flatMap((id): ReviewRow[] => {
       const { events } = followerFor(id).read();
       const task = buildTaskView(id, events, caps, now);
@@ -800,7 +813,7 @@ export function createRecordView(recordHome: string) {
    * the opposite of waiting on him. Keeping them apart means the stop
    * control can exist without widening what "waiting on you" means. */
   function getRunningRows(now: number = Date.now()): RunningRow[] {
-    const caps = loadCapsOrDefault(recordHome);
+    const { caps } = readConfig(recordHome);
     const rows: RunningRow[] = discoverTaskIds(recordHome).flatMap((id): RunningRow[] => {
       const { events, transcript } = followerFor(id).read();
       const task = buildTaskView(id, events, caps, now);
@@ -837,7 +850,7 @@ export function createRecordView(recordHome: string) {
         detail: `the pause rule is refusing nothing: ${standing.unknownBecause}`,
       };
     }
-    const refusal = refusalFor(standing, pauseRuleFor(recordHome));
+    const refusal = refusalFor(standing, readConfig(recordHome).pause);
     return {
       label: describeMeters(standing),
       paused: refusal !== undefined,
@@ -845,7 +858,17 @@ export function createRecordView(recordHome: string) {
     };
   }
 
-  return { getState, getTask, getTranscript, getReviewRows, getRunningRows, getMeters };
+  /** The one thing wrong with this record home's projects.toml that
+   * every page has to show, or null when there is nothing wrong with it
+   * (including "there isn't one", which is ordinary - see `readConfig`).
+   * Its own accessor rather than a field on each page's state payload:
+   * four pages share one banner script (public/banner.js) and one
+   * endpoint, instead of three renderers each having to carry it. */
+  function getConfigProblem(): ConfigProblem | null {
+    return readConfig(recordHome).problem;
+  }
+
+  return { getState, getTask, getTranscript, getReviewRows, getRunningRows, getMeters, getConfigProblem };
 }
 
 export type RecordView = ReturnType<typeof createRecordView>;

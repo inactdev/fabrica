@@ -15,8 +15,8 @@ import {
   formatUsd,
   hasAttempts,
   latestMeterReading,
+  loadConfigOrProblem,
   meterPauseOf,
-  pauseRuleFor,
   refusalFor,
   SPEND_UNKNOWN_LINE,
   standingOf,
@@ -26,7 +26,6 @@ import {
 } from "../index.ts";
 import type { MeterStanding, PauseRule } from "../index.ts";
 import { CliError } from "./errors.ts";
-import { loadConfigOrDefault } from "./load-config.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import {
   describeLiveness,
@@ -91,6 +90,14 @@ opens with "${SPEND_UNKNOWN_LINE}" and the \`fabrica cost\` command
 that clears each one. That line is read from the record on every run,
 so it stays until the real cost is recorded.
 
+A projects.toml that will not parse is printed on this listing's very
+first line - the file's path, the line the parser stopped on, and what it
+objected to - and the listing then runs anyway: tasks come from the
+record, which needs no config. Without that line the caps would read as
+"no cap set", which is what an unreadable config looks like from here and
+is not the same thing at all. (\`fabrica do\`, \`answer\` and \`verdict\`
+refuse outright on the same file - they spend money; this only reports.)
+
 A blocked file-edit attempt (issue #13's off-the-books net) is not a
 task and never appears as one here - the record's own
 "project:<name>"/"project:unregistered" buckets for it are counted and
@@ -147,7 +154,21 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
   try {
     parseStatusArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
-    const { caps } = loadConfigOrDefault(recordHome);
+
+    // A projects.toml that will not parse is said out loud, on this
+    // listing's very first line, and then the listing runs anyway: the
+    // tasks come from the record, which needs no config at all, and a
+    // broken config file is no reason to stop showing the Client his own
+    // work (Client ruling). What it IS a reason for is never being
+    // silent - the caps below read as "no cap set" while that file is
+    // unreadable, and without this line that would look like a
+    // deliberate configuration rather than a parse error. `fabrica
+    // do`/`answer`/`verdict` still refuse outright on the same file
+    // (src/cli/load-config.ts's loadConfigOrDefault, which throws) -
+    // they spend money; this one only reports.
+    const { config, problem } = loadConfigOrProblem(recordHome);
+    if (problem) stdout(problem.message);
+    const { caps } = config;
 
     // One pass over events.jsonl for the whole listing. Asking the
     // Foreman for the task list and then for each task's events would
@@ -166,7 +187,7 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     // can never show a number that disagrees with what actually gates
     // new work. A flat-rate subscription's windows cost no dollars, so
     // nothing above this line can show them.
-    stdout(formatMetersLine(standingOf(latestMeterReading(allEvents), now), pauseRuleFor(recordHome)));
+    stdout(formatMetersLine(standingOf(latestMeterReading(allEvents), now), config.pause));
 
     // Rule 10 (issue #11, Client ruling 2026-10-08): derived from the
     // record on every run, closed tasks included, so the block survives

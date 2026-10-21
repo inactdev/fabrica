@@ -46,10 +46,7 @@ export function loadConfig(recordHome: string): FabricaConfig {
   try {
     parsed = TOML.parse(text);
   } catch (err) {
-    throw new ConfigError(
-      "malformed",
-      `${path} is not valid TOML: ${(err as Error).message}`
-    );
+    throw tomlParseError(path, err);
   }
 
   if (!isTable(parsed)) {
@@ -86,6 +83,72 @@ export function loadConfig(recordHome: string): FabricaConfig {
   const projects = parseProjects(rawProjects, path);
 
   return { caps, pause, projects };
+}
+
+/**
+ * The refusal for a projects.toml that will not parse at all, written as
+ * ONE line: `<path>:<line>:<column>: not valid TOML - <reason>`. Every
+ * place that has to show this now shows it on a single line — `fabrica
+ * doctor`'s FAIL line, `fabrica status`'s first line, and the live
+ * view's banner — so the parser's own multi-line code block is dropped
+ * and the path plus the line, which is what a reader needs to go fix it,
+ * is promoted to the front.
+ *
+ * The line/column are read by duck-typing two numeric fields rather than
+ * an `instanceof` against the parser's own error class: a second copy of
+ * the TOML package anywhere in the tree would make `instanceof` false
+ * and silently turn the line number off, and a line number is the whole
+ * point here. A parser that says nothing about where still gets a
+ * refusal naming the path.
+ */
+function tomlParseError(path: string, err: unknown): ConfigError {
+  const { line, column } = err as { line?: unknown; column?: unknown };
+  // "Invalid TOML document: <reason>\n\n<code block>" — the first line
+  // holds the reason, and the prefix is noise next to the path below.
+  const reason = ((err as Error).message ?? String(err)).split("\n")[0].replace(/^Invalid TOML document:\s*/, "");
+  if (typeof line !== "number") {
+    return new ConfigError("malformed", `${path} is not valid TOML: ${reason}`);
+  }
+  const at = typeof column === "number" ? `${line}:${column}` : `${line}`;
+  return new ConfigError("malformed", `${path}:${at}: not valid TOML - ${reason}`, line);
+}
+
+/** A projects.toml that exists but cannot be used, described for
+ * display: one ready-to-print line, plus the two facts a reader needs to
+ * go fix it on their own. `line` is null unless the failure was the TOML
+ * parse itself (see `ConfigError.line`). */
+export interface ConfigProblem {
+  /** Already carries the path and, when known, the line. */
+  message: string;
+  path: string;
+  line: number | null;
+}
+
+/**
+ * The config for a caller that must keep working against a broken
+ * projects.toml rather than refuse — the Client's own eyes: `fabrica
+ * status`, `fabrica doctor`, the live view. A file that will not parse
+ * yields the same empty config a missing one does, plus the problem to
+ * show; a missing file is not a problem at all (no file means no
+ * registered projects and no caps, which `loadConfigOrDefault` has
+ * always treated as ordinary).
+ *
+ * Deliberately NOT what `fabrica do`/`answer`/`verdict` use: those spend
+ * real money and must refuse on a broken caps table rather than quietly
+ * run with no cap at all. `loadConfig` and `src/cli/load-config.ts`'s
+ * `loadConfigOrDefault` still throw for exactly that reason — readers
+ * degrade loudly, spenders refuse.
+ */
+export function loadConfigOrProblem(recordHome: string): { config: FabricaConfig; problem: ConfigProblem | null } {
+  try {
+    return { config: loadConfig(recordHome), problem: null };
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    const path = projectsTomlPath(recordHome);
+    const empty: FabricaConfig = { caps: {}, pause: { ...DEFAULT_PAUSE_RULE }, projects: {} };
+    if (err.code === "not-found") return { config: empty, problem: null };
+    return { config: empty, problem: { message: err.message, path, line: err.line } };
+  }
 }
 
 /**

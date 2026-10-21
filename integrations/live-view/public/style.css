@@ -37,6 +37,27 @@ a {
   color: var(--text);
 }
 
+/* The banner strip (public/banner.js), inserted above everything else on
+   every page: a server running older code than the checkout, or a
+   projects.toml that will not parse. Deliberately the one loud thing in
+   an otherwise flat, quiet palette - these say the page you are reading
+   may not be telling you the truth, and must not read as decoration.
+   Still no borders, corners or shadows: a solid band of the state color
+   on dark text, full page width. */
+.banners {
+  display: block;
+}
+
+.banner {
+  padding: 0.5rem 0.75rem;
+  background: var(--amber);
+  color: #15181e;
+}
+
+.banner-config {
+  background: var(--red);
+}
+
 /* The header strip: task/event count on the left, filters on the right,
    the spend line (main page) or back link (task page) on a second row
    underneath - still one flat strip, no border around it, just the one

@@ -50,6 +50,8 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/style.css": { file: "style.css", contentType: "text/css; charset=utf-8" },
   "/task.js": { file: "task.js", contentType: "text/javascript; charset=utf-8" },
   "/review.js": { file: "review.js", contentType: "text/javascript; charset=utf-8" },
+  /** The banner strip every page loads - see public/banner.js. */
+  "/banner.js": { file: "banner.js", contentType: "text/javascript; charset=utf-8" },
 };
 
 const TRANSCRIPT_PATH = /^\/api\/tasks\/([^/]+)\/transcript$/;
@@ -95,11 +97,22 @@ export interface LiveView {
  * parameter anywhere in this function's signature, so there is no way
  * for a caller to ask for anything else. `port` defaults to 7777 (the
  * documented address) but tests pass 0 for an OS-assigned one so many
- * can run at once without colliding. `commit` defaults to this running
- * copy's real commit (src/cli/doctor-command.ts's `runningCopyCommit`,
- * the exact value `fabrica doctor`'s own "checkout" line reports) -
- * overridable so a test can make /api/version answer a fixed value
- * without depending on this checkout's real git state. */
+ * can run at once without colliding.
+ *
+ * `commit` reads the commit of the copy of Fabrica on disk
+ * (src/cli/doctor-command.ts's `runningCopyCommit`, the exact value
+ * `fabrica doctor`'s own "checkout" line reports) - overridable so a
+ * test can drive both commit endpoints without depending on this
+ * checkout's real git state. It is called ONCE here, at startup, and
+ * that captured string is what `/api/version` answers for this
+ * process's whole life; `/api/checkout` calls it again per request. The
+ * difference between those two answers is the whole point: it is what
+ * tells a live view still executing yesterday's code from the checkout
+ * that has since moved under it. Before this, `/api/version` re-read
+ * the checkout per request, so it reported the code on disk rather than
+ * the code it was running - and `fabrica up`/`fabrica update`, which
+ * compare it against that same on-disk value, were comparing a value
+ * against itself and could never find a stale live view at all. */
 export function startLiveView(opts: {
   recordHome: string;
   port?: number;
@@ -125,11 +138,15 @@ export function startLiveView(opts: {
   stopProcess?: StopProcess;
 }): Promise<LiveView> {
   const view = createRecordView(opts.recordHome);
-  const commit = opts.commit ?? (() => runningCopyCommit(CHECKOUT));
+  const readCheckoutCommit = opts.commit ?? (() => runningCopyCommit(CHECKOUT));
+  // Captured exactly here, exactly once. Nothing in this module ever
+  // re-reads it, so this value cannot drift toward the checkout's.
+  const startupCommit = readCheckoutCommit();
+  const version: Version = { startupCommit, readCheckoutCommit };
   const entryScripts = { fix: opts.fixEntryScript, answer: opts.answerEntryScript };
   const stopProcess = opts.stopProcess ?? defaultStopProcess;
   const server = createServer((req, res) => {
-    handleRequest(req, res, view, commit, opts.recordHome, entryScripts, stopProcess).catch((err) => {
+    handleRequest(req, res, view, version, opts.recordHome, entryScripts, stopProcess).catch((err) => {
       if (res.headersSent) return;
       send(res, 500, "text/plain; charset=utf-8", `fabrica live: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -147,6 +164,18 @@ export function startLiveView(opts: {
       });
     });
   });
+}
+
+/** The two commits `/api/version` and `/api/checkout` answer with. One
+ * is a string captured once at startup; the other is a function called
+ * per request. Kept as one object so the difference between them is
+ * visible at every call site rather than two similarly-named callbacks
+ * threaded side by side. */
+interface Version {
+  /** The commit this server process's own code came from. */
+  startupCommit: string | null;
+  /** The commit the copy of Fabrica on disk is on right now. */
+  readCheckoutCommit: () => string | null;
 }
 
 /** The two test-only entry-script overrides, one per detached round this
@@ -178,7 +207,7 @@ async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
   view: ReturnType<typeof createRecordView>,
-  commit: () => string | null,
+  version: Version,
   recordHome: string,
   entryScripts: EntryScripts,
   stopProcess: StopProcess
@@ -253,11 +282,36 @@ async function handleRequest(
   }
 
   if (url.pathname === "/api/version") {
-    // What `fabrica up` compares its own running commit against, to
-    // tell a live view running the current code from a stale one left
-    // over from before a merge (issue: "fabrica up must never reuse a
-    // live view running older code").
-    send(res, 200, "application/json", JSON.stringify({ commit: commit() }));
+    // What THIS PROCESS is running - captured once at startup
+    // (startLiveView) and never read again, so it keeps reporting the
+    // code it was started from however far the checkout moves
+    // afterwards. What `fabrica up` and `fabrica update` compare their
+    // own running commit against, to tell a live view running the
+    // current code from a stale one left over from before a merge.
+    send(res, 200, "application/json", JSON.stringify({ commit: version.startupCommit }));
+    return;
+  }
+
+  if (url.pathname === "/api/checkout") {
+    // What is ON DISK right now - read fresh on every request, the same
+    // way `fabrica doctor`'s own "checkout" line reads it. The page
+    // compares this against /api/version above on load and on each poll,
+    // so a banner appears within one poll of the checkout moving. A null
+    // here (or there) means the comparison cannot be made at all, and
+    // the page says nothing rather than guessing.
+    send(res, 200, "application/json", JSON.stringify({ commit: version.readCheckoutCommit() }));
+    return;
+  }
+
+  if (url.pathname === "/api/config-problem") {
+    // A projects.toml that is there but will not parse. Its own endpoint
+    // rather than a field on each page's state payload, because every
+    // page must show it (Client ruling) and there are four of them with
+    // three different scripts - one endpoint and one banner script
+    // (public/banner.js) beats three renderers that have to stay in
+    // step. Never an HTTP error: a broken config is not a broken
+    // server, and the pages below it keep working from the record.
+    send(res, 200, "application/json", JSON.stringify({ problem: view.getConfigProblem() }));
     return;
   }
 

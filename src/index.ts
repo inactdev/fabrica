@@ -87,9 +87,9 @@ export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
 // Config: the record home's project registry and caps (SPEC.md
 // "Config"), needed by the CLI to resolve `--project <path-or-name>`
 // before it ever calls createForeman.
-export { loadConfig, projectsTomlPath, requireProject, DEFAULT_PAUSE_RULE } from "./config/index.ts";
+export { loadConfig, loadConfigOrProblem, projectsTomlPath, requireProject, DEFAULT_PAUSE_RULE } from "./config/index.ts";
 export { ConfigError } from "./config/index.ts";
-export type { ConfigErrorCode, PauseRule, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
+export type { ConfigErrorCode, ConfigProblem, PauseRule, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
 
 // `fabrica register` (src/cli/register-command.ts): the one command
 // allowed to push, because it runs as the Client and only ever creates a
