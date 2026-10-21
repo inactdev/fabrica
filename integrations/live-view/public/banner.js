@@ -1,5 +1,5 @@
 // The banner strip, loaded by every page (index.html, history.html,
-// task.html, review.html). Two things can make a page here quietly lie,
+// task.html, review.html, quiz.html). Two things can make a page here quietly lie,
 // and each gets a banner nobody can miss:
 //
 //   1. The server answering this page is running older code than the
@@ -15,8 +15,8 @@
 //      this has to be said out loud.
 //
 // Deliberately self-contained: it builds its own DOM, polls its own
-// endpoints, and needs no wiring in app.js/task.js/review.js. One script
-// loaded by four pages beats three renderers that each have to stay in
+// endpoints, and needs no wiring in app.js/task.js/review.js/quiz.js. One
+// script loaded by five pages beats four renderers that each have to stay in
 // step with this one (and with each other).
 //
 // /api/version is fetched ONCE: a running process's startup commit
@@ -28,7 +28,7 @@
 // Wrapped in an IIFE so this script declares NOTHING in the global
 // scope. Classic scripts on one page share a single global lexical
 // environment, so a top-level `const` here and a top-level `const` of
-// the same name in app.js/review.js/task.js (all four of these files
+// the same name in app.js/review.js/task.js/quiz.js (all five of these files
 // want a `POLL_MS`) is a redeclaration SyntaxError - thrown before a
 // single statement of the page's own script runs, leaving the page on
 // its placeholder markup with every request answered 200 and nothing

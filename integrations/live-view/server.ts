@@ -46,10 +46,13 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/": { file: "index.html", contentType: "text/html; charset=utf-8" },
   "/history": { file: "history.html", contentType: "text/html; charset=utf-8" },
   "/review": { file: "review.html", contentType: "text/html; charset=utf-8" },
+  /** Issue #98: the accepted tasks' quizzes, for the owner to revisit. */
+  "/quiz": { file: "quiz.html", contentType: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", contentType: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", contentType: "text/css; charset=utf-8" },
   "/task.js": { file: "task.js", contentType: "text/javascript; charset=utf-8" },
   "/review.js": { file: "review.js", contentType: "text/javascript; charset=utf-8" },
+  "/quiz.js": { file: "quiz.js", contentType: "text/javascript; charset=utf-8" },
   /** The banner strip every page loads - see public/banner.js. */
   "/banner.js": { file: "banner.js", contentType: "text/javascript; charset=utf-8" },
 };
@@ -281,6 +284,20 @@ async function handleRequest(
     return;
   }
 
+  if (url.pathname === "/api/quiz") {
+    // Issue #98: the last ten accepted tasks' quizzes, for the owner to
+    // revisit work he has already ruled on. Read-only like every route
+    // above the POSTs, and wrapped the same way /api/review is - a
+    // record read that throws answers with the error as data rather
+    // than taking the server down.
+    try {
+      send(res, 200, "application/json", JSON.stringify({ rows: view.getQuizRows() }));
+    } catch (err) {
+      sendRecordError(res, err);
+    }
+    return;
+  }
+
   if (url.pathname === "/api/version") {
     // What THIS PROCESS is running - captured once at startup
     // (startLiveView) and never read again, so it keeps reporting the
@@ -308,7 +325,7 @@ async function handleRequest(
     // rather than a field on each page's state payload, because every
     // page must show it (Client ruling) and there are four of them with
     // three different scripts - one endpoint and one banner script
-    // (public/banner.js) beats three renderers that have to stay in
+    // (public/banner.js) beats four renderers that have to stay in
     // step. Never an HTTP error: a broken config is not a broken
     // server, and the pages below it keep working from the record.
     send(res, 200, "application/json", JSON.stringify({ problem: view.getConfigProblem() }));
@@ -669,7 +686,7 @@ function readJsonBody(req: IncomingMessage, maxBytes = 8192): Promise<unknown> {
  *
  * Why no-store on literally every response, pages and scripts included:
  * nothing here is fingerprinted. `index.html`, `app.js`, `review.js`,
- * `task.js`, `banner.js` and `style.css` are read off the checkout on
+ * `task.js`, `quiz.js`, `banner.js` and `style.css` are read off the checkout on
  * each request (STATIC_FILES, above), at paths that never change, so a
  * browser that cached one by URL goes on running code the checkout has
  * since replaced - with no version in the path to tell it otherwise. That

@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
-import { WRITEUP_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
+import { WRITEUP_FIELDS, WRITEUP_QUIZ_LENGTH, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
 import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgressNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
@@ -312,7 +312,11 @@ export const DEFAULT_IMAGE = "fabrica-claude-code:latest";
  * on 2.1.222), so no write-up is ever parsed out of prose.
  * `couldNotVerify` is a declared property but deliberately not in
  * `required`: it is the one optional field, and `additionalProperties:
- * false` means a field the worker may send has to be declared even so. */
+ * false` means a field the worker may send has to be declared even so.
+ * `quiz` pins its own length both ways (`minItems`/`maxItems`), so the
+ * CLI's own schema retries are the first thing that asks for exactly
+ * three questions - `writeupProblem` refusing the attempt is the
+ * backstop, not the only line of defence. */
 export const WRITEUP_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -327,6 +331,20 @@ export const WRITEUP_JSON_SCHEMA = {
     assumptions: { type: "string", minLength: 1 },
     expectedOutcomes: { type: "string", minLength: 1 },
     deviations: { type: "string", minLength: 1 },
+    quiz: {
+      type: "array",
+      minItems: WRITEUP_QUIZ_LENGTH,
+      maxItems: WRITEUP_QUIZ_LENGTH,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["question", "answer"],
+        properties: {
+          question: { type: "string", minLength: 1 },
+          answer: { type: "string", minLength: 1 },
+        },
+      },
+    },
     couldNotVerify: { type: "string" },
   },
 };
@@ -961,7 +979,14 @@ export function claudeCodeCheckBox(opts: { image?: string } = {}): CheckBox {
  * shape asked for: an object whose string fields are all strings and
  * whose `confidence` is a number. Anything else is no write-up - the
  * Foreman checks the contents (empty fields, title length, confidence
- * range) and names what is wrong. */
+ * range, the quiz's own three questions) and names what is wrong.
+ *
+ * `quiz` is deliberately NOT part of the shape test above it: a write-up
+ * that arrived with a broken quiz and nothing else wrong is a write-up,
+ * so it is carried through exactly as it came and the Foreman reports
+ * what is wrong with it. Returning undefined here would report "the
+ * worker returned no write-up" instead, which is both false and
+ * unactionable. */
 function writeupFrom(value: unknown): WorkerWriteup | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const record = value as Record<string, unknown>;
@@ -977,6 +1002,7 @@ function writeupFrom(value: unknown): WorkerWriteup | undefined {
     assumptions: record.assumptions as string,
     expectedOutcomes: record.expectedOutcomes as string,
     deviations: record.deviations as string,
+    quiz: record.quiz as WorkerWriteup["quiz"],
     // The one optional field: carried only when the model actually sent
     // a string, so an absent one stays absent rather than becoming "".
     ...(typeof record.couldNotVerify === "string" ? { couldNotVerify: record.couldNotVerify } : {}),

@@ -115,6 +115,11 @@ const SLOW_WRITEUP = {
   assumptions: "None.",
   expectedOutcomes: "None.",
   deviations: "None.",
+  quiz: [
+    { question: "What changed?", answer: "The thing this test is about." },
+    { question: "Why?", answer: "So the write-up is valid." },
+    { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+  ],
 };
 
 function slowBrain(delayMs: number): Brain {
@@ -475,6 +480,11 @@ function meteredFakeBrain(
           assumptions: "None.",
           expectedOutcomes: "It lands.",
           deviations: "None.",
+          quiz: [
+            { question: "What changed?", answer: "The thing this test is about." },
+            { question: "Why?", answer: "So the write-up is valid." },
+            { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+          ],
         },
       };
     },

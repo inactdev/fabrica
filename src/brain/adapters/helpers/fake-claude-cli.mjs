@@ -152,6 +152,11 @@ switch (brief) {
       assumptions: "None.",
       expectedOutcomes: "It works as described.",
       deviations: "None.",
+      quiz: [
+        { question: "What changed?", answer: "The fake CLI's stand-in change." },
+        { question: "Why?", answer: "To exercise the structured write-up path." },
+        { question: "What should the owner watch?", answer: "Nothing - this is a test fixture." },
+      ],
     };
     line({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
     line(resultLine({ result: JSON.stringify(writeup), structured_output: writeup }));

@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { runAsk, runWork, writeupProblem, questionsFrom, IDLE_NUDGE, WORK_SYSTEM_PROMPT } from "./loop.mjs";
 import { WRITEUP_TOOL_NAME } from "./tools.mjs";
 import { writeupToolSchema } from "../openai-compatible.ts";
-import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
+import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_QUIZ_LENGTH, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
 import type { AgentJob, AgentLine, ChatTarget } from "./types.ts";
 
 function makeJob(overrides: Partial<AgentJob> = {}): AgentJob {
@@ -35,6 +35,7 @@ function makeJob(overrides: Partial<AgentJob> = {}): AgentJob {
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
     writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
+    writeupQuizLength: WRITEUP_QUIZ_LENGTH,
     maxToolOutputChars: 2_000,
     bashTimeoutMs: 10_000,
     ...overrides,
@@ -51,6 +52,11 @@ const goodWriteup = {
   assumptions: "assumptions",
   expectedOutcomes: "outcomes",
   deviations: "None.",
+  quiz: [
+    { question: "What changed?", answer: "The thing this test is about." },
+    { question: "Why?", answer: "So the write-up is valid." },
+    { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+  ],
 };
 
 /** One provider answer, in the shape OpenRouter's own tool-calling doc

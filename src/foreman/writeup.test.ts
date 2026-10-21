@@ -31,6 +31,11 @@ const WRITEUP: WorkerWriteup = {
   assumptions: "None.",
   expectedOutcomes: "A timed-out login succeeds on the retry.",
   deviations: "None.",
+  quiz: [
+    { question: "What changed?", answer: "The thing this test is about." },
+    { question: "Why?", answer: "So the write-up is valid." },
+    { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+  ],
 };
 
 const WRITEUP_MESSAGE =
@@ -155,6 +160,13 @@ test("no write-up: the work is still committed, the attempt is red naming why, a
 for (const [label, writeup, reason] of [
   ["a title over 60 characters", { ...WRITEUP, title: "x".repeat(61) }, /the title is 61 characters \(at most 60\)/],
   ["an empty deviations field", { ...WRITEUP, deviations: "  " }, /the deviations field is empty/],
+  // Issue #98: four questions where three were asked for is invalid like
+  // any other bad field - rejected, never trimmed down to three.
+  [
+    "a quiz with four questions",
+    { ...WRITEUP, quiz: [...WRITEUP.quiz, { question: "One more?", answer: "Yes." }] as WorkerWriteup["quiz"] },
+    /the quiz has 4 questions \(exactly 3 required\)/,
+  ],
 ] as const) {
   test(`a write-up with ${label} is invalid, named, and never handed to Inspector`, async () => {
     const recordHome = freshHome();

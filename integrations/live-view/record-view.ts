@@ -23,6 +23,7 @@ import {
   hasAttempts,
   latestMeterReading,
   loadConfigOrProblem,
+  quizEntriesOf,
   readTaskFile,
   refusalFor,
   standingOf,
@@ -40,6 +41,7 @@ import type {
   TaskFollower,
   TranscriptEntry,
   WorkerWriteup,
+  WriteupQuizEntry,
 } from "../../src/index.ts";
 
 /** How much of the task's own text stands in for a title before a
@@ -247,6 +249,12 @@ export interface DeliveredReviewRow {
   /** False when the write-up was invalid and `writeupBody` is Fabrica's
    * own fallback wording naming what was wrong, not the worker's words. */
   writeupOk: boolean;
+  /** The worker's quiz (issue #98): three questions about what the
+   * change did and why, each with its own one-line answer, for the owner
+   * who did not read the diff. The page shows the questions with the
+   * answers hidden until tapped. Empty for a task whose write-up predates
+   * the field - the record is append-only, so nothing was backfilled. */
+  quiz: WriteupQuizEntry[];
   inspectorStamp: string;
   /** Inspector's own report text, when the stamp is anything but green -
    * null when there's nothing more to say (green, or no Inspector
@@ -286,6 +294,21 @@ export interface AskingReviewRow {
   questions: string[];
   lastActivityMs: number;
 }
+
+/** One accepted task's quiz on the /quiz page (issue #98) - the owner
+ * revisiting what he already ruled on, so there is nothing to decide
+ * here and no control to offer: the title, the three questions with
+ * their answers, and when he accepted it. */
+export interface QuizRow {
+  id: string;
+  title: string;
+  quiz: WriteupQuizEntry[];
+  /** When the "accept" verdict landed - what this page is ordered by. */
+  acceptedAtMs: number;
+}
+
+/** How many accepted tasks' quizzes /quiz keeps (issue #98). */
+export const QUIZ_HISTORY_LENGTH = 10;
 
 /** One running task on the review page (issue #203) - enough to
  * recognize what is about to be stopped, and nothing that invites a
@@ -438,6 +461,22 @@ function latestAttempt(events: FabricaEvent[]): number | null {
 function lastActivityMs(events: FabricaEvent[]): number {
   const last = events[events.length - 1];
   return last ? Date.parse(last.occurredAt) : 0;
+}
+
+/** When the Client accepted this task - the most recent "accept" verdict
+ * event's own timestamp, or null when he never accepted it. Read from
+ * that event rather than from the task's last activity: /quiz is ordered
+ * by when the owner accepted the work, and an accepted task can still
+ * record something afterwards (a hand-recorded cost, say). */
+function acceptedAtMs(events: FabricaEvent[]): number | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.name !== "verdict-recorded") continue;
+    if ((event.details as { ruling?: string } | undefined)?.ruling !== "accept") continue;
+    const parsed = Date.parse(event.occurredAt);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 /** When this task was first received - its own first event, which
@@ -786,6 +825,7 @@ export function createRecordView(recordHome: string) {
             kind: "delivered",
             writeupBody: message.body,
             writeupOk: message.ok,
+            quiz: quizEntriesOf(task.writeup),
             inspectorStamp: inspectorStampLabel(delivery),
             inspectorDetail: inspectorReportDetail(delivery),
             gateState: gateStateLabel(delivery),
@@ -835,6 +875,33 @@ export function createRecordView(recordHome: string) {
     return rows;
   }
 
+  /** The /quiz page (issue #98): the last ten accepted tasks' quizzes,
+   * newest acceptance first, for the owner to revisit after he has
+   * already ruled. A task with no quiz is skipped rather than listed
+   * empty - a write-up recorded before the field existed has none, and
+   * the record is append-only, so nothing was backfilled. An accepted
+   * task whose write-up is somehow malformed is skipped by the same
+   * rule, through the same `quizEntriesOf`.
+   *
+   * Deliberately not folded into `getReviewRows`: these are exactly the
+   * tasks that are NOT waiting on him, which is the one thing that list
+   * means (the same reasoning `getRunningRows` is kept separate for). */
+  function getQuizRows(): QuizRow[] {
+    const { caps } = readConfig(recordHome);
+    const rows: QuizRow[] = discoverTaskIds(recordHome).flatMap((id): QuizRow[] => {
+      const { events } = followerFor(id).read();
+      const acceptedAt = acceptedAtMs(events);
+      if (acceptedAt === null) return [];
+      const task = buildTaskView(id, events, caps);
+      if (task.state !== "closed (accept)") return [];
+      const quiz = quizEntriesOf(task.writeup);
+      if (quiz.length === 0) return [];
+      return [{ id, title: task.title, quiz, acceptedAtMs: acceptedAt }];
+    });
+    rows.sort((a, b) => b.acceptedAtMs - a.acceptedAtMs);
+    return rows.slice(0, QUIZ_HISTORY_LENGTH);
+  }
+
   /** Issue #189: the two subscription meters as the record last saw
    * them, with what the pause rule makes of them. Reads every task's
    * events through the same per-task follower cache the rest of this
@@ -862,13 +929,13 @@ export function createRecordView(recordHome: string) {
    * every page has to show, or null when there is nothing wrong with it
    * (including "there isn't one", which is ordinary - see `readConfig`).
    * Its own accessor rather than a field on each page's state payload:
-   * four pages share one banner script (public/banner.js) and one
-   * endpoint, instead of three renderers each having to carry it. */
+   * five pages share one banner script (public/banner.js) and one
+   * endpoint, instead of four renderers each having to carry it. */
   function getConfigProblem(): ConfigProblem | null {
     return readConfig(recordHome).problem;
   }
 
-  return { getState, getTask, getTranscript, getReviewRows, getRunningRows, getMeters, getConfigProblem };
+  return { getState, getTask, getTranscript, getReviewRows, getRunningRows, getQuizRows, getMeters, getConfigProblem };
 }
 
 export type RecordView = ReturnType<typeof createRecordView>;

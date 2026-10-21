@@ -50,6 +50,7 @@ const PAGE_PATHS: Record<string, string> = {
   "index.html": "/",
   "history.html": "/history",
   "review.html": "/review",
+  "quiz.html": "/quiz",
   "task.html": "/tasks/20260101-some-task-aa",
 };
 
@@ -59,10 +60,10 @@ function htmlPages(): string[] {
     .sort();
 }
 
-/** Browser globals the four scripts reach for. Everything here is the
+/** Browser globals the page scripts reach for. Everything here is the
  * smallest thing that keeps load-time execution honest, not a convenience:
  *
- *  - `fetch` returns a promise that NEVER settles. All four scripts end by
+ *  - `fetch` returns a promise that NEVER settles. Every one of them ends by
  *    calling something that immediately awaits a fetch, so a pending
  *    request is exactly the state a just-loaded page is in. A stub that
  *    resolved would instead run every renderer against invented data and

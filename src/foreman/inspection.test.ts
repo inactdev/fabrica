@@ -164,6 +164,11 @@ test("an invalid write-up is red with no Inspector call and no PR - a later vali
           assumptions: "None.",
           expectedOutcomes: "None.",
           deviations: "None.",
+          quiz: [
+            { question: "What changed?", answer: "The thing this test is about." },
+            { question: "Why?", answer: "So the write-up is valid." },
+            { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+          ],
         },
       };
     },
@@ -440,6 +445,11 @@ test("Inspector is handed the worker's own write-up title as pr-title and its se
       assumptions: "None.",
       expectedOutcomes: "Login no longer fails on the first timeout.",
       deviations: "None.",
+      quiz: [
+        { question: "What changed?", answer: "The thing this test is about." },
+        { question: "Why?", answer: "So the write-up is valid." },
+        { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+      ],
       couldNotVerify: "The login service itself was not reachable from here.",
     },
   });

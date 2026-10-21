@@ -606,11 +606,13 @@ as "unknown" and the pause rule treats as "refuse nothing" - never 0%.
 ## `writeup` and `--json-schema`
 
 Every `work()` call passes `--json-schema` with `WRITEUP_JSON_SCHEMA`: an
-object of nine required fields plus one optional one, no other keys -
+object of ten required fields plus one optional one, no other keys -
 eight non-empty strings (`title` at most 60 characters, `why`, `what`,
 `how`, `outsideChanges`, `assumptions`, `expectedOutcomes`,
 `deviations`), one number, `confidence`, from 0 to 100 (issues
-#185/#194), and the optional `couldNotVerify` (declared as a property
+#185/#194), one list, `quiz` - exactly three (`minItems`/`maxItems`)
+`{question, answer}` objects, both non-empty (issue #98) - and the
+optional `couldNotVerify` (declared as a property
 all the same, since `additionalProperties` is false, but kept out of
 `required` - Client ruling 2026-10-18). Verified on 2.1.222 with a real call: the
 result line then carries the answer as an object on `structured_output`
@@ -626,6 +628,13 @@ binary's own strings, not from a recorded run.
 `structured_output` is not on `stream-json-shape.ts`'s parity allowlist
 yet: the recorded fixture predates `--json-schema` and would need a
 real re-recording to cover it.
+
+One thing `writeupFrom` deliberately does not check: the quiz. A
+write-up whose every string field and `confidence` are fine but whose
+quiz has four questions is still a write-up, so it is carried through as
+it came and `writeupProblem` (`src/foreman/pr-body.ts`) names the real
+problem. Returning no write-up at all would report "the worker returned
+no write-up" instead - false, and nothing the worker could act on.
 
 ## `gateChanges`
 

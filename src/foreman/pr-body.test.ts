@@ -21,6 +21,11 @@ const WRITEUP: WorkerWriteup = {
   assumptions: "d",
   expectedOutcomes: "e",
   deviations: "None.",
+  quiz: [
+    { question: "What changed?", answer: "The thing this test is about." },
+    { question: "Why?", answer: "So the write-up is valid." },
+    { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+  ],
 };
 
 /** The Client's template, in full, for the write-up above - the exact
@@ -80,6 +85,57 @@ test("writeupProblem rejects a write-up with no outsideChanges, like any other r
 // problem, and nothing renders in its place.
 test("writeupProblem accepts a write-up with no couldNotVerify at all", () => {
   assert.equal(writeupProblem({ ...WRITEUP, couldNotVerify: undefined }), undefined);
+});
+
+// The quiz (issue #98) is required, and required to be exactly three
+// questions: a fourth, a missing one, or an empty answer is as much an
+// invalid write-up as an empty `why`, and goes down the same red path.
+// Never coerced to three (Client ruling) - this is where that is
+// enforced.
+test("writeupProblem rejects a quiz that isn't exactly three answered questions", () => {
+  const entry = (n: number) => ({ question: `q${n}`, answer: `a${n}` });
+
+  assert.equal(
+    writeupProblem({ ...WRITEUP, quiz: undefined as unknown as WorkerWriteup["quiz"] }),
+    "the quiz is missing (3 questions, each with a one-line answer)"
+  );
+  assert.equal(
+    writeupProblem({ ...WRITEUP, quiz: "q1, q2, q3" as unknown as WorkerWriteup["quiz"] }),
+    "the quiz is not a list of questions"
+  );
+  assert.equal(writeupProblem({ ...WRITEUP, quiz: [entry(1), entry(2)] }), "the quiz has 2 questions (exactly 3 required)");
+  assert.equal(
+    writeupProblem({ ...WRITEUP, quiz: [entry(1), entry(2), entry(3), entry(4)] }),
+    "the quiz has 4 questions (exactly 3 required)"
+  );
+  assert.equal(writeupProblem({ ...WRITEUP, quiz: [entry(1)] }), "the quiz has 1 question (exactly 3 required)");
+  assert.equal(
+    writeupProblem({ ...WRITEUP, quiz: [entry(1), { question: "  ", answer: "a" }, entry(3)] }),
+    "quiz question 2 is empty"
+  );
+  assert.equal(
+    writeupProblem({ ...WRITEUP, quiz: [entry(1), entry(2), { question: "q3", answer: "" }] }),
+    "quiz question 3's answer is empty"
+  );
+  // A wrapped answer is a cosmetic slip, not a reason to spend a whole
+  // red round - the brief and both schemas ask for one line, nothing
+  // refuses over it.
+  assert.equal(writeupProblem({ ...WRITEUP, quiz: [entry(1), entry(2), { question: "q3", answer: "a\nb" }] }), undefined);
+});
+
+// Where the quiz is NOT: the pull request body is the Client's own
+// four-section template (ruling 2026-10-18), and the quiz has a
+// different reader - the owner, on the live view - so it is asked for,
+// validated, and then deliberately left out of what Inspector opens.
+test("finalMessageFor renders no quiz: it is the owner's, not the pull request's", () => {
+  const message = finalMessageFor(
+    { ...WRITEUP, quiz: [{ question: "Did the schema change?", answer: "Yes, one field." }, WRITEUP.quiz[1], WRITEUP.quiz[2]] },
+    "fallback"
+  );
+
+  assert.equal(message.ok, true);
+  assert.equal(message.body, BODY, "the body gained a section when the quiz did");
+  assert.ok(!message.body.includes("Did the schema change?"));
 });
 
 test("finalMessageFor renders the Client's template exactly: five headings in order", () => {

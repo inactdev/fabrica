@@ -26,7 +26,7 @@ import {
   splitBaseUrl,
   writeupToolSchema,
 } from "./openai-compatible.ts";
-import { WRITEUP_FIELDS, WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
+import { WRITEUP_FIELDS, WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_QUIZ_LENGTH, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
 import { costFromTranscript } from "../../foreman/spend.ts";
 import { registerLiveTranscriptListener } from "../live-transcript.ts";
 import { chatCompletion } from "./openai-agent/client.mjs";
@@ -164,7 +164,13 @@ test("the write-up tool asks for exactly the ratified fields, with rule 9's decl
   const schema = writeupToolSchema();
   const properties = Object.keys(schema.properties as Record<string, unknown>);
 
-  assert.deepEqual(schema.required, [...WRITEUP_STRING_FIELDS, "confidence"]);
+  // Every ratified required field, from the one list that defines them -
+  // so a field added to the write-up (issue #98's `quiz`) cannot become
+  // required for one adapter and optional for the other.
+  assert.deepEqual(schema.required, [...WRITEUP_FIELDS]);
+  // Those are exactly the string fields plus the two that aren't
+  // strings, which is what this used to assert field by field.
+  assert.deepEqual([...(schema.required as string[])].sort(), [...WRITEUP_STRING_FIELDS, "confidence", "quiz"].sort());
   assert.deepEqual(
     [...WRITEUP_FIELDS, ...WRITEUP_OPTIONAL_STRING_FIELDS].sort(),
     properties.filter((name) => name !== "gateChanges").sort()
@@ -271,6 +277,7 @@ test("the real worker image runs the staged agent and answers in the protocol", 
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
     writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
+    writeupQuizLength: WRITEUP_QUIZ_LENGTH,
     maxToolOutputChars: 1_000,
     bashTimeoutMs: 1_000,
   });
@@ -330,6 +337,7 @@ test("a real provider reports the call's cost on its own usage object", async (t
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
     writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
+    writeupQuizLength: WRITEUP_QUIZ_LENGTH,
     maxToolOutputChars: 1_000,
     bashTimeoutMs: 1_000,
     askMaxTokens: 16,

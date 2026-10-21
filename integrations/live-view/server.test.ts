@@ -240,7 +240,7 @@ test("startLiveView: a record home with no projects.toml reports no problem", as
   }
 });
 
-// The banner strip is one script shared by all four pages (see
+// The banner strip is one script shared by every page (see
 // public/banner.js's own header). A page that forgot to load it would
 // silently show no banner at all, which is the exact failure this change
 // exists to remove - so every page's own source is checked for it.
@@ -260,7 +260,7 @@ test("startLiveView: banner.js is served, and every page loads it", async () => 
     assert.match(source, /fabrica update/, "the stale banner must name the command that fixes it");
 
     const taskPagePath = `/tasks/${"20260101-x-aa"}`;
-    for (const path of ["/", "/history", "/review", taskPagePath]) {
+    for (const path of ["/", "/history", "/review", "/quiz", taskPagePath]) {
       const page = await (await fetch(`${base}${path}`)).text();
       assert.match(page, /<script src="\/banner\.js"><\/script>/, `${path} does not load banner.js`);
     }
@@ -376,9 +376,11 @@ test("startLiveView: every response carries Cache-Control: no-store - pages, scr
       "/",
       "/history",
       "/review",
+      "/quiz",
       "/app.js",
       "/task.js",
       "/review.js",
+      "/quiz.js",
       "/banner.js",
       "/style.css",
       `/tasks/${taskId}`,
@@ -391,6 +393,7 @@ test("startLiveView: every response carries Cache-Control: no-store - pages, scr
       "/api/state",
       "/api/history",
       "/api/review",
+      "/api/quiz",
       "/api/version",
       "/api/checkout",
       "/api/config-problem",
@@ -664,6 +667,51 @@ test("startLiveView: /api/review lists a delivered task with its write-up, Inspe
     assert.equal(typeof body.rows[0].writeupBody, "string");
     assert.equal(typeof body.rows[0].inspectorStamp, "string");
     assert.equal(typeof body.rows[0].gateState, "string");
+    // Issue #98: the worker's three questions ride on the row as data,
+    // so the page can hold each answer back until it is tapped.
+    assert.equal(body.rows[0].quiz.length, 3);
+    for (const entry of body.rows[0].quiz) {
+      assert.equal(typeof entry.question, "string");
+      assert.equal(typeof entry.answer, "string");
+    }
+  } finally {
+    await view.close();
+  }
+});
+
+// Issue #98: the quiz outlives the ruling. /api/review drops a task the
+// moment it is accepted (it is no longer waiting on anyone); /api/quiz
+// is where it then shows up, for the owner to revisit.
+test("startLiveView: /api/quiz keeps an accepted task's quiz after /api/review has let it go", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+
+    // Nothing accepted yet, so nothing to revisit.
+    assert.deepEqual((await (await fetch(`${base}/api/quiz`)).json()).rows, []);
+
+    const accept = await fetch(`${base}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+    assert.equal(accept.status, 200);
+
+    assert.deepEqual((await (await fetch(`${base}/api/review`)).json()).rows, []);
+    const { rows } = await (await fetch(`${base}/api/quiz`)).json();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, task.id);
+    assert.equal(rows[0].quiz.length, 3);
+    assert.ok(rows[0].acceptedAtMs > 0);
+
+    // The page itself is served, and loads its own script.
+    const page = await fetch(`${base}/quiz`);
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.match(html, /<script src="\/quiz\.js"><\/script>/);
+    assert.equal((await fetch(`${base}/quiz.js`)).status, 200);
   } finally {
     await view.close();
   }
