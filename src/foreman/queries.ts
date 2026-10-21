@@ -41,12 +41,13 @@ export interface DeliveredDetails {
   baseCommit?: string;
   /** Present exactly when this delivery IS a rebase conflict report
    * (issue #235) - the host could not bring the branch up to origin's
-   * default branch, so there is a conflict only the Client can rule on.
-   * This is the one thing the next fix round branches on: a `fix` ruled
-   * on a delivery carrying this means the Client has already seen the
-   * markers and his note is instructions for resolving them, so that
-   * round re-attempts the rebase and hands it to the worker stopped
-   * rather than aborting and reporting the same conflict again. */
+   * default branch, even after this round's own worker was handed the
+   * stopped rebase, so what is left is a conflict only the Client can
+   * rule on. Bookkeeping only: nothing branches on it. It used to be the
+   * one field the next fix round read, back when a first conflict was
+   * reported before any worker saw it; conflict handling is one round now
+   * (see `src/foreman/README.md`) and no round asks what shape the
+   * previous delivery was. */
   rebaseConflict?: { base: string; files: string[] };
 }
 
