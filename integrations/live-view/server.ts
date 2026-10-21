@@ -661,6 +661,29 @@ function readJsonBody(req: IncomingMessage, maxBytes = 8192): Promise<unknown> {
   });
 }
 
+/** The one place in this module that writes a response's headers - every
+ * route above answers through here, including the refusals and the 500
+ * fallback, which is what makes `Cache-Control: no-store` true of
+ * everything this server sends rather than of the routes someone
+ * remembered to set it on.
+ *
+ * Why no-store on literally every response, pages and scripts included:
+ * nothing here is fingerprinted. `index.html`, `app.js`, `review.js`,
+ * `task.js`, `banner.js` and `style.css` are read off the checkout on
+ * each request (STATIC_FILES, above), at paths that never change, so a
+ * browser that cached one by URL goes on running code the checkout has
+ * since replaced - with no version in the path to tell it otherwise. That
+ * is the same staleness the banner exists to surface (`/api/version` vs
+ * `/api/checkout`), except a cached `banner.js` is the layer that would
+ * have reported it. The JSON API is the simpler case: it is a live view
+ * of a record that changes under it by the second, and `/api/review`'s
+ * answers decide what the Client rules on.
+ *
+ * Unconditional on purpose - no route may opt out, and
+ * `integrations/live-view/server.test.ts` pins both halves: one request of
+ * every response shape carries the header, and this is still the only
+ * header-writing call site in the file. A caching rule worth having here
+ * is one no future route can be written around. */
 function send(res: ServerResponse, status: number, contentType: string, body: string | Buffer): void {
   res.writeHead(status, { "Content-Type": contentType, "Cache-Control": "no-store" });
   res.end(body);
