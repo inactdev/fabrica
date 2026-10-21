@@ -339,7 +339,11 @@ through (issue #186 - `docker image inspect` only, which never pulls,
 and a FAIL carrying the exact `docker pull`: a missing one means the
 first task of the day dies inside `docker run` instead of here), the
 worker token (from the environment or `brain.env`, mode 600), the
-GitHub token Inspector needs, `inspector` on PATH taking `-branch`,
+GitHub token Inspector needs, `inspector` on PATH taking `-branch` and
+built from its own `origin main`'s tip (a stale binary is the one
+Inspector-side FAIL carrying a `go install` pinned to that tip; see
+`src/inspector/README.md`'s "The doctor line" for which builds fail and
+which only report),
 every registered project (exists, git root, a check, an `origin`
 remote), the caps, and any SPEND UNKNOWN block. `--live` adds one
 minimal real call with the worker token (a few cents) and reports it

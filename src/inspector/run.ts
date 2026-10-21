@@ -104,21 +104,32 @@ export function resolveGithubToken(env: NodeJS.ProcessEnv): { token: string; sou
   return { token, source: "gh auth token" };
 }
 
-/** Whether `command` names an executable: a path as given, a bare name on
- * PATH. Looked up without running anything. */
-export function commandIsInstalled(command: string, env: NodeJS.ProcessEnv): boolean {
+/** Where `command` resolves to as an executable - a path as given, a bare
+ * name against PATH - or `null` when nothing there is executable. Looked
+ * up without running anything. Exported because a check that reports
+ * *which build* of Inspector is installed has to name the file it read
+ * (`go version -m <path>`), not just know that one exists. */
+export function resolveCommandPath(command: string, env: NodeJS.ProcessEnv): string | null {
   const candidates =
     isAbsolute(command) || command.includes("/")
       ? [command]
       : (env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, command));
-  return candidates.some((path) => {
-    try {
-      accessSync(path, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  return (
+    candidates.find((path) => {
+      try {
+        accessSync(path, constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    }) ?? null
+  );
+}
+
+/** Whether `command` names an executable: a path as given, a bare name on
+ * PATH. Looked up without running anything. */
+export function commandIsInstalled(command: string, env: NodeJS.ProcessEnv): boolean {
+  return resolveCommandPath(command, env) !== null;
 }
 
 interface OutputTail {

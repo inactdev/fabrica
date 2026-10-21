@@ -44,9 +44,12 @@ against origin/master - any leftover \`npm link\` symlink standing where
 an installed copy belongs (which makes the global install fail with
 ENOTDIR), Docker, the worker image, the worker CLI version
 installed in it, the relay image every task's network goes through, the
-worker token, the GitHub token Inspector needs, Inspector itself, every
-registered project, the caps, and any SPEND UNKNOWN block. One line per
-check - OK, or FAIL with the exact fix. Exits non-zero if anything fails.
+worker token, the GitHub token Inspector needs, Inspector itself - on
+PATH, taking -branch, and built from the commit its own origin main is
+at, a stale binary being a FAIL carrying the exact \`go install\` that
+replaces it - every registered project, the caps, and any SPEND UNKNOWN
+block. One line per check - OK, or FAIL with the exact fix. Exits
+non-zero if anything fails.
 
 A projects.toml that will not parse is its own FAIL line, naming the
 file, the line the parser stopped on and what it objected to. Every
