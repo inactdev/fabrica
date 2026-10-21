@@ -344,6 +344,118 @@ test("startLiveView: serves the static page and rejects everything but GET", asy
   }
 });
 
+// Every response this server sends is `Cache-Control: no-store`. The
+// page, its scripts and its stylesheet are read from the checkout on
+// each request and there are no fingerprinted bundles, so a browser
+// holding on to any of them is showing code or state that has already
+// moved - the exact failure the staleness banner exists to make
+// impossible, undone one layer lower by a cached app.js. The JSON API is
+// the same story with a shorter fuse: it is a live view of the record.
+//
+// The header is set in one place (server.ts's `send`), which is what
+// makes it true of every route including the error answers. This test is
+// the behavioural half of pinning that: it sweeps one request of each
+// response SHAPE - a page, a script, a stylesheet, the task page served
+// off its own route, every JSON endpoint, and the 400/403/404/405
+// refusals - rather than trusting that one checked route stands for the
+// rest.
+test("startLiveView: every response carries Cache-Control: no-store - pages, scripts, stylesheet, JSON and refusals alike", async () => {
+  const recordHome = tempRecordHome();
+  const taskId = registerTask(recordHome, "a task to read back").id;
+  appendTaskFile(recordHome, taskId, "transcript.log", "working\n");
+
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+    const checked: Array<{ what: string; res: Response }> = [];
+
+    // Pages, scripts, stylesheet - the static table - plus the task page,
+    // which is served off its own route and so could have been written
+    // without `send`.
+    for (const path of [
+      "/",
+      "/history",
+      "/review",
+      "/app.js",
+      "/task.js",
+      "/review.js",
+      "/banner.js",
+      "/style.css",
+      `/tasks/${taskId}`,
+    ]) {
+      checked.push({ what: `GET ${path}`, res: await fetch(`${base}${path}`) });
+    }
+
+    // Every JSON endpoint, including the two that answer a known task.
+    for (const path of [
+      "/api/state",
+      "/api/history",
+      "/api/review",
+      "/api/version",
+      "/api/checkout",
+      "/api/config-problem",
+      `/api/tasks/${taskId}`,
+      `/api/tasks/${taskId}/transcript`,
+    ]) {
+      checked.push({ what: `GET ${path}`, res: await fetch(`${base}${path}`) });
+    }
+
+    // The refusals. A cached 404 or 403 is its own small trap - a page
+    // that was briefly wrong about a route or an identity would keep
+    // being wrong until the browser let go of it.
+    checked.push({ what: "404 unknown route", res: await fetch(`${base}/no-such-route`) });
+    checked.push({ what: "404 unknown task", res: await fetch(`${base}/api/tasks/20260101-ghost-zz`) });
+    checked.push({ what: "400 bad task id", res: await fetch(`${base}/api/tasks/..%2f..%2fetc/transcript`) });
+    checked.push({ what: "405 non-GET", res: await fetch(`${base}/api/state`, { method: "POST" }) });
+    checked.push({
+      what: "403 no identity",
+      res: await fetch(`${base}/api/review/tasks/${taskId}/verdict`, {
+        method: "POST",
+        body: JSON.stringify({ ruling: "accept" }),
+      }),
+    });
+
+    for (const { what, res } of checked) {
+      await res.text(); // drain, so no connection is left open behind this
+      assert.equal(res.headers.get("cache-control"), "no-store", `${what} did not answer with Cache-Control: no-store`);
+    }
+    // A guard on the sweep itself: an empty or half-built list would make
+    // every assertion above vacuously pass.
+    assert.ok(checked.length >= 22, `only ${checked.length} responses were checked - the sweep lost routes`);
+    assert.deepEqual(
+      checked.filter(({ res }) => res.status === 500).map(({ what }) => what),
+      [],
+      "a route answered 500 - the sweep is measuring the error handler, not the route"
+    );
+  } finally {
+    await view.close();
+  }
+});
+
+// The structural half, and the one that actually holds the line: the
+// sweep above can only cover the routes that exist today, so it would say
+// nothing about a route added next year that wrote its own headers. One
+// function writes response headers in this module, so there is no route
+// that can be written without inheriting no-store - this reads the
+// server's own source to keep that true, the same way
+// src/foreman/no-host-check.test.ts scans for a host check.
+test("server.ts writes response headers in exactly one place, so no route can be added that skips no-store", () => {
+  const source = readFileSync(fileURLToPath(new URL("./server.ts", import.meta.url)), "utf8");
+
+  const writeHeadCalls = [...source.matchAll(/\.writeHead\s*\(/g)];
+  assert.equal(writeHeadCalls.length, 1, `expected exactly one writeHead call in server.ts, found ${writeHeadCalls.length}`);
+  assert.equal(
+    [...source.matchAll(/\.setHeader\s*\(|\.appendHeader\s*\(/g)].length,
+    0,
+    "server.ts sets a header outside `send` - every response's headers must come from that one helper"
+  );
+  assert.match(
+    source,
+    /function send\([^)]*\)[^{]*\{\s*res\.writeHead\(status, \{ "Content-Type": contentType, "Cache-Control": "no-store" \}\);/,
+    "`send` no longer sets Cache-Control: no-store unconditionally alongside the content type"
+  );
+});
+
 test("startLiveView: a task id that fails the id pattern is refused before it ever reaches the filesystem", async () => {
   const view = await startLiveView({ recordHome: tempRecordHome(), port: 0 });
   try {

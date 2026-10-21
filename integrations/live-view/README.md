@@ -38,6 +38,33 @@ The one write in this directory isn't in `server.ts` either: `start.ts`
 `fabrica up` to find and verify before ever stopping it
 (`src/cli/live-view-process.ts`).
 
+## Nothing it serves is cacheable: `Cache-Control: no-store`
+
+Every response carries `Cache-Control: no-store` - pages, scripts, the
+stylesheet and the JSON API alike, refusals included. It is set in one
+place, `server.ts`'s `send`, which is the only function in the module
+that writes a response's headers, so it is true of every route by
+construction rather than by each route remembering.
+
+Nothing here is fingerprinted, which is why the rule has no exceptions.
+`index.html`, `app.js`, `review.js`, `task.js`, `banner.js` and
+`style.css` are read off the checkout on every request, at paths that
+never change (`STATIC_FILES`), so a browser caching one by URL keeps
+running code the checkout has since replaced - with nothing in the path
+to tell it the file is a different file now. That is precisely the
+staleness the banner above exists to surface, and a cached `banner.js` is
+the layer that would have reported it. The JSON API is the easier case:
+it is a live view of a record that changes by the second, and
+`/api/review`'s answers are what the Client rules on.
+
+Two tests in `server.test.ts` hold this, deliberately not one: a sweep
+asserting the header on one request of every response shape (page,
+script, stylesheet, the task page off its own route, each JSON endpoint,
+and the 400/403/404/405 refusals), and a structural check that `send` is
+still the only `writeHead`/`setHeader` call site in the file. The sweep
+can only cover the routes that exist today; the structural one is what
+makes a route added later unable to opt out.
+
 ## Two commits, and why they are two endpoints
 
 `/api/version` answers `{ "commit": "<sha-or-null>" }` with the commit
