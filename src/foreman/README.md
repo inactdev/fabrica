@@ -133,12 +133,12 @@ return early" below.
    refusal reason, leaves no delivery for a Client verdict, and reports
    task state `refused`. A fix-round refusal supersedes the earlier red
    delivery rather than exposing that stale result again. Refusal is
-   terminal for that round because there is no verdict to repair toward;
-   the operator reads the reason in `fabrica log` and resolves the
-   external handoff problem outside the Client verdict loop. A refusal
-   that instead comes after a real (non-red) delivery does not supersede
-   anything the Client can still act on directly - see `verdict()`'s own
-   section below.
+   terminal for that *round* - there is no verdict to repair toward, so
+   nothing more happens by itself - but it is not terminal for the task:
+   as long as some real delivery sits behind it, the Client's own `fix`
+   runs the same warm worker again with the refusal's reason as its
+   correction (see `verdict()`'s own section below). Only a refusal with
+   no delivery anywhere behind it is a genuine end, closable by `wrong`.
    A self-tested task records `inspection-skipped`, with the reason (no
    `.inspector.json` at the base commit, or Inspector not installed),
    before its first attempt. Heartbeats continue while Inspector is
@@ -783,9 +783,8 @@ whether a task is `"closed"`.
   `rulesOnDeliveryDespiteLaterRefusal` — and the verdict records it,
   marking `"verdict-recorded"`'s own details with `supersedesRefusal:
   true` so the record says plainly that a refusal sits between the ruling
-  and the delivery it actually ruled on. `fix` alone still refuses here
-  (`inspection-refused`): Inspector's own refusal is what needs resolving
-  before a fresh Worker attempt is worth running, same as before. The same
+  and the delivery it actually ruled on. `fix` is accepted there too now
+  — see its own bullet below for what the round is handed. The same
   exception applies to a task that failed before it ever reached a delivery at all
   — `brain.ask()` threw (`"ask-failed"`), a spending cap refused its very
   first start (`"cap-refused"` before the task ever began), or some other
@@ -812,6 +811,39 @@ whether a task is `"closed"`.
   Inspector refusal appends only `"inspection-finished"` and supersedes
   the prior delivery. `queries.ts` therefore reads the latest event
   appropriate to each value rather than assuming every fix re-delivers.
+  The round's `priorReceipts` therefore come from `receiptsOf` (every
+  `"receipt-recorded"` event merged with the latest delivery's list),
+  not from the latest delivery alone: a refused round delivers nothing,
+  so reading only the delivery would restart `startAttempt` on a number
+  the task has already used — and `receiptsOf` de-duplicates by
+  `attempt`, so the new receipt would then vanish from the next
+  delivery's cumulative list. For a fix after an ordinary delivery the
+  two are the same set.
+
+  **A round answering an Inspector refusal** (Client ruling: the dead end
+  after a refused fix round). When the task's latest word is a refusal
+  with a real delivery behind it (`queries.ts`'s
+  `refusalAfterDelivery`), `fix` is accepted and the round runs exactly
+  as any other does, with two differences. Its brief carries
+  `verdict.ts`'s `refusalCorrection` alongside the Client's own note —
+  Inspector's reason verbatim, framed as a refusal rather than a
+  judgement, and covering both shapes of refusal, because Inspector
+  publishes no exit code, marker line or report field that tells "it
+  declined before publishing anything" apart from "the check passed and
+  a green publication was left incomplete" (both exit 2). Fabrica
+  therefore classifies nothing and hands the report over whole; if that
+  ever has to be decided in code, the mechanism is
+  `src/inspector/consumer-contract.json`, not a pattern match on
+  Inspector's prose. Second, the judge is **not** wrapped with
+  `skipIfUnchanged`: that wrapper exists because re-handing an
+  already-*reviewed* commit only draws a refusal, and a refusal means
+  nothing was reviewed — so handing it over again is the retry that can
+  succeed, and the only way an unpublished green branch ever gets
+  published. A worker told to change nothing (the incomplete-publication
+  case) would otherwise deliver `"nothing-changed"` with Inspector never
+  called again. `"verdict-recorded"` carries `answersRefusal: true` for
+  this case, as bookkeeping; nothing branches on it. A refusal with no
+  delivery anywhere behind it is unchanged: only `wrong` closes it.
 
   This calls `reopenProductionLine` directly rather than going through
   `runProductionRound`, so a fix round appends `"work-started"` but no
@@ -1235,9 +1267,9 @@ attempts *end*.
 | `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
 | `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/inspect/result, shared with `answer.ts`'s resume path) - its tail, once a round's attempts are done, is `round.ts`'s `recordRoundResult`. |
 | `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. Split in two (issue #123) so `src/cli/answer-command.ts` can detach the round: `recordAnswerDecision` (validate + record, no round) and `runRecordedAnswer` (re-derives the brief/ctx from the record and calls `runProductionRound`) - `answerTask` composes both, unchanged for every other caller. |
-| `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong (wrong alone also closes a task Inspector refused with no delivery, via `queries.ts`'s `refusedWithNoDelivery`, or a task that failed before any delivery, via `failedWithNoDelivery`; accept and wrong both still rule on an earlier real delivery a later fix round's refusal supersedes, recording `supersedesRefusal: true`), re-enters the same line and worker on fix. Split in two for its `fix` path (issue #123) so `src/cli/verdict-command.ts` can detach the round: `recordVerdictDecision` (validate + record, no round) and `runRecordedFix` (re-derives project/baseCommit/prior receipts/the note from the record and calls the module-private `runFixRound`) - `recordVerdict` composes both, unchanged for every other caller. `runFixRound` captures the branch's HEAD before the round's one attempt runs and wraps its judge with `judge.ts`'s `skipIfUnchanged`, so a round that lands no new commit delivers `"nothing-changed"` (`delivery.ts`'s `buildNothingChangedDelivery`) without ever calling Inspector or a self-test check - unless rule 10's cap already stopped the same round, which still wins; its tail, same as `do.ts`'s, is `round.ts`'s `recordRoundResult`. |
+| `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong (wrong alone also closes a task Inspector refused with no delivery, via `queries.ts`'s `refusedWithNoDelivery`, or a task that failed before any delivery, via `failedWithNoDelivery`; accept and wrong both still rule on an earlier real delivery a later fix round's refusal supersedes, recording `supersedesRefusal: true`), re-enters the same line and worker on fix - including on a task whose latest word IS such a refusal (`queries.ts`'s `refusalAfterDelivery`), where the round's brief carries Inspector's own reason as a correction (`refusalCorrection`) and `"verdict-recorded"` notes `answersRefusal: true`. Split in two for its `fix` path (issue #123) so `src/cli/verdict-command.ts` can detach the round: `recordVerdictDecision` (validate + record, no round) and `runRecordedFix` (re-derives project/baseCommit/prior receipts/the note from the record and calls the module-private `runFixRound`) - `recordVerdict` composes both, unchanged for every other caller. `runFixRound` captures the branch's HEAD before the round's one attempt runs and wraps its judge with `judge.ts`'s `skipIfUnchanged`, so a round that lands no new commit delivers `"nothing-changed"` (`delivery.ts`'s `buildNothingChangedDelivery`) without ever calling Inspector or a self-test check - unless rule 10's cap already stopped the same round, which still wins, or the round is answering a refusal (nothing was reviewed, so the unchanged commit is handed over again rather than skipped); its tail, same as `do.ts`'s, is `round.ts`'s `recordRoundResult`. |
 | `stop.ts` | `recordStopDecision` (issue #203) - the record half of the Client stopping a task himself from the review page: refuses a task that is not `"working"`/`"checking"` (`not-running`, naming the state), otherwise appends `"stopped-by-owner"` carrying who stopped it (the Tailscale login), which state it was stopped from, and the worker's last transcript line with its timestamp. Signaling the process is deliberately NOT here - that needs `ps`, and `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`; `src/cli/task-process.ts` owns it, and `integrations/live-view/server.ts` composes the two the same way `src/cli/` composes `recordVerdictDecision` with `spawnDetachedResume`. |
-| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf`, `refusedWithNoDelivery`, `failedWithNoDelivery`, `earlyStopKindOf` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal, while `receiptsOf` reads the latest event carrying receipts. `refusedWithNoDelivery` is narrower than that: true only when there is no `"delivered"` event at all and the latest `"inspection-finished"` is a refusal - `verdict.ts`'s one carve-out letting `wrong` close such a task. `failedWithNoDelivery` (issue #143) is the sibling carve-out for a task that never reached a delivery because it failed first - `stateOf` reads `"failed"` and no `"delivered"` event exists anywhere in its history. `earlyStopKindOf` names *why*, in words, for whichever of those two applies (Inspector's own report, or whichever of `"cap-refused"`/`"task-failed"`/`"ask-failed"` actually killed the task) - the one function `fabrica status` and the phone review page (`integrations/live-view/record-view.ts`'s `getReviewRows`) both call, so a task waiting on a `wrong` verdict for either reason can never read differently on the two surfaces. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. `stateOf` has two absorbing states rather than pure "last event wins": `"stopped"` (issue #203) and a recorded failure, which only `CLEARS_FAILURE`'s three event names take a task back out of - see "A recorded failure is absorbing too" above. |
+| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf`, `refusedWithNoDelivery`, `refusalAfterDelivery`, `failedWithNoDelivery`, `earlyStopKindOf` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal, while `receiptsOf` reads the latest event carrying receipts. `refusedWithNoDelivery` is narrower than that: true only when there is no `"delivered"` event at all and the latest `"inspection-finished"` is a refusal - `verdict.ts`'s one carve-out letting `wrong` close such a task. `refusalAfterDelivery` is its exact other side: the latest `"inspection-finished"` is a refusal, it is newer than the task's last `"delivered"` event, and there IS one - the state a `fix` verdict re-enters the worker for, carrying that refusal's own report as the correction. `failedWithNoDelivery` (issue #143) is the sibling carve-out for a task that never reached a delivery because it failed first - `stateOf` reads `"failed"` and no `"delivered"` event exists anywhere in its history. `earlyStopKindOf` names *why*, in words, for whichever of those two applies (Inspector's own report, or whichever of `"cap-refused"`/`"task-failed"`/`"ask-failed"` actually killed the task) - the one function `fabrica status` and the phone review page (`integrations/live-view/record-view.ts`'s `getReviewRows`) both call, so a task waiting on a `wrong` verdict for either reason can never read differently on the two surfaces. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. `stateOf` has two absorbing states rather than pure "last event wins": `"stopped"` (issue #203) and a recorded failure, which only `CLEARS_FAILURE`'s three event names take a task back out of - see "A recorded failure is absorbing too" above. |
 | `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
 | `spend.ts` | Rule 10's ledger, derived from the record: `costFromTranscript` (now `{ costUsd, costBasis }`), `daySpend`/`taskSpend` (rolling 24 hours, returning `SpendTotals` - metered vs. subscription-estimate, issue #188), `unmeasuredSpend`, and the shared wording (`formatUsd`, `describeTaskCost`, `SPEND_UNKNOWN_LINE`). |

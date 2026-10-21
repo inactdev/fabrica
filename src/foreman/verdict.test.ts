@@ -228,6 +228,88 @@ test("wrong also rules on the earlier delivery when a later Inspector refusal su
   assert.equal(mine?.state, "closed");
 });
 
+// The dead end this round fixes: a fix round that ended in a refusal used
+// to refuse every further `fix` ("inspection-refused": read the log,
+// resolve it, hand the branch to Inspector again - i.e. leave the loop
+// and do it by hand). It re-enters the same warm worker now, with
+// Inspector's own reason as the correction, exactly like a fix after an
+// inspection-red delivery. Seen three times in real use before it was
+// fixed.
+test("fix re-enters the same warm worker when a later Inspector refusal superseded the delivery", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector(["green", "refused", "green"], (verdict) =>
+    verdict === "refused" ? "Inspector could not start: no container runtime" : `fake Inspector: ${verdict}`
+  );
+  const foreman = createForeman({ recordHome, inspector });
+  let version = 0;
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), `v${++version}\n`) });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "done");
+
+  await recordVerdict(recordHome, task.id, "fix", "one more pass", { brain, inspector });
+  assert.equal((await foreman.status()).find((t) => t.id === task.id)?.state, "refused");
+  assert.equal(deliveryOf(recordHome, task.id), null, "the refusal superseded the delivery, as before");
+
+  // The ruling that used to bounce.
+  await recordVerdict(recordHome, task.id, "fix", "have another go now the runtime is back", { brain, inspector });
+
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "delivered", "the round ran and delivered - no dead end left");
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "done");
+  assert.equal(inspector.calls.length, 3, "the branch was handed to Inspector again");
+
+  // Same warm worker on the same line: one session, three briefs.
+  assert.equal(brain.historyBySession.size, 1, "every round resumed the one session");
+  const briefs = [...brain.historyBySession.values()][0];
+  assert.equal(briefs.length, 3);
+  const last = briefs[2];
+  assert.match(last, /Inspector refused the previous round: Inspector could not start: no container runtime/);
+  assert.match(last, /have another go now the runtime is back/, "the Client's own note is still the correction");
+  assert.match(last, /publishing is the host's job after this round/, "and the incomplete-publication case is covered");
+
+  // Counted and reported like every other fix round, and the refused
+  // round's own attempt is still part of the running count.
+  assert.equal(fixRoundOf(recordHome, task.id), 2);
+  assert.deepEqual(
+    receiptsOf(recordHome, task.id).map((r) => r.attempt),
+    [1, 2, 3],
+    "attempt numbering continued across the refused round instead of reusing one of its numbers"
+  );
+
+  const lastVerdict = (await foreman.events(task.id)).filter((e) => e.name === "verdict-recorded").at(-1);
+  assert.equal((lastVerdict?.details as { answersRefusal?: boolean }).answersRefusal, true);
+});
+
+// The incomplete-publication shape: the check was green and the branch
+// was simply never published, so the worker is told to change nothing.
+// That must still reach Inspector - `skipIfUnchanged` would otherwise
+// deliver "nothing changed" and leave the branch unpublished forever,
+// which is the same dead end one step further along.
+test("a round answering a refusal hands an unchanged commit back to Inspector rather than skipping it", async () => {
+  const recordHome = freshHome();
+  const inspector = fakeInspector(["green", "refused", "green"], (verdict) =>
+    verdict === "refused" ? "green locally, but the branch was not published" : `fake Inspector: ${verdict}`
+  );
+  const foreman = createForeman({ recordHome, inspector });
+  let version = 0;
+  const brain = fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), `v${++version}\n`) });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
+  await recordVerdict(recordHome, task.id, "fix", "one more pass", { brain, inspector });
+  assert.equal((await foreman.status()).find((t) => t.id === task.id)?.state, "refused");
+
+  const callsBefore = inspector.calls.length;
+  const noopBrain = fakeBrain(); // confirms the tree and changes nothing
+  await recordVerdict(recordHome, task.id, "fix", "nothing to change - just get it published", {
+    brain: noopBrain,
+    inspector,
+  });
+
+  assert.equal(inspector.calls.length, callsBefore + 1, "the unchanged commit was handed over again");
+  const delivery = deliveryOf(recordHome, task.id);
+  assert.equal(delivery?.outcome, "done", "not 'nothing-changed': the handoff is the point of this round");
+  assert.deepEqual(delivery?.files, ["work.txt"]);
+});
+
 // Fix 1 (issue: two fixes in the fix-round path): a fix round whose
 // worker leaves the branch exactly where it was must never hand that
 // same, already-reviewed commit back to Inspector - which otherwise only

@@ -211,9 +211,10 @@ export function formatStatusLine(
      * (`earlyStopKindOf`'s "refused" case) - Inspector's own report, shown
      * plainly instead of the generic liveness label, alongside the one
      * verdict ("wrong") that closes it. Omitted for the rarer case where a
-     * later refusal supersedes an earlier real delivery: that one still has
-     * a delivery for "accept" to rule on too, so the wording stays as it
-     * was before this existed. */
+     * later refusal supersedes an earlier real delivery: that one has all
+     * three rulings open to it (`fix` included - it hands the refusal's
+     * reason to the worker), and names them on its own line below, with
+     * the reason itself left to `fabrica log`. */
     refusalReason?: string;
     /** The pull request Inspector opened, if any - shown once, on a
      * delivered task's own line, never implied for any other state. */
@@ -252,6 +253,18 @@ export function formatStatusLine(
     if (opts.refusalReason !== undefined) {
       return `${base}  <- INSPECTOR REACHED NO VERDICT: ${opts.refusalReason} - \`fabrica verdict ${task.id} wrong\` closes it (see \`fabrica log ${task.id}\`)`;
     }
+    if (task.state === "refused" && opts.hasDelivery) {
+      // A refusal with a real delivery behind it is the one dead-end
+      // state the Client's own ruling still moves: `fix` re-enters the
+      // worker with the refusal's reason as its correction, and
+      // accept/wrong rule on that earlier delivery. Said here rather
+      // than left to the generic line below, which named no command at
+      // all and read as "nothing to be done but go and look".
+      return (
+        `${base}  <- INSPECTOR REACHED NO VERDICT: \`fabrica verdict ${task.id} fix\` runs the worker again ` +
+        `with the refusal as its correction; accept|wrong rule on the last delivery (see \`fabrica log ${task.id}\`)`
+      );
+    }
     return `${base}  <- ${(opts.liveness ?? "Inspector reached no verdict").toUpperCase()}: fabrica log ${task.id}`;
   }
   // Whatever describeLiveness decided - "checking, 2m so far", a quiet
@@ -266,7 +279,12 @@ export function formatStatusLine(
 /** The one definition of a task that cannot move again in its current
  * round: `brain.ask()` failed before delivery, or Inspector reached no
  * verdict. It keeps status sorting, terminal notices, quiet detection,
- * and watch's exit condition aligned. */
+ * and watch's exit condition aligned.
+ *
+ * "In its current round" is the whole of it - a refusal with a real
+ * delivery behind it is still the Client's to rule `fix` on, which
+ * starts a fresh round (src/foreman/verdict.ts). What each case can
+ * actually be ruled is said in the notices above, not here. */
 export function isDeadEnd(state: FabricaTask["state"], hasDelivery: boolean): boolean {
   return state === "refused" || (state === "failed" && !hasDelivery);
 }
@@ -476,14 +494,24 @@ function describeLivenessFromRecord(state: FabricaTask["state"], events: Fabrica
  * a task that failed before it ever delivered has no `fix` path at all
  * (`recordVerdict` refuses it with "not-delivered"), so it is worded
  * apart from the delivered/failed-delivery case rather than pointing the
- * Client at a command that would be rejected. */
+ * Client at a command that would be rejected. An Inspector refusal
+ * splits the same way, on whether a delivery sits behind it: with one,
+ * `fix` is accepted and hands the refusal's reason to the worker; with
+ * none, only `wrong` is. */
 export function formatTerminalNotice(
   state: FabricaTask["state"],
   ctx: { taskId: string; hasDelivery: boolean }
 ): string | null {
   if (isDeadEnd(state, ctx.hasDelivery)) {
     if (state === "refused") {
-      return `-- Inspector reached no verdict - resolve the reason in \`fabrica log ${ctx.taskId}\` before handing the branch over again --`;
+      // With a delivery behind it, the refusal is the loop's to clear,
+      // not the Client's to go and resolve by hand: `fix` hands the
+      // reason to the same warm worker (src/foreman/verdict.ts). With no
+      // delivery behind it there is nothing to fix, and "wrong" is the
+      // one ruling that closes it.
+      return ctx.hasDelivery
+        ? `-- Inspector reached no verdict - \`fabrica verdict ${ctx.taskId} fix\` runs the worker again with that reason as its correction; accept|wrong rule on the last delivery --`
+        : `-- Inspector reached no verdict and nothing was ever delivered, so there is nothing to fix - \`fabrica verdict ${ctx.taskId} wrong\` closes it; \`fabrica log ${ctx.taskId}\` has the reason --`;
     }
     return (
       `-- task failed before any work started - the brain's clarify step threw, so nothing was ever ` +

@@ -8,7 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEvent } from "../record/index.ts";
-import { eventsByTask, stateOf, statusOf } from "./queries.ts";
+import { eventsByTask, refusalAfterDelivery, refusedWithNoDelivery, stateOf, statusOf } from "./queries.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-foreman-queries-"));
@@ -162,5 +162,53 @@ test("stateOf: a cap refusal of a first start is absorbing the same way", () => 
       { occurredAt: "t3", taskId: "t1", name: "work-started", details: { project: "/p" } },
     ]),
     "working"
+  );
+});
+
+// `refusalAfterDelivery` is what tells the one fixable refusal apart from
+// the one that only "wrong" can close - the whole decision behind
+// `fabrica verdict <id> fix` on a refused task (src/foreman/verdict.ts).
+const DELIVERED = { occurredAt: "t1", taskId: "t1", name: "delivered" as const, details: { outcome: "done" } };
+const REFUSED = {
+  occurredAt: "t2",
+  taskId: "t1",
+  name: "inspection-finished" as const,
+  details: { verdict: "refused", report: "no container runtime" },
+};
+
+test("refusalAfterDelivery: a refusal that superseded a real delivery is the one a fix can answer", () => {
+  assert.deepEqual(refusalAfterDelivery([DELIVERED, REFUSED]), { report: "no container runtime" });
+});
+
+test("refusalAfterDelivery: a refusal with no delivery behind it is not one - that is wrong's to close", () => {
+  assert.equal(refusalAfterDelivery([{ occurredAt: "t0", taskId: "t1", name: "work-started" }, REFUSED]), null);
+  assert.equal(refusedWithNoDelivery([{ occurredAt: "t0", taskId: "t1", name: "work-started" }, REFUSED]), true);
+});
+
+test("refusalAfterDelivery: a later delivery takes the task back out of it", () => {
+  assert.equal(
+    refusalAfterDelivery([
+      DELIVERED,
+      REFUSED,
+      { occurredAt: "t3", taskId: "t1", name: "delivered", details: { outcome: "done" } },
+    ]),
+    null
+  );
+});
+
+test("refusalAfterDelivery: a red inspection is not a refusal - that delivery is ruled on directly", () => {
+  assert.equal(
+    refusalAfterDelivery([
+      { occurredAt: "t1", taskId: "t1", name: "inspection-finished", details: { verdict: "red", report: "a test fails" } },
+      { occurredAt: "t2", taskId: "t1", name: "delivered", details: { outcome: "inspection-red" } },
+    ]),
+    null
+  );
+});
+
+test("refusalAfterDelivery: a refusal that said nothing still gets words, never an empty correction", () => {
+  assert.deepEqual(
+    refusalAfterDelivery([DELIVERED, { occurredAt: "t2", taskId: "t1", name: "inspection-finished", details: { verdict: "refused" } }]),
+    { report: "Inspector reached no verdict and said nothing about why" }
   );
 });
