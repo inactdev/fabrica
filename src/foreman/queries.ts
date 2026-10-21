@@ -81,6 +81,32 @@ export function refusedWithNoDelivery(events: FabricaEvent[]): boolean {
   return (latestInspection?.details as { verdict?: string } | undefined)?.verdict === "refused";
 }
 
+/** The Inspector refusal a `fix` verdict would be answering, or null when
+ * the task's latest word is not one: exactly the other side of
+ * `refusedWithNoDelivery` above - the latest `"inspection-finished"` is a
+ * refusal, it is newer than the task's last `"delivered"` event, and
+ * there IS such an event behind it.
+ *
+ * That combination is the one the Client can still rule `fix` on. The
+ * earlier delivery holds everything a round needs to reopen the line
+ * (project, baseCommit), and the refusal itself - Inspector reached no
+ * verdict, so nothing about the work was judged - is what the next round
+ * is being asked to clear, carried into the worker's brief as its
+ * correction (`verdict.ts`'s `refusalCorrection`). A refusal with no
+ * delivery behind it has none of that and stays closable by `wrong`
+ * alone. `report` is Inspector's own words, already bounded for the
+ * record by `reportForRecord` (`src/inspector/run.ts`). */
+export function refusalAfterDelivery(events: FabricaEvent[]): { report: string } | null {
+  const deliveredIndex = events.map((event) => event.name).lastIndexOf("delivered");
+  if (deliveredIndex === -1) return null;
+  const latestInspection = events.filter((event) => event.name === "inspection-finished").at(-1);
+  if (latestInspection === undefined) return null;
+  if (events.lastIndexOf(latestInspection) < deliveredIndex) return null;
+  const details = latestInspection.details as { verdict?: string; report?: string } | undefined;
+  if (details?.verdict !== "refused") return null;
+  return { report: details.report ?? "Inspector reached no verdict and said nothing about why" };
+}
+
 export function receiptsOf(recordHome: string, taskId: string): Receipt[] {
   const events = readEventsForTask(recordHome, taskId);
   const receiptEvent = events

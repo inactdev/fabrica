@@ -127,12 +127,17 @@ final; a task waiting on questions gets pointed at `fabrica answer`. A
 task that failed before ever delivering - the brain's clarify step
 itself threw, so no Worker ever ran - gets its own note naming that,
 since neither `fix` nor `fabrica answer` can move it either. An Inspector
-refusal says no verdict was reached and points to its report in
-`fabrica log`. If the answer to "what's next" itself changes - a `fix`
+refusal says no verdict was reached: with a real delivery behind it, it
+names the `fix` verdict that runs the worker again with that refusal as
+its correction; with nothing delivered behind it, there is nothing to fix
+and it names `wrong` instead, pointing at the report in `fabrica log`
+either way. If the answer to "what's next" itself changes - a `fix`
 verdict re-delivers, an answer resumes the work - the note fires again
 for the new state. Watch ends outright, rather than continuing to poll,
-for the three states the record can never move on from again: "closed",
-a "failed" task that never delivered, and "refused". Every other
+for the three states nothing further happens in by itself: "closed",
+a "failed" task that never delivered, and "refused" - the last of those
+being a round that ended, not necessarily a task that is over, since a
+`fix` verdict starts a fresh round for it to be watched again. Every other
 terminal state - a real failed delivery, "delivered" itself, or "asking"
 - keeps watch running until you stop it yourself.
 

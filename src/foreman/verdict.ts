@@ -18,7 +18,13 @@ import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { networkPolicyFor } from "./network-policy.ts";
 import { ForemanError } from "./errors.ts";
-import { failedWithNoDelivery, latestDeliveredDetails, refusedWithNoDelivery } from "./queries.ts";
+import {
+  failedWithNoDelivery,
+  latestDeliveredDetails,
+  receiptsOf,
+  refusalAfterDelivery,
+  refusedWithNoDelivery,
+} from "./queries.ts";
 import { prepareRound, skipIfUnchanged } from "./judge.ts";
 import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
@@ -89,37 +95,36 @@ export function recordVerdictDecision(
   }
 
   const deliveredIndex = events.map((event) => event.name).lastIndexOf("delivered");
-  const latestInspection = events.filter((event) => event.name === "inspection-finished").at(-1);
-  const inspectionVerdict = (latestInspection?.details as { verdict?: string } | undefined)?.verdict;
-  const latestRefusalIsAfterDelivery =
-    inspectionVerdict === "refused" && deliveredIndex !== -1 && events.lastIndexOf(latestInspection!) > deliveredIndex;
   // A task Inspector refused before it ever reached a delivery has
   // nothing for "accept" or "fix" to work with - no delivery details to
-  // reopen a line from, no verdict to repair toward - so those two stay
-  // refused exactly as below. "wrong" needs none of that (it only closes
-  // the task), so it is the one ruling the Client can still use to close
-  // this state instead of it refusing every ruling forever (Client ruling).
+  // reopen a line from, no verdict to repair toward, nothing on the
+  // branch anyone has reviewed. "wrong" needs none of that (it only
+  // closes the task), so it is the one ruling the Client can still use
+  // to close this state instead of it refusing every ruling forever
+  // (Client ruling), and it stays the only one.
   const closesRefusedWithNoDelivery = ruling === "wrong" && refusedWithNoDelivery(events);
+  if (refusedWithNoDelivery(events) && !closesRefusedWithNoDelivery) {
+    throw new ForemanError(
+      "inspection-refused",
+      `fabrica verdict: Inspector reached no verdict for task "${taskId}", and it never reached a delivery - ` +
+        `there is nothing to accept and nothing to fix, so only "wrong" can close it. Read ` +
+        `\`fabrica log ${taskId}\` for why.`
+    );
+  }
   // A refusal that comes AFTER a real delivery is a different case: that
   // delivery is still there for the Client to rule on directly, so
   // "accept"/"wrong" rule on it as if the later refusal never happened
-  // (recorded as superseded below) - "fix" alone still refuses here, since
-  // Inspector's own refusal is itself what needs resolving before a fresh
-  // worker attempt is worth running.
-  const rulesOnDeliveryDespiteLaterRefusal =
-    latestRefusalIsAfterDelivery && (ruling === "accept" || ruling === "wrong");
-  if (
-    inspectionVerdict === "refused" &&
-    events.lastIndexOf(latestInspection!) > deliveredIndex &&
-    !closesRefusedWithNoDelivery &&
-    !rulesOnDeliveryDespiteLaterRefusal
-  ) {
-    throw new ForemanError(
-      "inspection-refused",
-      `fabrica verdict: Inspector reached no verdict for task "${taskId}". Read \`fabrica log ${taskId}\`, ` +
-        "resolve the refusal, then hand the branch to Inspector again before asking the Client to rule on it."
-    );
-  }
+  // (recorded as superseded below). "fix" used to refuse here too, on the
+  // reasoning that Inspector's own refusal had to be resolved by hand
+  // before a fresh worker attempt was worth running - which left the task
+  // with no way forward through Fabrica at all. By Client ruling it now
+  // re-enters the same warm worker on the same line with the refusal's
+  // own reason as its correction, exactly like a fix after an
+  // inspection-red delivery: the refusal is for this loop to clear, not
+  // for the Client to go and clear outside it. See `runRecordedFix`
+  // below and `queries.ts`'s `refusalAfterDelivery`.
+  const refusalToFix = refusalAfterDelivery(events);
+  const rulesOnDeliveryDespiteLaterRefusal = refusalToFix !== null && (ruling === "accept" || ruling === "wrong");
 
   // A task that failed before it ever reached a delivery (brain.ask()
   // threw, a spending cap refused its first start, or some other error
@@ -193,6 +198,13 @@ export function recordVerdictDecision(
       ruling,
       note: note ?? "",
       ...(rulesOnDeliveryDespiteLaterRefusal ? { supersedesRefusal: true } : {}),
+      // Bookkeeping only, for anyone reading the record afterwards:
+      // this round is answering Inspector's own refusal, not a red
+      // report, so its brief carries that reason alongside the note
+      // (`refusalCorrection` below). Nothing branches on it - the round
+      // re-derives the refusal from the record the same way it
+      // re-derives everything else.
+      ...(refusalToFix !== null && ruling === "fix" ? { answersRefusal: true } : {}),
     },
   });
 }
@@ -215,14 +227,28 @@ export async function runRecordedFix(
 ): Promise<void> {
   const details = latestDeliveredDetails(recordHome, taskId);
   const totalAttempts = details?.totalAttempts;
-  const priorReceipts = details?.receipts ?? [];
   const project = details?.project;
   const baseCommit = details?.baseCommit;
 
-  const lastVerdict = readEventsForTask(recordHome, taskId)
-    .filter((e) => e.name === "verdict-recorded")
-    .at(-1);
+  const events = readEventsForTask(recordHome, taskId);
+  const lastVerdict = events.filter((e) => e.name === "verdict-recorded").at(-1);
   const note = (lastVerdict?.details as { note?: string } | undefined)?.note ?? "";
+  // The refusal this round is being asked to clear, if that is what the
+  // task's latest word is - read back off the record exactly like the
+  // note, the project and the base commit above.
+  const refusal = refusalAfterDelivery(events);
+
+  // Every receipt the task has, not just the ones the latest *delivery*
+  // carried: a round Inspector refused delivers nothing, so its attempts
+  // are on the record only as their own "receipt-recorded" events
+  // (`receiptsOf` merges both sources). Reading the stale delivery's list
+  // instead would restart `startAttempt` on an attempt number this task
+  // has already used - and `receiptsOf` de-duplicates by attempt, so the
+  // new receipt would then be dropped from the next delivery's
+  // cumulative list altogether. For a fix after an ordinary delivery
+  // this is the same set it always was, since every receipt lands on
+  // both the "delivered" event and its own "receipt-recorded" one.
+  const priorReceipts = receiptsOf(recordHome, taskId);
 
   // #73: whatever throws in the fix round lands on the record as task-failed.
   await recordingFailure(recordHome, taskId, () => runFixRound(recordHome, taskId, note, {
@@ -231,6 +257,7 @@ export async function runRecordedFix(
     totalAttempts,
     baseCommit: baseCommit!,
     priorReceipts,
+    refusalReport: refusal?.report,
     priorGateChanges: details?.delivery?.gateChanges || undefined,
     inspector: opts.inspector,
     checkBox: opts.checkBox,
@@ -268,6 +295,35 @@ function buildFixBrief(originalBrief: string, note: string, extra?: string): str
   );
 }
 
+/**
+ * What the worker is told when the round it is re-entering is answering
+ * an Inspector refusal rather than a red report (Client ruling): the
+ * refusal's own reason, framed so the worker knows it was a refusal and
+ * not a judgement on its work.
+ *
+ * Both shapes of refusal are covered in one text, deliberately. Inspector
+ * exits the same way for either of its two no-verdict causes - it
+ * declined before attempting any publication, or the local check passed
+ * and a green publication was left incomplete - and publishes no exit
+ * code, marker line or report field that tells the two apart, so Fabrica
+ * cannot classify the refusal it is holding without pattern-matching
+ * another project's prose. Inspector's own report is handed over verbatim
+ * instead, with the instruction for each shape attached to what that
+ * report actually says. (If this ever needs deciding in code, the
+ * mechanism is `src/inspector/consumer-contract.json`, the ratified copy
+ * of the call that syncs to Inspector's own test data - not a regex.)
+ */
+function refusalCorrection(report: string): string {
+  return (
+    `Inspector refused the previous round: ${report}\n\n` +
+    `A refusal is not a red report - Inspector reached no verdict at all, so nothing about your work was ` +
+    `judged, and this branch still carries it. Read that reason: if it names something in this tree, fix ` +
+    `that and nothing else. If instead it says the check passed and the branch was not published, then the ` +
+    `work itself is fine - publishing is the host's job after this round, not yours (you cannot push from ` +
+    `here anyway), so change nothing and only confirm the tree is as intended.`
+  );
+}
+
 async function runFixRound(
   recordHome: string,
   taskId: string,
@@ -278,13 +334,20 @@ async function runFixRound(
     totalAttempts: number | undefined;
     baseCommit: string;
     priorReceipts: Receipt[];
+    /** Inspector's own reason, set exactly when this round is answering
+     * a refusal that superseded an earlier delivery (`runRecordedFix`).
+     * Two things follow from it: the worker's brief carries it as a
+     * correction, and the round's judge is never wrapped with
+     * `skipIfUnchanged` - see both call sites below. */
+    refusalReport?: string;
     priorGateChanges: string | undefined;
     inspector?: Inspector;
     checkBox?: CheckBox;
     caps?: Caps;
   }
 ): Promise<void> {
-  const { brain, project, totalAttempts, baseCommit, priorReceipts, priorGateChanges, inspector, checkBox, caps } = ctx;
+  const { brain, project, totalAttempts, baseCommit, priorReceipts, refusalReport, priorGateChanges, inspector, checkBox, caps } =
+    ctx;
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
@@ -365,8 +428,22 @@ async function runFixRound(
     // is detached mid-rebase and the host moves it again after the worker
     // returns - and there is nothing to protect against either way: the
     // commits are being replayed, so none of them is one Inspector has
-    // already seen. The wrapper is skipped on that path only.
-    const judge = stopped ? roundJudge : skipIfUnchanged(roundJudge, line.workdir, baseCommitOf(line.workdir));
+    // already seen.
+    //
+    // A round answering a refusal is the other path the wrapper is
+    // skipped on, and for the same reason read the other way round: a
+    // refusal is Inspector reaching NO verdict, so the commit on this
+    // branch was never reviewed, and handing it over again is exactly
+    // the retry that can succeed - it is the only way an unpublished
+    // green branch ever gets published. Left wrapped, a worker that
+    // correctly changed nothing (the incomplete-publication case, where
+    // it is told to do just that) would deliver "nothing-changed"
+    // without Inspector ever being called again: the same dead end, one
+    // step further along.
+    const judge =
+      stopped || refusalReport !== undefined
+        ? roundJudge
+        : skipIfUnchanged(roundJudge, line.workdir, baseCommitOf(line.workdir));
 
     appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
 
@@ -447,7 +524,20 @@ async function runFixRound(
 
         const result = await runAttempts({
           brain,
-          brief: buildFixBrief(originalBrief, note, handed ? rebaseConflictInstructions(handed) : undefined),
+          // Both extras can apply at once (a round answering a refusal
+          // whose own rebase then conflicted), so they are joined rather
+          // than one winning: each describes a different part of the
+          // state this worker is being handed.
+          brief: buildFixBrief(
+            originalBrief,
+            note,
+            [
+              refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,
+              handed ? rebaseConflictInstructions(handed) : undefined,
+            ]
+              .filter((part): part is string => part !== undefined)
+              .join("\n\n---\n\n") || undefined
+          ),
           workdir: line.workdir,
           taskId,
           judge,

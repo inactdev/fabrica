@@ -216,6 +216,37 @@ test("formatStatusLine: a failed task WITH a delivery is not marked unresolvable
   assert.doesNotMatch(line, /UNRESOLVABLE/);
 });
 
+// An Inspector refusal with a real delivery behind it is no longer a dead
+// end: `fabrica verdict <id> fix` runs the worker again with the refusal's
+// own reason as its correction (src/foreman/verdict.ts), so the line has
+// to name that instead of pointing the Client at `fabrica log` and
+// nothing else.
+test("formatStatusLine: a refusal with a delivery behind it names the fix verdict that clears it", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "refused" },
+    { project: "/proj", ageMs: 600_000, liveness: "Inspector reached no verdict", hasDelivery: true }
+  );
+  assert.match(line, /INSPECTOR REACHED NO VERDICT/);
+  assert.match(line, /`fabrica verdict t1 fix` runs the worker again with the refusal as its correction/);
+  assert.match(line, /accept\|wrong rule on the last delivery/);
+});
+
+test("formatStatusLine: a refusal with no delivery behind it still names wrong as the only way out", () => {
+  const line = formatStatusLine(
+    { id: "t1", state: "refused" },
+    {
+      project: "/proj",
+      ageMs: 600_000,
+      liveness: "Inspector reached no verdict",
+      hasDelivery: false,
+      refusalReason: "GITHUB_TOKEN is missing",
+    }
+  );
+  assert.match(line, /GITHUB_TOKEN is missing/);
+  assert.match(line, /`fabrica verdict t1 wrong` closes it/);
+  assert.doesNotMatch(line, /fix`/);
+});
+
 // describeLiveness is the one place `status` and `watch` decide what a
 // task's liveness looks like - these tests work from real event arrays
 // (not precomputed numbers) so a regression that makes the two commands
@@ -547,7 +578,14 @@ test("isDeadEnd: a failed task WITH a delivery is not a dead end - a fix verdict
   assert.equal(isDeadEnd("failed", true), false);
 });
 
-test("isDeadEnd: an Inspector refusal is a dead end, regardless of an earlier delivery", () => {
+// Both still true, and deliberately: this function answers "can this
+// task's CURRENT ROUND move again by itself", which a refusal's cannot
+// either way - it is what keeps the quiet alarm off a round that really
+// has ended, and what stops `watch` polling forever. Whether the *task*
+// can move is the Client's ruling, which the notices above now name
+// separately for each case (`fix` with a delivery behind it, `wrong`
+// without).
+test("isDeadEnd: an Inspector refusal ends its round, regardless of an earlier delivery", () => {
   assert.equal(isDeadEnd("refused", false), true);
   assert.equal(isDeadEnd("refused", true), true);
 });
@@ -863,6 +901,26 @@ test("formatTerminalNotice: a failed delivery still names the fix path", () => {
   const notice = formatTerminalNotice("failed", { taskId: "t1", hasDelivery: true });
   assert.ok(notice);
   assert.match(notice, /`fix` verdict wakes the worker again/);
+});
+
+// Same split as the status line above: the refusal is the loop's to
+// clear when a delivery sits behind it, and only "wrong"'s to close when
+// none does. The old notice told the Client to resolve it himself and
+// hand the branch over again - advice `fabrica verdict <id> fix` has
+// replaced.
+test("formatTerminalNotice: a refusal with a delivery behind it names the fix verdict, not hand-resolution", () => {
+  const notice = formatTerminalNotice("refused", { taskId: "t1", hasDelivery: true });
+  assert.ok(notice);
+  assert.match(notice, /fabrica verdict t1 fix/);
+  assert.match(notice, /accept\|wrong rule on the last delivery/);
+});
+
+test("formatTerminalNotice: a refusal with nothing delivered points at wrong only", () => {
+  const notice = formatTerminalNotice("refused", { taskId: "t1", hasDelivery: false });
+  assert.ok(notice);
+  assert.match(notice, /nothing to fix/);
+  assert.match(notice, /fabrica verdict t1 wrong` closes it/);
+  assert.doesNotMatch(notice, /verdict t1 fix/);
 });
 
 test("formatTerminalNotice: only terminal-ish states get one", () => {

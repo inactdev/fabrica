@@ -280,7 +280,11 @@ a brain from. If Inspector refuses the fix round, that - like any other
 outcome of a backgrounded round - is discovered through the record
 (`fabrica log`/`status`/`watch`), not this command's own exit code or
 output, which only ever reports that the ruling was recorded and handed
-off.
+off. Such a refusal is not the end of the task: another `fabrica verdict
+<id> fix` runs the same warm worker again with the refusal's own reason
+as its correction (`src/foreman/README.md`'s `verdict()` section), and
+`status`/`watch` say so on the task's line rather than pointing at
+`fabrica log` alone.
 
 ## `fabrica cost <taskId> <usd>`
 
