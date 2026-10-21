@@ -99,6 +99,46 @@ reason `app.js` duplicates `formatAge` - and `server.test.ts` pins both
 copies word for word so the one that actually runs in a browser cannot
 drift.
 
+### It declares nothing global, and that is now enforced
+
+`banner.js` is wrapped in an IIFE. It has to be. Every page loads it
+first, with a plain `<script src>` tag, and classic scripts on one page
+share a **single** global lexical environment - so a top-level `const`
+here and a top-level `const` of the same name in `app.js`/`review.js`/
+`task.js` is a redeclaration `SyntaxError`, and V8 raises it at script
+instantiation, before a single statement of the page's own script runs.
+All four files want a `POLL_MS`, and for a while all four declared one:
+every page sat on the placeholder markup in its own HTML - `Tasks · 0`,
+`Loading…`, an empty list - while the server answered every request 200
+and the only trace of the failure was in a browser console.
+
+`page-scripts.test.ts` is the guard. For every `*.html` file in
+`public/` it parses the page, collects its `<script>` tags in document
+order, and evaluates each one in **one shared `node:vm` context** - which
+reproduces a browser's semantics exactly (a top-level `const` in one
+script is readable from the next; a second one of the same name throws
+the real `SyntaxError`; a repeated `function` declaration does not). The
+rules are V8's own rather than a hand-written model of them, and three
+self-checks in that file pin them so the suite cannot pass vacuously. Two
+more points worth knowing before editing it:
+
+- Its `fetch` returns a promise that **never settles**. All four scripts
+  end by calling something that immediately awaits a fetch, so a pending
+  request is precisely the state a just-loaded page is in. A resolving
+  stub would drag every renderer into scope against invented data - a
+  different test from the one this is.
+- A page's URL is not derivable from its filename (`app.js` branches on
+  `location.pathname === "/history"`, `task.js` parses the task id out of
+  it), so the test keeps its own `index.html` → `/` map mirroring
+  `server.ts`'s `STATIC_FILES` and `TASK_PAGE_PATH` - with an assertion
+  that every `*.html` actually in `public/` appears in it, so a new page
+  cannot be silently skipped.
+
+`helpers/load-time-dom.ts` is the DOM those scripts load against: a
+load-time-only DOM, not a browser, whose `querySelectorAll` **throws** on
+selector syntax it does not implement rather than matching nothing - a
+fake answering "nothing matched" would hide a real gap.
+
 A `projects.toml` that will not parse is never an HTTP error here: a
 broken config is not a broken server. `record-view.ts` reads it through
 `loadConfigOrProblem` (`src/config/`), which hands back the same empty
