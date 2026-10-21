@@ -1,16 +1,23 @@
 // `fabrica doctor`'s Inspector-side checks: a GitHub token Inspector can
-// use, and an installed Inspector that takes -branch and is built from
+// use, and an installed Inspector that takes -branch and is not behind
 // origin main's tip.
+//
+// Every probe is faked here - a fake `inspector`, `go` and `git` on a
+// throwaway PATH, and an injected ancestry answer - so the default `npm
+// test` run reads no real binary, asks GitHub nothing, and fetches
+// nothing.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CommitAncestry } from "./ancestry.ts";
 import {
   INSPECTOR_MODULE_PATH,
   githubTokenStatus,
   inspectorBranchStatus,
+  inspectorInstallArgs,
   inspectorInstallCommand,
   inspectorVersionCheck,
   parseGoBuildInfo,
@@ -32,6 +39,18 @@ function pathWith(name: string, body: string): string {
 }
 
 const MAIN_TIP = "4f297d8be50e4f5b24460b5813ca50729d6413f9";
+const INSTALL_FIX = `go install github.com/inactdev/inspector/cmd/inspector@${MAIN_TIP}`;
+
+/** The ancestry answer, injected: the one probe that would otherwise
+ * fetch a commit graph over the network. `never` is the default so a
+ * test that should not reach it fails loudly rather than quietly
+ * fetching. */
+function ancestry(answer: CommitAncestry | "never" = "never"): (commit: string) => CommitAncestry {
+  return () => {
+    if (answer === "never") throw new Error("ancestry must not be asked here");
+    return answer;
+  };
+}
 
 /** `go version -m` output as a real one prints it - tab-indented,
  * tab-separated records. The installed shape comes from a real
@@ -96,43 +115,71 @@ test("GitHub token: unset and gh missing or logged out fails, with gh auth login
 });
 
 test("Inspector: on PATH, -h shows -branch, built from origin main's tip is OK", () => {
-  const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_AT_MAIN, MAIN_TIP) });
+  const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_AT_MAIN, MAIN_TIP) }, "inspector", ancestry());
   assert.equal(status.ok, true);
   assert.match(status.detail, /-branch/);
   assert.match(status.detail, /commit 4f297d8be50e, up to date with origin main/);
 });
 
 test("Inspector: a binary behind origin main fails, printing the exact install command", () => {
-  const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_BEHIND_MAIN, MAIN_TIP) });
+  const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_BEHIND_MAIN, MAIN_TIP) }, "inspector", ancestry("behind"));
   assert.equal(status.ok, false);
   assert.match(status.detail, /commit 1a2b3c4d5e6f is behind origin main, which is at 4f297d8be50e/);
-  assert.equal(status.fix, `go install github.com/inactdev/inspector/cmd/inspector@${MAIN_TIP}`);
+  assert.equal(status.fix, INSTALL_FIX);
+});
+
+test("Inspector: a commit ahead of origin main, or on a branch, passes - different is not behind", () => {
+  const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_BEHIND_MAIN, MAIN_TIP) }, "inspector", ancestry("not-behind"));
+  assert.equal(status.ok, true);
+  assert.match(status.detail, /commit 1a2b3c4d5e6f is not behind origin main, which is at 4f297d8be50e/);
+  assert.match(status.detail, /ahead of main, or built from a branch/);
+  assert.equal(status.fix, undefined);
+});
+
+test("Inspector: an ancestry lookup that failed passes too, never reported as behind", () => {
+  const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_BEHIND_MAIN, MAIN_TIP) }, "inspector", ancestry("unknown"));
+  assert.equal(status.ok, true);
+  assert.match(status.detail, /whether it is behind origin main \(at 4f297d8be50e\) could not be checked/);
+  assert.equal(status.fix, undefined, "nothing to fix: this is a lookup that failed, not a stale binary");
 });
 
 test("Inspector: a local build passes, naming its commit and its uncommitted changes", () => {
-  const status = inspectorBranchStatus({ PATH: inspectorOn(BUILT_FROM_CHECKOUT, MAIN_TIP) });
+  const status = inspectorBranchStatus({ PATH: inspectorOn(BUILT_FROM_CHECKOUT, MAIN_TIP) }, "inspector", ancestry());
   assert.equal(status.ok, true);
   assert.match(status.detail, /a local build at commit 1a2b3c4d5e6f with uncommitted changes/);
   assert.equal(status.fix, undefined);
 });
 
 test("Inspector: an unreachable origin main passes with a note, never a FAIL", () => {
-  const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_BEHIND_MAIN, null) });
+  const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_BEHIND_MAIN, null) }, "inspector", ancestry());
   assert.equal(status.ok, true);
   assert.match(status.detail, /could not check origin main/);
 });
 
 test("Inspector: on PATH but -h has no -branch fails - Fabrica's call would be refused", () => {
-  const status = inspectorBranchStatus({ PATH: pathWith("inspector", "echo '  -repo string'; exit 0") });
+  const path = pathWithAll({
+    inspector: "echo '  -repo string'; exit 0",
+    git: `printf '%s\\trefs/heads/main\\n' ${MAIN_TIP}`,
+  });
+  const status = inspectorBranchStatus({ PATH: path }, "inspector", ancestry());
   assert.equal(status.ok, false);
   assert.match(status.detail, /-branch/);
+  assert.equal(status.fix, INSTALL_FIX, "the fix is the same install, at main's tip");
 });
 
-test("Inspector: not on PATH fails, saying tasks will be self-tested", () => {
-  const status = inspectorBranchStatus({ PATH: "/usr/bin:/bin" });
+test("Inspector: not on PATH fails, saying tasks will be self-tested, with the go install fix", () => {
+  const path = pathWith("git", `printf '%s\\trefs/heads/main\\n' ${MAIN_TIP}`);
+  const status = inspectorBranchStatus({ PATH: path }, "inspector", ancestry());
   assert.equal(status.ok, false);
   assert.match(status.detail, /not on PATH/);
   assert.match(status.detail, /self-tested/);
+  assert.equal(status.fix, INSTALL_FIX);
+});
+
+test("Inspector: nothing installed and no answer from the remote still prints an install fix, at latest", () => {
+  const status = inspectorBranchStatus({ PATH: pathWith("git", "exit 128") }, "inspector", ancestry());
+  assert.equal(status.ok, false);
+  assert.equal(status.fix, "go install github.com/inactdev/inspector/cmd/inspector@latest");
 });
 
 test("Inspector build: a pseudo-version carries the commit; a tag carries none", () => {
@@ -176,29 +223,50 @@ const BEHIND: InspectorBuild = {
 };
 
 test("Inspector version: a build nothing could read, or that records no commit, passes with a note", () => {
-  const unreadable = inspectorVersionCheck({ ...BEHIND, commit: null, unreadable: "`go` is not on PATH" }, MAIN_TIP);
+  const unreadable = inspectorVersionCheck({ ...BEHIND, commit: null, unreadable: "`go` is not on PATH" }, MAIN_TIP, ancestry());
   assert.equal(unreadable.ok, true);
+  assert.equal(unreadable.state, "unreadable");
   assert.match(unreadable.note, /`go` is not on PATH/);
 
-  const tagged = inspectorVersionCheck({ ...BEHIND, version: "v1.2.3", commit: null }, MAIN_TIP);
+  const tagged = inspectorVersionCheck({ ...BEHIND, version: "v1.2.3", commit: null }, MAIN_TIP, ancestry());
   assert.equal(tagged.ok, true);
+  assert.equal(tagged.state, "no-commit");
   assert.match(tagged.note, /no commit to check against origin main \(module version v1\.2\.3\)/);
 });
 
-test("Inspector version: a local build at a commit ahead of main passes, naming it", () => {
-  const ahead = inspectorVersionCheck({ ...BEHIND, fromCheckout: true }, MAIN_TIP);
+test("Inspector version: a local build is left to itself, with no ancestry lookup at all", () => {
+  const ahead = inspectorVersionCheck({ ...BEHIND, fromCheckout: true }, MAIN_TIP, ancestry());
   assert.equal(ahead.ok, true);
+  assert.equal(ahead.state, "local-build");
   assert.match(ahead.note, /a local build at commit 1a2b3c4d5e6f \(origin main is at 4f297d8be50e\)/);
   assert.equal(ahead.fix, undefined);
 });
 
-test("Inspector version: a 12-hex module commit matches main's full sha", () => {
-  const current = inspectorVersionCheck({ ...BEHIND, commit: MAIN_TIP.slice(0, 12) }, MAIN_TIP);
+test("Inspector version: a 12-hex module commit matches main's full sha, and asks no ancestry either", () => {
+  const current = inspectorVersionCheck({ ...BEHIND, commit: MAIN_TIP.slice(0, 12) }, MAIN_TIP, ancestry());
   assert.equal(current.ok, true);
+  assert.equal(current.state, "current");
   assert.match(current.note, /up to date with origin main/);
 });
 
+test("Inspector version: an unreachable origin main asks no ancestry - there is nothing to compare with", () => {
+  const noMain = inspectorVersionCheck(BEHIND, null, ancestry());
+  assert.equal(noMain.ok, true);
+  assert.equal(noMain.state, "no-main");
+  assert.match(noMain.note, /could not check origin main/);
+});
+
 test("Inspector version: the fix pins the sha it compared against, not @latest", () => {
-  assert.equal(inspectorInstallCommand(MAIN_TIP), `go install github.com/inactdev/inspector/cmd/inspector@${MAIN_TIP}`);
-  assert.equal(inspectorVersionCheck(BEHIND, MAIN_TIP).fix, inspectorInstallCommand(MAIN_TIP));
+  assert.equal(inspectorInstallCommand(MAIN_TIP), INSTALL_FIX);
+  const behind = inspectorVersionCheck(BEHIND, MAIN_TIP, ancestry("behind"));
+  assert.equal(behind.state, "behind");
+  assert.equal(behind.fix, inspectorInstallCommand(MAIN_TIP));
+});
+
+// One spelling of the install: what every message prints and what
+// `goInstallInspector` actually runs are built from the same package
+// path, so neither can name a command the other wouldn't.
+test("Inspector version: the printed install command and the args that run it are the same command", () => {
+  assert.equal(inspectorInstallCommand(MAIN_TIP), `go ${inspectorInstallArgs(MAIN_TIP).join(" ")}`);
+  assert.equal(inspectorInstallCommand("latest"), `go ${inspectorInstallArgs("latest").join(" ")}`);
 });
