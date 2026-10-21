@@ -56,7 +56,11 @@ export {
 export type { MeterPausedDetails, MeterRefusedDetails, MeterStanding } from "./foreman/index.ts";
 export type { MeterReading } from "./brain/index.ts";
 export type { TaskFollower, TaskProgress } from "./foreman/index.ts";
-export type { TranscriptEntry, WorkerWriteup } from "../contract/surface.ts";
+export type { TranscriptEntry, WorkerWriteup, WriteupQuizEntry } from "../contract/surface.ts";
+// Issue #98: the write-up's quiz, as the live view reads it - one reader
+// for "is there a showable quiz here", so every surface skips a
+// quiz-less task the same way.
+export { quizEntriesOf, WRITEUP_QUIZ_LENGTH } from "./brain/index.ts";
 export type {
   Delivery,
   FabricaTask,

@@ -98,6 +98,26 @@ export function writeupProblem(job, args) {
   if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 100) {
     return "confidence is required and must be a number from 0 to 100";
   }
+  // The quiz (issue #98): named here the way `confidence` above is -
+  // the two non-string required fields are each checked on their own
+  // terms, while `writeupStringFields` keeps every string field's name
+  // out of this directory. Its length comes over the job file, so the
+  // "exactly three" rule still lives in src/brain/writeup.ts alone.
+  const quiz = args.quiz;
+  if (!Array.isArray(quiz) || quiz.length !== job.writeupQuizLength) {
+    return `quiz is required and must hold exactly ${job.writeupQuizLength} questions`;
+  }
+  for (let i = 0; i < quiz.length; i++) {
+    const entry = quiz[i];
+    const question = entry && typeof entry === "object" ? entry.question : undefined;
+    const answer = entry && typeof entry === "object" ? entry.answer : undefined;
+    if (typeof question !== "string" || question.trim().length === 0) {
+      return `quiz question ${i + 1} is required and must be a non-empty string`;
+    }
+    if (typeof answer !== "string" || answer.trim().length === 0) {
+      return `quiz question ${i + 1}'s answer is required and must be a non-empty one-line string`;
+    }
+  }
   return undefined;
 }
 
@@ -107,7 +127,7 @@ export function writeupProblem(job, args) {
  */
 function writeupFrom(job, args) {
   /** @type {Record<string, unknown>} */
-  const writeup = { confidence: args.confidence };
+  const writeup = { confidence: args.confidence, quiz: args.quiz };
   for (const field of job.writeupStringFields) writeup[field] = args[field];
   // An optional field only rides along when the model actually filled
   // it in: the host omits its bullet entirely when it is empty, so an

@@ -96,6 +96,10 @@ export interface AgentJob extends ChatTarget {
    * this directory still restates no field name of its own. */
   writeupOptionalStringFields: string[];
   writeupTitleMaxLength: number;
+  /** How many questions the write-up's quiz must hold - exactly this
+   * many (issue #98). A number rather than a rule restated in the
+   * agent, from the same single source as the title limit above. */
+  writeupQuizLength: number;
   /** How much of one tool result is kept, in characters - for the model
    * and for the transcript alike. A check's full output can be
    * megabytes; a context window cannot. */

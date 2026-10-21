@@ -652,6 +652,36 @@ body.review-page main {
   opacity: 0.5;
 }
 
+/* The worker's quiz (issue #98) - three questions, each with its answer
+   hidden until the question is tapped, on a delivered card (/review) and
+   on every card of /quiz. The question is the tap target, so it gets the
+   page's normal text color and a touch-sized row, the same reasoning
+   .review-btn's 44px minimum follows; the answer reads as the quieter
+   half once it is open. */
+.quiz-list {
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--hairline);
+}
+
+.quiz-entry + .quiz-entry {
+  border-top: 1px solid var(--hairline);
+}
+
+.quiz-question {
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.6rem 0.5rem;
+  min-height: 44px;
+  box-sizing: border-box;
+  word-break: break-word;
+}
+
+.quiz-answer {
+  color: var(--dim);
+  padding: 0 0.5rem 0.6rem 0.5rem;
+  word-break: break-word;
+}
+
 /* The note box's own label sits directly above it, so it keeps
    .review-line's dim color but loses that rule's bottom margin - the gap
    belongs between the box and the buttons, not between the label and the

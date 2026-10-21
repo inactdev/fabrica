@@ -44,7 +44,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
-import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
+import {
+  WRITEUP_FIELDS,
+  WRITEUP_OPTIONAL_STRING_FIELDS,
+  WRITEUP_QUIZ_LENGTH,
+  WRITEUP_STRING_FIELDS,
+  WRITEUP_TITLE_MAX_LENGTH,
+} from "../writeup.ts";
 import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgressNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
@@ -296,18 +302,24 @@ async function connectThroughRelay(opts: { baseUrl: string; apiKey?: string }): 
   };
 }
 
-/** The write-up tool's `parameters`: the nine required ratified fields
+/** The write-up tool's `parameters`: the ten required ratified fields
  * and the one optional one, built from src/brain/writeup.ts so no field
  * list is restated here or in the agent, plus the one extra thing a
  * worker may declare with its work - rule 9's `gateChanges`, which is
  * optional because leaving the gate alone is the normal case and "no
  * changes here" has no other spelling (src/brain/README.md's
- * `gateChanges` section). */
+ * `gateChanges` section).
+ *
+ * `required` is `WRITEUP_FIELDS` itself rather than the string fields
+ * plus the non-string ones named here by hand: the two sets are the same
+ * set, and a field added to the ratified write-up (`quiz`, issue #98)
+ * must not be able to arrive in that list for one adapter and not the
+ * other. */
 export function writeupToolSchema(): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
-    required: [...WRITEUP_STRING_FIELDS, "confidence"],
+    required: [...WRITEUP_FIELDS],
     properties: {
       title: { type: "string", minLength: 1, maxLength: WRITEUP_TITLE_MAX_LENGTH, description: "Your own words, in the imperative, at most 60 characters - never the task text." },
       why: { type: "string", minLength: 1, description: "What this change is for, from the product side." },
@@ -323,6 +335,23 @@ export function writeupToolSchema(): Record<string, unknown> {
       assumptions: { type: "string", minLength: 1 },
       expectedOutcomes: { type: "string", minLength: 1 },
       deviations: { type: "string", minLength: 1, description: 'What you deviated from the request and why, or "None."' },
+      quiz: {
+        type: "array",
+        minItems: WRITEUP_QUIZ_LENGTH,
+        maxItems: WRITEUP_QUIZ_LENGTH,
+        description:
+          `Exactly ${WRITEUP_QUIZ_LENGTH} questions about what this change did and why, each with its own ` +
+          "one-line answer, written for the owner of the codebase who did not read the diff.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["question", "answer"],
+          properties: {
+            question: { type: "string", minLength: 1 },
+            answer: { type: "string", minLength: 1 },
+          },
+        },
+      },
       couldNotVerify: {
         type: "string",
         description:
@@ -414,7 +443,9 @@ export function mapAgentLine(line: AgentLine): TranscriptEntry[] {
 /** The agent's final line, as a `WorkerWriteup` when it has the shape
  * the seam promises. The Foreman checks the contents again and names
  * what is wrong with a bad one (src/foreman/pr-body.ts); this only
- * refuses to pass off something that is not the right shape at all. */
+ * refuses to pass off something that is not the right shape at all -
+ * which is why the quiz rides along unexamined, the same reasoning
+ * claude-code.ts's own `writeupFrom` spells out. */
 function writeupFrom(value: unknown): WorkerWriteup | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const record = value as Record<string, unknown>;
@@ -423,7 +454,7 @@ function writeupFrom(value: unknown): WorkerWriteup | undefined {
   // Built field by field rather than passed through: whatever else the
   // model put in the tool call (rule 9's `gateChanges` rides in the same
   // arguments object) must not end up inside the write-up itself.
-  const writeup = { confidence: record.confidence } as Record<string, unknown>;
+  const writeup = { confidence: record.confidence, quiz: record.quiz } as Record<string, unknown>;
   for (const field of WRITEUP_STRING_FIELDS) writeup[field] = record[field];
   for (const field of WRITEUP_OPTIONAL_STRING_FIELDS) {
     if (typeof record[field] === "string") writeup[field] = record[field];
@@ -460,6 +491,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
     writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
+    writeupQuizLength: WRITEUP_QUIZ_LENGTH,
   };
 
   /** Runs one staged job in a box and returns every line it printed.

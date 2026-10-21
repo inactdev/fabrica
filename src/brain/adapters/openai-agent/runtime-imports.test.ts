@@ -17,7 +17,7 @@ import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
+import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_QUIZ_LENGTH, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
 import { writeupToolSchema } from "../openai-compatible.ts";
 import type { AgentJob, AgentLine } from "./types.ts";
 
@@ -33,6 +33,11 @@ const writeup = {
   assumptions: "none",
   expectedOutcomes: "the file exists",
   deviations: "None.",
+  quiz: [
+    { question: "What changed?", answer: "The thing this test is about." },
+    { question: "Why?", answer: "So the write-up is valid." },
+    { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+  ],
 };
 
 /** Answers in order, then fails loudly rather than looping forever. */
@@ -104,6 +109,7 @@ test("bootstrap.mjs runs the whole agent with plain node and only this directory
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
     writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
+    writeupQuizLength: WRITEUP_QUIZ_LENGTH,
     maxToolOutputChars: 4_000,
     bashTimeoutMs: 10_000,
   };
@@ -175,6 +181,7 @@ test("a work job with no cap makes no API call at all, whatever started it", asy
       writeupStringFields: [...WRITEUP_STRING_FIELDS],
       writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
       writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
+      writeupQuizLength: WRITEUP_QUIZ_LENGTH,
       maxToolOutputChars: 4_000,
       bashTimeoutMs: 10_000,
     })

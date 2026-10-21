@@ -16,7 +16,7 @@
 // always returns something to commit, falling back to a label naming
 // what is wrong rather than ever reaching for the task's own words.
 
-import { WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../brain/index.ts";
+import { quizProblem, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../brain/index.ts";
 import type { WorkerWriteup } from "../brain/index.ts";
 
 export interface FinalMessageForCommit {
@@ -113,13 +113,21 @@ function bullet(label: string, value: string): string {
 
 /** Everything wrong with a write-up, as one clause - or undefined when it
  * is valid. Checks only the required fields: an absent optional one is
- * not a problem, it just renders nothing. */
+ * not a problem, it just renders nothing.
+ *
+ * The quiz (issue #98) is required like any other field even though
+ * nothing below renders it: it is asked of the worker for the owner's
+ * sake, read on the live view, and a missing or mis-counted one is as
+ * much an invalid write-up as an empty `why` - it goes down this same
+ * red-attempt path, never padded or truncated to fit. */
 export function writeupProblem(writeup: WorkerWriteup | undefined): string | undefined {
   if (writeup === undefined) return "the worker returned no write-up";
   const problems: string[] = [];
   for (const field of WRITEUP_STRING_FIELDS) {
     if (writeup[field].trim().length === 0) problems.push(`the ${field} field is empty`);
   }
+  const quiz = quizProblem(writeup.quiz);
+  if (quiz !== undefined) problems.push(quiz);
   if (typeof writeup.confidence !== "number" || !Number.isFinite(writeup.confidence) || writeup.confidence < 0 || writeup.confidence > 100) {
     problems.push("the confidence field is not a number from 0 to 100");
   }

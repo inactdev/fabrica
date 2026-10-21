@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import * as http from "node:http";
 import { chatCompletion, usageFrom } from "./client.mjs";
 import { writeupToolSchema } from "../openai-compatible.ts";
-import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
+import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_QUIZ_LENGTH, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
 import type { AgentJob } from "./types.ts";
 
 interface Seen {
@@ -60,6 +60,7 @@ function job(port: number, overrides: Partial<AgentJob> = {}): AgentJob {
     writeupStringFields: [...WRITEUP_STRING_FIELDS],
     writeupOptionalStringFields: [...WRITEUP_OPTIONAL_STRING_FIELDS],
     writeupTitleMaxLength: WRITEUP_TITLE_MAX_LENGTH,
+    writeupQuizLength: WRITEUP_QUIZ_LENGTH,
     maxToolOutputChars: 100,
     bashTimeoutMs: 1_000,
     ...overrides,

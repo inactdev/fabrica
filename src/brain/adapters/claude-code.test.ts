@@ -310,7 +310,7 @@ test("claudeCodeAdapter.ask() never forwards the real worker token into the cont
 
 // The write-up is structured output the CLI validates against this
 // schema, never prose Fabrica parses (Client ruling 2026-10-13).
-test("claudeCodeAdapter passes --json-schema for the write-up: eight required fields, title at most 60", async (t) => {
+test("claudeCodeAdapter passes --json-schema for the write-up: every required field, title at most 60, a three-question quiz", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const brain = claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, image: TEST_IMAGE });
 
@@ -323,7 +323,7 @@ test("claudeCodeAdapter passes --json-schema for the write-up: eight required fi
   assert.equal(schema.type, "object");
   assert.deepEqual(
     [...schema.required].sort(),
-    ["assumptions", "confidence", "deviations", "expectedOutcomes", "how", "outsideChanges", "title", "what", "why"]
+    ["assumptions", "confidence", "deviations", "expectedOutcomes", "how", "outsideChanges", "quiz", "title", "what", "why"]
   );
   for (const field of ["title", "what", "why", "how", "outsideChanges", "assumptions", "expectedOutcomes", "deviations"]) {
     assert.equal(schema.properties[field].type, "string", `${field} is not a string field`);
@@ -337,6 +337,16 @@ test("claudeCodeAdapter passes --json-schema for the write-up: eight required fi
   assert.equal(schema.properties.confidence.maximum, 100);
   assert.equal(schema.properties.title.maxLength, 60);
   assert.equal(schema.additionalProperties, false);
+  // Issue #98's quiz: exactly three, pinned both ways, each entry a
+  // question and a non-empty answer - so the CLI's own schema retries
+  // ask for the right shape before the Foreman ever has to refuse it.
+  assert.equal(schema.properties.quiz.type, "array");
+  assert.equal(schema.properties.quiz.minItems, 3);
+  assert.equal(schema.properties.quiz.maxItems, 3);
+  assert.deepEqual([...schema.properties.quiz.items.required].sort(), ["answer", "question"]);
+  assert.equal(schema.properties.quiz.items.properties.question.minLength, 1);
+  assert.equal(schema.properties.quiz.items.properties.answer.minLength, 1);
+  assert.equal(schema.properties.quiz.items.additionalProperties, false);
 });
 
 test("claudeCodeAdapter fills writeup from the result line's structured_output", async (t) => {
@@ -355,6 +365,11 @@ test("claudeCodeAdapter fills writeup from the result line's structured_output",
     assumptions: "None.",
     expectedOutcomes: "It works as described.",
     deviations: "None.",
+    quiz: [
+      { question: "What changed?", answer: "The fake CLI's stand-in change." },
+      { question: "Why?", answer: "To exercise the structured write-up path." },
+      { question: "What should the owner watch?", answer: "Nothing - this is a test fixture." },
+    ],
   });
 });
 

@@ -70,6 +70,11 @@ function slowBrain(delayMs: number): Brain {
           assumptions: "None.",
           expectedOutcomes: "None.",
           deviations: "None.",
+          quiz: [
+            { question: "What changed?", answer: "The thing this test is about." },
+            { question: "Why?", answer: "So the write-up is valid." },
+            { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+          ],
         },
       };
     },

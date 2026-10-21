@@ -47,8 +47,8 @@ that writes a response's headers, so it is true of every route by
 construction rather than by each route remembering.
 
 Nothing here is fingerprinted, which is why the rule has no exceptions.
-`index.html`, `app.js`, `review.js`, `task.js`, `banner.js` and
-`style.css` are read off the checkout on every request, at paths that
+`index.html`, `app.js`, `review.js`, `task.js`, `quiz.js`, `banner.js`
+and `style.css` are read off the checkout on every request, at paths that
 never change (`STATIC_FILES`), so a browser caching one by URL keeps
 running code the checkout has since replaced - with nothing in the path
 to tell it the file is a different file now. That is precisely the
@@ -113,10 +113,10 @@ the top of every page that nobody can miss:
    is true, and nothing else on the page distinguishes that from a
    deliberate choice.
 
-`banner.js` is loaded by all four pages and is deliberately
+`banner.js` is loaded by every page and is deliberately
 self-contained: it builds its own DOM, polls its own endpoints, and needs
-no wiring in `app.js`/`task.js`/`review.js`. One script for four pages
-beats three renderers that each have to stay in step. `/api/version` is
+no wiring in `app.js`/`task.js`/`review.js`/`quiz.js`. One script for five
+pages beats four renderers that each have to stay in step. `/api/version` is
 fetched **once** (a running process's startup commit cannot change while
 it is answering); the other two are polled on the same 2-second tick the
 pages use, so a banner appears within one poll of the checkout moving or
@@ -132,7 +132,7 @@ drift.
 first, with a plain `<script src>` tag, and classic scripts on one page
 share a **single** global lexical environment - so a top-level `const`
 here and a top-level `const` of the same name in `app.js`/`review.js`/
-`task.js` is a redeclaration `SyntaxError`, and V8 raises it at script
+`task.js`/`quiz.js` is a redeclaration `SyntaxError`, and V8 raises it at script
 instantiation, before a single statement of the page's own script runs.
 All four files want a `POLL_MS`, and for a while all four declared one:
 every page sat on the placeholder markup in its own HTML - `Tasks · 0`,
@@ -243,7 +243,7 @@ different things depending on how wide the window is. Both pages also
 carry the `width=device-width` viewport meta - without it a phone
 renders at a notional desktop width and the card layout never applies.
 
-## Two pages, split by whether a task is still open (a third, `/review`, is below)
+## Two pages, split by whether a task is still open (`/review` and `/quiz` are below)
 
 `/` (the default) lists only open tasks - working, asked a question,
 delivered - newest activity first, with a plain "History" link in the
@@ -328,6 +328,18 @@ any more (follow-up to issue #202, "show every task waiting on me"):
   whole point is reviewing a handful of deliveries already sitting in
   front of it. This card has one note box and three buttons - accept,
   fix, wrong (see "One note box per card" below).
+  Under the write-up it also carries the worker's **quiz** (issue #98):
+  three questions about what the change did and why, each with a
+  one-line answer, written for the owner who did not read the diff. Each
+  answer is hidden until its question is tapped - a native
+  `<details>`/`<summary>` pair, so a tap, Enter or Space all open it and
+  a screen reader announces it as expandable, none of which a `div` with
+  an `onclick` would give. The quiz rides on the row as data
+  (`DeliveredReviewRow.quiz`), deliberately NOT folded into
+  `writeupBody`: the answers have to be separable to be hidden, and the
+  pull request body is the Client's own ratified four-section template,
+  which the quiz is not part of. A delivery whose write-up predates the
+  field has none, and draws no empty quiz furniture at all.
 - **Inspector refused it, with no delivery behind the refusal** - a
   narrower card: just the title and Inspector's own report in plain
   words (never the generic "Inspector reached no verdict" placeholder
@@ -389,6 +401,32 @@ the recorded questions themselves), not a status line that state has
 never carried. When nothing is waiting on the Client at all, the page
 says so in words ("Nothing waiting on you.") rather than showing an
 empty list.
+
+## The quiz page: `/quiz`
+
+The last ten **accepted** tasks' quizzes, newest acceptance first, for
+the owner to revisit work he has already ruled on (issue #98). One card
+per task: its title, when he accepted it, the three questions with their
+answers hidden until tapped exactly as on `/review`, and a link to the
+task's own page. No buttons anywhere - everything on this page has
+already been decided, which is the whole difference between it and
+`/review`.
+
+`record-view.ts`'s `getQuizRows` is deliberately its own list rather than
+part of `getReviewRows`, for the same reason `getRunningRows` is: those
+rows are exactly the set `fabrica status` flags as waiting on the Client,
+and an accepted task is the opposite of waiting. It orders by the
+`"accept"` verdict event's own timestamp rather than by the task's last
+activity, since an accepted task can still record something afterwards
+(a hand-recorded cost, say).
+
+A task with no quiz is **skipped**, not listed empty: the field is
+required of new write-ups only, the record is append-only, and nothing
+was backfilled - so a task delivered before this existed simply has
+none. `quizEntriesOf` (exported from `src/index.ts`) is the one reader
+that decides "is there a showable quiz here", shared with `/review`, so
+a malformed quiz is skipped by that same rule rather than by a second
+judgment made here.
 
 ### One note box per card
 
@@ -568,6 +606,11 @@ Issue #189's meters line added `describeMeters`, `latestMeterReading`,
 type) to `src/index.ts` - the pause rule's own decision functions, so
 this page shows the same numbers that gate new work rather than a second
 reading of the same receipts.
+
+Issue #98's quiz added `quizEntriesOf` and `WRITEUP_QUIZ_LENGTH` (plus
+the `WriteupQuizEntry` type) - the one reader that decides whether a
+write-up has a showable quiz, so `/review` and `/quiz` skip a quiz-less
+task by the same rule rather than each judging for itself.
 
 The staleness banner and the loud `projects.toml` added one export,
 `loadConfigOrProblem` - the reader that hands back usable defaults *plus*

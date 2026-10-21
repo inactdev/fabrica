@@ -206,6 +206,30 @@ function buildRunningRow(row, identified) {
   return cardEl;
 }
 
+// The worker's quiz (issue #98): three questions about what the change
+// did and why, each with its own answer hidden until the question is
+// tapped. A native <details>/<summary>, not a click handler of our own:
+// a tap opens it, so does Enter or Space from a keyboard, and a screen
+// reader announces it as the expandable thing it is. Null for a task
+// whose write-up predates the field - the record is append-only, so
+// those were never backfilled, and an empty "Quiz" heading would only
+// read as something missing.
+//
+// quiz.js carries the same two functions - duplicated, not shared, for
+// the same reason formatAge above is: these are plain scripts with no
+// build step and no module loading between them.
+function buildQuizEntry(entry) {
+  return el("details", { className: "quiz-entry" }, [
+    el("summary", { className: "quiz-question" }, [entry.question]),
+    el("div", { className: "quiz-answer" }, [entry.answer]),
+  ]);
+}
+
+function buildQuiz(quiz) {
+  if (!Array.isArray(quiz) || quiz.length === 0) return null;
+  return el("div", { className: "quiz-list" }, quiz.map(buildQuizEntry));
+}
+
 // A label for the one-line reason shown on a "refused"/"failed" row -
 // mirrors record-view.ts's own EarlyStopReviewRow doc comment: Inspector's
 // own report for a refusal, whatever killed the task first for a failure.
@@ -379,7 +403,13 @@ function buildDeliveredRow(row) {
   });
 
   const actions = el("div", { className: "review-actions" }, [acceptBtn, fixBtn, wrongBtn]);
-  const body = [title, writeup, stampLine, gateLine];
+  const body = [title, writeup];
+  // Directly under the write-up, above the stamp: the quiz is the
+  // worker explaining itself to the owner, so it belongs with the words,
+  // not down among the machine's own verdicts.
+  const quiz = buildQuiz(row.quiz);
+  if (quiz) body.push(quiz);
+  body.push(stampLine, gateLine);
   if (prLine) body.push(prLine);
   body.push(labelEl, box, actions, statusEl);
   const cardEl = el("div", { className: "review-card" }, body);

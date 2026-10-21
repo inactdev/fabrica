@@ -280,6 +280,11 @@ test("createRecordView: getReviewRows shows only delivered tasks, with the real 
     assumptions: "none",
     expectedOutcomes: "it ships",
     deviations: "None.",
+    quiz: [
+      { question: "What changed?", answer: "The thing this test is about." },
+      { question: "Why?", answer: "So the write-up is valid." },
+      { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+    ],
   };
   appendEvent(recordHome, {
     taskId: delivered,
@@ -313,6 +318,92 @@ test("createRecordView: getReviewRows shows only delivered tasks, with the real 
   assert.match(row.writeupBody, /## Context \(Why\)\n\nbecause/);
   assert.match(row.writeupBody, /## Changes in the codebase \(How\)\n\ncarefully/);
   assert.match(row.writeupBody, /## Changes outside the codebase\n\nNone\./);
+  // Issue #98: the worker's quiz rides on the row as data, not folded
+  // into writeupBody - the page needs the answers separately to keep
+  // them hidden until one is tapped.
+  assert.deepEqual(row.quiz, writeup.quiz);
+  assert.ok(!row.writeupBody.includes("What changed?"), "the quiz must not be rendered into the pull request body");
+});
+
+// Issue #98: the /quiz page. Accepted tasks only - the one list here
+// that is deliberately about tasks NOT waiting on the Client - newest
+// acceptance first, capped at ten, and a task whose write-up predates
+// the field is skipped rather than listed with nothing in it.
+test("createRecordView: getQuizRows lists the last ten accepted tasks' quizzes, newest first, skipping those with none", () => {
+  const recordHome = tempRecordHome();
+  const view = createRecordView(recordHome);
+  const quizFor = (n: number) => [
+    { question: `q1 of ${n}`, answer: `a1 of ${n}` },
+    { question: `q2 of ${n}`, answer: `a2 of ${n}` },
+    { question: `q3 of ${n}`, answer: `a3 of ${n}` },
+  ];
+
+  /** One task delivered and then ruled on, in that order. The verdict
+   * event is appended by hand rather than through `appendEvent` for one
+   * reason: it stamps its own `occurredAt` (append.ts), and this test
+   * needs twelve acceptances in a guaranteed order, which twelve
+   * same-millisecond timestamps cannot give. The alternative the
+   * newest-first test above uses - a real sleep between each - would be
+   * twelve of them here. */
+  function ruledTask(n: number, ruling: string, writeup: unknown): string {
+    const id = registerTask(recordHome, `task ${n}`).id;
+    appendEvent(recordHome, { taskId: id, name: "work-started", details: { project: "/p" } });
+    appendEvent(recordHome, {
+      taskId: id,
+      name: "delivered",
+      details: { outcome: "done", ...(writeup === undefined ? {} : { writeup }), delivery: fakeDelivery() },
+    });
+    const occurredAt = new Date(Date.UTC(2026, 9, 1, 12, n)).toISOString();
+    appendFileSync(
+      recordPath(recordHome),
+      `${JSON.stringify({ taskId: id, name: "verdict-recorded", occurredAt, details: { ruling } })}\n`
+    );
+    return id;
+  }
+
+  const base = {
+    why: "w",
+    what: "w",
+    how: "w",
+    outsideChanges: "None.",
+    confidence: 80,
+    assumptions: "None.",
+    expectedOutcomes: "o",
+    deviations: "None.",
+  };
+
+  // Twelve accepted tasks, appended oldest first, so the two oldest fall
+  // off the end of the ten this page keeps.
+  const accepted: string[] = [];
+  for (let n = 1; n <= 12; n++) accepted.push(ruledTask(n, "accept", { ...base, title: `Task ${n}`, quiz: quizFor(n) }));
+
+  // Three tasks that must never appear: ruled "wrong", still waiting on
+  // a verdict, and accepted but with no quiz on its write-up at all (the
+  // pre-issue-#98 record, which is never backfilled).
+  const wrong = ruledTask(13, "wrong", { ...base, title: "Task 13", quiz: quizFor(13) });
+  const stillDelivered = registerTask(recordHome, "task 14").id;
+  appendEvent(recordHome, { taskId: stillDelivered, name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, {
+    taskId: stillDelivered,
+    name: "delivered",
+    details: { outcome: "done", writeup: { ...base, title: "Task 14", quiz: quizFor(14) }, delivery: fakeDelivery() },
+  });
+  const noQuiz = ruledTask(15, "accept", { ...base, title: "Task 15" });
+
+  const rows = view.getQuizRows();
+
+  assert.equal(rows.length, 10, "the page keeps exactly the last ten");
+  assert.deepEqual(
+    rows.map((r) => r.id),
+    [...accepted].reverse().slice(0, 10),
+    "newest acceptance first, oldest two dropped"
+  );
+  for (const id of [wrong, stillDelivered, noQuiz]) {
+    assert.ok(!rows.some((r) => r.id === id), `${id} must not appear on the quiz page`);
+  }
+  assert.deepEqual(rows[0].quiz, quizFor(12));
+  assert.equal(rows[0].title, "Task 12");
+  assert.ok(rows[0].acceptedAtMs > 0, "the row must carry when it was accepted");
 });
 
 test("questionsFromEvents: the latest questions-asked wins, and a details shape that isn't a list of questions reads as none", () => {

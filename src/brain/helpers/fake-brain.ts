@@ -8,6 +8,15 @@
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
 import type { MeterReading } from "../meters.ts";
 
+/** The quiz the default write-up carries (issue #98): exactly three
+ * questions with one-line answers, so an ordinary test still produces a
+ * *valid* write-up. A test about a bad quiz passes its own `writeup`. */
+const FAKE_QUIZ = [
+  { question: "What changed?", answer: "The fake brain's own stand-in change." },
+  { question: "Why?", answer: "So a test has a valid write-up to work with." },
+  { question: "What should the owner watch?", answer: "Nothing - this is a test fixture." },
+];
+
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
   /** Every brief passed to work(), grouped by the session id it landed
@@ -122,6 +131,7 @@ export function fakeBrain(
               assumptions: "None.",
               expectedOutcomes: "The fake's work lands as described.",
               deviations: "None.",
+              quiz: FAKE_QUIZ,
             }
           : opts.writeup;
       const entry: TranscriptEntry = {

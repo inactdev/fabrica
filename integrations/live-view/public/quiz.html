@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- See index.html's own note: without this a phone never gets the
+     one-column layout this page is built for. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fabrica — quiz</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="review-page">
+<header class="toolbar">
+  <div class="toolbar-row">
+    <!-- Issue #98: the last ten accepted tasks' quizzes, kept so the
+         owner can revisit work he has already ruled on. Nothing here is
+         waiting on him and nothing here is decided - this page offers no
+         control at all, unlike /review. -->
+    <span class="toolbar-title">Quiz · <span id="count">0</span></span>
+    <a class="back-link" href="/review">Review</a>
+  </div>
+  <div class="toolbar-row toolbar-sub">
+    <span id="error" hidden></span>
+  </div>
+</header>
+
+<main>
+  <div id="rows"></div>
+</main>
+
+<!-- See index.html's own note: every page loads the banner strip. -->
+<script src="/banner.js"></script>
+<script src="/quiz.js"></script>
+</body>
+</html>

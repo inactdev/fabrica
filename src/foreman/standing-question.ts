@@ -13,7 +13,7 @@ export const STANDING_QUESTION =
 /** Pull requests must read like a human wrote them: a worker returns its
  * write-up as a structured answer (BrainWorkResult.writeup) - title, why,
  * what, how, outsideChanges, confidence, assumptions, expectedOutcomes,
- * deviations, and the one optional couldNotVerify - which Fabrica uses as
+ * deviations, quiz, and the one optional couldNotVerify - which Fabrica uses as
  * the commit message and, when Inspector is configured, the pull request
  * title and body, laid out as the Client's own template (ruling
  * 2026-10-18): why/what/how/outsideChanges verbatim under "## Context
@@ -26,7 +26,14 @@ export const STANDING_QUESTION =
  * is stated as a requirement, not a suggestion. The notice also says what
  * each section is *for*, because a reviewer who did not run the task is
  * the reader: a worker that describes its own box under "How" is the one
- * failure this wording exists to prevent. */
+ * failure this wording exists to prevent.
+ *
+ * The quiz (issue #98) is the one field whose reader is not this pull
+ * request's reviewer: it is for the owner of the codebase, who did not
+ * read the diff, and is shown to him on the live view's review page and
+ * kept on its own /quiz page afterwards - never in the pull request
+ * body. "Exactly three" is stated as the hard requirement it is, since a
+ * fourth question, or a missing one, makes the whole write-up invalid. */
 export const FINAL_MESSAGE_FORMAT_NOTICE =
   "When you finish, give your write-up as the structured answer you are asked for. Fabrica uses it verbatim as " +
   "the commit message and (when a pull request is opened) its title and body, so write every field for a " +
@@ -40,9 +47,13 @@ export const FINAL_MESSAGE_FORMAT_NOTICE =
   'service, the machine it runs on - or "None." if there is nothing); confidence (a number from 0 to 100, how ' +
   "sure you are in this result); assumptions (every judgment call you made where the brief was silent); " +
   "expectedOutcomes (what should be true once this change lands, so it can be checked); deviations (what you " +
-  'deviated from the request and why, or "None." if nothing); and, optionally, couldNotVerify (anything you ' +
+  'deviated from the request and why, or "None." if nothing); quiz (exactly three questions about what this ' +
+  "change did and why, each with its own one-line answer, written for the owner of the codebase who did not " +
+  "read the diff - he reads these on his own review page, not in the pull request, so ask what he would " +
+  "actually want to know and answer it plainly); and, optionally, couldNotVerify (anything you " +
   "could not check from where you are - a service you could not reach, a test you could not run; leave it out " +
-  "entirely if there is nothing). Every field except couldNotVerify is required and must not be empty. Do not " +
+  "entirely if there is nothing). Every field except couldNotVerify is required and must not be empty, and the " +
+  "quiz must hold exactly three questions - not two, not four. Do not " +
   "type the write-up out as text; an attempt without a valid structured write-up is not accepted as done.";
 
 /** A bug is rarely a one-off: the same shape - the same missing guard,

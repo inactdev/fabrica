@@ -59,6 +59,11 @@ test("the delivery commit's Deviations bullet carries the worker's own write-up,
       assumptions: "None.",
       expectedOutcomes: "The check no longer times out on the larger suite.",
       deviations: "Widened check.sh's timeout because the suite grew.",
+      quiz: [
+        { question: "What changed?", answer: "The thing this test is about." },
+        { question: "Why?", answer: "So the write-up is valid." },
+        { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+      ],
     },
   });
 
@@ -88,6 +93,11 @@ test("a worker's write-up with an empty title is refused, not delivered as done"
       assumptions: "None.",
       expectedOutcomes: "None.",
       deviations: "None.",
+      quiz: [
+        { question: "What changed?", answer: "The thing this test is about." },
+        { question: "Why?", answer: "So the write-up is valid." },
+        { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+      ],
     },
   });
 
@@ -140,6 +150,11 @@ test("a valid write-up becomes the delivery commit's exact subject and body", as
       assumptions: "None.",
       expectedOutcomes: "Login no longer fails spuriously on a timeout.",
       deviations: "None.",
+      quiz: [
+        { question: "What changed?", answer: "The thing this test is about." },
+        { question: "Why?", answer: "So the write-up is valid." },
+        { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+      ],
     },
   });
 
@@ -231,6 +246,11 @@ function liveStreamingBrain(): Brain {
           assumptions: "None.",
           expectedOutcomes: "None.",
           deviations: "None.",
+          quiz: [
+            { question: "What changed?", answer: "The thing this test is about." },
+            { question: "Why?", answer: "So the write-up is valid." },
+            { question: "What should the owner watch?", answer: "Nothing - this is a test." },
+          ],
         },
       };
     },

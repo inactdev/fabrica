@@ -131,11 +131,30 @@ export interface WorkerWriteup {
   expectedOutcomes: string;
   /** What the worker deviated from the request and why, or "None." */
   deviations: string;
+  /** Exactly three questions about what this change did and why, each
+   * with its own one-line answer, written for the owner of the codebase
+   * who did not read the diff (issue #98). Required, and required to be
+   * exactly three: anything else makes the write-up invalid, the same
+   * way an empty field or an over-long title does, and goes down the
+   * same red-attempt path - never padded or truncated to fit. Not part
+   * of the pull request body at all; it is shown to the owner on the
+   * live view's review page, answers hidden until tapped, and kept on
+   * its own /quiz page afterwards. A write-up recorded before this field
+   * existed simply has none - the record is append-only, so nothing is
+   * backfilled, and those tasks are skipped wherever quizzes are shown. */
+  quiz: WriteupQuizEntry[];
   /** Anything the worker could not check from inside its own box - a
    * service it could not reach, a test it could not run. The one
    * optional field: absent or empty, its bullet is omitted from
    * "Additional information" entirely rather than rendered as "None." */
   couldNotVerify?: string;
+}
+
+/** One question from a write-up's `quiz` and its own answer - both
+ * non-empty, the answer written as a single line. */
+export interface WriteupQuizEntry {
+  question: string;
+  answer: string;
 }
 
 /**

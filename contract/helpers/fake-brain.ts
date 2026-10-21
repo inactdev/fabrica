@@ -6,6 +6,16 @@
 import type { Brain, BrainAskResult, BrainWorkOptions } from "../surface.ts";
 import type { TranscriptEntry, WorkerWriteup } from "../surface.ts";
 
+/** The quiz the default write-up carries (issue #98): exactly three
+ * questions with one-line answers, so an ordinary test still produces a
+ * *valid* write-up without spelling this out. A test about a bad quiz
+ * passes its own `writeup` instead. */
+const FAKE_QUIZ = [
+  { question: "What changed?", answer: "The fake brain's own stand-in change." },
+  { question: "Why?", answer: "So a test has a valid write-up to work with." },
+  { question: "What should the owner watch?", answer: "Nothing - this is a test fixture." },
+];
+
 export interface FakeBrainHandle extends Brain {
   readonly calls: number;
   /** The options each work() call received, in call order. */
@@ -78,6 +88,7 @@ export function fakeBrain(
               assumptions: "None.",
               expectedOutcomes: "The fake's work lands as described.",
               deviations: "None.",
+              quiz: FAKE_QUIZ,
             }
           : opts.writeup;
       const transcript: TranscriptEntry[] = [
