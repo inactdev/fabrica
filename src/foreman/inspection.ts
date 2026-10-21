@@ -15,6 +15,9 @@ import { DEFAULT_HEARTBEAT_INTERVAL_MS, withHeartbeat } from "./attempts.ts";
 import type { ProductionLine } from "../../contract/surface.ts";
 import type { Receipt } from "../inspector/types.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
+// Type only: what a rebased branch's publish leases against, decided by
+// fix-rebase.ts's policy - this module only carries it.
+import type { PublishLease } from "./fix-rebase.ts";
 
 interface InspectionOptions {
   heartbeatIntervalMs?: number;
@@ -22,6 +25,10 @@ interface InspectionOptions {
   totalAttempts?: number;
   prTitle?: string;
   prBody?: string;
+  /** Set only by a fix round whose host-side rebase rewrote the branch
+   * (inspector#53). Absent means Inspector publishes exactly as it
+   * always has. */
+  publishLease?: PublishLease;
 }
 
 const INSPECTOR_DIR = ".inspector";
@@ -80,7 +87,20 @@ export async function handToInspector(
       report: "Inspector could not run: .inspector.json differs from the task base commit",
     };
   } else {
-    appendEvent(recordHome, { taskId, name: "inspector-called", details: { branch: line.branch } });
+    const lease = options.publishLease;
+    appendEvent(recordHome, {
+      taskId,
+      name: "inspector-called",
+      details: {
+        branch: line.branch,
+        // Both tips when they disagreed, not just the one leased against
+        // (Client ruling) - the record is where anyone asking "why did
+        // that publish refuse" has to be able to see what was expected.
+        ...(lease
+          ? { expectedTip: lease.expectedTip, ...(lease.localTip ? { localTipBeforeRebase: lease.localTip } : {}) }
+          : {}),
+      },
+    });
     try {
       inspection = await withHeartbeat(
         () => appendEvent(recordHome, { taskId, name: "heartbeat", details: { phase: "inspection" } }),
@@ -91,6 +111,7 @@ export async function handToInspector(
             workdir: line.workdir,
             prTitle: options.prTitle,
             prBody: options.prBody,
+            ...(lease ? { expectedTip: lease.expectedTip } : {}),
           })
       );
     } catch (err) {

@@ -100,6 +100,22 @@ export interface RebaseOutcome {
   baseCommit: string;
   /** Set exactly when `status` is "conflicted". */
   conflict?: RebaseConflict;
+  /** The branch's two tips as they stood the moment before this ran -
+   * read after the fetch above, which is the only moment both are true
+   * at once. What a later publish leases against (inspector#53). */
+  tips: BranchTips;
+}
+
+/** A task branch's own last commit and origin's copy of it, as of one
+ * moment. Either can be null, and neither being readable is ever a
+ * failure: a caller asking these questions is deciding whether it can
+ * add a safety flag, not whether it can carry on. */
+export interface BranchTips {
+  /** `refs/heads/<branch>`, or null when it cannot be read. */
+  branch: string | null;
+  /** `refs/remotes/origin/<branch>`, or null when origin has no copy of
+   * this branch - a task branch nothing has ever published. */
+  remote: string | null;
 }
 
 /** What `finishRebase` found. "conflicted" carries why: the worker left
@@ -130,6 +146,25 @@ function gitOk(workdir: string, args: string[]): { ok: true } | { ok: false; err
   } catch (error) {
     return { ok: false, error };
   }
+}
+
+/** The commit `rev` names in `dir`, or null when there is no such ref.
+ * Never throws: every caller here is asking a question whose unknown
+ * answer is "then assume nothing", never "then fail". */
+function commitAt(dir: string, rev: string): string | null {
+  try {
+    const commit = git(dir, ["rev-parse", "--verify", rev]).trim();
+    return commit.length > 0 ? commit : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The branch's own last commit right now, or null when it cannot be
+ * read. Asked after a rebase to answer "did it actually move the
+ * branch" against the `tips.branch` read before it. */
+export function branchTip(line: ProductionLine): string | null {
+  return commitAt(line.project, `refs/heads/${line.branch}`);
 }
 
 /** The rebase state directory git itself names for this worktree, if one
@@ -383,13 +418,22 @@ export function rebaseOntoOriginDefault(line: ProductionLine): RebaseOutcome {
     );
   }
 
+  // Read here, between the fetch and the rebase: the remote tip is only
+  // the one `--force-with-lease` will compare against if it is the one
+  // the fetch just brought in, and the branch tip is only a "before" if
+  // nothing has rewritten it yet.
+  const tips: BranchTips = {
+    branch: branchTip(line),
+    remote: commitAt(line.project, `refs/remotes/origin/${line.branch}`),
+  };
+
   // Already contains origin's tip: nothing to do, and nothing rewritten.
   if (gitOk(line.workdir, ["merge-base", "--is-ancestor", baseCommit, "HEAD"]).ok) {
-    return { status: "already-current", base, baseCommit };
+    return { status: "already-current", base, baseCommit, tips };
   }
 
   const rebase = gitOk(line.workdir, [...FORCED_CONFIG, "rebase", baseCommit]);
-  if (rebase.ok) return { status: "rebased", base, baseCommit };
+  if (rebase.ok) return { status: "rebased", base, baseCommit, tips };
 
   // A failed rebase is a conflict only if git actually stopped on one.
   // Anything else (a locked index, an unreadable object) is a real error
@@ -404,7 +448,7 @@ export function rebaseOntoOriginDefault(line: ProductionLine): RebaseOutcome {
     );
   }
 
-  return { status: "conflicted", base, baseCommit, conflict: describeConflict(line.workdir, files) };
+  return { status: "conflicted", base, baseCommit, tips, conflict: describeConflict(line.workdir, files) };
 }
 
 /** True when the index holds nothing the next commit could record - so

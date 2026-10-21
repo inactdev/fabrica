@@ -31,6 +31,15 @@ export interface Inspector {
     /** The pull request body Fabrica wants Inspector to use if it opens
      * one - written to a temp file and passed as -pr-body-file. */
     prBody?: string;
+    /** The commit origin's copy of `branch` is expected to still be at,
+     * so Inspector publishes a rewritten branch with force-with-lease
+     * instead of a blind force (inspector#53). Set only when this
+     * round's host-side rebase actually moved the branch and origin had
+     * a copy to lease against - see src/foreman/fix-rebase.ts's
+     * `publishLeaseAfterRebase`. Omitted means "publish as before":
+     * there is nothing here that may turn a working publish into a
+     * failure. */
+    expectedTip?: string;
   }): Promise<Inspection>;
   /** Whether this Inspector can run at all (its command is installed).
    * Omitted means it can - a test's fake always can. */

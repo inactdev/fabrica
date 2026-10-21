@@ -17,7 +17,7 @@ import type { CheckBox } from "../brain/index.ts";
 import type { GateResult, ProductionLine } from "../../contract/surface.ts";
 import type { RebaseConflict } from "../line/index.ts";
 // Type only: this module is a judgement's shape, not the rebase policy.
-import type { ConflictReportReason } from "./fix-rebase.ts";
+import type { ConflictReportReason, PublishLease } from "./fix-rebase.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 import type { Delivery } from "../inspector/types.ts";
 import { requireCheckCommand, resolveCheckCommand } from "./resolve-check.ts";
@@ -99,9 +99,17 @@ export function inspectorJudge(
    * pr-body.ts's `closesIssueFor` and applied only to the body Inspector
    * is asked to open the pull request with - never to the commit
    * message itself. */
-  closesIssue?: number
+  closesIssue?: number,
+  /** Asked once per handoff, not resolved up front (inspector#53): a fix
+   * round whose rebase stopped on a conflict only finishes moving the
+   * branch after this judge already exists, so the lease its publish may
+   * be made under is not knowable when the round is prepared. Undefined,
+   * or a call that answers undefined, means no lease - see
+   * fix-rebase.ts's `publishLeaseAfterRebase`. */
+  publishLease?: () => PublishLease | undefined
 ): Judge {
   return async (_attempt, _gateChanges, finalMessage) => {
+    const lease = publishLease?.();
     // attempts.ts has already committed this attempt with this same
     // write-up as its message, and only calls judge() when the write-up is
     // valid - so the commit Inspector diffs and the pull request it may
@@ -109,6 +117,7 @@ export function inspectorJudge(
     const inspection = (await handToInspector(recordHome, taskId, line, baseCommit, inspector, {
       prTitle: finalMessage.title,
       prBody: withClosesLine(finalMessage.body, closesIssue),
+      ...(lease ? { publishLease: lease } : {}),
     }))!;
     if (inspection.verdict === "refused") return { kind: "refused", inspection };
     const gate: GateResult = {
@@ -155,7 +164,14 @@ export function prepareRound(
   taskId: string,
   line: ProductionLine,
   baseCommit: string,
-  opts: { inspector?: Inspector; checkBox?: CheckBox; closesIssue?: number }
+  opts: {
+    inspector?: Inspector;
+    checkBox?: CheckBox;
+    closesIssue?: number;
+    /** A fix round's own (verdict.ts); asked at each handoff rather than
+     * now - see `inspectorJudge`. Nothing else has a rebase to lease. */
+    publishLease?: () => PublishLease | undefined;
+  }
 ): { judge: Judge; mode: CheckMode } {
   const check = resolveCheckCommand(recordHome, line.project);
   const mode = chooseCheckMode(line, baseCommit, opts.inspector);
@@ -174,7 +190,7 @@ export function prepareRound(
 
   const judge =
     mode.mode === "inspector"
-      ? inspectorJudge(recordHome, taskId, line, baseCommit, mode.inspector, opts.closesIssue)
+      ? inspectorJudge(recordHome, taskId, line, baseCommit, mode.inspector, opts.closesIssue, opts.publishLease)
       : selfTestJudge(recordHome, taskId, line, check, opts.checkBox ?? defaultCheckBox());
   return { judge, mode };
 }

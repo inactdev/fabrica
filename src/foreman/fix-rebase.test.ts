@@ -18,7 +18,13 @@ import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { latestDeliveredDetails, stateOf } from "./queries.ts";
 import { readEventsForTask } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine, rebaseInProgress } from "../line/index.ts";
-import { continueStoppedRebase, MAX_REBASE_STOPS_PER_ROUND, rebaseForFixRound } from "./fix-rebase.ts";
+import {
+  continueStoppedRebase,
+  MAX_REBASE_STOPS_PER_ROUND,
+  publishLeaseAfterRebase,
+  rebaseForFixRound,
+} from "./fix-rebase.ts";
+import type { Inspector } from "../inspector/index.ts";
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-fix-rebase-home-"));
@@ -59,6 +65,44 @@ function conflictEvents(recordHome: string, taskId: string): ConflictEventDetail
   return readEventsForTask(recordHome, taskId)
     .filter((e) => e.name === "rebase-conflicted")
     .map((e) => e.details as ConflictEventDetails);
+}
+
+/** Inspector's publish, as far as these tests need it: the task's branch
+ * reaches origin. Fabrica never pushes - Inspector owns that - so a test
+ * that wants a published branch to lease against does it itself. Returns
+ * the commit origin's copy now sits at. */
+function publishBranch(project: string, taskId: string): string {
+  execFileSync("git", ["push", "-q", "origin", `fabrica/${taskId}`], { cwd: project, stdio: ["ignore", "pipe", "pipe"] });
+  return branchHead(project, taskId);
+}
+
+/** A green Inspector that records the expected tip of every handoff -
+ * inspector#53's flag, as the publishing side actually receives it. */
+function leaseRecordingInspector(): Inspector & {
+  readonly calls: { branch: string; expectedTip?: string }[];
+} {
+  const calls: { branch: string; expectedTip?: string }[] = [];
+  return {
+    calls,
+    installed: () => true,
+    async inspect(request) {
+      calls.push({ branch: request.branch, expectedTip: request.expectedTip });
+      return { verdict: "green", report: "fake Inspector: green" };
+    },
+  };
+}
+
+/** The `"inspector-called"` events a task's record carries, in order. */
+interface InspectorCalledDetails {
+  branch?: string;
+  expectedTip?: string;
+  localTipBeforeRebase?: string;
+}
+
+function inspectorCalls(recordHome: string, taskId: string): InspectorCalledDetails[] {
+  return readEventsForTask(recordHome, taskId)
+    .filter((e) => e.name === "inspector-called")
+    .map((e) => e.details as InspectorCalledDetails);
 }
 
 /** A worker resolving markers in place, with no git of its own: writes
@@ -444,5 +488,174 @@ test("a rebase that keeps stopping past the ceiling is aborted and reported, not
     [1, "stopped", undefined],
     [MAX_REBASE_STOPS_PER_ROUND + 1, "aborted", "too-many-stops"],
   ]);
+  destroyProductionLine(line);
+});
+
+// inspector#53: a rebase rewrites the branch, so publishing it is a
+// forced push - and Fabrica is the only side that knows which commit
+// origin's copy of it is expected to still be at. These prove the flag
+// rides along exactly when a rebase genuinely moved the branch, and
+// never otherwise.
+
+test("a fix round that rebased the branch hands Inspector origin's copy of it as the expected tip", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  let version = 0;
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "task.txt"), `v${++version}\n`),
+  });
+  const inspector = leaseRecordingInspector();
+  const foreman = createForeman({ recordHome, inspector });
+  const task = await foreman.do("small change", { project, brain });
+
+  // The first round rebased nothing, so its own handoff leases nothing.
+  assert.deepEqual(inspector.calls, [{ branch: `fabrica/${task.id}`, expectedTip: undefined }]);
+  assert.deepEqual(inspectorCalls(recordHome, task.id), [{ branch: `fabrica/${task.id}` }]);
+
+  const published = publishBranch(project, task.id);
+  advanceOrigin(project, { "origin.txt": "origin work\n" });
+  await foreman.verdict(task.id, "fix", "one more tweak");
+
+  assert.equal(inspector.calls.length, 2);
+  assert.equal(inspector.calls[1].expectedTip, published, "the rebased branch was handed over with no lease");
+  assert.notEqual(branchHead(project, task.id), published, "the branch was never rewritten, so nothing was proven");
+  // And the record says what was leased against, not just Inspector.
+  assert.deepEqual(inspectorCalls(recordHome, task.id).at(-1), {
+    branch: `fabrica/${task.id}`,
+    expectedTip: published,
+  });
+});
+
+test("a fix round with nothing to rebase hands Inspector no expected tip, published branch or not", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  let version = 0;
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "task.txt"), `v${++version}\n`),
+  });
+  const inspector = leaseRecordingInspector();
+  const foreman = createForeman({ recordHome, inspector });
+  const task = await foreman.do("small change", { project, brain });
+  const published = publishBranch(project, task.id);
+
+  // Origin has not moved, so the branch already contains its tip.
+  await foreman.verdict(task.id, "fix", "one more tweak");
+
+  assert.equal(inspector.calls.length, 2);
+  assert.equal(
+    inspector.calls[1].expectedTip,
+    undefined,
+    "a branch that was only added to, never rewritten, is a fast-forward and needs no lease"
+  );
+  assert.equal(
+    execFileSync("git", ["rev-parse", `fabrica/${task.id}^`], { cwd: project, encoding: "utf8" }).trim(),
+    published,
+    "the branch was rewritten after all, which would change what this proves"
+  );
+  assert.deepEqual(inspectorCalls(recordHome, task.id).at(-1), { branch: `fabrica/${task.id}` });
+});
+
+test("a rebased branch origin has no copy of is handed over with no expected tip at all", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  let version = 0;
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "task.txt"), `v${++version}\n`),
+  });
+  const inspector = leaseRecordingInspector();
+  const foreman = createForeman({ recordHome, inspector });
+  const task = await foreman.do("small change", { project, brain });
+  const beforeRebase = branchHead(project, task.id);
+
+  // Never published: there is nothing on origin to lease against, and
+  // this must not become a new way for a publish to fail.
+  advanceOrigin(project, { "origin.txt": "origin work\n" });
+  await foreman.verdict(task.id, "fix", "one more tweak");
+
+  assert.notEqual(branchHead(project, task.id), beforeRebase, "the branch was never rewritten");
+  assert.equal(inspector.calls.length, 2);
+  assert.equal(inspector.calls[1].expectedTip, undefined);
+  assert.deepEqual(inspectorCalls(recordHome, task.id).at(-1), { branch: `fabrica/${task.id}` });
+});
+
+test("a rebase finished by the host after a conflict still leases on origin's copy of the branch", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      if (resolveMarkers(workdir, ["shared.txt"], "both versions, reconciled\n").length === 0) {
+        writeFileSync(join(workdir, "shared.txt"), "the task's version\n");
+      }
+    },
+  });
+  const inspector = leaseRecordingInspector();
+  const foreman = createForeman({ recordHome, inspector });
+  const task = await foreman.do("small change", { project, brain });
+  const published = publishBranch(project, task.id);
+
+  advanceOrigin(project, { "shared.txt": "origin's version\n" });
+  await foreman.verdict(task.id, "fix", "keep both sides");
+
+  const delivery = await foreman.deliveryOf(task.id);
+  assert.equal(delivery?.outcome, "done", delivery?.summary);
+  // The lease is only knowable once the host has finished the rebase the
+  // worker was handed - after this judge already existed.
+  assert.equal(inspector.calls.length, 2);
+  assert.equal(inspector.calls[1].expectedTip, published);
+});
+
+test("a worker that leaves markers behind leases nothing: the aborted branch never reaches Inspector", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  let resolve = true;
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      // The fix round touches nothing, so the stopped rebase's markers
+      // stay exactly where they were and the host aborts it.
+      if (resolve) writeFileSync(join(workdir, "shared.txt"), "the task's version\n");
+    },
+  });
+  const inspector = leaseRecordingInspector();
+  const foreman = createForeman({ recordHome, inspector });
+  const task = await foreman.do("small change", { project, brain });
+  resolve = false;
+  const beforeRebase = publishBranch(project, task.id);
+
+  advanceOrigin(project, { "shared.txt": "origin's version\n" });
+  await foreman.verdict(task.id, "fix", "keep both sides");
+
+  assert.equal((await foreman.deliveryOf(task.id))?.outcome, "inspection-red");
+  assert.equal(branchHead(project, task.id), beforeRebase, "the aborted rebase left the branch moved");
+  assert.equal(inspector.calls.length, 1, "an aborted rebase was still handed to Inspector");
+});
+
+test("a branch that moved on since it was published leases on origin's copy, and the record says both", () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  const line = createProductionLine({ project, taskId: "diverged-task", recordHome });
+  const commit = (name: string, content: string) => {
+    writeFileSync(join(line.workdir, name), content);
+    execFileSync("git", ["add", "-A"], { cwd: line.workdir, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", name], {
+      cwd: line.workdir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  };
+
+  commit("one.txt", "the reviewed round\n");
+  const published = publishBranch(project, "diverged-task");
+  // A later round's commit that was never published - a red or refused
+  // round leaves exactly this.
+  commit("two.txt", "the unpublished round\n");
+  const localTip = branchHead(project, "diverged-task");
+  advanceOrigin(project, { "origin.txt": "origin work\n" });
+
+  const rebase = rebaseForFixRound(recordHome, "diverged-task", line);
+  assert.equal(rebase.status, "rebased");
+
+  // The remote one is what force-with-lease compares against; the local
+  // one is carried only so the record names both.
+  assert.deepEqual(publishLeaseAfterRebase(line, rebase.tips), { expectedTip: published, localTip });
+  assert.notEqual(published, localTip, "the two tips never diverged, so this proves nothing");
   destroyProductionLine(line);
 });

@@ -26,7 +26,11 @@
 //     `finally`. A stopped rebase never outlives the round that started
 //     it, and is never left behind for the next round to find.
 //  6. Nothing is ever pushed. Inspector owns the push after green;
-//     Fabrica never pushes (src/foreman/README.md).
+//     Fabrica never pushes (src/foreman/README.md). What Fabrica does owe
+//     Inspector is the one fact only this side knows once a rebase has
+//     rewritten the branch: which commit origin's copy of it is expected
+//     to still be at, so that forced publish is leased rather than blind
+//     (`publishLeaseAfterRebase` below, inspector#53).
 //
 // There is deliberately no "report the conflict first and hand it to a
 // worker only after he has ruled on it" step any more: that cost the
@@ -35,8 +39,8 @@
 // delivery to know which shape it was. Nothing branches on that now.
 
 import { appendEvent, writeTaskFile } from "../record/index.ts";
-import { abortRebase, finishRebase, rebaseOntoOriginDefault } from "../line/index.ts";
-import type { RebaseConflict } from "../line/index.ts";
+import { abortRebase, branchTip, finishRebase, rebaseOntoOriginDefault } from "../line/index.ts";
+import type { BranchTips, RebaseConflict } from "../line/index.ts";
 import type { ProductionLine } from "../../contract/surface.ts";
 import type { Receipt } from "../inspector/types.ts";
 import { buildRebaseConflictDelivery, renderDeliveryMarkdown } from "./delivery.ts";
@@ -64,8 +68,10 @@ export interface StoppedRebase {
   stop: number;
 }
 
-/** What the host-side rebase left a fix round to work with. */
-export type FixRebase =
+/** What the host-side rebase left a fix round to work with. `tips` is
+ * where the branch stood just before it ran, whichever way it went -
+ * `publishLeaseAfterRebase` below is the only reader. */
+export type FixRebase = { tips: BranchTips } & (
   /** The branch already contained origin's tip; nothing was rebased, and
    * the round keeps the base commit it already had. */
   | { status: "already-current" }
@@ -75,14 +81,18 @@ export type FixRebase =
   | { status: "rebased"; base: string; baseCommit: string }
   /** Left stopped in the worktree with the markers in place, for this
    * round's own worker to resolve. */
-  | { status: "handed-to-worker"; stopped: StoppedRebase };
+  | { status: "handed-to-worker"; stopped: StoppedRebase }
+);
 
 /** Runs the rebase and records what it did. */
 export function rebaseForFixRound(recordHome: string, taskId: string, line: ProductionLine): FixRebase {
   const outcome = rebaseOntoOriginDefault(line);
+  const tips = outcome.tips;
 
-  if (outcome.status === "already-current") return { status: "already-current" };
-  if (outcome.status === "rebased") return { status: "rebased", base: outcome.base, baseCommit: outcome.baseCommit };
+  if (outcome.status === "already-current") return { status: "already-current", tips };
+  if (outcome.status === "rebased") {
+    return { status: "rebased", base: outcome.base, baseCommit: outcome.baseCommit, tips };
+  }
 
   const stopped: StoppedRebase = {
     base: outcome.base,
@@ -91,7 +101,49 @@ export function rebaseForFixRound(recordHome: string, taskId: string, line: Prod
     stop: 1,
   };
   recordStop(recordHome, taskId, stopped, { left: "stopped" });
-  return { status: "handed-to-worker", stopped };
+  return { status: "handed-to-worker", stopped, tips };
+}
+
+/**
+ * What publishing a rebased branch has to lease against (inspector#53).
+ *
+ * A rebase rewrites the branch's commits, so publishing it is a forced
+ * push - and a forced push with nothing to compare against would
+ * overwrite whatever else had reached the published branch in the
+ * meantime. `expectedTip` is the commit the publish may assume origin's
+ * copy is still at: `origin/<branch>` as the fetch immediately before
+ * the rebase left it, which is exactly what `--force-with-lease`
+ * compares against (Client ruling). Anything else there means someone
+ * else moved it, and the push must fail rather than win.
+ */
+export interface PublishLease {
+  expectedTip: string;
+  /** The branch's own last commit at that same moment, carried only when
+   * it disagreed with `expectedTip` - a branch that moved locally since
+   * it was last published. The remote one is still what is leased
+   * against; this is here so the record says both (Client ruling). */
+  localTip?: string;
+}
+
+/**
+ * The lease this round's branch may be published under, asked once the
+ * rebase has finished moving it - or undefined when nothing is leased:
+ *
+ *  - origin has no copy of this branch, or neither tip could be read: a
+ *    branch nothing ever published has nothing to lease against, and
+ *    this must never turn a publish that works today into a failure
+ *    (Client ruling) - the flag is simply left off.
+ *  - the rebase did not move the branch's tip: that is a fast-forward,
+ *    which needs no lease (Client ruling). Measured around the rebase
+ *    alone, before this round's worker commits anything on top, so a
+ *    round that only ever worked is never mistaken for one that rebased.
+ */
+export function publishLeaseAfterRebase(line: ProductionLine, tips: BranchTips): PublishLease | undefined {
+  if (tips.branch === null || tips.remote === null) return undefined;
+  if (branchTip(line) === tips.branch) return undefined;
+  return tips.branch === tips.remote
+    ? { expectedTip: tips.remote }
+    : { expectedTip: tips.remote, localTip: tips.branch };
 }
 
 /** Why the host stopped trying to finish this round's rebase. */

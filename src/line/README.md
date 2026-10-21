@@ -194,6 +194,20 @@ wording.
   that wants the branch back can say so in one call and a caller that
   does not must never have the markers thrown away under it.
 
+**All three carry `tips`: the branch's own last commit and origin's copy
+of it, read between the fetch and the rebase.** That is the only moment
+both are true at once — afterwards the branch has been rewritten, and a
+later fetch could have moved origin's copy — so the reading happens here
+even though nothing in this module uses it. `src/foreman/fix-rebase.ts`'s
+`publishLeaseAfterRebase` is the only reader: a rebased branch can only
+be published as a forced push, and `tips.remote` is what that push leases
+against (inspector#53). Either tip can be `null` — a branch nothing has
+ever published has no `refs/remotes/origin/<branch>` at all — and
+neither being readable is ever a failure here: `branchTip(line)` and the
+`commitAt` helper behind both return `null` rather than throw, because
+the caller is deciding whether it can add a safety flag, not whether it
+can carry on.
+
 **What is forced onto every history-writing call**, beyond what
 `src/foreman/commit.ts` already forces for the same reasons (a throwaway
 worktree has no claim on the Client's git identity or signing key, and a
