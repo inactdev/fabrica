@@ -159,6 +159,42 @@ test("runStatusCommand: a delivered task is flagged as awaiting the Client's ver
   assert.match(rows[0], new RegExp(project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
+// Issue #184: "a task run with no setting shows the real model name on
+// its row" - the real one the worker reported, never "default".
+test("runStatusCommand: every row names the model that did the work", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project,
+    brain: fakeBrain({ model: "default", reportedModel: "big-9-20260202" }),
+  });
+  const io = captureIo();
+
+  const code = await runStatusCommand([], { recordHome, ...io });
+
+  assert.equal(code, 0);
+  const rows = taskRows(io.out);
+  assert.match(rows[0], /model: big-9-20260202/);
+  assert.ok(!rows[0].includes("default"), `no row may ever say "default" as a model: ${rows[0]}`);
+});
+
+test("runStatusCommand: a task that asked for a model shows the declaration beside what ran", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  // The model actually run differs from the declared one, which is the
+  // case the two separate fields exist to make visible.
+  await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project,
+    brain: fakeBrain({ reportedModel: "big-9" }),
+    model: "small-5",
+  });
+  const io = captureIo();
+
+  await runStatusCommand([], { recordHome, ...io });
+
+  assert.match(taskRows(io.out)[0], /model: big-9 \(declared small-5 via --model\)/);
+});
+
 // The one fact on a status line read from git rather than from the
 // record: origin moves while a task works, and a `fix` rebases onto it
 // before anything else happens (issue #235). Nothing is written to get

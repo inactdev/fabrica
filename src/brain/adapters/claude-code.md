@@ -23,10 +23,12 @@ that guarantees and the one thing it doesn't yet. Four optional fields:
   `"claude-opus-5"` or the alias `"sonnet"`. Leave it out and the call
   omits `--model` entirely, so whatever model the `claude` binary is
   already configured to use by default runs. In that case `Brain.model`
-  reports the string `"default"` rather than guessing which model that
-  resolves to - the adapter would have to make an extra real call just
-  to find out, and `"default"` is the honest answer to "which model is
-  this adapter using" when no override was given.
+  reports `"unknown"` (`../model.ts`'s `UNKNOWN_MODEL`) rather than
+  guessing which model that resolves to. It used to report `"default"`,
+  which every receipt then recorded as the model that ran - a word that
+  reads like a real choice and named nothing (issue #184). Which model
+  each call actually ran is reported per call instead, and honestly: see
+  "The model a run actually used" below.
 - **`binPath`** - the command to run inside the container instead of
   `"claude"`. Exists so `claude-code.test.ts`'s fast tests can point
   this at a copy of `helpers/fake-claude-cli.mjs` placed inside
@@ -440,6 +442,7 @@ Each `stream-json` line becomes zero or more `TranscriptEntry` items:
 | assistant message, `tool_use` block | `"tool-call"`, text is `name(JSON-encoded input)` |
 | user message, `tool_result` block, `is_error: false` | `"tool-result"` |
 | user message, `tool_result` block, `is_error: true` | `"tool-error"` |
+| `system`/`init` line's `model` field | `"model"` (see below) |
 | everything else (`system`, `rate_limit_event`) | dropped |
 
 `system` lines (session init, and this environment's own `SessionStart`
@@ -448,7 +451,40 @@ hook chatter - real output included lines calling out `gh-axi` and
 not of the worker's actual task) and `rate_limit_event` lines are
 dropped rather than mapped, because `transcript` is what a person
 reviewing the worker sees (`src/brain/README.md`), and neither is part
-of the work done on `brief`.
+of the work done on `brief`. The one field read off a `system` line is
+the init line's `model`, below.
+
+### The model a run actually used: the `"model"` entry (issue #184)
+
+Verified by running the real binary (2.1.222) on 2026-10-22, not taken
+from documentation: the session-init line carries the model this run
+resolved to, as the alias plus any context suffix - exactly what was
+selected, not a canonical id:
+
+    {"type":"system","subtype":"init",...,"model":"claude-opus-5[1m]",...}
+
+That becomes one reserved transcript entry, `kind: "model"`, whose
+`text` is that name verbatim - the same shape rule 10's `"usage"` entry
+and issue #189's `"meters"` entry already use, and for the same reason:
+`Brain.work()`'s ratified return shape has no field for it, and a
+per-call fact must not be kept as mutable state on a `Brain` two
+concurrent tasks in one process share. `src/foreman/model.ts` reads it
+back out and records it as the receipt's `model`; a line naming no
+model, or naming a placeholder like `"default"`, reports nothing at all
+rather than letting that word reach a receipt.
+
+Two other lines also name a model - an `assistant` line's
+`message.model` (the canonical id, e.g. `claude-opus-5`) and the result
+line's `modelUsage`, keyed by the init-line spelling with a
+`canonicalModel` inside. The init line is what issue #184 asked for, and
+it is also the only one of the three that exists on a call that never
+reaches the API at all.
+
+Because the adapter now genuinely reads a key off this line, that key is
+covered by the fake-CLI drift guard like any other
+(`helpers/stream-json-shape.ts`'s `SYSTEM_KEYS`), the recorder keeps it
+when re-recording, and the committed fixture demonstrates it - see
+`helpers/fixtures/README.md`.
 
 **Mapped live, not batched at the end (issue #70).** `runContained`'s
 `onStdout` option delivers each raw chunk of the container's stdout as
@@ -456,7 +492,8 @@ it arrives; `lineFeeder` (`claude-code.ts`) buffers that into complete
 lines (holding a line split across a chunk boundary until its newline
 lands, exactly as `parseLines` would see it from the whole buffered
 output), and each complete line is mapped through the same
-`mapLineToEntries` the table above describes - no separate "live"
+`mapLineToEntries` the table above describes (exported for its own test,
+since every other proof of that mapping has to drive a real container) - no separate "live"
 mapping logic to drift from the batch one, because there is no batch
 one any more: this is the only mapping pass now. Every entry produced
 this way is pushed onto the same array `work()` eventually returns as

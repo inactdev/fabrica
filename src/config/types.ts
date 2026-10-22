@@ -28,6 +28,13 @@ export interface ProjectConfig {
    * already expanded to the home directory. */
   path: string;
   check?: string;
+  /** `model = "<name>"` — which model this project's Workers ask for
+   * (issue #184), in whatever vocabulary the selected brain speaks (an
+   * alias or a full model id). Omitted means the brain's own
+   * configuration decides, which is the default. `fabrica do --model`
+   * overrides it for one task; either way the choice and where it came
+   * from land on every receipt (src/foreman/model.ts). */
+  model?: string;
   /** Extra hosts a Worker on this project may reach through the relay
    * (issue #186), e.g. `["registry.npmjs.org"]` for a project whose
    * check installs its own dependencies. **Additive**: the model host

@@ -18,6 +18,7 @@ import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
+import { isModelName, MODEL_TRANSCRIPT_KIND, UNKNOWN_MODEL } from "../model.ts";
 import { registerMeterSource } from "../meters.ts";
 import type { MeterReading } from "../meters.ts";
 import { registerRelayHealthProbe } from "../relay-health.ts";
@@ -352,8 +353,11 @@ export const WRITEUP_JSON_SCHEMA = {
 export interface ClaudeCodeAdapterOptions {
   /** Value for `claude --model` (an alias like "sonnet" or a full model
    * id like "claude-sonnet-5"). Omitted means the CLI's own configured
-   * default runs, and `Brain.model` reports that honestly as "default"
-   * rather than guessing which model that resolves to. */
+   * default runs, and `Brain.model` reports that honestly as "unknown"
+   * (../model.ts's `UNKNOWN_MODEL`) rather than guessing which model
+   * that resolves to - the model each `work()` call actually ran is
+   * reported per call instead, off the session-init line, as the
+   * reserved "model" transcript entry (issue #184). */
   model?: string;
   /** The command to run inside the container - override for tests that
    * stand in a controllable fake binary, reachable at a path under
@@ -399,6 +403,13 @@ interface ClaudeStreamBlock {
 interface ClaudeStreamLine {
   type: string;
   message?: { content?: ClaudeStreamBlock[] };
+  /** On the session-init line (`type: "system"`, `subtype: "init"`), the
+   * model this run actually resolved to - the alias plus any context
+   * suffix, exactly as selected (issue #184). Verified by running the
+   * real binary (2.1.222) on 2026-10-22: `{"type":"system",
+   * "subtype":"init",...,"model":"<name>",...}`. This is the only line
+   * that names it before any API call happens. */
+  model?: string;
   // The terminal summary line (type: "result") carries everything a
   // receipt eventually wants: cost, duration, token usage, session id.
   is_error?: boolean;
@@ -415,7 +426,9 @@ interface ClaudeStreamLine {
   result?: string;
   /** --json-schema's answer, already an object (verified on 2.1.222). */
   structured_output?: unknown;
-  /** "error_max_budget_usd" when --max-budget-usd ran out. */
+  /** "init" on the session-init line (see `model` above);
+   * "error_max_budget_usd" on the result line when --max-budget-usd ran
+   * out. */
   subtype?: string;
   errors?: string[];
 }
@@ -545,11 +558,28 @@ function parseLines(stdout: string): ClaudeStreamLine[] {
 // worker's transcript needs to see. "assistant" carries what the worker
 // thought and did; "user" carries a tool's result fed back to it - both
 // are part of the real record of the work.
-function mapLineToEntries(line: ClaudeStreamLine): TranscriptEntry[] {
+//
+// The one exception, issue #184: the session-init line names the model
+// this run actually resolved to, which is the one thing in that harness
+// chatter the record genuinely wants (every receipt said "default"
+// before). It becomes the reserved "model" entry (../model.ts) rather
+// than a field on BrainWorkResult, the same way rule 10's "usage" entry
+// carries cost - see that module's header.
+// Exported for its own test, the same way `percentFromUtilization` and
+// `meterReadingFrom` above are: every other proof of this mapping has to
+// drive a real container (`work()` runs contained, always), which skips
+// wherever Docker is absent - and "the init line's model becomes the
+// receipt's model" is exactly the kind of fact that must not be provable
+// only on a machine that happens to have Docker.
+export function mapLineToEntries(line: ClaudeStreamLine): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const now = () => new Date().toISOString();
 
-  if (line.type === "assistant") {
+  if (line.type === "system" && line.subtype === "init") {
+    if (isModelName(line.model)) {
+      entries.push({ occurredAt: now(), kind: MODEL_TRANSCRIPT_KIND, text: line.model!.trim() });
+    }
+  } else if (line.type === "assistant") {
     for (const block of line.message?.content ?? []) {
       if (block.type === "thinking" && block.thinking) {
         entries.push({ occurredAt: now(), kind: "reasoning", text: block.thinking });
@@ -624,7 +654,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
 
   return {
     name: "claude-code",
-    model: opts.model ?? "default",
+    model: opts.model ?? UNKNOWN_MODEL,
 
     async ask(brief: string): Promise<BrainAskResult> {
       // No ProductionLine exists yet at this point (SPEC.md step 2 runs

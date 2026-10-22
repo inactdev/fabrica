@@ -140,7 +140,10 @@ Add to `~/.fabrica/brain.env` (same file, same `chmod 600`):
     FABRICA_MODEL=<the model id, exactly as your provider names it>
     OPENROUTER_API_KEY=<your key>
 
-Leave `FABRICA_BRAIN` out and nothing changes. `fabrica doctor` then
+`FABRICA_MODEL` is the standing choice for this Worker; a single task's
+own `fabrica do --model <name>`, or its project's `model` setting, wins
+over it (see "Running a task"). Leave `FABRICA_BRAIN` out and nothing
+changes. `fabrica doctor` then
 reports which model at which endpoint, and `fabrica doctor --live`
 spends a fraction of a cent to confirm it answers and reports its own
 cost. To point it somewhere else entirely - a local server, say - set
@@ -235,6 +238,10 @@ to merge. Then it appends the project to `~/.fabrica/projects.toml`:
     check = "./check.sh"
     onlyTouchedTests = true
 
+A `model = "<name>"` line here is this project's standing model choice
+for its Workers - see "Running a task" below; without one, the worker's
+own configuration decides.
+
 `onlyTouchedTests` is the standing instruction every Worker on this
 project is given: run the tests covering what you touched, not the
 whole suite - the project's check runs in full after the Worker is
@@ -272,13 +279,29 @@ and `--check`/`--image` aren't needed.
 
 ## Running a task
 
-    fabrica do "<task text>" --project <path-or-name>
+    fabrica do "<task text>" --project <path-or-name> [--model <name>]
 
 Prints the new task's id and returns immediately; the work continues in
 the background (`src/cli/README.md` has the full design). `--project`
 takes either a plain filesystem path, or the name of a project already
 registered in `~/.fabrica/projects.toml` (see "Registering a project"
 above).
+
+`--model` asks this one task's worker for a particular model, named in
+the worker's own vocabulary (an alias or a full model id) - a smaller,
+cheaper one for a small task, say. A project that always wants one says
+so once instead, in its own `projects.toml` entry:
+
+    [projects.spending-app]
+    model = "<the model this project's workers ask for>"
+
+The flag wins over that setting, and with neither the worker's own
+configuration decides. Whichever way it went, the choice and where it
+came from are recorded on every one of the task's receipts, beside the
+model that actually ran - and both are shown on the task's row by
+`fabrica status`. Every later round of the same task - a
+clarification you answer, a `fix` verdict - runs the model the task was
+registered with, not whatever the default happens to be by then.
 
 A project whose base commit - origin's default branch, which is where
 every task's branch is cut from - carries no `.inspector.json` is
@@ -353,6 +376,16 @@ yourself:
     fabrica status         # every open task: id, project, state, age
     fabrica log <id>       # one task's event history (--transcript for the raw output)
     fabrica watch <id>     # follow that task while it runs
+
+Every `status` row also names the model that did the work - the real one
+the worker reported running, read off that attempt's own receipt, not a
+placeholder. A task that asked for a particular model shows that
+declaration beside it ("model: small-5 (declared via --model)"), so a
+worker that ran something else is visible rather than assumed; a task
+whose first attempt has not reported one yet reads "not reported yet".
+`fabrica log <id>` says the same thing twice over: once where the round
+starts, naming what it asked for, and once per attempt, naming what
+actually ran beside what it cost.
 
 `status` flags a delivered task as waiting on your verdict, shows a task
 that is running its check with how long it has been at it, and calls a

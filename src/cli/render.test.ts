@@ -169,6 +169,35 @@ test("checkStartedAt: a second attempt's start, after the first attempt's check 
 // already drifted apart once). See the `describeLiveness` tests below
 // for the wording/quantity coverage that used to live on this function.
 
+// Issue #184: the model belongs on every row, whatever the state - "the
+// dashboard column the Client wants most (which model was used)".
+test("formatStatusLine: carries the model phrase on any state's line, and omits it when not asked for", () => {
+  const working = formatStatusLine(
+    { id: "t1", state: "working" },
+    {
+      project: "/proj",
+      ageMs: 60_000,
+      liveness: null,
+      hasDelivery: false,
+      model: "big-9 (declared small-5 via --model)",
+    }
+  );
+  assert.match(working, /model: big-9 \(declared small-5 via --model\)/);
+
+  const delivered = formatStatusLine(
+    { id: "t1", state: "delivered" },
+    { project: "/proj", ageMs: 60_000, liveness: null, hasDelivery: true, model: "big-9" }
+  );
+  assert.match(delivered, /model: big-9/);
+  assert.match(delivered, /AWAITING YOUR VERDICT/);
+
+  const silent = formatStatusLine(
+    { id: "t1", state: "working" },
+    { project: "/proj", ageMs: 60_000, liveness: null, hasDelivery: false }
+  );
+  assert.ok(!silent.includes("model:"), silent);
+});
+
 test("formatStatusLine: flags a delivered task as awaiting verdict", () => {
   const line = formatStatusLine(
     { id: "t1", state: "delivered" },
@@ -666,6 +695,53 @@ test("formatEventLine: a fix round's work-started says so", () => {
     details: { project: "/repo", verdict: "fix" },
   });
   assert.equal(line, "t0  work-started  fix round started on /repo");
+});
+
+// Issue #184: `fabrica log`'s own two model facts - what the round asked
+// for, where it starts, and what each attempt actually ran, on its
+// receipt line.
+test("formatEventLine: work-started names the declared model, and says nothing when none was declared", () => {
+  assert.equal(
+    formatEventLine({
+      occurredAt: "t0",
+      taskId: "x",
+      name: "work-started",
+      details: { project: "/repo", declaredModel: "small-5", modelSource: "flag" },
+    }),
+    "t0  work-started  work started on /repo asking for model small-5 (via --model)"
+  );
+  assert.equal(
+    formatEventLine({
+      occurredAt: "t0",
+      taskId: "x",
+      name: "work-started",
+      details: { project: "/repo", declaredModel: "small-5", modelSource: "project" },
+    }),
+    "t0  work-started  work started on /repo asking for model small-5 (via projects.toml)"
+  );
+});
+
+test("formatEventLine: a receipt line names the model that actually ran, beside the cost", () => {
+  assert.equal(
+    formatEventLine({
+      occurredAt: "t0",
+      taskId: "x",
+      name: "receipt-recorded",
+      details: { receipt: { attempt: 2, costUsd: 0.5, model: "big-9", declaredModel: null, modelSource: "default" } },
+    }),
+    "t0  receipt-recorded  attempt 2 on model big-9, cost $0.50"
+  );
+  // A worker that ran something other than what was asked for says both,
+  // which is the whole point of recording the two separately.
+  assert.match(
+    formatEventLine({
+      occurredAt: "t0",
+      taskId: "x",
+      name: "receipt-recorded",
+      details: { receipt: { attempt: 1, costUsd: null, model: "big-9", declaredModel: "small-5", modelSource: "flag" } },
+    }),
+    /attempt 1 on model big-9 \(declared small-5 via --model\), cost unknown/
+  );
 });
 
 test("formatEventLine: check-run started vs finished read as prose, not JSON", () => {

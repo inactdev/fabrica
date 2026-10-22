@@ -12,6 +12,7 @@ import { claudeCodeAdapter, claudeCodeCheckBox, type ClaudeCodeAdapterOptions } 
 import { HOSTED_CREDENTIAL_VAR, openAiCompatibleAdapter } from "./openai-compatible.ts";
 import type { CostSource } from "./openai-agent/types.ts";
 import type { Brain } from "../types.ts";
+import { UNKNOWN_MODEL } from "../model.ts";
 import type { CheckBox } from "../check-box.ts";
 
 /** The one host environment variable a contained worker may inherit
@@ -153,13 +154,23 @@ export function directBrainSettings(env: NodeJS.ProcessEnv, recordHome: string):
 /** The brain `defaultBrainAdapter` builds, chosen from the settings
  * above. Exported for its own test: the choice is invisible on the
  * `Brain` it returns beyond `name`/`model`. */
-export function selectedBrain(env: NodeJS.ProcessEnv, recordHome: string): Brain {
+export function selectedBrain(env: NodeJS.ProcessEnv, recordHome: string, opts: BrainChoice = {}): Brain {
+  const declaredModel = opts.model !== undefined && opts.model.trim().length > 0 ? opts.model.trim() : undefined;
   const direct = directBrainSettings(env, recordHome);
   if (direct === undefined) {
-    return claudeCodeAdapter(credentialEnvFrom(env, recordHome));
+    return claudeCodeAdapter({
+      ...credentialEnvFrom(env, recordHome),
+      ...(declaredModel === undefined ? {} : { model: declaredModel }),
+    });
   }
 
-  const { model, apiKey, baseUrl, cost } = direct;
+  // Issue #184: a task's own declaration outranks the standing
+  // `FABRICA_MODEL` setting for this adapter too - the point of the
+  // flag is asking one task for a different (often cheaper) model, and
+  // an adapter that ignored it would make the declaration a lie on the
+  // receipt beside the model that really ran.
+  const { apiKey, baseUrl, cost } = direct;
+  const model = declaredModel ?? direct.model;
   if (model === undefined) {
     throw new Error(
       `${BRAIN_SELECTION_VAR}=${DIRECT_BRAIN_NAME} is set, but no model is: this worker has no favourite model, so ` +
@@ -219,16 +230,31 @@ export function workerVendor(env: NodeJS.ProcessEnv, recordHome: string): string
 /** What to call the selected brain before it has been built - a plain
  * look at the settings that never validates and never throws, so
  * building a `defaultBrainAdapter` stays free (see below). */
-function brainLabels(env: NodeJS.ProcessEnv, recordHome: string): { name: string; model: string } {
+function brainLabels(env: NodeJS.ProcessEnv, recordHome: string, declaredModel?: string): { name: string; model: string } {
   try {
     if (setting(env, recordHome, BRAIN_SELECTION_VAR) === DIRECT_BRAIN_NAME) {
-      return { name: DIRECT_BRAIN_NAME, model: setting(env, recordHome, DIRECT_VARS.model) ?? "unset" };
+      return {
+        name: DIRECT_BRAIN_NAME,
+        model: declaredModel ?? setting(env, recordHome, DIRECT_VARS.model) ?? "unset",
+      };
     }
   } catch {
     // An unreadable or badly-permissioned brain.env is reported properly
     // by the first real call, which is where a refusal belongs.
   }
-  return { name: "claude-code", model: "default" };
+  // Issue #184: "unknown", never "default" - this adapter genuinely
+  // cannot say which model its own configuration will resolve to until
+  // a call reports one, and "default" read as a real choice everywhere
+  // it was shown (see ../model.ts's UNKNOWN_MODEL).
+  return { name: "claude-code", model: declaredModel ?? UNKNOWN_MODEL };
+}
+
+/** Which model this task asked for, if any (issue #184) - resolved from
+ * `fabrica do --model` and projects.toml by src/foreman/model.ts, and
+ * handed to whichever adapter is selected. Omitted means the brain's own
+ * configuration decides, which is the default. */
+export interface BrainChoice {
+  model?: string;
 }
 
 /** The real worker. Which adapter it is, and its token, are both looked
@@ -237,10 +263,11 @@ function brainLabels(env: NodeJS.ProcessEnv, recordHome: string): { name: string
  * missing token or an unnamed model then refuses that first call (the
  * clarifying step, before any worker starts), and the Foreman records
  * why. */
-export function defaultBrainAdapter(recordHome: string): Brain {
+export function defaultBrainAdapter(recordHome: string, opts: BrainChoice = {}): Brain {
+  const declaredModel = opts.model !== undefined && opts.model.trim().length > 0 ? opts.model.trim() : undefined;
   let inner: Brain | undefined;
-  const real = (): Brain => (inner ??= selectedBrain(process.env, recordHome));
-  const labels = brainLabels(process.env, recordHome);
+  const real = (): Brain => (inner ??= selectedBrain(process.env, recordHome, opts));
+  const labels = brainLabels(process.env, recordHome, declaredModel);
   return {
     get name() {
       return inner?.name ?? labels.name;

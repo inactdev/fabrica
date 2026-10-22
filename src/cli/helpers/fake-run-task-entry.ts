@@ -1,5 +1,5 @@
 // Test-only stand-in for run-task-entry.ts: same argv contract
-// (<recordHome> <projectPath> <taskText> [issue]), but runs against fakeBrain
+// (task-entry-args.ts), but runs against fakeBrain
 // instead of the real default adapter, so spawn-detached and do-command
 // tests can exercise the real spawn-then-discover mechanism as a real
 // separate process without ever invoking a real coding agent.
@@ -19,11 +19,11 @@ import { fixtureCheckBox } from "../../../contract/helpers/fake-check-box.ts";
 import { fakeIssueReader } from "../../foreman/helpers/fake-issue-reader.ts";
 import { runTask } from "../run-task.ts";
 import { prefixTaskLog } from "../task-log.ts";
+import { parseTaskEntryArgs } from "../task-entry-args.ts";
 
 const setLogTaskId = prefixTaskLog();
 
-const [, , recordHome, projectPath, taskText, issueArg] = process.argv;
-const issue = issueArg;
+const { recordHome, projectPath, taskText, issue, model } = parseTaskEntryArgs(process.argv);
 
 try {
   const askQuestions = taskText.includes("ASK_ME_SOMETHING")
@@ -34,7 +34,11 @@ try {
     : undefined;
   // Neither the real Inspector nor the real worker's box: fakes that read
   // the fixture's check.sh to answer, and run nothing.
-  await runTask(recordHome, projectPath, taskText, fakeBrain({ askQuestions, askError }), {
+  // Issue #184: a declared model reaches the fake brain as its own
+  // `model` label, so a `--model` run through the real detached
+  // mechanism records the declaration AND an actual model, the same way
+  // the reference adapter's would.
+  await runTask(recordHome, projectPath, taskText, fakeBrain({ askQuestions, askError, ...(model ? { model } : {}) }), {
     inspector: fixtureInspector(),
     checkBox: fixtureCheckBox().box,
     onTaskRegistered: setLogTaskId,
@@ -42,6 +46,7 @@ try {
     // Neither the real GitHub nor a real token: a fixture issue, for the
     // same reason the Inspector and the box above are fakes.
     issueReader: fakeIssueReader().reader,
+    model,
   });
 } catch (err) {
   console.error(`fake-run-task-entry: ${(err as Error).message}`);

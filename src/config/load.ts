@@ -264,6 +264,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   const {
     path: projectPath,
     check,
+    model,
     hosts,
     maxRequestBytes,
     maxCallsPerTask,
@@ -276,7 +277,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path, check, hosts, maxRequestBytes, maxCallsPerTask, reviewer and onlyTouchedTests are recognized.`
+        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, reviewer and onlyTouchedTests are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -287,6 +288,18 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   }
   if (check !== undefined && typeof check !== "string") {
     throw new ConfigError("malformed", `${path}: [projects.${name}].check must be a string.`);
+  }
+  // Issue #184: which model this project's Workers ask for. An empty or
+  // whitespace-only value is refused rather than quietly read as "no
+  // model declared" - it can only be a typo, and the difference between
+  // the two is a project silently running the wrong (or the expensive)
+  // model for weeks.
+  if (model !== undefined && (typeof model !== "string" || model.trim().length === 0)) {
+    throw new ConfigError(
+      "malformed",
+      `${path}: [projects.${name}].model must be a non-empty model name (for example model = "small-fast-1"), ` +
+        `or be left out entirely to let the worker's own configuration decide.`
+    );
   }
   // Issue #142: the Client's standing ruling, so it is a default on load
   // rather than something each entry has to carry. An entry written
@@ -303,6 +316,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     onlyTouchedTests: onlyTouchedTests ?? true,
   };
   if (check !== undefined) project.check = check;
+  if (model !== undefined) project.model = (model as string).trim();
   if (hosts !== undefined) project.hosts = requireHosts(hosts, `${path}: [projects.${name}].hosts`);
   if (maxRequestBytes !== undefined) {
     project.maxRequestBytes = requirePositiveInteger(maxRequestBytes, `${path}: [projects.${name}].maxRequestBytes`);

@@ -667,3 +667,36 @@ test("loadConfig: [pause] is a known top-level table, never reported as a stale 
   // top-level table and suggested for renaming to [projects.pause].
   assert.doesNotThrow(() => loadConfig(makeTestHome(`[pause]\nsevenDayRefusePercent = 70\n`)));
 });
+
+// Issue #184: a project can name the model its Workers ask for, so a
+// project the Client wants done cheaply can say so once instead of on
+// every `fabrica do`.
+test("loadConfig: a project's own model is read, trimmed, and absent means nothing declared", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/app"
+    model = "  small-5  "
+
+    [projects.other]
+    path = "~/other"
+  `);
+
+  const config = loadConfig(recordHome);
+  assert.equal(config.projects["spending-app"].model, "small-5");
+  assert.equal(config.projects.other.model, undefined);
+});
+
+test("loadConfig: an empty project model is refused rather than read as 'no model declared'", () => {
+  for (const value of ['""', '"   "', "42"]) {
+    assert.throws(
+      () => loadConfig(makeTestHome(`[projects.app]\npath = "~/app"\nmodel = ${value}\n`)),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /\[projects\.app\]\.model must be a non-empty model name/);
+        return true;
+      },
+      `model = ${value} must be refused`
+    );
+  }
+});

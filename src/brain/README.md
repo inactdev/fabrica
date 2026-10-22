@@ -18,6 +18,10 @@ Two separate labels, because they answer different questions.
   `"terminal-cli"` for one adapter or `"model-api"` for another.
 - `model` identifies which underlying model that adapter is currently
   using, such as whatever version string that model reports itself as.
+  An adapter that was given no model to use says so honestly -
+  `model.ts`'s `UNKNOWN_MODEL`, never a word like "default" that reads
+  as a real choice (issue #184) - and the model each call really ran is
+  reported per call, on the reserved `"model"` transcript entry below.
 
 They're split apart because one adapter can often be pointed at more than
 one model. `name` stays fixed; `model` is what changes if you switch
@@ -148,14 +152,26 @@ Each entry holds three fields:
 - `text` - the content itself, in whatever form makes sense for that
   kind of chunk.
 
-Two kinds are reserved, both carrying JSON in `text` rather than prose,
-because `Brain.work()`'s ratified return shape has no field for either
-and reshaping that seam for bookkeeping would be a contract change:
-`"usage"` (rule 10's cost - see `contract/surface.ts`) and, since issue
-#189, `"meters"`, whose text is a `MeterReading`. Whatever assembles the
-Receipt reads both back out (`src/foreman/spend.ts`,
-`src/foreman/meters.ts`). Nothing else about an entry is ever parsed to
+Three kinds are reserved, because `Brain.work()`'s ratified return shape
+has no field for any of them and reshaping that seam for bookkeeping
+would be a contract change: `"usage"` (rule 10's cost - see
+`contract/surface.ts`) and, since issue #189, `"meters"`, whose text is
+a `MeterReading` - both carrying JSON in `text` rather than prose - and,
+since issue #184, `"model"` (`model.ts`'s `MODEL_TRANSCRIPT_KIND`),
+whose text is plainly the name of the model that call actually ran, as
+the brain reported it. Whatever assembles the Receipt reads all three
+back out (`src/foreman/spend.ts`, `src/foreman/meters.ts`,
+`src/foreman/model.ts`). Nothing else about an entry is ever parsed to
 make a decision.
+
+A per-call fact belongs on a reserved entry rather than on the `Brain`
+object itself for a reason worth stating once: a `Brain` is built once
+and can be shared by two tasks running in the same process, so a `model`
+field the adapter rewrote as each call learned its real model would let
+one task's receipt name the other task's model. `Brain.model` therefore
+stays what it always was - a label for whatever the brain was configured
+with, before any call - and is only ever a fallback for a brain that
+reports nothing per call.
 
 For example, an adapter running a tool call and reading its result might
 produce:

@@ -8,7 +8,7 @@
 // everything it needs - project, baseCommit, prior receipts, the note -
 // from recordHome/taskId alone.
 
-import { defaultBrainAdapter, runRecordedFix } from "../index.ts";
+import { defaultBrainAdapter, readModelChoice, runRecordedFix } from "../index.ts";
 import { prefixTaskLog } from "./task-log.ts";
 import { writeTaskPidFile } from "./task-process.ts";
 
@@ -28,8 +28,12 @@ if (recordHome === undefined || taskId === undefined) {
 // from here on, and is the only party that knows its own pid.
 writeTaskPidFile(recordHome, taskId);
 
+// Issue #184: same as answer-entry.ts - a fix round runs the model the
+// task was registered with, read back off its own record.
+const declaredModel = readModelChoice(recordHome, taskId).declaredModel ?? undefined;
+
 try {
-  await runRecordedFix(recordHome, taskId, { brain: defaultBrainAdapter(recordHome) });
+  await runRecordedFix(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel }) });
 } catch (err) {
   console.error(`fabrica verdict: fix round for "${taskId}" failed: ${(err as Error).message}`);
   process.exit(1);

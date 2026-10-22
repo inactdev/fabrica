@@ -18,6 +18,22 @@ function line(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
+// The session-init line, as the real binary emits it: mostly chatter the
+// adapter skips, except `model` - the model this run actually resolved
+// to, which the adapter reports onto the receipt (issue #184). The
+// value follows whatever `--model` asked for, the way the real binary's
+// does, and falls back to a stand-in for "whatever this install's own
+// configuration resolves to" when nothing asked.
+const initLine = () => {
+  const asked = args[args.indexOf("--model") + 1];
+  return {
+    type: "system",
+    subtype: "init",
+    session_id: "fake-session-123",
+    model: args.includes("--model") && asked !== undefined ? asked : "fake-configured-model",
+  };
+};
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -71,7 +87,7 @@ switch (brief) {
     break;
   }
   case "SUCCESS_WITH_TOOLS": {
-    line({ type: "system", subtype: "init" }); // noise the adapter must skip
+    line(initLine()); // chatter the adapter skips, except its `model`
     line({
       type: "assistant",
       message: {

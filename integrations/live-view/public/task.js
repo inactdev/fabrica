@@ -72,10 +72,12 @@ function isScrolledToBottom(thresholdPx = 4) {
 // belongs to, and the one color its kind word gets - tool use and
 // thinking are blue, plain text is the page's ordinary light gray,
 // anything naming an error is red, and the adapter's own bookkeeping
-// entries (usage, budget-exhausted) are the "system" green bucket.
+// entries (usage, budget-exhausted, the model it ran, the subscription
+// meters) are the "system" green bucket.
 function entryKindInfo(kind) {
   if (kind.includes("error")) return { bucket: "errors", cls: "kind-error" };
-  if (kind === "usage" || kind === "budget-exhausted") return { bucket: "system", cls: "kind-system" };
+  if (kind === "usage" || kind === "budget-exhausted" || kind === "model" || kind === "meters")
+    return { bucket: "system", cls: "kind-system" };
   if (kind === "text") return { bucket: "worker", cls: "kind-text" };
   return { bucket: "worker", cls: "kind-toolthink" };
 }

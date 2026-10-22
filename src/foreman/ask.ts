@@ -20,6 +20,7 @@ import type { Brain, BrainAskResult } from "../brain/index.ts";
 import { networkPolicyFor } from "./network-policy.ts";
 import { ForemanError } from "./errors.ts";
 import { requireRoomToStart } from "./caps.ts";
+import { resolveModelChoice, writeModelChoice } from "./model.ts";
 import { requireMeterRoomToStart } from "./meters.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
 import { fetchTaskIssue, parseIssueArgOrRefuse, withIssueText } from "./task-issue.ts";
@@ -88,6 +89,11 @@ export async function registerAndAsk(
      * (src/foreman/helpers/fake-issue-reader.ts) so no suite ever needs
      * a token or a network. */
     issueReader?: IssueReader;
+    /** `fabrica do --model <name>` (issue #184) - the model this one
+     * task asks for, outranking the project's own setting. Resolved
+     * against projects.toml and persisted here, once, for every later
+     * round to re-derive (see src/foreman/model.ts). */
+    model?: string;
     caps?: Caps;
     onTaskRegistered?: (taskId: string) => void;
   }
@@ -124,6 +130,13 @@ export async function registerAndAsk(
   // `fabrica answer` only has to append a round to answers.md and
   // re-derive brief.md from what's already there.
   writeTaskFile(recordHome, taskId, "brief.md", taskText);
+  // Issue #184: which model this task asked for, and where that came
+  // from, resolved once here - the flag beats the project's setting,
+  // and a task that declared neither records that as a fact too, the
+  // same way caps.json below does. Every later round reads it back
+  // rather than re-resolving against a projects.toml that may have
+  // changed under it.
+  writeModelChoice(recordHome, taskId, resolveModelChoice(recordHome, opts.project, opts.model));
   // Rule 10's numbers as of this moment, persisted once (issue #203):
   // these are the caps this task is actually held to, and a cost meter
   // read weeks later should show the ceiling that applied rather than

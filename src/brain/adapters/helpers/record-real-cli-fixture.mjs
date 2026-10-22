@@ -53,11 +53,20 @@ function sanitizeLine(raw) {
   if (obj.type === "rate_limit_event") return null;
 
   if (obj.type === "system" && obj.subtype === "init") {
-    // Only the fact that a "system" line exists and gets dropped matters
-    // to the adapter - keep a minimal, generic version instead of this
-    // machine's real cwd, session id, installed skills/agents, and MCP
-    // server list.
-    return { type: "system", subtype: "init", cwd: "/workdir", session_id: "fixture-session" };
+    // A minimal, generic version instead of this machine's real cwd,
+    // session id, installed skills/agents, and MCP server list - plus
+    // the one field on this line the adapter genuinely reads: `model`,
+    // the model this run resolved to (issue #184). It names a model, not
+    // the machine or the account, so it is kept verbatim; without it, a
+    // re-recording would silently narrow what the shape-parity test
+    // checks (coverageGaps names it, and this script then refuses).
+    return {
+      type: "system",
+      subtype: "init",
+      cwd: "/workdir",
+      session_id: "fixture-session",
+      ...(obj.model === undefined ? {} : { model: obj.model }),
+    };
   }
 
   if (obj.type === "assistant" || obj.type === "user") {

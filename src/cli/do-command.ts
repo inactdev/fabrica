@@ -55,6 +55,14 @@ record as it runs.
                             named as owner/repo#N, or by pasting its
                             URL. If it cannot be read, nothing starts
                             and the cause prints here.
+  --model <name>           Which model this one task's worker asks for,
+                            in the worker's own vocabulary (an alias or
+                            a full model id). Overrides the project's
+                            own \`model\` in projects.toml; without
+                            either, the worker's configuration decides.
+                            Whatever model actually runs is recorded on
+                            every receipt beside this declaration, and
+                            shown on the task's row.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -137,7 +145,7 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
   try {
-    const { taskText, projectArg, issue } = parseDoArgs(argv);
+    const { taskText, projectArg, issue, model } = parseDoArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
     const config = loadConfigOrDefault(recordHome);
     const projectPath = resolveProjectPath(config, projectArg);
@@ -160,6 +168,7 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
       projectPath,
       taskText,
       issue,
+      model,
       entryScript: opts.entryScript,
       timeoutMs: opts.timeoutMs,
     });

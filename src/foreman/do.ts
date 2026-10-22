@@ -20,6 +20,7 @@ import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
+import { readModelChoice } from "./model.ts";
 import { networkPolicyFor } from "./network-policy.ts";
 import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
@@ -47,6 +48,11 @@ export async function doTask(
     issue?: number | string;
     /** Where that issue is read from - tests supply a fake. */
     issueReader?: IssueReader;
+    /** `fabrica do --model <name>` (issue #184): the model this task
+     * asks for, overriding the project's own setting. The brain itself
+     * is built with it by the caller (`defaultBrainAdapter`); this is
+     * what gets persisted and recorded. */
+    model?: string;
     inspector?: Inspector;
     checkBox?: CheckBox;
     /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
@@ -159,6 +165,11 @@ async function productionRound(
   // the same words, and a round running in another process needs no
   // GitHub access of its own.
   const issueText = taskIssueText(recordHome, taskId);
+  // Re-derived from the record the same way, and for the same reason
+  // (issue #184): the model this task asked for was resolved once at
+  // registration, so a resumed round reports the same declaration as
+  // the first one even if projects.toml has changed since.
+  const modelChoice = readModelChoice(recordHome, taskId);
   // `isRetry` is an explicit signal the caller derives from the RECORD -
   // answer.ts sets it true only when this exact taskId, in this exact
   // record home, already has a "line-cut" event: proof that
@@ -236,8 +247,15 @@ async function productionRound(
     // `project` rides on work-started's details, not a dedicated event -
     // it's the earliest point in the loop the resolved project path is
     // known, and issue #12's `fabrica status`/`log` need it to label an
-    // open task without waiting for delivery.
-    appendEvent(recordHome, { taskId, name: "work-started", details: { project: line.project } });
+    // open task without waiting for delivery. The declared model rides
+    // along for exactly the same reason (issue #184): a task row has to
+    // say which model the round asked for from the moment work starts,
+    // not only once an attempt's receipt has landed.
+    appendEvent(recordHome, {
+      taskId,
+      name: "work-started",
+      details: { project: line.project, ...modelChoice },
+    });
 
     // Issue #186: every call this round makes runs under the project's
     // own network policy - the hosts it declared in projects.toml, the
@@ -259,6 +277,7 @@ async function productionRound(
         totalAttempts,
         stopEarlyOnGreen: !explicitAttempts,
         spendLimits: spendLimitsFor(recordHome, taskId, caps),
+        modelChoice,
         // Issue #189: the thresholds that stop an attempt already
         // running. Read from projects.toml here rather than threaded in
         // like `caps`, since the pause rule has no "unset" - a record

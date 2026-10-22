@@ -80,6 +80,73 @@ test("runDoCommand: --issue <N> survives the detached process and lands on the t
   assert.match(readTaskFile(recordHome, taskId, "issue.md") ?? "", /#186: Fixture issue/);
 });
 
+/** `runDoCommand` returns as soon as the ask-or-proceed step is decided
+ * (issue #123) - the attempt itself is still running in the detached
+ * process - so a test about what lands on a receipt has to wait for one
+ * to exist. */
+async function waitForReceipts(recordHome: string, taskId: string) {
+  const foreman = createForeman({ recordHome });
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const receipts = await foreman.receiptsOf(taskId);
+    if (receipts.length > 0) return receipts;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`no receipt was ever recorded for ${taskId}`);
+}
+
+// Issue #184's own definition of done: "a task run with --model shows
+// both the declared and the actual model". The declaration has to
+// survive the same detached-process boundary --issue does, and reach
+// both the task's own record (for every later round) and every receipt
+// (beside the model that really ran).
+test("runDoCommand: --model survives the detached process and lands on the record and the receipt", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["add a comment", "--project", project, "--model", "small-5"], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  const taskId = io.out[0];
+  assert.equal(readTaskFile(recordHome, taskId, "model.json"), JSON.stringify({ declaredModel: "small-5", modelSource: "flag" }));
+
+  const receipts = await waitForReceipts(recordHome, taskId);
+  assert.equal(receipts[0].declaredModel, "small-5");
+  assert.equal(receipts[0].modelSource, "flag");
+  // The fake entry hands the declared model to its fake brain, which is
+  // what the real entry does with the real adapter - so the model that
+  // ran is a real name, and never the word this issue removed.
+  assert.equal(receipts[0].model, "small-5");
+  assert.notEqual(receipts[0].model, "default");
+});
+
+test("runDoCommand: with no --model and no project setting, the record says nothing was declared", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["add a comment", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  const receipts = await waitForReceipts(recordHome, io.out[0]);
+  assert.equal(receipts[0].declaredModel, null);
+  assert.equal(receipts[0].modelSource, "default");
+  // The fake brain's own label stands in for the model that ran, the
+  // way a real adapter's reported model would - "default" never appears.
+  assert.notEqual(receipts[0].model, "default");
+});
+
 test("runDoCommand: --issue must be a positive integer", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");

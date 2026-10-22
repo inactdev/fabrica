@@ -18,6 +18,7 @@ import {
   describeBaseStandingOf,
   describeTaskCost,
   describeMeters,
+  describeModel,
   earlyStopKindOf,
   finalMessageFor,
   followTask,
@@ -25,6 +26,7 @@ import {
   hasAttempts,
   latestMeterReading,
   loadConfigOrProblem,
+  modelFromEvents,
   quizEntriesOf,
   readTaskFile,
   refusalFor,
@@ -170,8 +172,11 @@ export interface TaskView {
   /** Whether a stop is even possible - see `isRunning`. */
   running: boolean;
   lastActivityMs: number;
-  /** "Worker and model": the brain's name and its model, off the latest
-   * receipt. Null before any attempt has produced one. */
+  /** "Worker and model": the brain's name off the latest receipt, and
+   * `describeModel`'s phrase for the model (issue #184) - the one that
+   * actually ran, with the declaration behind it when the task asked for
+   * a particular model. A declaration shows from the moment work starts;
+   * null only when the record can say neither. */
   worker: string | null;
   /** See `networkPolicyLabel` - what the record can actually say about
    * this task's network, which today is its refusals or nothing. */
@@ -538,13 +543,19 @@ function latestReceipt(events: FabricaEvent[]): Receipt | null {
   return latest;
 }
 
-/** "Worker and model" - the brain's own name and the model it reported,
- * off the latest receipt. Null before any attempt has produced one (a
- * task still asking, or one whose first attempt hasn't finished). */
-function workerLabel(receipt: Receipt | null): string | null {
-  if (!receipt) return null;
-  const brain = typeof receipt.brain === "string" ? receipt.brain.trim() : "";
-  const model = typeof receipt.model === "string" ? receipt.model.trim() : "";
+/** "Worker and model" - the brain's own name, off the latest receipt,
+ * and what the record says about the model (issue #184): the one that
+ * actually ran, plus the declaration behind it when the task asked for a
+ * particular one. The model half is `describeModel`'s own phrase, the
+ * identical string `fabrica status` and `fabrica log` print, so the
+ * three can never word the same fact differently - and it is there from
+ * the moment work starts, before any receipt exists, whenever a model
+ * was declared. Null only when the record can say neither. */
+function workerLabel(receipt: Receipt | null, events: FabricaEvent[]): string | null {
+  const brain = receipt !== null && typeof receipt.brain === "string" ? receipt.brain.trim() : "";
+  const onRecord = modelFromEvents(events);
+  const model =
+    onRecord.actualModel !== null || onRecord.declaredModel !== null ? describeModel(onRecord) : "";
   if (!brain && !model) return null;
   if (!model) return brain;
   if (!brain) return model;
@@ -823,7 +834,7 @@ export function createRecordView(recordHome: string, opts: { baseStanding?: Base
       finished,
       running: isRunning(state),
       lastActivityMs: lastActivity,
-      worker: workerLabel(latestReceipt(events)),
+      worker: workerLabel(latestReceipt(events), events),
       networkPolicy: networkPolicyLabel(events),
       trigger: triggerLabel(events, readTaskFile(recordHome, id, "issue")),
       startedAtMs: startedAt,

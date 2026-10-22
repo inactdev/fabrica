@@ -13,6 +13,8 @@ import type { Receipt } from "../inspector/types.ts";
 import type { PauseRule } from "../config/index.ts";
 import { meterReadingFromTranscript, pauseMessage, standingOf, stopFor } from "./meters.ts";
 import type { MeterPausedDetails } from "./meters.ts";
+import { modelFromTranscript, NO_MODEL_DECLARED, receiptModel } from "./model.ts";
+import type { ModelChoice } from "./model.ts";
 import type { Judge, Judgement } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { costFromTranscript } from "./spend.ts";
@@ -131,6 +133,13 @@ export async function runAttempts(opts: {
   relayGoneGraceMs?: number;
   /** Omitted, nothing about money stops the loop. */
   spendLimits?: AttemptSpendLimits;
+  /** Which model this task asked for and where that came from (issue
+   * #184), read off the task's own record by the caller
+   * (`model.ts`'s `readModelChoice`) so a first round, a resumed round
+   * and a fix round all report the same declaration. Recorded on every
+   * receipt beside the model that actually ran; nothing in this loop
+   * decides anything from it. Omitted means nothing declared one. */
+  modelChoice?: ModelChoice;
   /** Issue #189. Omitted, nothing about the subscription meters stops
    * the loop - they are still read and recorded either way. */
   pauseRule?: AttemptPauseRule;
@@ -167,6 +176,7 @@ export async function runAttempts(opts: {
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
     relayGoneGraceMs,
     spendLimits,
+    modelChoice = NO_MODEL_DECLARED,
     pauseRule,
     onReceipt,
     beforeCommit,
@@ -348,7 +358,12 @@ export async function runAttempts(opts: {
         task: taskId,
         attempt,
         brain: brain.name,
-        model: brain.model,
+        // Issue #184: the model the worker reported actually running,
+        // out of its own transcript - never the brain's placeholder
+        // label (see model.ts's receiptModel).
+        model: receiptModel(modelFromTranscript(transcript), brain.model),
+        declaredModel: modelChoice.declaredModel,
+        modelSource: modelChoice.modelSource,
         startedAt,
         durationMs,
         costUsd,
@@ -432,7 +447,11 @@ export async function runAttempts(opts: {
       task: taskId,
       attempt,
       brain: brain.name,
-      model: brain.model,
+      // Issue #184: what actually ran, from this attempt's own
+      // transcript, with the declaration it was started under beside it.
+      model: receiptModel(modelFromTranscript(work.transcript), brain.model),
+      declaredModel: modelChoice.declaredModel,
+      modelSource: modelChoice.modelSource,
       startedAt,
       durationMs,
       costUsd,

@@ -1486,6 +1486,7 @@ the verdict table, the three bounds, and the GitHub-side sharp edges.
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
 | `spend.ts` | Rule 10's ledger, derived from the record: `costFromTranscript` (now `{ costUsd, costBasis }`), `daySpend`/`taskSpend` (rolling 24 hours, returning `SpendTotals` - metered vs. subscription-estimate, issue #188), `unmeasuredSpend`, and the shared wording (`formatUsd`, `describeTaskCost`, `SPEND_UNKNOWN_LINE`). |
 | `caps.ts` | Rule 10's enforcement: `requireRoomToStart`, the per-round `spendLimitsFor`, the `"receipt-recorded"`/`"cap-stopped"` writers, and `recordCost`. See "Rule 10: spending caps" above. |
+| `model.ts` | Issue #184's model facts: `resolveModelChoice` (the flag beats the project's setting beats nothing), `writeModelChoice`/`readModelChoice` (the `model.json` task file), `modelFromTranscript` (the brain's own report for one call), `receiptModel` (the only builder of a receipt's `model`, and the reason "default" can never appear in one again), `modelFromEvents` (what a task row can say, from events the caller already holds) and the shared wording `describeModel`/`describeDeclaration`. See "Which model ran" above. |
 | `meters.ts` | Issue #189's pause rule: `pauseRuleFor` (projects.toml's `[pause]`, defaults when there is no file), `standingOf`/`refusalFor`/`stopFor` (the three decisions), `meterReadingFromTranscript` and `latestMeterReading` (the two ways a reading is read back - an attempt's own, and the record's newest), `requireMeterRoomToStart` (the start gate, called beside `requireRoomToStart` at all three of its sites), `recordMeterPause`/`meterPauseOf`, and the shared wording (`describeMeters`, `formatPercent`, `pauseMessage`) that `fabrica status` and the phone review page both show. See "The pause rule" above. |
 | `task-failure.ts` | #73: `recordingFailure` appends `"task-failed"` (with the message) for any error after `task-received` and before a delivery or refusal - except one already on the record as `ask-failed` or `cap-refused`. `requireGitRoot` refuses a project path that is missing or not a git root before the clarifying step spends anything. |
 | `standing-question.ts` | CONTRACT rule 11: `withStandingQuestion` puts the standing question, then the write-up notice (the structured write-up every worker must return), then the same-shape notice (a fix lists every other place in the code with the same shape, in the write-up, fixed or not - issue #147), then the durable-notes notice (a durable project fact goes in `notes/`, one file per task, never appended straight into the project's root agent-memory file's shared body - the merge-conflict fix that file documents) - all stated here rather than left to a file a worker might not read - at the start of every brief, applied by `touched-tests.ts`'s `workerBrief` once per round and again where `attempts.ts` hands its correction brief over, never twice. Also `ONLY_TOUCHED_TESTS_NOTICE` (issue #142), which unlike those four is conditional - `withStandingQuestion`'s `onlyTouchedTests` option adds it after the fixed prefix, and `touched-tests.ts` decides it. Only `STANDING_QUESTION` itself is ratified text (`contract/rule11.standing-question.test.ts` holds a verbatim copy); a new standing line is added as its own exported constant folded into `STANDING_PREFIX`, never appended to that question, so it needs no change to a protected contract path. |
@@ -1499,4 +1500,47 @@ local `types.ts` here to keep in sync by hand any more. `Receipt`,
 rather than straight from the contract: that file is the one place
 Fabrica's own additions to a ratified shape live, and `Receipt` gained
 two of them in issue #189 (`meters`, and the `"paused-by-meter"`
-outcome).
+outcome) and two more in issue #184 (`declaredModel`, `modelSource` -
+see "Which model ran" below).
+
+## Which model ran (issue #184)
+
+Every receipt used to say `model: "default"`. It was the reference
+worker's own label for "whatever my configuration resolves to", and it
+made the record unable to answer the one question a dashboard column
+most wanted to ask. Three facts now, all on the receipt:
+
+- `model` - the model that **actually ran**, as the worker reported it
+  for that call. `model.ts`'s `receiptModel` is the only builder of this
+  field anywhere, and it treats `"default"`/`"unset"`/`""` as
+  placeholders rather than model names: a brain that offers nothing
+  better yields `"unknown"`, never a word that reads like a choice
+  nobody made. `model.test.ts` proves exactly that.
+- `declaredModel` - what was **asked for** (`fabrica do --model`, or the
+  project's own `model` in `projects.toml`), or `null`.
+- `modelSource` - `"flag"`, `"project"` or `"default"`.
+
+The actual model arrives from the brain as a reserved transcript entry
+(`src/brain/model.ts`'s `MODEL_TRANSCRIPT_KIND`), read back by
+`model.ts`'s `modelFromTranscript` - the same mechanism rule 10's
+`"usage"` entry and issue #189's `"meters"` entry already use, for the
+same two reasons: `Brain.work()`'s ratified return shape has no field
+for it, and a per-call fact must never be mutable state on a `Brain`
+object two concurrent tasks in one process share.
+
+The declared half is resolved **once**, at registration
+(`ask.ts`), and persisted as the task file `model.json` - exactly how
+`issue` and `caps.json` are handled, and for the same reason: every
+later round (a resumed one, a fix) re-derives it from the record rather
+than from a `projects.toml` that may have changed under it, and that is
+also what lets the detached entry points build their worker with the
+right model from `recordHome` plus `taskId` alone. The declaration also
+rides on `"work-started"`'s own details, beside `project`, so a task row
+can name it from the moment work begins instead of waiting for the first
+receipt.
+
+`model.ts`'s `describeModel` is the one wording for all of it - "big-9",
+"small-5 (declared via --model)", "big-9 (declared small-5 via
+projects.toml)", "not reported yet" - shared by `fabrica status`,
+`fabrica log` and the live view's own row, so the three can never word
+the same fact differently.

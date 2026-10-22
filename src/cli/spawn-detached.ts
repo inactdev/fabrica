@@ -22,6 +22,7 @@ import { closeSync, mkdirSync, openSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { CliError } from "./errors.ts";
+import { taskEntryFlags } from "./task-entry-args.ts";
 import { watchForTaskId } from "./watch-for-task-id.ts";
 
 const BOOTSTRAP = fileURLToPath(new URL("./tsx-bootstrap.mjs", import.meta.url));
@@ -36,9 +37,13 @@ export interface SpawnDetachedTaskOptions {
   taskText: string;
   /** The issue the chat agent names explicitly (do-args.ts's `--issue`)
    * - a number, or one of the two repository-naming spellings as text -
-   * forwarded as a trailing positional so run-task-entry.ts can pass it
-   * on to doTask. Omitted, nothing is appended. */
+   * forwarded as a named flag so run-task-entry.ts can pass it on to
+   * doTask (task-entry-args.ts). Omitted, nothing is appended. */
   issue?: number | string;
+  /** The model this task asks for (do-args.ts's `--model`, issue #184) -
+   * forwarded the same way, and used by the entry script to build the
+   * worker as well as by doTask to record the declaration. */
+  model?: string;
   /** Overridden in tests to point at a fixture entry script that uses a
    * fake brain, so exercising the real spawn-and-discover mechanism
    * never has to invoke the real adapter's coding agent. */
@@ -52,7 +57,7 @@ export interface SpawnDetachedTaskOptions {
 export async function spawnDetachedTask(
   opts: SpawnDetachedTaskOptions
 ): Promise<{ taskId: string; isRunning: () => boolean }> {
-  const { recordHome, projectPath, taskText, issue, entryScript = DEFAULT_ENTRY_SCRIPT, timeoutMs } = opts;
+  const { recordHome, projectPath, taskText, issue, model, entryScript = DEFAULT_ENTRY_SCRIPT, timeoutMs } = opts;
 
   // A first-ever `fabrica do` on a fresh machine has no recordHome yet -
   // registerTask would create it in time, but that happens inside the
@@ -61,7 +66,7 @@ export async function spawnDetachedTask(
   const logFd = openSync(join(recordHome, "cli.log"), "a");
   const child = spawn(
     process.execPath,
-    [BOOTSTRAP, entryScript, recordHome, projectPath, taskText, ...(issue !== undefined ? [String(issue)] : [])],
+    [BOOTSTRAP, entryScript, recordHome, projectPath, taskText, ...taskEntryFlags({ issue, model })],
     { detached: true, stdio: ["ignore", logFd, logFd] }
   );
   closeSync(logFd); // the child holds its own duplicated copy from here on

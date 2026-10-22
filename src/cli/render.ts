@@ -3,8 +3,15 @@
 // identically everywhere it shows up rather than three slightly different
 // home-grown formats.
 
-import { CHECKS_LABEL, DEFAULT_HEARTBEAT_INTERVAL_MS, formatAge, formatUsd } from "../index.ts";
-import type { FabricaEvent, FabricaTask, TranscriptEntry } from "../index.ts";
+import {
+  CHECKS_LABEL,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  describeDeclaration,
+  describeModel,
+  formatAge,
+  formatUsd,
+} from "../index.ts";
+import type { FabricaEvent, FabricaTask, ModelSource, TranscriptEntry } from "../index.ts";
 import type { WorkerPresence } from "./task-process.ts";
 
 /** Longer than this since the last recorded event on a still-working task,
@@ -214,6 +221,12 @@ export function formatStatusLine(
     /** Rule 10: the task's cost in one phrase ("$0.0421", "unknown",
      * "no attempts yet") - omitted, the line says nothing about cost. */
     cost?: string;
+    /** Issue #184: `describeModel`'s own phrase for this task - the
+     * model that actually ran, and the declaration behind it when there
+     * was one. Shown on every state's line: which model did (or is
+     * doing) the work is a fact about the whole task, not about its
+     * outcome. Omitted, the line says nothing about the model. */
+    model?: string;
     /** Why a failed task with no delivery never started, when it was not
      * the brain's clarify step (e.g. a spending cap refused it). The exact
      * same string `earlyStopKindOf` (queries.ts) hands the phone review
@@ -262,7 +275,8 @@ export function formatStatusLine(
   const project = opts.project ?? "unknown project";
   const age = formatAge(opts.ageMs);
   const checks = opts.checksSummary ? `  ${CHECKS_LABEL}: ${opts.checksSummary}` : "";
-  const base = `${task.id}  ${project}  ${task.state}  ${age} old${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}${checks}`;
+  const model = opts.model === undefined ? "" : `  model: ${opts.model}`;
+  const base = `${task.id}  ${project}  ${task.state}  ${age} old${model}${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}${checks}`;
 
   if (task.state === "delivered") {
     const pr = opts.prUrl ? `  pull request: ${opts.prUrl}` : "";
@@ -642,9 +656,18 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
 
   switch (event.name) {
     case "work-started": {
-      const d = details as { project?: string; verdict?: string };
+      const d = details as { project?: string; verdict?: string; declaredModel?: string; modelSource?: string };
       const round = d.verdict === "fix" ? "fix round" : "work";
-      return d.project ? `${round} started on ${d.project}` : `${round} started`;
+      const where = d.project ? ` on ${d.project}` : "";
+      // Issue #184: the model this round asked for, named from the
+      // moment it starts - the receipt lines below then say which model
+      // actually ran. Nothing is said when nothing was declared: the
+      // worker's own configuration deciding is the ordinary case.
+      const asked =
+        typeof d.declaredModel === "string" && d.declaredModel.length > 0
+          ? ` asking for model ${describeDeclaration(d.declaredModel, d.modelSource === "project" ? "project" : "flag")}`
+          : "";
+      return `${round} started${where}${asked}`;
     }
 
     case "check-run": {
@@ -691,9 +714,18 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     }
 
     case "receipt-recorded": {
-      const d = details as { receipt?: { attempt?: number; costUsd?: number | null } };
+      const d = details as {
+        receipt?: { attempt?: number; costUsd?: number | null; model?: string; declaredModel?: string | null; modelSource?: ModelSource };
+      };
       const cost = d.receipt?.costUsd;
-      return `attempt ${d.receipt?.attempt} cost ${typeof cost === "number" ? formatUsd(cost) : "unknown"}`;
+      // Issue #184: which model actually ran this attempt, in the same
+      // wording `fabrica status` and the live view use.
+      const model = describeModel({
+        actualModel: d.receipt?.model ?? null,
+        declaredModel: d.receipt?.declaredModel ?? null,
+        modelSource: d.receipt?.modelSource ?? "default",
+      });
+      return `attempt ${d.receipt?.attempt} on model ${model}, cost ${typeof cost === "number" ? formatUsd(cost) : "unknown"}`;
     }
 
     case "cost-recorded": {

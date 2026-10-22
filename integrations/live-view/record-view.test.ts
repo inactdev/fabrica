@@ -591,6 +591,40 @@ test("worker and model come off the latest receipt, and read as nothing before t
   assert.equal(createRecordView(recordHome).getTask(id)!.worker, "claude-code · new-model");
 });
 
+// Issue #184: the model column is the one the Client wanted most, so a
+// row says what it can as early as it can - the declaration from the
+// moment work starts, and the model that really ran once an attempt has
+// reported one. The phrase itself is `describeModel`'s, the identical
+// string `fabrica status` prints.
+test("the model column shows the declaration from the start, and what actually ran once it is known", () => {
+  const recordHome = tempRecordHome();
+  const { id } = registerTask(recordHome, "a task");
+  appendEvent(recordHome, {
+    taskId: id,
+    name: "work-started",
+    details: { project: "/proj/thing", declaredModel: "small-5", modelSource: "flag" },
+  });
+
+  assert.equal(
+    createRecordView(recordHome).getTask(id)!.worker,
+    "not reported yet (declared small-5 via --model)",
+    "no receipt yet, but the declaration is already a fact"
+  );
+
+  receiptEvent(recordHome, id, {
+    attempt: 1,
+    brain: "claude-code",
+    model: "small-5-20260202",
+    declaredModel: "small-5",
+    modelSource: "flag",
+  });
+
+  assert.equal(
+    createRecordView(recordHome).getTask(id)!.worker,
+    "claude-code · small-5-20260202 (declared small-5 via --model)"
+  );
+});
+
 test("a receipt carried only on a delivered event's own list is still found", () => {
   const recordHome = tempRecordHome();
   const { id } = registerTask(recordHome, "a task");

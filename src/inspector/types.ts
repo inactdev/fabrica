@@ -50,6 +50,16 @@ export interface Inspector {
   prepare?(): void;
 }
 
+/** Where the model a task asked for came from (issue #184): the
+ * Client's own `fabrica do --model`, the project's own setting in
+ * projects.toml, or nothing at all - in which case the brain's
+ * configuration decided and nothing declared anything. Declared here,
+ * beside the `Receipt` field that carries it, rather than in
+ * `src/foreman/model.ts` where the rest of the model logic lives: the
+ * record's own shapes are this file's business, and the alternative is
+ * two declarations of one union. */
+export type ModelSource = "flag" | "project" | "default";
+
 /** One attempt's receipt, extended with what issue #189 asks every
  * receipt to record: the two subscription meters as they stood when the
  * attempt ran. Widened here rather than in `contract/surface.ts` for
@@ -67,6 +77,16 @@ export type Receipt = Omit<ContractReceipt, "outcome"> & {
    * open), and recording it as zero would both hide that and read as a
    * fresh, empty quota. */
   meters: MeterReading | null;
+  /** Which model this attempt asked for, and where that choice came
+   * from (issue #184) - `null`/`"default"` when nothing declared one
+   * and the brain's own configuration decided. Widened here for the
+   * same reason `meters` above is: a declaration the Client made is
+   * Fabrica's own bookkeeping, not a new promise about a seam. The
+   * ratified `model` field keeps its name and now holds the model that
+   * actually ran, which is the only thing a reader ever wanted from it
+   * (see `src/foreman/model.ts`). */
+  declaredModel: string | null;
+  modelSource: ModelSource;
   /** "paused-by-meter" (issue #189): a subscription meter past its stop
    * threshold stopped this attempt mid-flight. Deliberately its own
    * outcome and never "failed" (Client's clarification) - the work was
@@ -174,8 +194,12 @@ export interface Foreman {
      * to the two other spellings the Client asked for, `owner/repo#N`
      * and a pasted issue URL (src/github's `parseIssueArg`). A plain
      * number, the only form the ratified type names, still means
-     * exactly what it always did. */
-    opts: { project: string; attempts?: number; brain?: Brain; issue?: number | string }
+     * exactly what it always did.
+     *
+     * `model` (issue #184): which model this task asks for, overriding
+     * the project's own `model` setting. Recorded on every receipt
+     * beside the model that actually ran. */
+    opts: { project: string; attempts?: number; brain?: Brain; issue?: number | string; model?: string }
   ): Promise<FabricaTask>;
   answer(taskId: string, text: string): Promise<FabricaTask>;
   deliveryOf(taskId: string): Promise<Delivery | null>;

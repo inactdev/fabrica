@@ -211,7 +211,7 @@ stream on the left.
 
 Each column's own derivation lives beside it in `record-view.ts`
 (`latestReceipt`/`workerLabel`, `networkPolicyLabel`, `triggerLabel`,
-`checksLabel`, `deliveryFromEvents`, `capsAtStart`). Five are worth
+`checksLabel`, `deliveryFromEvents`, `capsAtStart`). Six are worth
 knowing without reading the code:
 
 - **network policy** says what the record can actually say, which today
@@ -226,6 +226,16 @@ knowing without reading the code:
   `Brain.ask`/`work` take no task id at all, a gap its own header
   states. This column will show a real policy the day one is recorded,
   and until then it does not invent one.
+- **worker · model** is the brain's own name off the latest receipt,
+  then the model (issue #184): the one the worker reported actually
+  running, with the declaration behind it when the task asked for a
+  particular model - "claude-code · big-9 (declared small-5 via
+  --model)". The model half is `describeModel`'s own phrase, the
+  identical string `fabrica status` and `fabrica log` print, so the
+  three surfaces can never word one fact three ways. A declaration shows
+  from the moment work starts, before any receipt exists; the column is
+  empty only when the record can say neither. It used to read "default"
+  for every task the reference worker ran, which named nothing.
 - **trigger** is what started the round the task is on - `do`,
   `answer`, or `fix N` - plus the issue number when one was named
   explicitly (`--issue`, persisted as the task's own `issue` file).
@@ -653,6 +663,11 @@ which the worker/model and checks columns read; its process half,
 `findTaskProcess`/`stopTaskProcess`, is imported straight from
 `src/cli/task-process.ts` under the same established exception
 `runningCopyCommit` and `spawnDetachedResume` already use.
+
+Issue #184's model column added `describeModel` and `modelFromEvents`
+(plus the `ModelOnRecord` type) for the same reason: the model phrase is
+built once, in `src/foreman/model.ts`, and shown here and by `fabrica
+status` from that one function rather than worded twice.
 
 Issue #189's meters line added `describeMeters`, `latestMeterReading`,
 `pauseRuleFor`, `refusalFor` and `standingOf` (plus the `MeterStanding`
