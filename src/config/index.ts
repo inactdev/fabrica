@@ -4,4 +4,4 @@ export { requireProject } from "./registry.ts";
 export { ConfigError } from "./errors.ts";
 export type { ConfigErrorCode } from "./errors.ts";
 export type { CheckedProjectConfig } from "./registry.ts";
-export type { Caps, PauseRule, ProjectConfig, FabricaConfig, ReviewerConfig } from "./types.ts";
+export type { Caps, KnowledgeConfig, PauseRule, ProjectConfig, FabricaConfig, ReviewerConfig } from "./types.ts";

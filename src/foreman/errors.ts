@@ -12,6 +12,13 @@ export type ForemanErrorCode =
    * for an issue carried into a brief. Carries the cause verbatim -
    * see src/foreman/task-issue.ts. */
   | "issue-unavailable"
+  /** A project names knowledge-base notes (projects.toml's
+   * `[projects.<name>.knowledge]`) that could not be carried into the
+   * brief: the knowledge base is not there, it has no `notes/` folder, a
+   * named note has no file, a named note has no front-matter title, or
+   * the brief would be past its size ceiling with them in. Raised before
+   * any ProductionLine is cut - see src/foreman/task-knowledge.ts. */
+  | "knowledge-unavailable"
   | "missing-check"
   | "inspector-not-ready"
   /** No reviewer could be settled for a project whose test changes need
