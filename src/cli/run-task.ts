@@ -14,7 +14,7 @@
 // from a direct `foreman.do()` call.
 
 import { createForeman } from "../index.ts";
-import type { Brain, CheckBox, Inspector } from "../index.ts";
+import type { Brain, CheckBox, Inspector, IssueReader } from "../index.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 
 export async function runTask(
@@ -26,9 +26,15 @@ export async function runTask(
     inspector?: Inspector;
     checkBox?: CheckBox;
     onTaskRegistered?: (taskId: string) => void;
-    /** The issue number `fabrica do --issue <N>` named explicitly - see
-     * src/foreman/pr-body.ts's `closesIssueFor`. */
-    issue?: number;
+    /** The issue `fabrica do --issue <N>` named explicitly - a number,
+     * or one of the two repository-naming spellings as text. Its title
+     * and body are fetched at registration and carried into every
+     * round's brief (src/foreman/task-issue.ts). */
+    issue?: number | string;
+    /** Where that issue is read from. Omitted uses the real GitHub;
+     * the test entry script (helpers/fake-run-task-entry.ts) supplies a
+     * fake, the same way it does for the Inspector and the check box. */
+    issueReader?: IssueReader;
   } = {}
 ): Promise<void> {
   const { issue, ...foremanExtra } = extra;

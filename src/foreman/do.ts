@@ -17,6 +17,7 @@ import { runAttempts } from "./attempts.ts";
 import { deliveredState } from "./delivery.ts";
 import { recordRoundResult } from "./round.ts";
 import { closesIssueFor } from "./pr-body.ts";
+import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { networkPolicyFor } from "./network-policy.ts";
@@ -25,6 +26,7 @@ import { recordingFailure } from "./task-failure.ts";
 import { recordReceipt, spendLimitsFor } from "./caps.ts";
 import { pauseRuleFor } from "./meters.ts";
 import type { Caps } from "../../contract/surface.ts";
+import type { IssueReader } from "./task-issue.ts";
 import type { FabricaTask } from "../inspector/types.ts";
 import type { Inspector } from "../inspector/index.ts";
 import type { CheckBox } from "../brain/index.ts";
@@ -38,9 +40,13 @@ export async function doTask(
     project: string;
     attempts?: number;
     brain?: Brain;
-    /** The issue number the chat agent names explicitly - see
-     * src/foreman/pr-body.ts's `closesIssueFor`. */
-    issue?: number;
+    /** The issue the chat agent names explicitly - a number, or any
+     * spelling src/github's `parseIssueArg` accepts. Its words are
+     * fetched at registration and carried into every round's brief; see
+     * src/foreman/task-issue.ts. */
+    issue?: number | string;
+    /** Where that issue is read from - tests supply a fake. */
+    issueReader?: IssueReader;
     inspector?: Inspector;
     checkBox?: CheckBox;
     /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
@@ -146,8 +152,13 @@ async function productionRound(
   // Re-derived the same way taskText is: an explicit issue number has no
   // home in taskText, so ask.ts persisted it once, at registration, for
   // every round of this task to read back here.
-  const explicitIssueRaw = readTaskFile(recordHome, taskId, "issue");
-  const closesIssue = closesIssueFor(taskText, explicitIssueRaw !== null ? Number(explicitIssueRaw) : undefined);
+  const closesIssue = closesIssueFor(taskText, storedClosesIssue(recordHome, taskId));
+  // The issue this task names, as it was fetched at registration
+  // (ask.ts) - read back off the record, never fetched again: the issue
+  // is frozen for the life of the task, so every round's worker reads
+  // the same words, and a round running in another process needs no
+  // GitHub access of its own.
+  const issueText = taskIssueText(recordHome, taskId);
   // `isRetry` is an explicit signal the caller derives from the RECORD -
   // answer.ts sets it true only when this exact taskId, in this exact
   // record home, already has a "line-cut" event: proof that
@@ -241,7 +252,7 @@ async function productionRound(
         // brief also carries the only-touched-tests ruling. Built here,
         // not at each caller, so a resumed round (answer.ts) and a
         // first attempt resolve it identically.
-        brief: workerBrief(recordHome, line.project, brief),
+        brief: workerBrief(recordHome, line.project, withIssueText(brief, issueText)),
         workdir: line.workdir,
         taskId,
         judge,

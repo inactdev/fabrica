@@ -180,7 +180,7 @@ test("every template heading appears exactly once, in the body and the commit me
   const bodies = {
     body: finalMessageFor(WRITEUP, "x").body,
     "body with couldNotVerify": finalMessageFor(writeup, "x").body,
-    "body with a closing line": withClosesLine(finalMessageFor(writeup, "x").body, 52),
+    "body with a closing line": withClosesLine(finalMessageFor(writeup, "x").body, { number: 52 }),
     "commit message": renderCommitMessage(finalMessageFor(writeup, "x")),
   };
 
@@ -241,15 +241,25 @@ test("issueNamedByTaskText matches only an \"Issue #N:\" prefix at the very star
 });
 
 test("closesIssueFor: case 1, the task's own text names the issue", () => {
-  assert.equal(closesIssueFor("Issue #186: add retries", undefined), 186);
+  assert.deepEqual(closesIssueFor("Issue #186: add retries", undefined), { number: 186 });
 });
 
 test("closesIssueFor: case 2, the caller names the issue explicitly", () => {
-  assert.equal(closesIssueFor("add retries, see issue 186", 186), 186);
+  assert.deepEqual(closesIssueFor("add retries, see issue 186", { number: 186 }), { number: 186 });
 });
 
 test("closesIssueFor: an explicit issue wins over what the text would have matched", () => {
-  assert.equal(closesIssueFor("Issue #186: add retries", 194), 194);
+  assert.deepEqual(closesIssueFor("Issue #186: add retries", { number: 194 }), { number: 194 });
+});
+
+// An issue in another repository can only ever be named explicitly
+// (`fabrica do --issue owner/repo#N`): a task text's own "Issue #N:"
+// prefix has no room for a repository, so it always means this one.
+test("closesIssueFor: an explicitly named repository is carried through", () => {
+  assert.deepEqual(closesIssueFor("do the inspector side", { number: 45, repo: "inactdev/inspector" }), {
+    number: 45,
+    repo: "inactdev/inspector",
+  });
 });
 
 test("closesIssueFor: a task that is only part of an issue's work gets neither", () => {
@@ -258,6 +268,18 @@ test("closesIssueFor: a task that is only part of an issue's work gets neither",
 
 // The Client's template puts it first, not last (ruling 2026-10-18).
 test("withClosesLine makes \"Closes #N\" the body's very first line, only when an issue is set", () => {
-  assert.equal(withClosesLine(BODY, 186), `Closes #186\n\n${BODY}`);
+  assert.equal(withClosesLine(BODY, { number: 186 }), `Closes #186\n\n${BODY}`);
   assert.equal(withClosesLine(BODY, undefined), BODY);
+});
+
+// GitHub's own documented spelling for a closing keyword across
+// repositories ("Linking a pull request to an issue": KEYWORD
+// OWNER/REPOSITORY#ISSUE-NUMBER). A bare "Closes #45" in a pull request
+// on another repository would close whatever issue happens to carry that
+// number there.
+test("withClosesLine names an issue in another repository in full", () => {
+  assert.equal(
+    withClosesLine(BODY, { number: 45, repo: "inactdev/inspector" }),
+    `Closes inactdev/inspector#45\n\n${BODY}`
+  );
 });

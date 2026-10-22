@@ -42,11 +42,19 @@ record as it runs.
                             here, before anything is registered - set it
                             up first with \`fabrica register\`.
   --issue <N>              This task is the whole of GitHub issue N's
-                            work - the opened pull request's body will
-                            end with "Closes #N". Only for a task that
-                            IS the issue, not part of it; omit otherwise.
-                            The same applies automatically when <task
-                            text> itself starts with "Issue #N:".
+                            work. The issue's title and body are read
+                            from GitHub before anything starts and go
+                            into every round's brief, in full, so the
+                            task need not repeat them; the opened pull
+                            request's body also closes the issue. Only
+                            for a task that IS the issue, not part of
+                            it; omit otherwise. The same closing applies
+                            automatically when <task text> itself starts
+                            with "Issue #N:", but only --issue fetches
+                            the issue. An issue in another repository is
+                            named as owner/repo#N, or by pasting its
+                            URL. If it cannot be read, nothing starts
+                            and the cause prints here.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).

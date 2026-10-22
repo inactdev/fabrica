@@ -27,8 +27,12 @@ if (recordHome === undefined || projectPath === undefined || taskText === undefi
 }
 
 // issueArg travels as a trailing positional (spawn-detached.ts), present
-// only when `fabrica do --issue <N>` named one explicitly.
-const issue = issueArg !== undefined ? Number(issueArg) : undefined;
+// only when `fabrica do --issue <N>` named one explicitly. Handed on as
+// the text it arrived as: do-args.ts already proved it is one of the
+// three spellings, and registration parses it in one place
+// (src/foreman/task-issue.ts) rather than each process re-deriving a
+// number here.
+const issue = issueArg;
 
 try {
   await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome), {

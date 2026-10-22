@@ -13,6 +13,7 @@ import {
   notSetUpMessage,
   originSetup,
   originUrl,
+  ownerRepoFromOriginUrl,
   repoNameFromOriginUrl,
 } from "./origin.ts";
 
@@ -30,6 +31,38 @@ test("repoNameFromOriginUrl: every spelling git accepts for one remote gives one
   for (const [url, name] of cases) {
     assert.equal(repoNameFromOriginUrl(url), name, url);
   }
+});
+
+// `fabrica do --issue N` resolves a bare issue number against origin's
+// own repository, so the owner half has to be read as carefully as the
+// name half above - including for the scp-style form that isn't a URL.
+test("ownerRepoFromOriginUrl: every spelling gives one owner/repo pair", () => {
+  const pair = { owner: "inactdev", repo: "fabrica" };
+  for (const url of [
+    "git@github.com:inactdev/fabrica.git",
+    "git@github.com:inactdev/fabrica",
+    "https://github.com/inactdev/fabrica.git",
+    "https://github.com/inactdev/fabrica",
+    "https://github.com/inactdev/fabrica/",
+    "ssh://git@github.com/inactdev/fabrica.git",
+    "ssh://git@github.com:2222/inactdev/fabrica.git",
+  ]) {
+    assert.deepEqual(ownerRepoFromOriginUrl(url), pair, url);
+  }
+});
+
+test("ownerRepoFromOriginUrl: null when the URL names no pair at all", () => {
+  assert.equal(ownerRepoFromOriginUrl("/spending-app.git"), null);
+  assert.equal(ownerRepoFromOriginUrl("spending-app"), null);
+  assert.equal(ownerRepoFromOriginUrl(""), null);
+});
+
+// A local bare mirror (every fixture project's origin) parses into a
+// pair of directory names. That is not a GitHub repository, which is why
+// the caller checks the host too - see src/foreman/task-issue.ts.
+test("ownerRepoFromOriginUrl says nothing about the host", () => {
+  assert.deepEqual(ownerRepoFromOriginUrl("/srv/git/spending-app.git"), { owner: "git", repo: "spending-app" });
+  assert.equal(hostFromOriginUrl("/srv/git/spending-app.git"), null);
 });
 
 // gh auth status exits 1 if ANY stored host has a problem, so register

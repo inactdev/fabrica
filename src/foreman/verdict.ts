@@ -31,6 +31,7 @@ import { prepareRound, skipIfUnchanged } from "./judge.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
+import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
 import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { runAttempts } from "./attempts.ts";
@@ -392,10 +393,11 @@ async function runFixRound(
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
   // Same re-derivation do.ts's productionRound does: an explicit issue
-  // number has no home in taskText, so it's read back from what ask.ts
-  // persisted at registration.
-  const explicitIssueRaw = readTaskFile(recordHome, taskId, "issue");
-  const closesIssue = closesIssueFor(taskText, explicitIssueRaw !== null ? Number(explicitIssueRaw) : undefined);
+  // has no home in taskText, so both it and its fetched words are read
+  // back from what ask.ts persisted at registration - a fix round runs
+  // in its own process and never asks GitHub anything.
+  const closesIssue = closesIssueFor(taskText, storedClosesIssue(recordHome, taskId));
+  const issueText = taskIssueText(recordHome, taskId);
 
   // Reopens the same line directly rather than going through
   // runProductionRound, so this round appends "work-started" below but
@@ -577,7 +579,10 @@ async function runFixRound(
             // than one winning: each describes a different part of the
             // state this worker is being handed.
             buildFixBrief(
-              originalBrief,
+              // The issue this task names rides along on a fix round
+              // too: the Client's note corrects the work, it does not
+              // replace the request the issue spells out.
+              withIssueText(originalBrief, issueText),
               note,
               [
                 refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,

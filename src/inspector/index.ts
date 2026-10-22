@@ -8,7 +8,9 @@ export {
   resolveCommandPath,
   // Issue #267: src/ci/ reads the pull request Inspector published with
   // the same token, from the same resolver - never a second lookup that
-  // could disagree about which credential is in play.
+  // could disagree about which credential is in play. The same resolver
+  // also supplies `do(..., { issue })`'s issue fetch (src/foreman/
+  // task-issue.ts), for the same one-credential reason.
   resolveGithubToken,
   INSPECTOR_CONFIG,
   MAX_INSPECTION_REPORT_BYTES,

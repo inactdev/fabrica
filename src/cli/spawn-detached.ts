@@ -34,10 +34,11 @@ export interface SpawnDetachedTaskOptions {
   recordHome: string;
   projectPath: string;
   taskText: string;
-  /** The issue number the chat agent names explicitly (do-args.ts's
-   * `--issue`) - forwarded as a trailing positional so run-task-entry.ts
-   * can pass it on to doTask. Omitted, nothing is appended. */
-  issue?: number;
+  /** The issue the chat agent names explicitly (do-args.ts's `--issue`)
+   * - a number, or one of the two repository-naming spellings as text -
+   * forwarded as a trailing positional so run-task-entry.ts can pass it
+   * on to doTask. Omitted, nothing is appended. */
+  issue?: number | string;
   /** Overridden in tests to point at a fixture entry script that uses a
    * fake brain, so exercising the real spawn-and-discover mechanism
    * never has to invoke the real adapter's coding agent. */

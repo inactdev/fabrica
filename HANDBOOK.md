@@ -101,9 +101,26 @@ all mean the same thing as an "Issue #N:" prefix would:
 
     fabrica do "<task text>" --project <path-or-name> --issue <N>
 
+`--issue` also does the reading for you. Fabrica fetches that issue's
+title and body from GitHub before the task starts and puts them, in
+full, into every brief its worker gets - the clarifying step included.
+So **never paste an issue's text into `<task text>`, and never summarize
+it.** Pass the Client's own sentence as he said it, however short, plus
+`--issue <N>`: "do issue #142 as written" with `--issue 142` is complete,
+and the worker will have #142's own words in front of it. You don't need
+to have read the issue yourself.
+
+If the issue lives in another repository, say so where you'd put the
+number: `--issue inactdev/inspector#45`, or paste the issue's URL. If it
+can't be read - wrong number, no access, GitHub unreachable - nothing is
+started and `fabrica do` prints the reason; relay that to the Client
+rather than retrying with the text pasted in by hand.
+
 Leave `--issue` off when the issue is named as only part of the task
 ("the first half of #186," "the Inspector side of #109") - closing it
-early would be wrong - or when more than one issue is named.
+early would be wrong - or when more than one issue is named. An issue
+named that way is not fetched either, so if the Client's own words are
+all the worker will have, make sure they say what to do.
 
 If `fabrica do` refuses with "this project isn't set up for Fabrica
 yet," no task was started and nothing is wrong with his words - the

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
+import { fakeIssueReader } from "./helpers/fake-issue-reader.ts";
 import type { Brain } from "../brain/index.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
@@ -86,11 +87,14 @@ test("a task whose text starts with \"Issue #N:\" gets a pull request body openi
 });
 
 // Case 2, the chat agent names the issue explicitly instead - even when
-// the text itself doesn't start with the "Issue #N:" prefix.
+// the text itself doesn't start with the "Issue #N:" prefix. The
+// explicit path now also fetches the issue (src/foreman/task-issue.ts),
+// so it needs an IssueReader: a fake, like the Inspector above, so no
+// test reaches the real GitHub.
 test("a task whose caller names an issue explicitly gets the same closing line", async () => {
   const recordHome = freshHome();
   const inspector = fakeInspector({ verdict: "green", report: "ok" });
-  const foreman = createForeman({ recordHome, inspector });
+  const foreman = createForeman({ recordHome, inspector, issueReader: fakeIssueReader().reader });
 
   await foreman.do("add retries, see the issue tracker", { project: inspectedProject(), brain: fakeBrain(), issue: 186 });
 

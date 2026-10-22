@@ -3,6 +3,8 @@
 // quoted by the caller's shell) and one required flag; every wrong shape
 // refuses with exact instructions, matching src/config's style.
 
+import { ISSUE_ARG_FORMS, parseIssueArg } from "../index.ts";
+import type { IssueRequest } from "../index.ts";
 import { CliError } from "./errors.ts";
 
 export const DO_USAGE = 'fabrica do "<task text>" --project <path-or-name> [--issue <N>]';
@@ -10,11 +12,15 @@ export const DO_USAGE = 'fabrica do "<task text>" --project <path-or-name> [--is
 export interface DoArgs {
   taskText: string;
   projectArg: string;
-  /** The issue number the chat agent names explicitly - the alternative
-   * to the task text itself starting with "Issue #N:" (see
-   * src/foreman/pr-body.ts's `closesIssueFor`). Omitted, nothing about
-   * closing an issue is added unless the task text names one itself. */
-  issue?: number;
+  /** The issue the chat agent names explicitly - the alternative to the
+   * task text itself starting with "Issue #N:" (see
+   * src/foreman/pr-body.ts's `closesIssueFor`). A number for the
+   * project's own repository; the `owner/repo#N` and issue-URL
+   * spellings are kept as text and resolved at registration, where the
+   * project's origin remote is known (src/foreman/task-issue.ts).
+   * Omitted, nothing is fetched and nothing about closing an issue is
+   * added unless the task text names one itself. */
+  issue?: number | string;
 }
 
 export function parseDoArgs(argv: string[]): DoArgs {
@@ -70,15 +76,25 @@ export function parseDoArgs(argv: string[]): DoArgs {
     );
   }
 
-  let issue: number | undefined;
+  // Parsed here only to refuse a typo in the foreground, before a
+  // detached process is spawned for it - src/github owns the spellings,
+  // so the CLI and the registration step can never disagree about which
+  // values are legal. A plain number is handed on as a number, the one
+  // form `Foreman.do`'s ratified `issue` option names; the two
+  // repository-naming spellings travel as the text the Client typed and
+  // are resolved at registration, where the project's origin is known.
+  let issue: number | string | undefined;
   if (issueArg !== undefined) {
-    issue = Number(issueArg);
-    if (!Number.isInteger(issue) || issue < 1) {
+    let parsed: IssueRequest;
+    try {
+      parsed = parseIssueArg(issueArg);
+    } catch {
       throw new CliError(
         "bad-usage",
-        `fabrica do: --issue must be a positive integer, got "${issueArg}". Usage: ${DO_USAGE}`
+        `fabrica do: --issue must be ${ISSUE_ARG_FORMS}, got "${issueArg}". Usage: ${DO_USAGE}`
       );
     }
+    issue = parsed.repo === undefined ? parsed.number : issueArg;
   }
 
   return { taskText: positionals[0], projectArg, ...(issue !== undefined ? { issue } : {}) };

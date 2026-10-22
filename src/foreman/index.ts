@@ -15,7 +15,12 @@ export { recordStopDecision } from "./stop.ts";
 export type { LastWorkerActivity, StoppedByOwnerDetails } from "./stop.ts";
 export { DEFAULT_CHECK_COMMAND } from "./resolve-check.ts";
 export { finalMessageFor } from "./pr-body.ts";
-export type { FinalMessageForCommit } from "./pr-body.ts";
+export type { ClosesIssue, FinalMessageForCommit } from "./pr-body.ts";
+// The issue a task names, fetched once at registration and carried into
+// every brief - the record file and the brief section, so a surface
+// showing a task can show the issue it is the whole of.
+export { ISSUE_BRIEF_HEADER, storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
+export type { IssueReader } from "./task-issue.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./attempts.ts";
 // One age formatter for every surface that shows one - it used to live
 // in src/cli/render.ts, which the live view cannot import from.

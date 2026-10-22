@@ -64,6 +64,42 @@ export function repoNameFromOriginUrl(url: string): string {
 }
 
 /**
+ * The owner and repository origin's URL names - what GitHub's own API
+ * calls `{owner}/{repo}` - or null when the URL names no such pair (a
+ * bare filesystem path with a single segment, something unparseable).
+ *
+ * The same spellings `repoNameFromOriginUrl` above handles, read one
+ * segment deeper: scp-style (`git@host:owner/repo.git`), a real URL
+ * (`https://host/owner/repo`, `ssh://git@host/owner/repo.git`), with or
+ * without a `.git` suffix or trailing slashes. The last two path
+ * segments are the pair, which is exactly how GitHub spells a repository
+ * path.
+ *
+ * Says nothing about the host: a local bare mirror's path can answer
+ * this too, and calling its last two directories an owner and a
+ * repository would be nonsense to send to api.github.com. Pair it with
+ * `hostFromOriginUrl` when that matters - see
+ * src/foreman/task-issue.ts.
+ */
+export function ownerRepoFromOriginUrl(url: string): { owner: string; repo: string } | null {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  const scp = /^[^/@]+@[^:/]+:(.+)$/.exec(trimmed);
+  let path: string | null = scp ? scp[1] : null;
+  if (path === null) {
+    try {
+      path = new URL(trimmed).pathname;
+    } catch {
+      path = trimmed;
+    }
+  }
+  const parts = path.split("/").filter((part) => part.length > 0);
+  if (parts.length < 2) return null;
+  const repo = parts[parts.length - 1].replace(/\.git$/, "");
+  const owner = parts[parts.length - 2];
+  return repo.length > 0 && owner.length > 0 ? { owner, repo } : null;
+}
+
+/**
  * origin's host, for scoping `gh auth status` to it. Null for a remote
  * with no host at all (a local path), where there is no host to scope to.
  *
