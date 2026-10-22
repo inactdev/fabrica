@@ -102,6 +102,44 @@ test("parseDoArgs: --issue must name an issue", () => {
   }
 });
 
+// Issue #184: "nothing lets a project ask for a cheaper one" - this is
+// the per-task half of the answer, the project's own `model` setting
+// being the standing one.
+test("parseDoArgs: --model <name> names the model this one task asks for", () => {
+  assert.deepEqual(parseDoArgs(["fix it", "--project", "spending-app", "--model", "small-5"]), {
+    taskText: "fix it",
+    projectArg: "spending-app",
+    model: "small-5",
+  });
+  assert.deepEqual(parseDoArgs(["fix it", "--project=spending-app", "--model=small-5"]), {
+    taskText: "fix it",
+    projectArg: "spending-app",
+    model: "small-5",
+  });
+  // Both flags together, and neither at all.
+  assert.deepEqual(parseDoArgs(["fix it", "--project", "app", "--issue", "184", "--model", "small-5"]), {
+    taskText: "fix it",
+    projectArg: "app",
+    issue: 184,
+    model: "small-5",
+  });
+  assert.deepEqual(parseDoArgs(["fix it", "--project", "app"]), { taskText: "fix it", projectArg: "app" });
+});
+
+test("parseDoArgs: --model with nothing behind it refuses rather than silently running the default", () => {
+  for (const argv of [
+    ["fix it", "--project", "app", "--model"],
+    ["fix it", "--project", "app", "--model", "   "],
+    ["fix it", "--project", "app", "--model="],
+  ]) {
+    assert.throws(
+      () => parseDoArgs(argv),
+      (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--model"),
+      `${argv.join(" ")} must refuse`
+    );
+  }
+});
+
 test("parseDoArgs: an unknown flag refuses", () => {
   assert.throws(
     () => parseDoArgs(["fix it", "--project", "spending-app", "--attempts", "3"]),

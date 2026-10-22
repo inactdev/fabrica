@@ -46,6 +46,12 @@ export type TaskFile =
    * so a task worded "do issue #N as written" never has to ask what #N
    * says. See src/foreman/task-issue.ts. */
   | "issue.md"
+  /** Which model this task asked for and where that came from (issue
+   * #184), as JSON - `src/foreman/model.ts`'s `ModelChoice`, written
+   * once at registration. Every later round re-derives the worker's
+   * model from here rather than from a parameter it never receives,
+   * the same way `issue` is re-read. */
+  | "model.json"
   /** The caps (rule 10) this task actually started under, as JSON,
    * written once at registration - so a cost meter shown weeks later
    * reports the ceiling the task was held to rather than whatever

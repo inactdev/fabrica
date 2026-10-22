@@ -63,6 +63,18 @@ export {
 } from "./foreman/index.ts";
 export type { MeterPausedDetails, MeterRefusedDetails, MeterStanding } from "./foreman/index.ts";
 export type { MeterReading } from "./brain/index.ts";
+// Issue #184: the model a task asked for, the one that actually ran, and
+// the single phrase every surface shows for the pair.
+export {
+  describeDeclaration,
+  describeModel,
+  modelFromEvents,
+  readModelChoice,
+  receiptModel,
+  resolveModelChoice,
+} from "./foreman/index.ts";
+export type { ModelChoice, ModelOnRecord, ModelSource } from "./foreman/index.ts";
+export { UNKNOWN_MODEL } from "./brain/index.ts";
 export type { TaskFollower, TaskProgress } from "./foreman/index.ts";
 export type { TranscriptEntry, WorkerWriteup, WriteupQuizEntry } from "../contract/surface.ts";
 // Issue #98: the write-up's quiz, as the live view reads it - one reader

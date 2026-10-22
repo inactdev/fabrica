@@ -80,7 +80,7 @@ list (`skill-settings.test.ts`); HANDBOOK.md's case 8 is what stops the
 chat agent running it unasked, by turning `fabrica do`'s refusal below
 into a yes/no question for the Client first.
 
-## `fabrica do "<task text>" --project <path-or-name> [--issue <N>]`
+## `fabrica do "<task text>" --project <path-or-name> [--issue <N>] [--model <name>]`
 
 The one command this issue builds. What it does, in order:
 
@@ -100,10 +100,16 @@ The one command this issue builds. What it does, in order:
    re-exported from `src/index.ts`), so the flag and the task can never
    disagree about which values are legal. Which repository a bare number
    means is deliberately **not** resolved here: that needs the project's
-   `origin` remote, which the registration step reads. Anything else -
-   missing task text, missing `--project`, an unrecognized flag, an
-   `--issue` naming no issue, two positionals - refuses with the exact
-   usage line, exit 1, nothing spawned.
+   `origin` remote, which the registration step reads. Issue #184 adds
+   one more optional flag, `--model <name>`/`--model=<name>`: the model
+   this one task's worker asks for, which overrides the project's own
+   `model` setting in `projects.toml`. An empty value refuses rather
+   than silently falling back to the default - the Client asking for a
+   model and quietly getting another one is the confusion that flag
+   exists to end. Anything else - missing task text, missing
+   `--project`, an unrecognized flag, an `--issue` naming no issue, two
+   positionals - refuses with the exact usage line, exit 1, nothing
+   spawned.
 2. **Reads config** (`loadConfig`, from `src/index.ts`) for the record
    home's project registry and caps. A record home with no
    `projects.toml` at all yet (a brand-new install) is not an error -
@@ -151,6 +157,18 @@ The one command this issue builds. What it does, in order:
    happens once, not twice.
 5. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
    new task's id the moment it's registered (`watch-for-task-id.ts`).
+   The child's argv is three positionals - record home, project path,
+   task text - then named flags for whatever is optional
+   (`task-entry-args.ts`, the one place that shape is decided, parsed by
+   the real entry script and by the fake standing in for it in tests).
+   `--issue` used to ride as a trailing fourth positional, which worked
+   only while it was the single optional value; `--model` (issue #184)
+   would have needed a placeholder for an absent issue, in argv, between
+   two processes, with nothing checking the order. `--issue` crosses
+   that boundary as the text the Client typed, not a number re-derived
+   on the way: all three spellings have to arrive intact, and
+   registration is the one place that resolves which repository a bare
+   number means (`src/foreman/task-issue.ts`).
 6. **Waits, bounded, to see whether the task asks, proceeds, or fails**
    (`wait-for-ask-outcome.ts`, issue #8): the detached process is still
    running `doTask` (`src/foreman/do.ts`), which now does register ->

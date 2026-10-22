@@ -7,7 +7,7 @@ import { ISSUE_ARG_FORMS, parseIssueArg } from "../index.ts";
 import type { IssueRequest } from "../index.ts";
 import { CliError } from "./errors.ts";
 
-export const DO_USAGE = 'fabrica do "<task text>" --project <path-or-name> [--issue <N>]';
+export const DO_USAGE = 'fabrica do "<task text>" --project <path-or-name> [--issue <N>] [--model <name>]';
 
 export interface DoArgs {
   taskText: string;
@@ -21,11 +21,17 @@ export interface DoArgs {
    * Omitted, nothing is fetched and nothing about closing an issue is
    * added unless the task text names one itself. */
   issue?: number | string;
+  /** The model this one task asks for (issue #184), overriding the
+   * project's own `model` in projects.toml. Omitted, the project's
+   * setting decides, and without one the worker's own configuration
+   * does. */
+  model?: string;
 }
 
 export function parseDoArgs(argv: string[]): DoArgs {
   let projectArg: string | undefined;
   let issueArg: string | undefined;
+  let modelArg: string | undefined;
   const positionals: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -46,6 +52,14 @@ export function parseDoArgs(argv: string[]): DoArgs {
       issueArg = value;
     } else if (arg.startsWith("--issue=")) {
       issueArg = arg.slice("--issue=".length);
+    } else if (arg === "--model") {
+      const value = argv[++i];
+      if (value === undefined) {
+        throw new CliError("bad-usage", `fabrica do: --model needs a value. Usage: ${DO_USAGE}`);
+      }
+      modelArg = value;
+    } else if (arg.startsWith("--model=")) {
+      modelArg = arg.slice("--model=".length);
     } else if (arg.startsWith("-")) {
       throw new CliError(
         "bad-usage",
@@ -97,5 +111,22 @@ export function parseDoArgs(argv: string[]): DoArgs {
     issue = parsed.repo === undefined ? parsed.number : issueArg;
   }
 
-  return { taskText: positionals[0], projectArg, ...(issue !== undefined ? { issue } : {}) };
+  // A `--model` with nothing but whitespace behind it is refused rather
+  // than quietly dropped: the Client asking for a model and silently
+  // getting the default one is exactly the confusion this flag exists
+  // to end.
+  let model: string | undefined;
+  if (modelArg !== undefined) {
+    model = modelArg.trim();
+    if (model.length === 0) {
+      throw new CliError("bad-usage", `fabrica do: --model needs a model name. Usage: ${DO_USAGE}`);
+    }
+  }
+
+  return {
+    taskText: positionals[0],
+    projectArg,
+    ...(issue !== undefined ? { issue } : {}),
+    ...(model !== undefined ? { model } : {}),
+  };
 }

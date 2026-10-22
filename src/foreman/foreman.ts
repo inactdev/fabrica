@@ -14,6 +14,7 @@ import type { IssueReader } from "./task-issue.ts";
 import type { Foreman, Inspector } from "../inspector/types.ts";
 import type { Caps } from "../../contract/surface.ts";
 import { recordCost } from "./caps.ts";
+import { readModelChoice } from "./model.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import {
   deliveryOf as lookupDelivery,
@@ -62,6 +63,18 @@ export interface ForemanOptions {
   onTaskRegistered?: (taskId: string) => void;
 }
 
+/** Issue #184: a round started in a fresh process has to build its
+ * worker with the model the task was registered with, not whatever the
+ * brain's own configuration resolves to - otherwise a `fix` on a task
+ * that declared one would silently run a different model from the round
+ * being fixed, while its receipt still named the declaration. Read from
+ * the task's own record (`model.json`), the same way everything else a
+ * resumed round needs is. */
+function modelFor(recordHome: string, taskId: string): { model?: string } {
+  const { declaredModel } = readModelChoice(recordHome, taskId);
+  return declaredModel === null ? {} : { model: declaredModel };
+}
+
 export function createForeman(opts: ForemanOptions): Foreman {
   const { recordHome, caps } = opts;
   // Remembers which brain a do() call on THIS instance used for each
@@ -83,7 +96,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       // remembered its brain by taskId; a fresh process (the real shape
       // of `fabrica do` then `fabrica answer` by hand) falls back the
       // same way verdict() does.
-      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome);
+      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome, modelFor(recordHome, taskId));
       return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, caps });
     },
     async deliveryOf(taskId) {
@@ -93,7 +106,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       return lookupReceipts(recordHome, taskId);
     },
     async verdict(taskId, ruling, note) {
-      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome);
+      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome, modelFor(recordHome, taskId));
       return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, caps });
     },
     async status() {

@@ -10,6 +10,7 @@ import {
   deliveredBranchOf,
   describeBaseStandingOf,
   describeMeters,
+  describeModel,
   describeTaskCost,
   describeUnmeasured,
   earlyStopKindOf,
@@ -19,6 +20,7 @@ import {
   latestMeterReading,
   loadConfigOrProblem,
   meterPauseOf,
+  modelFromEvents,
   refusalFor,
   SPEND_UNKNOWN_LINE,
   standingOf,
@@ -57,6 +59,13 @@ worker has even started (its own, much shorter ceiling, since a real
 answer from the brain arrives in well under a minute). A closed task
 (verdict recorded) drops off this list - see \`fabrica log <id>\` for its
 history.
+
+Every line names the model that did the work - the real one the worker
+reported, not a placeholder. A task that asked for a particular model
+(\`fabrica do --model\`, or a project's own \`model\` in projects.toml)
+shows that declaration beside it, so a worker that ran something else is
+visible rather than assumed: "model: small-5 (declared via --model)".
+Before the first attempt has reported one it reads "not reported yet".
 
 Every line also carries what the repository's own checks said about that
 task's pull request - "CI: 5 green, rehearsal red". Those are the checks
@@ -306,6 +315,10 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             liveness,
             hasDelivery,
             cost,
+            // Issue #184: which model did (or is doing) the work, in the
+            // one wording `fabrica log` and the live view also use - read
+            // off the same events this listing already holds.
+            model: describeModel(modelFromEvents(events)),
             failedBecause,
             refusalReason,
             prUrl: prUrlFromEvents(events),

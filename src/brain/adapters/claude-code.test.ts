@@ -10,6 +10,7 @@ import {
   claudeCodeAdapter,
   claudeCodeCheckBox,
   ClaudeCodeError,
+  mapLineToEntries,
   meterReadingFrom,
   percentFromUtilization,
   resolveGitMounts,
@@ -400,12 +401,14 @@ test("claudeCodeAdapter maps structured stream-json into transcript entries and 
 
   assert.deepEqual(
     result.transcript.map((e) => e.kind),
-    ["reasoning", "tool-call", "tool-result", "text", "usage"]
+    // Issue #184: the init line's own model leads, then the work itself.
+    ["model", "reasoning", "tool-call", "tool-result", "text", "usage"]
   );
-  assert.match(result.transcript[1].text, /^Bash\(/);
-  assert.equal(result.transcript[2].text, "hello from spike");
-  assert.equal(result.transcript[3].text, "Done.");
-  // "system" (init) never became a transcript entry.
+  assert.equal(result.transcript[0].text, "fake-configured-model");
+  assert.match(result.transcript[2].text, /^Bash\(/);
+  assert.equal(result.transcript[3].text, "hello from spike");
+  assert.equal(result.transcript[4].text, "Done.");
+  // The rest of the "system" (init) line never became a transcript entry.
   assert.ok(!result.transcript.some((e) => e.text.includes("init")));
 });
 
@@ -630,9 +633,38 @@ test("resolveGitMounts surfaces a LineError other than not-a-worktree instead of
   }
 });
 
-test("claudeCodeAdapter reports model as configured, or 'default' when none was given", async () => {
-  assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER }).model, "default");
+// Issue #184: "unknown", never "default". This adapter genuinely cannot
+// say which model its own configuration resolves to until a call reports
+// one - and "default" read as a real choice on every receipt and every
+// row that showed it, which is the whole complaint the issue opens with.
+test("claudeCodeAdapter reports model as configured, or 'unknown' when none was given", async () => {
+  assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER }).model, "unknown");
+  assert.notEqual(claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER }).model, "default");
   assert.equal(claudeCodeAdapter({ binPath: FAKE_CLI_IN_CONTAINER, model: "claude-opus-5" }).model, "claude-opus-5");
+});
+
+// Issue #184: the session-init line is the only place this binary names
+// the model a run actually resolved to (verified against the real
+// 2.1.222 binary, and the committed fixture now demonstrates the field -
+// see helpers/fixtures/). It becomes the reserved "model" transcript
+// entry src/foreman/model.ts reads the receipt's model out of.
+test("claudeCodeAdapter turns the session-init line's model into the reserved transcript entry", () => {
+  const entries = mapLineToEntries({ type: "system", subtype: "init", model: "some-model-5[1m]" });
+
+  assert.deepEqual(
+    entries.map((e) => ({ kind: e.kind, text: e.text })),
+    [{ kind: "model", text: "some-model-5[1m]" }]
+  );
+});
+
+test("an init line that names no model, or names a placeholder, reports nothing at all", () => {
+  // Rather than reporting "default" and letting it reach a receipt,
+  // which is the behaviour this issue removed.
+  assert.deepEqual(mapLineToEntries({ type: "system", subtype: "init" }), []);
+  assert.deepEqual(mapLineToEntries({ type: "system", subtype: "init", model: "default" }), []);
+  // Harness chatter on a "system" line that is not the init one stays
+  // exactly what it always was: nothing.
+  assert.deepEqual(mapLineToEntries({ type: "system", subtype: "hook_started", model: "some-model-5" }), []);
 });
 
 // Proves the wiring (issue #44), not just the standalone primitive:

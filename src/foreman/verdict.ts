@@ -47,6 +47,7 @@ import type { FixRebaseStep, PublishLease, StoppedRebase } from "./fix-rebase.ts
 import { baseCommitOf } from "../delivery/index.ts";
 import { recordReceipt, requireRoomToStart, spendLimitsFor } from "./caps.ts";
 import { pauseRuleFor, requireMeterRoomToStart } from "./meters.ts";
+import { readModelChoice } from "./model.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { Inspector, Receipt } from "../inspector/types.ts";
 import type { CheckBox } from "../brain/index.ts";
@@ -398,6 +399,10 @@ async function runFixRound(
   // in its own process and never asks GitHub anything.
   const closesIssue = closesIssueFor(taskText, storedClosesIssue(recordHome, taskId));
   const issueText = taskIssueText(recordHome, taskId);
+  // Same re-derivation, same reason (issue #184): a fix round reports
+  // the declaration this task was registered with, not whatever
+  // projects.toml says by the time the Client rules on it.
+  const modelChoice = readModelChoice(recordHome, taskId);
 
   // Reopens the same line directly rather than going through
   // runProductionRound, so this round appends "work-started" below but
@@ -488,7 +493,15 @@ async function runFixRound(
         ? roundJudge
         : skipIfUnchanged(roundJudge, line.workdir, baseCommitOf(line.workdir));
 
-    appendEvent(recordHome, { taskId, name: "work-started", details: { verdict: "fix", project: line.project } });
+    // `...modelChoice` for the same reason do.ts's own work-started
+    // carries it (issue #184): this round's declared model has to be on
+    // the record from the moment it starts, not only once an attempt
+    // has produced a receipt.
+    appendEvent(recordHome, {
+      taskId,
+      name: "work-started",
+      details: { verdict: "fix", project: line.project, ...modelChoice },
+    });
 
     // This round's own earlier passes over a stopped rebase, kept so the
     // delivery's attempt count and declared gate changes still cover
@@ -602,6 +615,7 @@ async function runFixRound(
           // time the next starts, so rule 10's per-task cap still counts
           // every worker call this round made.
           spendLimits: spendLimitsFor(recordHome, taskId, caps),
+          modelChoice,
           // Issue #189: a fix round is held to the same stop threshold as
           // any other - see do.ts for why this is read here rather than
           // threaded in like `caps`.

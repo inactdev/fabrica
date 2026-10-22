@@ -59,6 +59,17 @@ export {
   standingOf,
 } from "./meters.ts";
 export type { MeterPausedDetails, MeterRefusedDetails, MeterStanding } from "./meters.ts";
+// Issue #184: which model a task asked for, which one ran, and the one
+// wording `fabrica status`, `fabrica log` and the live view all show.
+export {
+  describeDeclaration,
+  describeModel,
+  modelFromEvents,
+  readModelChoice,
+  receiptModel,
+  resolveModelChoice,
+} from "./model.ts";
+export type { ModelChoice, ModelOnRecord, ModelSource } from "./model.ts";
 // Issue #267: the two events a round appends for the checks the
 // repository runs on its pull request, and the seam the GitHub read
 // itself sits behind. The record writing is here, not in `src/ci/`, so no

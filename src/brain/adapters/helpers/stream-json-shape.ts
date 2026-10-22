@@ -11,9 +11,19 @@ export interface StreamJsonShape {
   lineTypes: Set<string>;
   result: Record<string, string> | null; // key -> typeof value, including "usage.<key>"
   blocks: Record<string, Record<string, string>>; // block type -> (key -> typeof value)
+  /** The session-init line's own shape (`type: "system"`, `subtype:
+   * "init"`) - key -> typeof value, restricted to SYSTEM_KEYS. Null when
+   * no init line was seen at all. */
+  system: Record<string, string> | null;
 }
 
 const RESULT_KEYS = ["is_error", "session_id", "total_cost_usd", "duration_ms", "result", "api_error_status"];
+// Issue #184: the adapter reads the model this run resolved to off the
+// session-init line, so that line is no longer pure noise the adapter
+// skips - a rename or removal of this key has to fail loudly here, the
+// same as a result key's would. `subtype` is listed with it because the
+// init line is only recognizable by it.
+const SYSTEM_KEYS = ["subtype", "model"];
 const USAGE_KEYS = ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"];
 const BLOCK_KEYS: Record<string, string[]> = {
   text: ["text"],
@@ -58,12 +68,21 @@ function has(container: Record<string, unknown>, key: string): boolean {
 export function extractShape(lines: unknown[]): StreamJsonShape {
   const lineTypes = new Set<string>();
   let result: Record<string, string> | null = null;
+  let system: Record<string, string> | null = null;
   const blocks: Record<string, Record<string, string>> = {};
 
   for (const raw of lines) {
     const line = raw as Record<string, unknown>;
     if (typeof line?.type !== "string") continue;
     lineTypes.add(line.type);
+
+    if (line.type === "system" && line.subtype === "init") {
+      const shape: Record<string, string> = {};
+      for (const key of SYSTEM_KEYS) {
+        if (has(line, key)) shape[key] = typeOf(line[key]);
+      }
+      system = shape;
+    }
 
     if (line.type === "result") {
       const shape: Record<string, string> = {};
@@ -93,7 +112,7 @@ export function extractShape(lines: unknown[]): StreamJsonShape {
     }
   }
 
-  return { lineTypes, result, blocks };
+  return { lineTypes, result, blocks, system };
 }
 
 // Every line type, result key and block-type/key pair present in
@@ -118,6 +137,19 @@ export function shapeDiff(reference: StreamJsonShape, candidate: StreamJsonShape
         if (candidateType === undefined) problems.push(`result.${key}: present in reference, missing in candidate`);
         else if (candidateType !== type)
           problems.push(`result.${key}: reference is ${type}, candidate is ${candidateType}`);
+      }
+    }
+  }
+
+  if (reference.system) {
+    if (!candidate.system) {
+      problems.push('reference has a "system"/"init" line but the candidate has none');
+    } else {
+      for (const [key, type] of Object.entries(reference.system)) {
+        const candidateType = candidate.system[key];
+        if (candidateType === undefined) problems.push(`system.${key}: present in reference, missing in candidate`);
+        else if (candidateType !== type)
+          problems.push(`system.${key}: reference is ${type}, candidate is ${candidateType}`);
       }
     }
   }
@@ -157,6 +189,15 @@ export function coverageGaps(shape: StreamJsonShape): string[] {
     for (const key of [...RESULT_KEYS, ...USAGE_KEYS.map((k) => `usage.${k}`)]) {
       if (`result.${key}` in UNPROVABLE_BY_RECORDING) continue;
       if (!(key in shape.result)) gaps.push(`result.${key}`);
+    }
+  }
+
+  if (!shape.system) {
+    gaps.push('no "system"/"init" line at all');
+  } else {
+    for (const key of SYSTEM_KEYS) {
+      if (`system.${key}` in UNPROVABLE_BY_RECORDING) continue;
+      if (!(key in shape.system)) gaps.push(`system.${key}`);
     }
   }
 

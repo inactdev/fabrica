@@ -35,11 +35,15 @@ export async function runTask(
      * the test entry script (helpers/fake-run-task-entry.ts) supplies a
      * fake, the same way it does for the Inspector and the check box. */
     issueReader?: IssueReader;
+    /** The model `fabrica do --model <name>` named explicitly (issue
+     * #184). `brain` is already built with it by the caller; this is
+     * what makes it reach the task's own record. */
+    model?: string;
   } = {}
 ): Promise<void> {
-  const { issue, ...foremanExtra } = extra;
+  const { issue, model, ...foremanExtra } = extra;
   // Rule 10: the caps in projects.toml are law for every task this
   // process starts - read here, in the process that actually spends.
   const foreman = createForeman({ recordHome, caps: loadConfigOrDefault(recordHome).caps, ...foremanExtra });
-  await foreman.do(taskText, { project: projectPath, brain, issue });
+  await foreman.do(taskText, { project: projectPath, brain, issue, model });
 }

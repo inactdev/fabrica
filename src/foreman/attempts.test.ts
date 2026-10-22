@@ -645,3 +645,45 @@ test("runAttempts: a brain that registers no meter source is never paused mid-fl
   assert.notEqual(result.receipts[0].outcome, "failed");
   assert.equal(result.receipts[0].meters?.sevenDayPercent, 97);
 });
+
+// Issue #184: every receipt names the model that actually ran, as the
+// worker itself reported it, plus the declaration the round was started
+// under. "default" is gone from both halves - see model.test.ts for the
+// invariant itself.
+test("runAttempts: a receipt records the model the worker reported, and the declaration behind it", async () => {
+  const brain = fakeBrain({ model: "small-5", reportedModel: "small-5-20260202" });
+
+  const { receipts } = await runAttempts({
+    brain,
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+    modelChoice: { declaredModel: "small-5", modelSource: "flag" },
+  });
+
+  assert.equal(receipts[0].model, "small-5-20260202", "what ran, not what was asked for");
+  assert.equal(receipts[0].declaredModel, "small-5");
+  assert.equal(receipts[0].modelSource, "flag");
+});
+
+test("runAttempts: a brain that reports no model per call falls back to its own label, never to 'default'", async () => {
+  // The reference worker's own label before issue #184 was literally
+  // "default"; a brain still saying that contributes nothing, and the
+  // receipt says "unknown" rather than implying a model nobody chose.
+  const { receipts } = await runAttempts({
+    brain: fakeBrain({ model: "default" }),
+    brief: "do it",
+    workdir: scratchWorkdir(),
+    taskId: "t1",
+    judge: greenJudge,
+    totalAttempts: 1,
+    stopEarlyOnGreen: true,
+  });
+
+  assert.equal(receipts[0].model, "unknown");
+  assert.equal(receipts[0].declaredModel, null, "nothing declared one");
+  assert.equal(receipts[0].modelSource, "default");
+});

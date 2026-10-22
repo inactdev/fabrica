@@ -58,16 +58,22 @@ this test was first written, it caught the fake's success-path
 emits it, `null` on success) - exactly the class of drift issue #46
 worried about, found by the allowlist as it stands today. If the
 allowlist is ever found to be missing something the adapter genuinely
-reads, widen `BLOCK_KEYS`/`RESULT_KEYS` in `../stream-json-shape.ts`, not
-this fixture's sanitization.
+reads, widen `BLOCK_KEYS`/`RESULT_KEYS`/`SYSTEM_KEYS` in
+`../stream-json-shape.ts`, not this fixture's sanitization. That is what
+`SYSTEM_KEYS` itself is: the session-init line stopped being pure noise
+once the adapter started reading the model off it (issue #184).
 
 ## Sanitization
 
 The recorded sample is stripped of anything specific to the machine or
 account that recorded it - real `cwd`, `session_id`, hook/harness chatter
 (`system` lines other than `init`, `rate_limit_event`), and any file path
-under the recording machine's temp directory, in both the form handed to
-the CLI and its realpath (on macOS `os.tmpdir()` resolves through a
+under the recording machine's temp directory - but NOT the init line's own
+`model` field, which the adapter reads (issue #184): it names a model,
+not the machine or the account, and a sanitizer that dropped it would
+silently narrow the parity check below (`coverageGaps` names it, and the
+recorder then refuses to overwrite this file at all). Paths are blanked
+in both the form handed to the CLI and its realpath (on macOS `os.tmpdir()` resolves through a
 `/var` -> `/private/var` symlink, and a tool reports back the resolved
 one) - before it's written here. `../record-real-cli-fixture.mjs` does
 this automatically.

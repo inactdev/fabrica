@@ -7,7 +7,7 @@
 // (runRecordedAnswer, src/foreman/answer.ts), which re-derives
 // everything it needs from recordHome/taskId alone.
 
-import { defaultBrainAdapter, runRecordedAnswer } from "../index.ts";
+import { defaultBrainAdapter, readModelChoice, runRecordedAnswer } from "../index.ts";
 import { prefixTaskLog } from "./task-log.ts";
 import { writeTaskPidFile } from "./task-process.ts";
 
@@ -27,8 +27,14 @@ if (recordHome === undefined || taskId === undefined) {
 // from here on, and is the only party that knows its own pid.
 writeTaskPidFile(recordHome, taskId);
 
+// Issue #184: this round's worker is built with the model the task was
+// registered with (`model.json`), so a resumed round runs the model the
+// Client asked for rather than the default - re-derived from the record
+// like everything else this process needs.
+const declaredModel = readModelChoice(recordHome, taskId).declaredModel ?? undefined;
+
 try {
-  await runRecordedAnswer(recordHome, taskId, { brain: defaultBrainAdapter(recordHome) });
+  await runRecordedAnswer(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel }) });
 } catch (err) {
   console.error(`fabrica answer: resuming "${taskId}" failed: ${(err as Error).message}`);
   process.exit(1);

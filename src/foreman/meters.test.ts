@@ -45,6 +45,8 @@ function receiptWith(task: string, attempt: number, meters: MeterReading | null)
     attempt,
     brain: "fake",
     model: "fake-1",
+    declaredModel: null,
+    modelSource: "default",
     startedAt: new Date(NOW).toISOString(),
     durationMs: 1,
     costUsd: 0,

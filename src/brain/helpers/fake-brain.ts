@@ -7,6 +7,7 @@
 
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
 import type { MeterReading } from "../meters.ts";
+import { MODEL_TRANSCRIPT_KIND } from "../model.ts";
 
 /** The quiz the default write-up carries (issue #98): exactly three
  * questions with one-line answers, so an ordinary test still produces a
@@ -69,6 +70,16 @@ export function fakeBrain(
      * a valid one so ordinary tests still see a "done" delivery without
      * constructing it themselves; null returns none at all. */
     writeup?: WorkerWriteup | null;
+    /** Issue #184: this fake's own `Brain.model` label - what a receipt
+     * falls back to when the brain reported no model for the call
+     * itself. Defaults to "fake-1". */
+    model?: string;
+    /** Issue #184: the model each work() call reports actually having
+     * run, on the reserved "model" transcript entry (../model.ts) - what
+     * a streaming adapter reads off its session-init line, and what a
+     * receipt prefers over the label above. Omitted, no entry is
+     * emitted, standing in for a brain that cannot report one. */
+    reportedModel?: string;
     /** Issue #189: the subscription-meter reading each work() call
      * reports, on a "meters" transcript entry (../meters.ts). Omitted,
      * no entry is emitted at all - a brain that cannot report them,
@@ -85,7 +96,7 @@ export function fakeBrain(
 
   return {
     name: "fake",
-    model: "fake-1",
+    model: opts.model ?? "fake-1",
     get calls() {
       return calls;
     },
@@ -140,6 +151,13 @@ export function fakeBrain(
         text: saw,
       };
       const transcript: TranscriptEntry[] = [entry];
+      if (opts.reportedModel !== undefined) {
+        transcript.push({
+          occurredAt: new Date().toISOString(),
+          kind: MODEL_TRANSCRIPT_KIND,
+          text: opts.reportedModel,
+        });
+      }
       if (opts.costUsd !== undefined) {
         const costUsd = typeof opts.costUsd === "function" ? opts.costUsd(calls) : opts.costUsd;
         transcript.push({
