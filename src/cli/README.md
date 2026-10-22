@@ -350,10 +350,8 @@ and a FAIL carrying the exact `docker pull`: a missing one means the
 first task of the day dies inside `docker run` instead of here), the
 worker token (from the environment or `brain.env`, mode 600), the
 GitHub token Inspector needs, `inspector` on PATH taking `-branch` and
-built from its own `origin main`'s tip (a stale binary is the one
-Inspector-side FAIL carrying a `go install` pinned to that tip; see
-`src/inspector/README.md`'s "The doctor line" for which builds fail and
-which only report),
+not behind its own `origin main` (see "The inspector line" below, and
+`src/inspector/README.md` for which builds fail and which only report),
 every registered project (exists, git root, a check, an `origin`
 remote), the caps, and any SPEND UNKNOWN block. `--live` adds one
 minimal real call with the worker token (a few cents) and reports it
@@ -362,6 +360,28 @@ Inspector-specific checks live beside those modules
 (`src/brain/adapters/doctor-checks.ts`,
 `src/relay/container/doctor-check.ts`,
 `src/inspector/doctor-checks.ts`); this command only prints them.
+
+### The inspector line
+
+One line, three facts: `inspector` on `PATH`, `-h` naming `-branch`,
+and the commit the installed binary was built from against the tip of
+`inactdev/inspector`'s own `main`. Missing, or genuinely behind main, is
+a real `FAIL` - so `fabrica up` stops on it - and the fix printed is the
+exact `go install
+github.com/inactdev/inspector/cmd/inspector@<main's tip>` that `fabrica
+update` would have run. A binary that is there but does not take
+`-branch` prints that same fix, for the same reason. The mechanism is
+`src/inspector/doctor-checks.ts` (plus `ancestry.ts` for the ordering);
+see its own README section for why the comparison is an ancestry check
+rather than two hashes, what each shape of `go version -m` output means,
+and why this line and `fabrica update` branch on one shared answer.
+
+Three states are *different* from main without being stale, and all
+three pass, named for what they are: a commit ahead of main, one built
+from a branch, and a binary built from a source tree on this machine. So
+does a comparison that could not be made at all - no network means
+Fabrica cannot ask about an Inspector that works perfectly well, and
+that is not the Inspector's fault.
 
 ### The `npm link` check
 
@@ -509,6 +529,27 @@ install - `npx` extracts a throwaway one into its own cache, under no
 prefix at all - is refused outright, naming the install command,
 instead of being reinstalled somewhere it never lived.
 
+Then **Inspector comes forward too** - unconditionally, with no flag to
+skip it (Client ruling: "update means everything comes forward"). The
+two sides keep a ratified, hand-synced agreement about the exact shape
+of the call between them (`src/inspector/consumer-contract.json`), so
+updating one and leaving the other behind is how that agreement breaks.
+`updateInspector` reads the commit the installed `inspector` was built
+from, reads `main`'s tip, and runs `go install
+github.com/inactdev/inspector/cmd/inspector@<that tip>` for the two
+states where the tip is strictly better than what is there: nothing
+installed at all, and a commit that really is an ancestor of main. One
+ahead of main, on a branch, or built from a local source tree is left
+exactly as it is - installing main's tip over it would silently
+downgrade a binary someone put there on purpose.
+
+**Nothing in that step can fail the update.** No answer from the remote,
+a `go install` that fails, a binary whose commit can't be read: each
+warns on stderr saying what happened, leaves the installed Inspector
+untouched, and still exits 0 with Fabrica's own update intact. The
+summary line reports what really happened to it either way - `inspector
+<before> -> <after>`, or what was left alone and why.
+
 Once updated, it calls `refreshStaleLiveView` - the exact function
 `fabrica up`'s own Step 2 uses, pulled out of `runUpCommand` for this
 reuse rather than duplicated - to bring the live view in line with the
@@ -528,9 +569,10 @@ older commit is still replaced, and one already current, or not listening
 at all, is left alone.
 
 Unlike `fabrica up`, which prints a line per step, `fabrica update`
-prints exactly one summary line: the commit before and after, whether
-the live view was restarted, started or left as is, and the next step,
-`fabrica up --continue`.
+prints exactly one summary line: the commit before and after, the
+installed Inspector before and after, whether the live view was
+restarted, started or left as is, and the next step, `fabrica up
+--continue`.
 
 `fabrica update` is denied to the chat agent itself the same way
 `fabrica up` is (`skill-settings.test.ts`'s `NEVER_FROM_CHAT_COMMANDS`):
@@ -988,7 +1030,7 @@ already recorded, and the response says `signaled: false`.
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). Issue #99 adds the reporting side on top of that same verification, for `status`/`watch`: `probeTaskWorker` (`alive`/`not-found`/`unknown`), `cachedProcessTable`, and `WORKER_PROBE_INTERVAL_MS`. |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
-| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); the install itself is spelled once, in `npm-prefix.ts`'s `installCommandArgs`, so the message a failure prints is the command that really ran; calls `up-command.ts`'s `refreshStaleLiveView` afterward rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
+| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); the install itself is spelled once, in `npm-prefix.ts`'s `installCommandArgs`, so the message a failure prints is the command that really ran; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
 | `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus `INSTALL_SPEC`/`installCommandArgs`, the one spelling of the documented install command, shared by `fabrica update`'s real call and every message that prints it. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |

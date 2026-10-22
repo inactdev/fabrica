@@ -51,6 +51,14 @@ replaces it - every registered project, the caps, and any SPEND UNKNOWN
 block. One line per check - OK, or FAIL with the exact fix. Exits
 non-zero if anything fails.
 
+The inspector line reports that commit against the tip of its own main
+inline, and FAILs - printing the exact \`go install\` command \`fabrica
+update\` would run - when Inspector is missing or genuinely behind main.
+Behind is an ancestry answer, not two hashes that differ: one ahead of
+main, one built from a branch, and one built from a local source tree are
+each reported as that and pass, as does a comparison no network could
+make.
+
 A projects.toml that will not parse is its own FAIL line, naming the
 file, the line the parser stopped on and what it objected to. Every
 machine check above it still runs; only the checks that need the file
@@ -91,6 +99,9 @@ export interface DoctorProbes {
   relayImage(): DoctorCheck;
   workerToken(recordHome: string): DoctorCheck;
   githubToken(): DoctorCheck;
+  /** Inspector on PATH, taking -branch, and not behind its own main -
+   * which is a real FAIL, so `fabrica up` stops on a stale Inspector
+   * (src/inspector/doctor-checks.ts). */
   inspector(): DoctorCheck;
   live(recordHome: string): Promise<DoctorCheck>;
 }

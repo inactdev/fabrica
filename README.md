@@ -75,8 +75,9 @@ editing, mid-merge, or on a branch - the problem that motivated this
 install method. To upgrade later, run `fabrica update` (or the same
 install command again); `fabrica update` reinstalls into the prefix this
 copy actually lives under, which matters on a host whose default npm
-prefix is read-only. There is no uninstall step beyond the ordinary `npm
-uninstall -g fabrica`.
+prefix is read-only, and brings the installed Inspector and the live
+view forward with it. There is no uninstall step beyond the ordinary
+`npm uninstall -g fabrica`.
 
 **`npm link` is a separate, developer-only install**, documented above
 under "Developing Fabrica itself" - it points the `fabrica` command at
@@ -169,10 +170,11 @@ The **inspector** line also reports which build of Inspector you have:
 the commit the installed binary was built from, against the tip of
 Inspector's own `main`. A binary behind `main` is a `FAIL`, and the fix
 is the exact command that replaces it, pinned to that commit - run it
-and the line goes green. A binary you built yourself from a checkout
-passes with its commit named, since it may be ahead of `main`; so does
-one whose commit can't be read, or a run that can't reach GitHub at all
-(no network is not a stale binary).
+and the line goes green. Behind means behind: a commit *ahead* of
+`main`, or one built from a branch, passes with that said, and so does a
+binary you built yourself from a checkout, one whose commit can't be
+read, and a run that can't reach GitHub at all (no network is not a
+stale binary).
 
 Two of those lines are about the network a Worker gets. **relay image**
 fails if the image the relay container runs from isn't on the machine -
@@ -202,6 +204,14 @@ commit uses `go version -m`, so leaving Go on `PATH` after the install
 is what lets that line say anything; without it the line reports that
 and passes.
 See `src/inspector/README.md` for the publishing boundary.
+
+You only run that command by hand once. After that, `fabrica update`
+keeps Inspector current along with Fabrica itself - it installs the tip
+of Inspector's own `main` whenever the installed one is behind it, or
+when none is installed at all - and `fabrica doctor` FAILs on a stale
+one, printing the exact command to fix it. An Inspector you built
+yourself (from a branch, or from a local source tree) is reported as
+that and left alone, never replaced.
 
 ## Registering a project
 

@@ -21,7 +21,18 @@
 // own cache - is refused rather than reinstalled somewhere it never
 // lived.
 //
-// Once the code is updated, the live view is brought in line with it -
+// Once Fabrica's own code is updated, the installed Inspector is brought
+// forward with it (`updateInspector`): Fabrica and Inspector keep a
+// ratified, hand-synced agreement about the call between them
+// (src/inspector/consumer-contract.json), so updating one and not the
+// other is how that agreement breaks. Whether an Inspector is behind is
+// not decided here - it is `inspectorVersionCheck`'s answer, the same one
+// `fabrica doctor`'s inspector line prints, so the line that FAILs on a
+// stale binary and the step that replaces it can never disagree. The
+// Inspector step can never fail the update - the worst case warns and
+// leaves the install alone.
+//
+// Then the live view is brought in line with the new code -
 // by calling `fabrica up`'s own stale-live-view check (up-command.ts's
 // refreshStaleLiveView), never a second copy of that logic. When the
 // commit actually changed, that restart is unconditional and a live view
@@ -35,6 +46,14 @@
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  goInstallInspector,
+  inspectorInstallCommand,
+  inspectorVersionCheck,
+  realInspectorVersionProbes,
+  INSPECTOR_MODULE_PATH,
+  type InspectorVersionProbes,
+} from "../index.ts";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { detectCopy, git, short, type CopyInfo } from "./doctor-command.ts";
@@ -61,7 +80,18 @@ session:
          whose default prefix is read-only, say) updates where it
          actually lives. A copy that is neither of the two - \`npx\`
          runs one out of its own cache - is refused.
-  2. Brings the live view on 127.0.0.1:7777 in line with the code that
+  2. Brings the installed Inspector forward too, since the two sides
+     agree on the exact shape of the call between them: it reads the
+     commit the installed \`inspector\` was built from, reads the tip of
+     \`inactdev/inspector\`'s own main, and runs \`go install
+     github.com/inactdev/inspector/cmd/inspector@<that commit>\` when
+     the installed one is genuinely behind it, or when none is
+     installed at all. One ahead of main, built from a branch, or built
+     from a local source tree is left exactly as it is. There is no
+     flag to skip this. Nothing here can fail the update: no network,
+     or a \`go install\` that fails, warns and leaves the installed
+     Inspector alone.
+  3. Brings the live view on 127.0.0.1:7777 in line with the code that
      just landed - the same check and restart \`fabrica up\` itself
      runs. If the commit changed, whatever is listening is restarted
      and one that wasn't running is started; there is no flag to skip
@@ -69,9 +99,9 @@ session:
      than no page. If the commit did not change, a live view running
      older code (checked via its own /api/version) is still replaced,
      and one already current, or not running at all, is left alone.
-  3. Prints one summary line: the commit before and after, whether the
-     live view was restarted, started or left as is, and the exact next
-     step.
+  4. Prints one summary line: the commit before and after, the
+     installed Inspector before and after, whether the live view was
+     restarted, started or left as is, and the exact next step.
 
 Resume your session afterward with \`fabrica up --continue\` - your
 chat harness's own flag for continuing the most recent conversation in
@@ -112,6 +142,17 @@ export interface UpdateProbes {
    * the one the running copy is installed under. Installed-copy
    * only. */
   reinstall(prefix: string): { ok: boolean; message: string };
+  /** Inspector's side of the same update (see `updateInspector`). */
+  inspector: InspectorUpdateProbes;
+}
+
+/** The installed Inspector's own build, main's tip and how the two are
+ * ordered - the same three facts `fabrica doctor`'s inspector line
+ * reads - plus the one action only `fabrica update` takes. */
+export interface InspectorUpdateProbes extends InspectorVersionProbes {
+  /** Runs `go install github.com/inactdev/inspector/cmd/inspector@<revision>`.
+   * Reported, never thrown. */
+  install(revision: string): { ok: boolean; message: string };
 }
 
 function commandFailureMessage(err: unknown): string {
@@ -154,6 +195,7 @@ export const realProbes: UpdateProbes = {
   isDirty: gitStatusDirty,
   pull: gitPullFfOnly,
   reinstall: npmInstallGlobal,
+  inspector: { ...realInspectorVersionProbes(), install: (revision) => goInstallInspector(revision) },
 };
 
 export interface RunUpdateCommandOptions {
@@ -230,6 +272,15 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
 
   const after = probes.copy();
 
+  // Inspector comes forward with Fabrica itself: the two sides agree on
+  // the flags, exit codes and stdout line of the call between them
+  // (src/inspector/consumer-contract.json), so leaving one behind is how
+  // that agreement breaks. Unconditional, with no flag to skip it
+  // (Client ruling: "update means everything comes forward"), and never
+  // able to fail the update - the worst it does is say what it could not
+  // do and leave the installed Inspector exactly as it was.
+  const inspector = updateInspector(probes.inspector, stderr);
+
   // Client ruling: when the commit actually changed, restart the live
   // view unconditionally, and start one if none was running - no flag to
   // opt out. The ordinary `/api/version` comparison is still what
@@ -262,10 +313,131 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
   }
 
   stdout(
-    `fabrica update: ${short(before.commit)} -> ${short(after.commit)} - live view ${describeLiveViewOutcome(outcome)}. ` +
-      `Resume your session with: fabrica up --continue`
+    `fabrica update: ${short(before.commit)} -> ${short(after.commit)} - ${describeInspectorOutcome(inspector)} - ` +
+      `live view ${describeLiveViewOutcome(outcome)}. Resume your session with: fabrica up --continue`
   );
   return 0;
+}
+
+/** What `fabrica update` did about the installed Inspector. */
+export type InspectorUpdateOutcome =
+  /** `from` is null when nothing was installed before. */
+  | { kind: "installed"; from: string | null; to: string }
+  | { kind: "current"; commit: string }
+  /** Deliberately untouched, for a reason the Client was told in full on
+   * stderr; `label` is that reason short enough for the summary line. */
+  | { kind: "left-alone"; label: string }
+  | { kind: "install-failed"; from: string | null };
+
+/** Brings the installed Inspector up to its own main's tip, or says why
+ * it didn't. Nothing here can fail `fabrica update` (Client ruling): a
+ * network that can't be reached, a `go install` that fails, a binary
+ * built from a local tree - each warns, leaves the install alone, and
+ * returns an outcome the summary line reports honestly.
+ *
+ * The install only ever happens for the two states where main's tip is
+ * strictly better than what is there: nothing installed at all, and a
+ * commit that really is an ancestor of main. An Inspector ahead of
+ * main, on a branch, or built locally is left exactly as it is -
+ * installing main's tip over it would be a silent downgrade of a binary
+ * someone put there on purpose. */
+export function updateInspector(probes: InspectorUpdateProbes, warn: (line: string) => void): InspectorUpdateOutcome {
+  const build = probes.build();
+
+  // Nothing installed at all: there is no commit to classify, so this is
+  // the one path that doesn't go through inspectorVersionCheck.
+  if (build === null) return installFresh(probes, warn);
+
+  // Asked only when there is a commit to compare it against, exactly as
+  // doctor's own line asks it.
+  const mainCommit = build.commit === null ? null : probes.mainCommit();
+  const check = inspectorVersionCheck(build, mainCommit, probes.ancestry);
+
+  switch (check.state) {
+    case "current":
+      // `current` is reached only from a commit that matched main's tip,
+      // so build.commit is never null here.
+      return { kind: "current", commit: build.commit as string };
+
+    case "behind":
+      // The one state where main's tip is strictly better than what is
+      // there. `mainCommit` is non-null: nothing else could have been
+      // compared against to reach this.
+      return install(probes, warn, mainCommit as string, build.commit);
+
+    case "not-behind":
+      warn(`fabrica update: left the installed Inspector alone - ${check.note}. Fabrica itself was still updated.`);
+      return { kind: "left-alone", label: "not behind main" };
+
+    case "local-build":
+      // Installing main's tip over a binary someone built here on
+      // purpose would be a silent downgrade.
+      warn(`fabrica update: left the installed Inspector alone - ${check.note}. Fabrica itself was still updated.`);
+      return { kind: "left-alone", label: "a local build" };
+
+    // The two ways the comparison itself can come to nothing, kept apart
+    // because they fail at different points: main's tip couldn't be read
+    // at all, or it could and the ordering couldn't.
+    case "no-main":
+    case "unknown-ancestry":
+      warn(`fabrica update: left the installed Inspector alone - ${check.note}. Fabrica itself was still updated.`);
+      return { kind: "left-alone", label: "couldn't check against main" };
+
+    // A binary whose own build record names no commit - a release tag, a
+    // `-buildvcs=false` build, or nothing readable at all. There is
+    // nothing to compare, so nothing this can honestly act on.
+    case "no-commit":
+    case "unreadable":
+      warn(`fabrica update: left the installed Inspector alone - ${check.note}. Fabrica itself was still updated.`);
+      return { kind: "left-alone", label: "no commit to compare with main" };
+  }
+}
+
+/** Nothing installed: main's tip is unambiguously better than nothing,
+ * so it goes in - unless the remote can't be read, which warns. */
+function installFresh(probes: InspectorUpdateProbes, warn: (line: string) => void): InspectorUpdateOutcome {
+  const mainCommit = probes.mainCommit();
+  if (mainCommit === null) {
+    warn(
+      `fabrica update: no Inspector is installed, and its main could not be read from ${INSPECTOR_MODULE_PATH} ` +
+        `(no network, or git unavailable) - nothing was installed. Fabrica itself was still updated.`
+    );
+    return { kind: "left-alone", label: "couldn't check against main" };
+  }
+  return install(probes, warn, mainCommit, null);
+}
+
+function install(
+  probes: InspectorUpdateProbes,
+  warn: (line: string) => void,
+  target: string,
+  from: string | null
+): InspectorUpdateOutcome {
+  const result = probes.install(target);
+  if (!result.ok) {
+    warn(
+      `fabrica update: ${inspectorInstallCommand(target)} failed: ${result.message} - the installed Inspector was ` +
+        `left as it was. Fabrica itself was still updated.`
+    );
+    return { kind: "install-failed", from };
+  }
+
+  // Read back rather than assume: the installed binary's own record is
+  // what the next `fabrica doctor` will compare, and if the install
+  // somehow landed elsewhere the summary line should say so, not repeat
+  // the request.
+  const installed = probes.build();
+  return { kind: "installed", from, to: installed?.commit ?? target };
+}
+
+/** The Inspector segment of the one summary line - before and after
+ * whenever something moved, and what was left alone otherwise. */
+function describeInspectorOutcome(outcome: InspectorUpdateOutcome): string {
+  const was = (from: string | null) => (from === null ? "not installed" : short(from));
+  if (outcome.kind === "installed") return `inspector ${was(outcome.from)} -> ${short(outcome.to)}`;
+  if (outcome.kind === "current") return `inspector ${short(outcome.commit)} unchanged, already current`;
+  if (outcome.kind === "install-failed") return `inspector ${was(outcome.from)} unchanged (install failed)`;
+  return `inspector left as is (${outcome.label})`;
 }
 
 /** The three words this summary line can end on. "started" is its own

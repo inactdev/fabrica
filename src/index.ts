@@ -96,6 +96,23 @@ export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
 // that cannot be settled - `fabrica do` refuses up front on all three.
 export { resolveReviewer } from "./reviewer/index.ts";
 export type { ResolvedReviewer, ReviewerResolution } from "./reviewer/index.ts";
+// `fabrica update`'s Inspector step (src/cli/update-command.ts): the
+// installed Inspector's own build, main's tip, how the two are ordered,
+// and the one classifier doctor's inspector line branches on too, so
+// neither can call a binary current that the other just replaced.
+export {
+  goInstallInspector,
+  inspectorInstallCommand,
+  inspectorVersionCheck,
+  realInspectorVersionProbes,
+  INSPECTOR_MODULE_PATH,
+} from "./inspector/index.ts";
+export type {
+  CommitAncestry,
+  InspectorBuild,
+  InspectorVersionProbes,
+  InspectorVersionState,
+} from "./inspector/index.ts";
 export { requireGitRoot } from "./foreman/index.ts";
 export type { Brain, Caps, GateResult } from "../contract/surface.ts";
 export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
