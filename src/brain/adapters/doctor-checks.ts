@@ -41,6 +41,16 @@ function buildCommand(): string {
   );
 }
 
+/** The build command as a doctor fix line (issue #130): it opens with its
+ * own `cd` into the checkout, so it genuinely runs from wherever the
+ * Client happens to be - said out loud, so nobody goes looking for the
+ * right directory first. The note leads and the command trails, so
+ * copying the fix from `cd` to the end of the line still pastes
+ * something runnable. */
+function buildFix(): string {
+  return `run from any folder: ${buildCommand()}`;
+}
+
 /** The image's stamp: null when the image is absent, "" when it carries
  * none. */
 function readStamp(): string | null {
@@ -58,12 +68,12 @@ function readStamp(): string | null {
 export function workerImageStatus(stamp: () => string | null = readStamp): AdapterCheck {
   const label = "worker image";
   const found = stamp();
-  if (found === null) return { ok: false, label, detail: `${DEFAULT_IMAGE} is not built`, fix: buildCommand() };
+  if (found === null) return { ok: false, label, detail: `${DEFAULT_IMAGE} is not built`, fix: buildFix() };
   if (found === "") {
-    return { ok: false, label, detail: `${DEFAULT_IMAGE} carries no Dockerfile stamp, so whether it is current is unknown`, fix: buildCommand() };
+    return { ok: false, label, detail: `${DEFAULT_IMAGE} carries no Dockerfile stamp, so whether it is current is unknown`, fix: buildFix() };
   }
   if (found !== dockerfileSha256()) {
-    return { ok: false, label, detail: `${DEFAULT_IMAGE} is out of date - the Dockerfile changed since it was built`, fix: buildCommand() };
+    return { ok: false, label, detail: `${DEFAULT_IMAGE} is out of date - the Dockerfile changed since it was built`, fix: buildFix() };
   }
   return { ok: true, label, detail: `${DEFAULT_IMAGE} is built and current` };
 }
@@ -138,7 +148,11 @@ export function workerCliVersionStatus(
         ok: false,
         label,
         detail: `${DEFAULT_IMAGE} has ${have} installed, but ${pin}`,
-        fix: buildCommand(),
+        // The same command, printed in the same run of doctor, with the
+        // same "where do I run this" question - so it says the same
+        // thing (issue #130 names the worker-image line; this is the one
+        // other place that prints this command).
+        fix: buildFix(),
       };
 }
 

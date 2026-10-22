@@ -36,6 +36,19 @@ test("worker image: an unstamped image (built without the hash) is reported as u
   assert.match(status.fix ?? "", /docker build/);
 });
 
+// Issue #130: the build command opens with its own `cd`, so it runs from
+// wherever the Client is standing - every state that prints it says so,
+// with the command itself still the tail of the line (nothing follows it
+// that would break a copy-paste).
+test("worker image: every failing state's fix says the command runs from any folder", () => {
+  const stamps: (() => string | null)[] = [() => null, () => "", () => "0".repeat(64)];
+  for (const stamp of stamps) {
+    const status = workerImageStatus(stamp);
+    assert.equal(status.ok, false);
+    assert.match(status.fix ?? "", /^run from any folder: cd \S+ && docker build .* \.$/);
+  }
+});
+
 test("worker image: a stamp matching the Dockerfile's hash is current", () => {
   const status = workerImageStatus(() => dockerfileSha256());
   assert.equal(status.ok, true);
@@ -197,6 +210,9 @@ test("worker CLI: an installed version that differs from the pin fails, with the
   assert.match(status.detail, /2\.0\.0/);
   assert.match(status.detail, /2\.1\.222/);
   assert.match(status.fix ?? "", /docker build/);
+  // The same command as the worker-image fix, so it carries the same
+  // "runs from any folder" note (issue #130).
+  assert.match(status.fix ?? "", /^run from any folder: cd /);
 });
 
 test("worker CLI: with no pin to differ from, the installed version is information, never a failure", () => {
