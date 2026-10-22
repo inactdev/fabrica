@@ -12,6 +12,10 @@
 
 import { appendEvent } from "../record/index.ts";
 import { defaultInspector, inspectorIsConfigured } from "../inspector/index.ts";
+import { checksOutputForWorker, isRedReport } from "../ci/index.ts";
+import type { ChecksReport } from "../ci/index.ts";
+import { handToPullRequestChecks } from "./ci-checks.ts";
+import type { ChecksReader } from "./ci-checks.ts";
 import { defaultCheckBox } from "../brain/index.ts";
 import type { CheckBox } from "../brain/index.ts";
 import type { GateResult, ProductionLine } from "../../contract/surface.ts";
@@ -39,6 +43,13 @@ export type Judgement =
       /** Set when the attempt is red because its write-up was missing or
        * invalid (attempts.ts) - never judged at all. */
       writeupInvalid?: string;
+      /** Issue #267: set when this attempt is red because the checks the
+       * repository runs on the pull request itself went red, AFTER
+       * Inspector had already called the branch green. The value is the
+       * one-phrase summary (`src/ci/report.ts`'s `summarizeChecks`), so
+       * the delivery can say what actually went red instead of blaming
+       * Inspector for a verdict it did not reach. */
+      ciRed?: string;
     }
   /** Inspector reached no verdict. */
   | { kind: "refused"; inspection: Inspection }
@@ -117,7 +128,11 @@ export function inspectorJudge(
    * be made under is not knowable when the round is prepared. Undefined,
    * or a call that answers undefined, means no lease - see
    * fix-rebase.ts's `publishLeaseAfterRebase`. */
-  publishLease?: () => PublishLease | undefined
+  publishLease?: () => PublishLease | undefined,
+  /** Issue #267. Omitted uses the real GitHub read; a test supplies a
+   * fake. Reached only after a green inspection that printed a pull
+   * request URL - nothing else has a pull request to read. */
+  checksReader?: ChecksReader
 ): Judge {
   return async (_attempt, _gateChanges, finalMessage) => {
     const lease = publishLease?.();
@@ -135,9 +150,54 @@ export function inspectorJudge(
       green: inspection.verdict === "green",
       output: `check: delegated to Inspector - Inspector reported ${inspection.verdict}:\n${inspection.report}`,
     };
-    return { kind: "verdict", gate, inspection };
+    // Issue #267: Inspector's green is not the last word any more. What
+    // the repository itself runs on the pull request - the protected-path
+    // gate, a formatter, a container rehearsal - happens after Inspector
+    // has pushed, and used to be invisible here: the task read
+    // "delivered" while the pull request page read red, and the only way
+    // the failure reached anyone was the Client opening the job himself.
+    //
+    // Read only after a GREEN inspection that printed a pull request URL.
+    // A red or refused inspection published nothing, so there is no pull
+    // request whose checks could say anything about this attempt; and a
+    // green run that opened nothing (no URL on Inspector's stdout) has no
+    // pull request either.
+    if (inspection.verdict !== "green" || !inspection.prUrl) return { kind: "verdict", gate, inspection };
+
+    const report = await handToPullRequestChecks(recordHome, taskId, inspection.prUrl, checksReader);
+    // Nothing to read (not a GitHub pull request URL), or nothing red:
+    // Inspector's own verdict stands, and the read is already on the
+    // record either way. An unreadable API and a check that never
+    // concluded both land here on purpose - inventing a red out of a
+    // silence is the same lie as calling it green.
+    if (report === undefined || !isRedReport(report)) {
+      return {
+        kind: "verdict",
+        gate: report === undefined ? gate : { green: gate.green, output: `${gate.output}\n\n${checksNote(report)}` },
+        inspection,
+      };
+    }
+    return {
+      kind: "verdict",
+      gate: { green: false, output: `${gate.output}\n\n${checksOutputForWorker(report)}` },
+      inspection,
+      ciRed: report.summary,
+    };
   };
 }
+
+/** One line about a read that did not turn the round red, appended to the
+ * gate's output - which is what the delivery's `evidence` carries, so a
+ * green delivery still says what the pull request's checks did (or that
+ * they could not be read, or had not finished). Never silently omitted:
+ * a delivery that says nothing about them reads as "there were none". */
+function checksNote(report: ChecksReport): string {
+  return `${CHECKS_PREFIX}: ${report.summary} (${report.prUrl})`;
+}
+
+/** The exact words a delivery's evidence uses for the pull request's own
+ * checks. Kept here beside the one writer of it. */
+const CHECKS_PREFIX = "the pull request's own checks";
 
 export function selfTestJudge(
   recordHome: string,
@@ -182,6 +242,10 @@ export function prepareRound(
     /** A fix round's own (verdict.ts); asked at each handoff rather than
      * now - see `inspectorJudge`. Nothing else has a rebase to lease. */
     publishLease?: () => PublishLease | undefined;
+    /** Issue #267's seam, threaded from `createForeman`'s options the
+     * same way `inspector`/`checkBox` are - omitted uses the real
+     * GitHub read. */
+    checksReader?: ChecksReader;
   }
 ): { judge: Judge; mode: CheckMode } {
   const check = resolveCheckCommand(recordHome, line.project);
@@ -210,7 +274,16 @@ export function prepareRound(
 
   const judge =
     mode.mode === "inspector"
-      ? inspectorJudge(recordHome, taskId, line, baseCommit, mode.inspector, opts.closesIssue, opts.publishLease)
+      ? inspectorJudge(
+          recordHome,
+          taskId,
+          line,
+          baseCommit,
+          mode.inspector,
+          opts.closesIssue,
+          opts.publishLease,
+          opts.checksReader
+        )
       : selfTestJudge(recordHome, taskId, line, check, opts.checkBox ?? defaultCheckBox());
   return { judge, mode };
 }

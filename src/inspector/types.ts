@@ -143,7 +143,22 @@ export type FabricaEventName =
   /** Issue #189's pause rule stopped an attempt that was already
    * running. Details: `src/foreman/meters.ts`'s `MeterPausedDetails`.
    * The counterpart of rule 10's `"cap-stopped"`. */
-  | "meter-paused";
+  | "meter-paused"
+  /** One check the repository runs on the pull request itself reached a
+   * conclusion (issue #267). Details: `src/ci/watch.ts`'s
+   * `CiCheckConcludedDetails` - the check's name, which of GitHub's two
+   * mechanisms reported it, its own conclusion word verbatim, whether
+   * Fabrica reads that as red, where a human reads the run, and the tail
+   * of the job log when it is red and the API served one. One event per
+   * check, appended as it concludes. */
+  | "ci-check-concluded"
+  /** The whole read of a pull request's checks ended - every check
+   * concluded, the bounded wait expired, or the API could not be read
+   * (issue #267). Details: `src/ci/watch.ts`'s `CiChecksFinishedDetails`
+   * - the head commit read, the verdict drawn from it, the one-phrase
+   * summary every task line shows, and the checks that never concluded,
+   * recorded as unknown and never as green. */
+  | "ci-checks-finished";
 
 export interface FabricaEvent extends Omit<ContractFabricaEvent, "name"> {
   name: FabricaEventName;

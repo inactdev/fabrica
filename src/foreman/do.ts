@@ -12,6 +12,7 @@ import { createProductionLine, destroyProductionLine, reopenProductionLine } fro
 import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { prepareRound } from "./judge.ts";
+import type { ChecksReader } from "./ci-checks.ts";
 import { runAttempts } from "./attempts.ts";
 import { deliveredState } from "./delivery.ts";
 import { recordRoundResult } from "./round.ts";
@@ -42,6 +43,9 @@ export async function doTask(
     issue?: number;
     inspector?: Inspector;
     checkBox?: CheckBox;
+    /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
+     * the pull request's real checks from GitHub. */
+    checksReader?: ChecksReader;
     caps?: Caps;
     onTaskRegistered?: (taskId: string) => void;
   }
@@ -74,6 +78,7 @@ export async function doTask(
     isRetry: false,
     inspector: opts.inspector,
     checkBox: opts.checkBox,
+    checksReader: opts.checksReader,
     caps: opts.caps,
   });
 }
@@ -100,6 +105,9 @@ export async function runProductionRound(
     isRetry: boolean;
     inspector?: Inspector;
     checkBox?: CheckBox;
+    /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
+     * the pull request's real checks from GitHub. */
+    checksReader?: ChecksReader;
     caps?: Caps;
   }
 ): Promise<FabricaTask> {
@@ -119,10 +127,13 @@ async function productionRound(
     isRetry: boolean;
     inspector?: Inspector;
     checkBox?: CheckBox;
+    /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
+     * the pull request's real checks from GitHub. */
+    checksReader?: ChecksReader;
     caps?: Caps;
   }
 ): Promise<FabricaTask> {
-  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, checkBox, caps } = ctx;
+  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, checkBox, checksReader, caps } = ctx;
   // The delivery's summary/evidence want the Client's original one-line
   // ask, not the full brief a resumed round's worker receives - `brief`
   // for an answer.ts retry is request.md plus the whole "## Clarification"
@@ -208,6 +219,7 @@ async function productionRound(
       inspector,
       checkBox,
       closesIssue,
+      checksReader,
     });
 
     // `project` rides on work-started's details, not a dedicated event -

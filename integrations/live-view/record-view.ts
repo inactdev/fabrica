@@ -12,6 +12,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CHECKS_LABEL,
   daySpend,
   deliveryOf,
   describeBaseStandingOf,
@@ -605,14 +606,24 @@ function triggerLabel(events: FabricaEvent[], issue: string | null): string {
  * short word. A single forward pass, so the latest judgement wins
  * whichever kind it was: the worker's own box running the project's
  * check ("check-run", which lands twice per attempt - `phase: "started"`
- * then the result) or Inspector's independent verdict
+ * then the result), Inspector's independent verdict
  * ("inspection-finished"), which IS the check in Inspector mode (issue
- * #64: Fabrica runs none itself). "—" until something has judged
- * anything. */
+ * #64: Fabrica runs none itself), or - last of all, because it happens
+ * last - the checks the repository itself runs on the pull request
+ * ("ci-checks-finished", issue #267). "—" until something has judged
+ * anything.
+ *
+ * The CI summary is taken verbatim off the event, prefixed with the same
+ * label `fabrica status` uses, so this column and that line can never
+ * word one read two ways. */
 function checksLabel(events: FabricaEvent[]): string {
   let label = "—";
   for (const event of events) {
-    if (event.name === "check-run") {
+    if (event.name === "ci-checks-finished") {
+      const details = event.details as { summary?: string; verdict?: string } | undefined;
+      const summary = typeof details?.summary === "string" ? details.summary.trim() : "";
+      label = `${CHECKS_LABEL}: ${summary.length > 0 ? summary : (details?.verdict ?? "read")}`;
+    } else if (event.name === "check-run") {
       const details = event.details as { phase?: string; green?: boolean; notVerified?: string } | undefined;
       if (details?.phase === "started") label = "running";
       else if (typeof details?.notVerified === "string") label = "not verified";

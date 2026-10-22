@@ -13,6 +13,7 @@ import type { Brain, CheckBox } from "../brain/index.ts";
 import type { Foreman, Inspector } from "../inspector/types.ts";
 import type { Caps } from "../../contract/surface.ts";
 import { recordCost } from "./caps.ts";
+import type { ChecksReader } from "./ci-checks.ts";
 import {
   deliveryOf as lookupDelivery,
   eventsOf as lookupEvents,
@@ -42,6 +43,13 @@ export interface ForemanOptions {
   /** Where a project with no Inspector is self-tested: the worker's own
    * box. Omitted uses the default adapter's box; tests supply a fake. */
   checkBox?: CheckBox;
+  /** Issue #267: who reads the checks the repository runs on the pull
+   * request Inspector opened, after it has published a green branch.
+   * Omitted reads the real pull request over GitHub's API; tests supply
+   * a fake, the same way they do for `inspector` and `checkBox`. Only
+   * ever reached by a round whose green inspection printed a pull
+   * request URL. */
+  checksReader?: ChecksReader;
   /** Told each new task's id the moment it is registered - before any
    * step that can fail - so a caller can label what it logs for it. */
   onTaskRegistered?: (taskId: string) => void;
@@ -58,7 +66,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
 
   return {
     async do(taskText, callOpts) {
-      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, checkBox: opts.checkBox, caps, onTaskRegistered: opts.onTaskRegistered });
+      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, caps, onTaskRegistered: opts.onTaskRegistered });
       if (callOpts.brain) brainByTask.set(task.id, callOpts.brain);
       return task;
     },
@@ -69,7 +77,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       // of `fabrica do` then `fabrica answer` by hand) falls back the
       // same way verdict() does.
       const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome);
-      return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector, checkBox: opts.checkBox, caps });
+      return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, caps });
     },
     async deliveryOf(taskId) {
       return lookupDelivery(recordHome, taskId);
@@ -79,7 +87,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
     },
     async verdict(taskId, ruling, note) {
       const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome);
-      return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector, checkBox: opts.checkBox, caps });
+      return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, caps });
     },
     async status() {
       return lookupStatus(recordHome);

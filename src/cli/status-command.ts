@@ -30,6 +30,7 @@ import type { MeterStanding, PauseRule } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import {
+  checksSummaryFromEvents,
   describeLiveness,
   expectsWorkerProcess,
   formatStatusLine,
@@ -56,6 +57,14 @@ worker has even started (its own, much shorter ceiling, since a real
 answer from the brain arrives in well under a minute). A closed task
 (verdict recorded) drops off this list - see \`fabrica log <id>\` for its
 history.
+
+Every line also carries what the repository's own checks said about that
+task's pull request - "CI: 5 green, rehearsal red". Those are the checks
+GitHub runs on the pull request after Inspector has published it, read
+once by the round itself and shown here from the record; a task whose
+pull request has not been read says nothing about CI rather than
+implying there were none. A check that never finished within the round's
+bounded wait reads as "unknown", never as green.
 
 A delivered task whose branch no longer contains origin's default tip
 is marked "behind origin/<branch>, a fix will rebase" - the rebase a
@@ -301,6 +310,10 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             refusalReason,
             prUrl: prUrlFromEvents(events),
             baseStanding,
+            // Issue #267: what the repository's own checks said about this
+            // task's pull request, read off the record like everything else
+            // on this line.
+            checksSummary: checksSummaryFromEvents(events),
             ...(pausedByMeter === undefined ? {} : { pausedByMeter }),
           })
         );

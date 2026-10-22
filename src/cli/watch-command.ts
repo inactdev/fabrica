@@ -27,6 +27,7 @@ import { resolveRecordHome } from "./record-home.ts";
 import {
   QUIET_THRESHOLD_MS,
   checkStartedAt,
+  checksSummaryFromEvents,
   describeLiveness,
   expectsWorkerProcess,
   formatTerminalNotice,
@@ -332,7 +333,14 @@ async function streamTranscript(ctx: {
     wasQuiet = quiet;
 
     const hasDelivery = events.some((e) => e.name === "delivered");
-    const notice = formatTerminalNotice(state, { taskId, hasDelivery });
+    // Issue #267: the one line this command prints about a finished
+    // task also says what the pull request's own checks did, since a
+    // streamed transcript has no task line to put it on.
+    const notice = formatTerminalNotice(state, {
+      taskId,
+      hasDelivery,
+      checksSummary: checksSummaryFromEvents(events),
+    });
     if (!notice) {
       noticedState = null;
     } else if (state !== noticedState) {

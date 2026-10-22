@@ -260,6 +260,10 @@ export function recordRoundResult(
     selfTested: ctx.mode.mode === "self-test",
     notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
     writeupInvalid: lastJudgement.kind === "verdict" ? lastJudgement.writeupInvalid : undefined,
+    // Issue #267, read off the judgement exactly the way writeupInvalid
+    // above is: the round is red, and this says whether it was the pull
+    // request's own checks rather than Inspector that said so.
+    ciRed: lastJudgement.kind === "verdict" ? lastJudgement.ciRed : undefined,
     capStop,
     taskId,
     spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, ctx.caps),

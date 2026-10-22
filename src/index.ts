@@ -91,6 +91,14 @@ export { defaultBrainAdapter } from "./brain/index.ts";
 // `fabrica doctor`'s machine checks (src/cli/doctor-command.ts).
 export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerTokenStatus } from "./brain/index.ts";
 export { relayImageStatus } from "./relay/index.ts";
+// Issue #267: what the repository's own checks said about the pull
+// request. Only the label and the two event-detail shapes are exported -
+// `fabrica status`/`watch` and the live view read the summary straight
+// off the `"ci-checks-finished"` event rather than polling anything
+// themselves, and nothing outside src/ci/ ever makes a GitHub call.
+export { CHECKS_LABEL } from "./ci/index.ts";
+export type { ChecksVerdict } from "./ci/index.ts";
+export type { CiCheckConcludedDetails, CiChecksFinishedDetails } from "./foreman/index.ts";
 export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
 // Who judges a project's test changes, and the three grounds on which
 // that cannot be settled - `fabrica do` refuses up front on all three.

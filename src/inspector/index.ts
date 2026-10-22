@@ -6,6 +6,10 @@ export {
   inspectorConfigMatches,
   inspectorIsConfigured,
   resolveCommandPath,
+  // Issue #267: src/ci/ reads the pull request Inspector published with
+  // the same token, from the same resolver - never a second lookup that
+  // could disagree about which credential is in play.
+  resolveGithubToken,
   INSPECTOR_CONFIG,
   MAX_INSPECTION_REPORT_BYTES,
   reportForRecord,
