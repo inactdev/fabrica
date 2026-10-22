@@ -132,6 +132,33 @@ export function latestDeliveredDetails(recordHome: string, taskId: string): Deli
   return delivered?.details as DeliveredDetails | undefined;
 }
 
+/** The branch the task's current delivery names (`Delivery.branch`), or
+ * null when there is no delivery on the record. Takes the events the
+ * caller already holds, for the same reason `src/cli/render.ts`'s
+ * `projectFromEvents` does: `fabrica status` must not re-read
+ * events.jsonl once per open task just to name a branch.
+ *
+ * Latest "delivered" event wins (a fix round appends its own), and an
+ * Inspector refusal landing after it clears the answer - the same rule
+ * `deliveryOf` applies, since a superseded delivery is not the branch
+ * anyone is ruling on any more. */
+export function deliveredBranchOf(events: FabricaEvent[]): string | null {
+  let branch: string | null = null;
+  for (const event of events) {
+    if (event.name === "delivered") {
+      const delivered = event.details as DeliveredDetails | undefined;
+      const named = delivered?.delivery?.branch;
+      branch = typeof named === "string" && named.trim().length > 0 ? named : null;
+    } else if (
+      event.name === "inspection-finished" &&
+      (event.details as { verdict?: string } | undefined)?.verdict === "refused"
+    ) {
+      branch = null;
+    }
+  }
+  return branch;
+}
+
 /** How many "fix" verdicts a task has had so far, including the most
  * recent one — rule 6's fix path has no attempt budget (issue #65: "he
  * is the stop condition", not a counter), but each round still reports

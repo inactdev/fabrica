@@ -32,6 +32,20 @@ page, `/api/tasks/<id>`, or `/api/tasks/<id>/transcript`), and that is
 checked against `TASK_ID_PATTERN` (the same shape `src/record/ids.ts`
 generates) before it ever reaches a file path.
 
+One reading does come from outside the record, and it is still a read:
+a delivered task's **base standing** - whether its branch still contains
+origin's default tip - is four local `git` queries against the project's
+own refs (`src/foreman/base-standing.ts`, reached through
+`src/index.ts`'s `describeBaseStandingOf` like everything else here). It
+cannot come from the record, because origin moves after a delivery is
+written. It never fetches and never writes: `src/foreman/
+base-standing.test.ts` proves that byte for byte, snapshotting the whole
+project folder - `.git` included - around the call. Because these pages
+poll twice a second, the answer is cached per project+branch for
+`BASE_STANDING_CACHE_MS` (15s, `record-view.ts`), and it is only ever
+asked for a delivered task: see "What the task list page shows" below
+for where it is displayed.
+
 The one write in this directory isn't in `server.ts` either: `start.ts`
 (the real process entry point, not the server module itself) writes
 `<recordHome>/live-view.pid` once it's actually bound to its port, for
@@ -178,7 +192,8 @@ record problem, with the task list taken down with it.
 ## What the task list page shows, and what's one click away
 
 A row carries twelve columns (issue #203), every one of them derived
-from the task's own record and nothing else: **state**, **task**,
+from the task's own record - the one exception being the base-standing
+mark described below, which the record cannot know: **state**, **task**,
 **project**, **worker · model**, **network policy**, **trigger**,
 **started**, **duration**, **cost** (with a cap meter), **checks**,
 **delivery**, and **confidence**. The task column is the worker's
@@ -227,6 +242,24 @@ knowing without reading the code:
   `caps.json` (`src/foreman/ask.ts`); a task registered before that
   file existed falls back to the current config. With no cap set there
   is no meter at all and the cost stands as plain text (Client ruling).
+
+And one mark that is not a column of its own: a **delivered** task whose
+branch no longer contains origin's default tip reads
+"behind origin/&lt;branch&gt;, a fix will rebase (origin last fetched Nm
+ago)" - the rebase a `fix` verdict already runs before its round starts
+(issue #235) - or "base unknown: &lt;reason&gt;" when the standing cannot be
+read at all (no `origin` remote, `origin/HEAD` unset, the branch or the
+project gone). Never nothing: a silent fall back to looking current was
+explicitly ruled out. The sentence comes from
+`src/foreman/base-standing.ts`'s `describeBaseStanding`, the identical
+string `fabrica status` prints, so the two surfaces cannot word it
+differently. It rides in the **delivery** cell rather than in a
+thirteenth column, since it is set only for a delivered task: inline
+under the outcome on the phone-width card, as the cell's tooltip in the
+table layout (a 36px row has no second line), and as an amber outcome
+value at both widths so the row is marked at a glance either way. It is
+also a field of its own on the task page ("Base") and a line on the
+review card, which is where the accept-or-fix choice is actually made.
 
 ## One DOM, two layouts: phone and desk
 
@@ -317,7 +350,11 @@ any more (follow-up to issue #202, "show every task waiting on me"):
 - **Delivered** - the full card: its title, the pull request's own
   write-up (rendered through the exact same `finalMessageFor` that built
   the real pull request body, never a second hand-written copy of it),
-  Inspector's stamp, and the gate's declared state
+  Inspector's stamp, the gate's declared state, and - when there is
+  something to say about it - where the branch stands against origin's
+  default tip ("behind origin/&lt;branch&gt;, a fix will rebase", or
+  "base unknown: &lt;reason&gt;"; the same string the task list and
+  `fabrica status` show, read once per task)
   (`record-view.ts`'s `getReviewRows`/`inspectorStampLabel`/
   `gateStateLabel` - see their own doc comments for exactly what each
   label means and where it comes from). "Inspector's stamp" and "the
@@ -593,6 +630,11 @@ background process `fabrica verdict fix` uses) - reached the same way
 from `src/cli/` rather than through `src/index.ts`, the one established
 exception to the "integrations reach Fabrica only through `src/index.ts`"
 rule.
+
+The base-standing mark added two more, for the same reason: `formatAge`
+(moved out of `src/cli/render.ts`, which this integration never imports
+from) and `describeBaseStandingOf`, the read-and-render pair behind
+"behind origin/&lt;branch&gt;, a fix will rebase".
 
 Issue #203's stop route added `recordStopDecision` (the record half, on
 `src/index.ts` like the rest) plus `Receipt` and `GateResult` as types,

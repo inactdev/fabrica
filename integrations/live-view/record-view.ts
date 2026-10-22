@@ -14,6 +14,7 @@ import { join } from "node:path";
 import {
   daySpend,
   deliveryOf,
+  describeBaseStandingOf,
   describeTaskCost,
   describeMeters,
   earlyStopKindOf,
@@ -187,6 +188,19 @@ export interface TaskView {
   checks: string;
   /** `Delivery.outcome`, or null when there is no delivery to show. */
   delivery: string | null;
+  /** "behind origin/<branch>, a fix will rebase", or "base unknown:
+   * <reason>" when the check could not answer - `describeBaseStanding`'s
+   * own string, the identical one `fabrica status` prints, never a
+   * second wording built here. Null for a branch that contains origin's
+   * tip and for every state but "delivered": this is about the `fix`
+   * verdict the Client is being asked for, and nothing else.
+   *
+   * The one field on this view that is not derived from the record - it
+   * cannot be, since origin moves after a delivery is written. It is a
+   * read of this machine's own git refs that writes nothing (see
+   * src/foreman/base-standing.ts), cached per project+branch so a 2Hz
+   * poll does not spawn git on every tick. */
+  baseStanding: string | null;
   /** `Delivery.confidence` - Fabrica/Inspector-derived, the ratified
    * field (CONTRACT rule 4), never the worker's own write-up
    * confidence, which is its own separate number shown on the review
@@ -261,6 +275,12 @@ export interface DeliveredReviewRow {
    * involved at all). */
   inspectorDetail: string | null;
   gateState: string;
+  /** Exactly `TaskView.baseStanding` for this same task, carried onto
+   * the card the Client actually rules from - "behind origin/<branch>,
+   * a fix will rebase" is a fact about the choice between accept and
+   * fix, so the page that offers that choice is where it matters most.
+   * Null when there is nothing to mark. */
+  baseStanding: string | null;
   prUrl: string | null;
   lastActivityMs: number;
 }
@@ -684,12 +704,47 @@ function discoverTaskIds(recordHome: string): string[] {
   }
 }
 
+/** How long one project+branch's base standing is reused before git is
+ * asked again. These pages poll at 2Hz and the answer can only change
+ * when something fetches origin or commits onto the branch - neither of
+ * which this process does - so asking git twice a second per delivered
+ * task would be pure cost. Deliberately short enough that the mark
+ * appears within seconds of a fetch bringing origin's new tip in. */
+export const BASE_STANDING_CACHE_MS = 15_000;
+
+/** What `TaskView.baseStanding` is read with: `describeBaseStandingOf`
+ * in the real server, a stub in tests that have no git project behind
+ * their record home (the only field on this view that is not a record
+ * read, so the only one that needs a seam at all). */
+export type BaseStandingReader = (project: string | null, branch: string | null, now: number) => string | null;
+
+/** Wraps a base-standing reader in a per-project+branch, time-bounded
+ * cache (see `BASE_STANDING_CACHE_MS`). Keyed on the pair, not on the
+ * task: two tasks on one project each have their own branch, and a fix
+ * round keeps the same one, so the key is stable for as long as the
+ * answer is. */
+function cachedBaseStanding(read: BaseStandingReader): BaseStandingReader {
+  const cache = new Map<string, { at: number; label: string | null }>();
+  return (project, branch, now) => {
+    const key = `${project ?? ""} ${branch ?? ""}`;
+    const hit = cache.get(key);
+    // `now` can move backwards between calls (a caller passing a fixed
+    // timestamp), so age is compared on its absolute value - a cache
+    // that never expired would be worse than one that expires early.
+    if (hit && Math.abs(now - hit.at) < BASE_STANDING_CACHE_MS) return hit.label;
+    const label = read(project, branch, now);
+    cache.set(key, { at: now, label });
+    return label;
+  };
+}
+
 /** Holds one `TaskFollower` per task for this record home's whole process
  * lifetime, so a 2Hz poll costs the bytes appended since the last one
  * (the same reasoning as `fabrica watch` - see src/record/tail.ts) rather
  * than re-reading every task's history from byte zero every time. */
-export function createRecordView(recordHome: string) {
+export function createRecordView(recordHome: string, opts: { baseStanding?: BaseStandingReader } = {}) {
   const followers = new Map<string, TaskFollower>();
+  const readBaseStanding = cachedBaseStanding(opts.baseStanding ?? describeBaseStandingOf);
 
   function followerFor(taskId: string): TaskFollower {
     let follower = followers.get(taskId);
@@ -765,6 +820,10 @@ export function createRecordView(recordHome: string) {
       // whatever it last recorded, so it doesn't keep counting forever.
       durationMs: startedAt === null ? 0 : Math.max(0, (finished ? lastActivity : now) - startedAt),
       checks: checksLabel(events),
+      // Only a delivered task, and only ever the delivery's own branch:
+      // asked for any other state this would be a reading about a branch
+      // nobody is being asked to rule on.
+      baseStanding: state === "delivered" ? readBaseStanding(projectFromEvents(events), delivery?.branch ?? null, now) : null,
       delivery: delivery?.outcome ?? null,
       confidence: typeof delivery?.confidence === "number" ? delivery.confidence : null,
     };
@@ -829,6 +888,9 @@ export function createRecordView(recordHome: string) {
             inspectorStamp: inspectorStampLabel(delivery),
             inspectorDetail: inspectorReportDetail(delivery),
             gateState: gateStateLabel(delivery),
+            // Read once, on the task view above, so this card and the
+            // list pages can never show different marks for one task.
+            baseStanding: task.baseStanding,
             prUrl: task.prUrl,
             lastActivityMs: task.lastActivityMs,
           },

@@ -17,10 +17,18 @@ export { DEFAULT_CHECK_COMMAND } from "./resolve-check.ts";
 export { finalMessageFor } from "./pr-body.ts";
 export type { FinalMessageForCommit } from "./pr-body.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./attempts.ts";
+// One age formatter for every surface that shows one - it used to live
+// in src/cli/render.ts, which the live view cannot import from.
+export { formatAge } from "./age.ts";
+// Where a delivered task's branch stands against origin's default
+// branch, and the one wording `fabrica status` and the live view both
+// mark it with - a local-refs-only git read that writes nothing.
+export { baseStandingOf, describeBaseStanding, describeBaseStandingOf } from "./base-standing.ts";
+export type { BaseStanding } from "./base-standing.ts";
 export { readTranscript } from "./transcript.ts";
 export { followTask } from "./follow.ts";
 export type { TaskFollower, TaskProgress } from "./follow.ts";
-export { fixRoundOf, eventsByTask, stateOf, deliveryOf, earlyStopKindOf } from "./queries.ts";
+export { fixRoundOf, eventsByTask, stateOf, deliveryOf, deliveredBranchOf, earlyStopKindOf } from "./queries.ts";
 export { capsActive } from "./caps.ts";
 export {
   daySpend,

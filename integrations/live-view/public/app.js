@@ -193,7 +193,14 @@ function buildRow(taskId) {
   const checksCell = cell("checks", "", [checksEl]);
 
   const deliveryEl = el("span", { className: "cell-value" }, [""]);
-  const deliveryCell = cell("delivery", "", [deliveryEl]);
+  // "behind origin/<branch>, a fix will rebase" (or "base unknown:
+  // <reason>") rides in the delivery cell rather than in a column of its
+  // own: it is set only for a delivered task, so a thirteenth column
+  // would be empty on nearly every row, and it is a fact about that
+  // delivery. Empty string collapses it away (style.css hides an empty
+  // .base-note), so an undelivered row looks exactly as it did.
+  const baseStandingEl = el("span", { className: "base-note" }, [""]);
+  const deliveryCell = cell("delivery", "", [deliveryEl, baseStandingEl]);
 
   const confidenceEl = el("span", { className: "cell-value" }, [""]);
   const confidenceCell = cell("confidence", "", [confidenceEl]);
@@ -239,6 +246,8 @@ function buildRow(taskId) {
     meterFillEl,
     checksEl,
     deliveryEl,
+    deliveryCell,
+    baseStandingEl,
     confidenceEl,
     last: {},
   };
@@ -316,6 +325,15 @@ function updateRow(refs, task) {
 
   setText(refs.checksEl, "checks", refs, task.checks);
   setText(refs.deliveryEl, "delivery", refs, task.delivery || "—");
+  // One sentence, shown wherever the layout has room for it: inline on
+  // the stacked card (phone width), as the delivery cell's tooltip in the
+  // table layout (where a 36px row has none), and as an amber delivery
+  // value at both widths, so the row is marked at a glance either way.
+  // Never a shortened paraphrase of it - the full text is also on the
+  // task page and on the review card.
+  setText(refs.baseStandingEl, "baseStanding", refs, task.baseStanding || "");
+  setAttr(refs.deliveryCell, "baseTitle", refs, "title", task.baseStanding || "");
+  setClass(refs.deliveryCell, "baseCls", refs, task.baseStanding ? "cell has-base-note" : "cell");
   setText(refs.confidenceEl, "confidence", refs, task.confidence === null ? "—" : `${task.confidence}%`);
 
   setClass(refs.el, "rowCls", refs, `task-row ${rowEmphasisClass(task.state)}`.trim());

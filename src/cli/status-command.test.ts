@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman, daySpend, formatUsd, readEvents, recordBlockedEditAttempt } from "../index.ts";
 import { appendEvent, recordPath, registerTask, writeTaskFile } from "../record/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
-import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { makeFixtureRepo, pushToOrigin } from "../../contract/helpers/fixture.ts";
 import { runDoCommand } from "./do-command.ts";
 import { runStatusCommand } from "./status-command.ts";
 import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS } from "./render.ts";
@@ -157,6 +157,78 @@ test("runStatusCommand: a delivered task is flagged as awaiting the Client's ver
   assert.match(rows[0], /delivered/);
   assert.match(rows[0], /AWAITING YOUR VERDICT/);
   assert.match(rows[0], new RegExp(project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+// The one fact on a status line read from git rather than from the
+// record: origin moves while a task works, and a `fix` rebases onto it
+// before anything else happens (issue #235). Nothing is written to get
+// this - see src/foreman/base-standing.test.ts for the byte-for-byte
+// proof of that - and it is only as fresh as the last fetch, which is
+// what the "origin last fetched" clause says.
+test("runStatusCommand: a delivered task still containing origin's tip is marked with nothing", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain: fakeBrain() });
+  const io = captureIo();
+
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+  const row = taskRows(io.out)[0];
+  assert.match(row, /AWAITING YOUR VERDICT/);
+  assert.doesNotMatch(row, /behind origin|base unknown/);
+});
+
+test("runStatusCommand: a delivered task whose branch no longer contains origin's tip says a fix will rebase", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project,
+    brain: fakeBrain(),
+  });
+
+  // Somebody else's work lands on origin's default branch, and this
+  // checkout fetches it - which is exactly what Fabrica itself does on
+  // the next line it cuts or fix round it runs.
+  writeFileSync(join(project, "someone-elses-merge.md"), "landed while the task worked\n");
+  execFileSync("git", ["add", "-A"], { cwd: project });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "another merge"], { cwd: project });
+  pushToOrigin(project);
+  execFileSync("git", ["fetch", "-q", "origin"], { cwd: project });
+
+  const io = captureIo();
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+
+  const row = taskRows(io.out).find((line) => line.startsWith(`${task.id}  `))!;
+  assert.ok(row, `the delivered task should still be listed: ${JSON.stringify(io.out)}`);
+  assert.match(row, /AWAITING YOUR VERDICT/);
+  assert.match(row, /behind origin\/\S+, a fix will rebase \(origin last fetched \d+s ago\)/);
+});
+
+test("runStatusCommand: a delivered task whose project has been moved away says `base unknown`, not nothing", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project,
+    brain: fakeBrain(),
+  });
+  rmSync(project, { recursive: true, force: true });
+
+  const io = captureIo();
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+
+  const row = taskRows(io.out).find((line) => line.startsWith(`${task.id}  `))!;
+  assert.match(row, /base unknown: the project folder .* is not there any more/);
+  assert.match(row, /AWAITING YOUR VERDICT/, "an unreadable base never hides the verdict the task is waiting for");
+});
+
+test("runStatusCommand: a working task is never marked with a base standing - only a delivery can be fixed", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const task = registerTask(recordHome, "still working");
+  appendEvent(recordHome, { taskId: task.id, name: "work-started", details: { project, attempt: 1 } });
+  const io = captureIo();
+
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+  assert.doesNotMatch(taskRows(io.out)[0], /behind origin|base unknown/);
 });
 
 test("runStatusCommand: a closed task (verdict recorded) drops off the list", async () => {

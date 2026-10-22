@@ -596,6 +596,20 @@ them can reach a running worker.
   below. It
   takes no arguments at all, and refuses any it is given
   (`parseStatusArgs`) instead of ignoring them.
+- **`status`** also marks a `delivered` task whose branch no longer
+  contains origin's default tip: "behind origin/&lt;branch&gt;, a fix
+  will rebase (origin last fetched 12m ago)", right after the verdict
+  call-to-action and before the pull request link. That is the rebase a
+  `fix` verdict already performs before its round starts (issue #235),
+  so the mark says what the choice between `accept` and `fix` actually
+  involves. The reading is `src/foreman/base-standing.ts`'s - this
+  machine's own git refs, nothing written, nothing fetched (its own test
+  proves that byte for byte), which is why the mark names the age of the
+  last fetch instead of implying it is live. When the standing cannot be
+  read at all - no `origin` remote, `origin/HEAD` unset, the branch or
+  the project gone - the line says "base unknown: &lt;reason&gt;" rather
+  than quietly reading as current. Only a delivered task is marked, and
+  the live view shows the identical string from the identical function.
 - **`log <id>`** prints one task's event history in order, each event
   rendered as prose judged per event name rather than its stored
   `details` dumped raw, and a consecutive run of heartbeats collapsed

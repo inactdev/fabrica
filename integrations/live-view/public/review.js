@@ -342,6 +342,13 @@ function buildDeliveredRow(row) {
     ...(row.inspectorDetail ? [` — ${row.inspectorDetail}`] : []),
   ]);
   const gateLine = el("div", { className: "review-line" }, [`Gate: ${row.gateState}`]);
+  // Where the branch stands against origin's default branch, when there
+  // is something to say about it - the server already rendered the whole
+  // sentence (src/foreman/base-standing.ts), identical to the one
+  // `fabrica status` prints, so this only decides whether to show it.
+  const baseLine = row.baseStanding
+    ? el("div", { className: "review-line review-base" }, [row.baseStanding])
+    : null;
   const prLine = row.prUrl
     ? el("div", { className: "review-line" }, [el("a", { href: row.prUrl, target: "_blank", rel: "noopener" }, [row.prUrl])])
     : null;
@@ -410,6 +417,7 @@ function buildDeliveredRow(row) {
   const quiz = buildQuiz(row.quiz);
   if (quiz) body.push(quiz);
   body.push(stampLine, gateLine);
+  if (baseLine) body.push(baseLine);
   if (prLine) body.push(prLine);
   body.push(labelEl, box, actions, statusEl);
   const cardEl = el("div", { className: "review-card" }, body);

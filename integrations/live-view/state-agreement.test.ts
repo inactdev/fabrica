@@ -191,6 +191,13 @@ const FIXTURES: Fixture[] = [
  * always opens with `${id}  ${project}  ${state}  ${age} old` regardless
  * of which branch follows - this pulls the state field back out rather
  * than re-deriving it. */
+/** A base-standing mark without its "(origin last fetched Nm ago)"
+ * clause - the one part of it that is a function of when it was read,
+ * which two surfaces reading a moment apart can legitimately differ on. */
+function withoutFetchClause(text: string): string {
+  return text.replace(/ \(origin last fetched [^)]*\)/g, "");
+}
+
 function statusStateFor(lines: string[], id: string): string | undefined {
   const line = lines.find((l) => l.startsWith(`${id}  `));
   return line?.split(/ {2,}/)[2];
@@ -306,6 +313,20 @@ for (const fixture of FIXTURES) {
 
     if (fixture.reviewRowKind === "delivered") {
       assert.match(statusLine!, /AWAITING YOUR VERDICT/);
+      // The base-standing mark is the one thing on either surface read
+      // from git rather than from the record, so it is the one thing
+      // that could silently come out differently in two places - both
+      // must show the identical sentence, never a paraphrase. The fetch
+      // clause is dropped from the comparison because the two surfaces
+      // read the clock a moment apart; everything that identifies the
+      // branch and what a fix would do to it has to match exactly.
+      const standing = (row as { baseStanding: string | null }).baseStanding;
+      if (standing !== null) {
+        assert.ok(
+          withoutFetchClause(statusLine!).includes(withoutFetchClause(standing)),
+          `both surfaces must show one base-standing mark:\n  status: ${statusLine}\n  review: ${standing}`
+        );
+      }
       return;
     }
 

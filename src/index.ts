@@ -25,7 +25,15 @@ export { recordVerdictDecision, runRecordedFix } from "./foreman/index.ts";
 export { recordStopDecision } from "./foreman/index.ts";
 export type { LastWorkerActivity, StoppedByOwnerDetails } from "./foreman/index.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
-export { readTranscript, eventsByTask, stateOf, deliveryOf, earlyStopKindOf } from "./foreman/index.ts";
+export { readTranscript, eventsByTask, stateOf, deliveryOf, deliveredBranchOf, earlyStopKindOf } from "./foreman/index.ts";
+// The "behind origin/<branch>, a fix will rebase" marker both
+// `fabrica status` and the live view show on a delivered task, plus the
+// read-only git check behind it and the age formatter its label uses.
+// One implementation for both surfaces: the live view reaches Fabrica
+// only through this file, so a label built under src/cli/ would have to
+// be hand-duplicated there to be shown at all.
+export { baseStandingOf, describeBaseStanding, describeBaseStandingOf, formatAge } from "./foreman/index.ts";
+export type { BaseStanding } from "./foreman/index.ts";
 export { followTask } from "./foreman/index.ts";
 // Rule 10's ledger, for `fabrica status` and `fabrica cost` (issue #11).
 export {
