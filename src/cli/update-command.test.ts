@@ -241,7 +241,7 @@ test("runUpdateCommand: a failed git pull --ff-only is reported and refuses", as
   assert.match(io.err.join("\n"), /fatal: Not possible to fast-forward/);
 });
 
-test("runUpdateCommand: an installed copy re-runs the documented install command, into the prefix it lives under", async () => {
+test("runUpdateCommand: an installed copy is reinstalled into the prefix it lives under", async () => {
   const io = captureIo();
   const prefixes: string[] = [];
   const probes = installedProbes();
@@ -261,17 +261,29 @@ test("runUpdateCommand: an installed copy re-runs the documented install command
   assert.match(io.out.join("\n"), new RegExp(`${OLD_BUILD_COMMIT} -> ${NEW_BUILD_COMMIT}`));
 });
 
-test("runUpdateCommand: a failed install is reported, naming the exact command that ran", async () => {
+// Reinstalling is two npm commands now (global-reinstall.ts: pack the
+// spec, install the tarball), so only the step that really ran knows
+// which command failed - it names it in the message, and this layer
+// passes that through verbatim rather than reconstructing a command of
+// its own that might not be the one that broke. The exact commands
+// themselves are asserted in global-reinstall.test.ts.
+test("runUpdateCommand: a failed install is reported verbatim, command and all, and refuses", async () => {
   const io = captureIo();
   const probes = installedProbes({
-    reinstall: () => ({ ok: false, message: "npm error 404 Not Found" }),
+    reinstall: (prefix) => ({
+      ok: false,
+      message: `npm install -g --prefix ${prefix} /tmp/fabrica-update-x1y2/fabrica-0.0.0.tgz failed: npm error EACCES`,
+    }),
   });
 
   const code = await runUpdateCommand([], { recordHome: "/fake/home", probes, ...liveViewNotListening, ...io });
 
   assert.equal(code, 1);
-  assert.match(io.err.join("\n"), /npm error 404 Not Found/);
-  assert.match(io.err.join("\n"), new RegExp(`npm install -g --prefix ${INSTALL_PREFIX} github:inactdev/fabrica`));
+  assert.equal(
+    io.err.join("\n"),
+    `fabrica update: npm install -g --prefix ${INSTALL_PREFIX} /tmp/fabrica-update-x1y2/fabrica-0.0.0.tgz ` +
+      `failed: npm error EACCES`
+  );
 });
 
 test("runUpdateCommand: a copy that is neither a checkout nor a global install is refused, never reinstalled", async () => {

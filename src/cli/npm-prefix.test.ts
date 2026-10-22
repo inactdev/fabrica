@@ -13,7 +13,10 @@ import {
   GLOBAL_PACKAGE_NAME,
   globalPackagePath,
   installCommandArgs,
+  installTarballCommandArgs,
+  isPackedTarball,
   normalizedPrefix,
+  packCommandArgs,
   prefixOfGlobalBin,
   prefixOfGlobalInstall,
 } from "./npm-prefix.ts";
@@ -87,6 +90,48 @@ test("installCommandArgs: carries --prefix when the prefix is known, and is READ
     readme.includes(`npm ${installCommandArgs(null).join(" ")}`),
     "README.md must name the same install command this builds"
   );
+});
+
+// The two commands `fabrica update` really runs to replace an installed
+// copy. Asserted as exact argv, like installCommandArgs above: npm is
+// spawned with these arrays verbatim, so a flag typed wrong here is a
+// broken update, not a failing match somewhere downstream.
+test("packCommandArgs: packs the documented spec into the directory it is given, and nothing else", () => {
+  assert.deepEqual(packCommandArgs("/tmp/fabrica-update-x1y2"), [
+    "pack",
+    "github:inactdev/fabrica",
+    "--pack-destination",
+    "/tmp/fabrica-update-x1y2",
+  ]);
+  // No --prefix (npm forces a non-global command to run inside it) and
+  // no --ignore-scripts (the package's own `prepare` script is what puts
+  // build-info.json in the tarball).
+  const args = packCommandArgs("/tmp/fabrica-update-x1y2");
+  assert.equal(args.includes("--prefix"), false);
+  assert.equal(args.includes("--ignore-scripts"), false);
+});
+
+test("installTarballCommandArgs: installs the packed tarball globally, under the prefix when there is one", () => {
+  assert.deepEqual(
+    installTarballCommandArgs("/home/me/.npm-global", "/tmp/fabrica-update-x1y2/fabrica-0.0.0.tgz"),
+    ["install", "-g", "--prefix", "/home/me/.npm-global", "/tmp/fabrica-update-x1y2/fabrica-0.0.0.tgz"]
+  );
+  assert.deepEqual(installTarballCommandArgs(null, "/tmp/fabrica-update-x1y2/fabrica-0.0.0.tgz"), [
+    "install",
+    "-g",
+    "/tmp/fabrica-update-x1y2/fabrica-0.0.0.tgz",
+  ]);
+  // A local file, never the git spec - which is the whole point: a git
+  // spec installs a symlink to a clone npm then deletes.
+  assert.equal(installTarballCommandArgs(null, "/tmp/x/fabrica-0.0.0.tgz").includes("github:inactdev/fabrica"), false);
+});
+
+test("isPackedTarball: npm's <name>-<version>.tgz for this package, whatever the version is", () => {
+  assert.equal(isPackedTarball("fabrica-0.0.0.tgz"), true);
+  assert.equal(isPackedTarball("fabrica-1.2.3-beta.4.tgz"), true);
+  assert.equal(isPackedTarball("something-else-1.0.0.tgz"), false);
+  assert.equal(isPackedTarball("fabrica-0.0.0.tgz.part"), false);
+  assert.equal(isPackedTarball("fabrica.tgz"), false);
 });
 
 test("normalizedPrefix: an absolute path with no trailing separator, or null for anything unusable", () => {

@@ -6,9 +6,11 @@
 // pull --ff-only origin master`, refusing first if it isn't on master or
 // has uncommitted changes (a fast-forward pull on a dirty tree, or one
 // not tracking master's history, is exactly the kind of surprise this
-// refuses rather than risks); an installed copy is updated by re-running
-// the documented install command, `npm install -g
-// github:inactdev/fabrica` (README.md's "Installable from zero").
+// refuses rather than risks); an installed copy is replaced with the
+// current code at `github:inactdev/fabrica` in two npm steps - pack the
+// spec into a throwaway directory, then install that tarball
+// (global-reinstall.ts, which carries the reason one `npm install -g
+// github:...` cannot do it).
 //
 // That install is run with `--prefix` set to the prefix the running
 // copy is actually installed under, derived from its own path
@@ -57,7 +59,8 @@ import {
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { detectCopy, git, short, type CopyInfo } from "./doctor-command.ts";
-import { INSTALL_SPEC, installCommandArgs, prefixOfGlobalInstall } from "./npm-prefix.ts";
+import { commandFailureMessage, realGlobalReinstallIo, reinstallGlobalCopy } from "./global-reinstall.ts";
+import { INSTALL_SPEC, prefixOfGlobalInstall } from "./npm-prefix.ts";
 import { LIVE_VIEW_PORT, refreshStaleLiveView, type LiveViewStaleOutcome } from "./up-command.ts";
 
 export const UPDATE_USAGE = "fabrica update";
@@ -73,13 +76,17 @@ session:
        - Checkout: runs \`git pull --ff-only origin master\` - refused
          first, with a clear message, if the checkout isn't on master
          or has uncommitted changes.
-       - Installed: re-runs the documented install command, \`npm
-         install -g github:inactdev/fabrica\`, with \`--prefix\` set
-         to the prefix this copy is installed under rather than npm's
-         default - so a copy installed outside that default (on a host
-         whose default prefix is read-only, say) updates where it
-         actually lives. A copy that is neither of the two - \`npx\`
-         runs one out of its own cache - is refused.
+       - Installed: builds the published tarball from
+         \`github:inactdev/fabrica\` into a throwaway directory (\`npm
+         pack\`) and installs that tarball globally, with \`--prefix\`
+         set to the prefix this copy is installed under rather than
+         npm's default - so a copy installed outside that default (on
+         a host whose default prefix is read-only, say) updates where
+         it actually lives. Two steps rather than one \`npm install -g
+         github:...\` because that form installs a symlink to a clone
+         npm then deletes, leaving the command broken. A copy that is
+         neither of the two - \`npx\` runs one out of its own cache -
+         is refused.
   2. Brings the installed Inspector forward too, since the two sides
      agree on the exact shape of the call between them: it reads the
      commit the installed \`inspector\` was built from, reads the tip of
@@ -138,9 +145,11 @@ export interface UpdateProbes {
   isDirty(root: string): boolean;
   /** Runs `git pull --ff-only origin master`. Dev-checkout only. */
   pull(root: string): { ok: boolean; message: string };
-  /** Runs the documented install command against one npm prefix -
-   * the one the running copy is installed under. Installed-copy
-   * only. */
+  /** Replaces the installed copy under one npm prefix - the one the
+   * running copy is installed under - with the current code at the
+   * documented spec, as global-reinstall.ts's two npm steps. A
+   * failure's `message` already names the exact command that failed.
+   * Installed-copy only. */
   reinstall(prefix: string): { ok: boolean; message: string };
   /** Inspector's side of the same update (see `updateInspector`). */
   inspector: InspectorUpdateProbes;
@@ -153,12 +162,6 @@ export interface InspectorUpdateProbes extends InspectorVersionProbes {
   /** Runs `go install github.com/inactdev/inspector/cmd/inspector@<revision>`.
    * Reported, never thrown. */
   install(revision: string): { ok: boolean; message: string };
-}
-
-function commandFailureMessage(err: unknown): string {
-  const e = err as { stderr?: Buffer | string; message?: string };
-  if (e?.stderr) return e.stderr.toString().trim();
-  return e?.message ?? String(err);
 }
 
 function gitStatusDirty(root: string): boolean {
@@ -178,23 +181,11 @@ function gitPullFfOnly(root: string): { ok: boolean; message: string } {
   }
 }
 
-function npmInstallGlobal(prefix: string): { ok: boolean; message: string } {
-  try {
-    const out = execFileSync("npm", installCommandArgs(prefix), {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { ok: true, message: out.trim() };
-  } catch (err) {
-    return { ok: false, message: commandFailureMessage(err) };
-  }
-}
-
 export const realProbes: UpdateProbes = {
   copy: () => detectCopy(CHECKOUT, (args) => git(CHECKOUT, args)),
   isDirty: gitStatusDirty,
   pull: gitPullFfOnly,
-  reinstall: npmInstallGlobal,
+  reinstall: (prefix) => reinstallGlobalCopy(prefix, realGlobalReinstallIo),
   inspector: { ...realInspectorVersionProbes(), install: (revision) => goInstallInspector(revision) },
 };
 
@@ -265,7 +256,10 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
     }
     const result = probes.reinstall(prefix);
     if (!result.ok) {
-      stderr(`fabrica update: npm ${installCommandArgs(prefix).join(" ")} failed: ${result.message}`);
+      // The message already names the exact npm command that failed -
+      // reinstalling is two of them now, and only the step that really
+      // ran knows which one it was.
+      stderr(`fabrica update: ${result.message}`);
       return 1;
     }
   }

@@ -2,9 +2,12 @@
 // needs from it: which prefix a given copy of this package is installed
 // under, which prefix the executable on `PATH` came from, and - the
 // reverse - where any prefix keeps its copy of this package. Plus the
-// one spelling of the install command those prefixes are for
-// (`installCommandArgs`), since a command that is printed in one place
-// and run in another must be the same command.
+// npm commands those prefixes are for, each spelled exactly once - the
+// documented install a person runs (`installCommandArgs`) and the two
+// `fabrica update` runs to replace an installed copy in place
+// (`packCommandArgs`, `installTarballCommandArgs`) - since a command
+// that is printed in one place and run in another must be the same
+// command.
 //
 // Taken from npm's own current documentation (`configuring-npm/folders`:
 // "Global installs on Unix systems go to `{prefix}/lib/node_modules`"
@@ -83,14 +86,57 @@ export function globalPackagePath(prefix: string): string {
 export const INSTALL_SPEC = "github:inactdev/fabrica";
 
 /** The documented install command, as one spelling shared by everything
- * that runs it or prints it - `fabrica update`'s real call, the message
- * a failed call prints, and `fabrica doctor`'s own "reinstall with"
- * fix - so none of them can drift from the others. Carries `--prefix`
- * whenever the prefix to install into is known, since npm's default is
- * read-only on some hosts; `null` falls back to npm's default, which is
- * all anyone can say when nothing names a prefix. */
+ * that prints it - `fabrica doctor`'s own "reinstall with" fix, and the
+ * advice a copy that can't be updated in place is given - so none of
+ * them can drift from the others. Carries `--prefix` whenever the prefix
+ * to install into is known, since npm's default is read-only on some
+ * hosts; `null` falls back to npm's default, which is all anyone can say
+ * when nothing names a prefix.
+ *
+ * This is the command a *person* runs, from README.md. It is no longer
+ * what `fabrica update` itself runs: installing a git spec globally
+ * leaves the package a symlink into npm's own clone directory, which npm
+ * then deletes (see global-reinstall.ts), so updating in place packs
+ * first and installs the tarball - `packCommandArgs` plus
+ * `installTarballCommandArgs` below. */
 export function installCommandArgs(prefix: string | null): string[] {
   return prefix === null
     ? ["install", "-g", INSTALL_SPEC]
     : ["install", "-g", "--prefix", prefix, INSTALL_SPEC];
+}
+
+/** Step one of updating an installed copy: build the published tarball
+ * from the documented spec into a directory of our own choosing.
+ *
+ * `--pack-destination` is npm's own documented flag for that
+ * ("Directory in which `npm pack` will save tarballs",
+ * `commands/npm-pack.md`); `--prefix` is deliberately absent, since npm
+ * forces a *non-global* command to run inside whatever `--prefix` names
+ * on the command line, and `pack` is one. No `--ignore-scripts` either:
+ * packing a git spec runs the package's `prepare` script first (npm's
+ * documented behaviour for git dependencies, verified), which is what
+ * puts `build-info.json` - the commit `fabrica doctor` reads off an
+ * installed copy - into the tarball at all. */
+export function packCommandArgs(destination: string): string[] {
+  return ["pack", INSTALL_SPEC, "--pack-destination", destination];
+}
+
+/** Step two: install that tarball globally. Same `--prefix` rule as
+ * `installCommandArgs` - named whenever it is known, npm's default
+ * otherwise - and the only difference is what is being installed: a
+ * local file, which npm unpacks into a real directory, instead of a git
+ * spec, which it symlinks to a clone it is about to delete. */
+export function installTarballCommandArgs(prefix: string | null, tarball: string): string[] {
+  return prefix === null
+    ? ["install", "-g", tarball]
+    : ["install", "-g", "--prefix", prefix, tarball];
+}
+
+/** Whether a file name in the pack destination is the tarball npm just
+ * wrote for this package. npm names a packed tarball
+ * `<name>-<version>.tgz` (`fabrica-0.0.0.tgz`), so the version is
+ * whatever `package.json` says at the commit being packed - never
+ * assumed here, only the name and the extension. */
+export function isPackedTarball(fileName: string): boolean {
+  return fileName.startsWith(`${GLOBAL_PACKAGE_NAME}-`) && fileName.endsWith(".tgz");
 }
