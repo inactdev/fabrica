@@ -695,6 +695,28 @@ them can reach a running worker.
   into one "14 heartbeats over 3m" line (a lone heartbeat still
   reads as an ordinary one). `--transcript` adds the worker's raw
   transcript entries.
+- **One event can be several lines** (issue #169). It used to be exactly
+  one, with every rendered detail capped at 200 characters and trailed
+  off with an ellipsis - which cut failure messages off mid-word and hid
+  the very reason the Client opened the log to read ("Could not reopen
+  the ProductionLine ... checking out 'fabric…"). A long message is now
+  printed whole: soft-wrapped to the terminal's width, with any newlines
+  of its own kept, and continuation lines indented four spaces so the
+  timestamp column still scans and a four-line event still reads as one
+  event. Only a genuinely huge payload is shortened, at
+  `render.ts`'s `DETAIL_CHAR_LIMIT` (10,000 characters, applied to every
+  event's rendered detail alike rather than only to the JSON fallback),
+  and when that happens the output says so in words with the real
+  figures - `[shortened: 10000 of 25000 characters shown]` - never a bare
+  ellipsis a reader has to interpret. Wrapping happens **only when there
+  is a real terminal to wrap to**: `detectWrapWidth()` reads
+  `process.stdout.columns` only if stdout is a TTY, so a piped,
+  redirected or captured `fabrica log` comes out unwrapped and
+  reproducible instead of reflowed to whatever size the window running it
+  happened to be. What is *excluded* from a rendered detail is a separate
+  decision this didn't touch: a `delivered` event still omits the
+  check's raw stdout and stderr (which can run to 64MB) and
+  `ci-check-concluded` still omits the CI job's log tail.
 - **`watch <id>`** polls the record and prints new transcript entries and
   heartbeats as they land, plus the same quiet and mid-check notices
   `status` uses. A backlog of heartbeats found on the first poll - normal

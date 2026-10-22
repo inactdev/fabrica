@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   CHECKING_QUIET_CEILING_MS,
+  DETAIL_CHAR_LIMIT,
   PRE_WORK_QUIET_CEILING_MS,
   QUIET_THRESHOLD_MS,
   WORKER_LIVENESS_UNKNOWN_NOTICE,
@@ -20,6 +21,7 @@ import {
   isQuietTooLong,
   lastActivityAt,
   projectFromEvents,
+  wrapDetail,
 } from "./render.ts";
 import type { FabricaEvent } from "../index.ts";
 
@@ -846,15 +848,102 @@ test("formatEventLine: ask-failed reads as prose, carrying the real error", () =
   assert.equal(line, "t0  ask-failed  ask failed: the brain is unreachable");
 });
 
-test("formatEventLine: an unanticipated event name falls back to bounded, not unbounded, JSON", () => {
+// Issue #169: `fabrica log` used to cap every rendered detail at a flat
+// 200 characters and trail off into an ellipsis, which cut real failure
+// messages off mid-sentence and hid the cause the Client opened the log
+// to read. A long message is now shown whole; only a genuinely huge
+// payload is shortened, and it says so.
+
+test("formatEventLine: a long failure message is shown whole, not cut off mid-sentence", () => {
+  const message =
+    "Could not reopen the ProductionLine for fabrica/20261014-t-aa from /Users/o/proj: " +
+    "git worktree add failed: fatal: 'fabrica/20261014-t-aa' is already used by worktree " +
+    "at '/Users/o/.fabrica/work/20261014-t-aa'";
+  const line = formatEventLine({ occurredAt: "t0", taskId: "x", name: "task-failed", details: { message } });
+
+  assert.ok(line.includes(message), `the whole message should survive, got: ${line}`);
+  assert.doesNotMatch(line, /…/);
+});
+
+test("formatEventLine: a payload nobody anticipated is still rendered in full while it is merely long", () => {
   const line = formatEventLine({
     occurredAt: "t0",
     taskId: "x",
     name: "cap-refused",
     details: { reason: "x".repeat(1000) },
   });
-  assert.ok(line.length < 300, `expected a bounded fallback, got ${line.length} chars`);
-  assert.match(line, /…$/);
+  // 1000 characters is a long message, not a huge payload - the old
+  // 200-character cap treated the two as the same thing.
+  assert.ok(line.includes("x".repeat(1000)), "a merely long payload should not be shortened");
+  assert.doesNotMatch(line, /shortened/);
+});
+
+test("formatEventLine: a genuinely huge payload is shortened, and the line says so with the real figures", () => {
+  const huge = "y".repeat(DETAIL_CHAR_LIMIT * 3);
+  const line = formatEventLine({ occurredAt: "t0", taskId: "x", name: "task-failed", details: { message: huge } });
+
+  assert.ok(line.length < huge.length, "a huge payload must not be printed whole");
+  // The figures, not a bare ellipsis: a reader who can't tell "the
+  // message ended" from "the message was cut" is back to the bug.
+  const note = line.match(/\[shortened: (\d+) of (\d+) characters shown\]$/);
+  assert.ok(note, `expected a note naming what was dropped, got: ...${line.slice(-120)}`);
+  assert.equal(Number(note[1]), DETAIL_CHAR_LIMIT);
+  assert.equal(Number(note[2]), huge.length);
+});
+
+test("formatEventLine: a message with its own newlines keeps them, each continuation line indented under its event", () => {
+  const lines = formatEventLines([
+    {
+      occurredAt: "t0",
+      taskId: "x",
+      name: "task-failed",
+      details: { message: "git worktree add failed:\nfatal: branch already checked out\nhint: use --force" },
+    },
+  ]);
+
+  assert.deepEqual(lines, [
+    "t0  task-failed  git worktree add failed:",
+    "    fatal: branch already checked out",
+    "    hint: use --force",
+  ]);
+});
+
+test("formatEventLines: one array element per output line, so a caller can print it line by line", () => {
+  const lines = formatEventLines(
+    [{ occurredAt: "t0", taskId: "x", name: "task-failed", details: { message: "a".repeat(200) } }],
+    { wrapWidth: 60 }
+  );
+
+  assert.ok(lines.length > 1, `expected the message to wrap, got ${lines.length} line(s)`);
+  for (const line of lines) assert.ok(line.length <= 60, `line over the width: ${line.length} chars`);
+  assert.equal(lines.slice(1).every((line) => line.startsWith("    ")), true);
+  assert.equal(lines.join("").replace(/\s/g, ""), `t0task-failed${"a".repeat(200)}`);
+});
+
+test("formatEventLine: no wrap width means no reflowing at all - piped output must not depend on a window's size", () => {
+  const message = "b".repeat(500);
+  const line = formatEventLine({ occurredAt: "t0", taskId: "x", name: "task-failed", details: { message } });
+  assert.equal(line, `t0  task-failed  ${message}`);
+});
+
+test("wrapDetail: breaks at whitespace, and hard at the margin only for a token wider than the line", () => {
+  assert.deepEqual(wrapDetail("the quick brown fox jumps over the lazy dog", 24, 24), [
+    "the quick brown fox",
+    "jumps over the lazy dog",
+  ]);
+  // A URL longer than the whole line has nowhere to break: cutting it at
+  // the margin beats running off the edge of the window.
+  assert.deepEqual(wrapDetail("see https://example.com/a/very/long/path", 24, 24), [
+    "see",
+    "https://example.com/a/ve",
+    "ry/long/path",
+  ]);
+});
+
+test("wrapDetail: a width narrower than anything readable still makes progress rather than hanging", () => {
+  const lines = wrapDetail("c".repeat(100), 1, 1);
+  assert.equal(lines.join(""), "c".repeat(100));
+  assert.ok(lines.length < 10, `a floor on the segment width should keep this short, got ${lines.length} lines`);
 });
 
 test("formatQuietNotice: names whatever signal it's given, verbatim - it's the one formatStatusLine prints", () => {

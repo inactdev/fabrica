@@ -76,6 +76,53 @@ test("runLogCommand: a run of heartbeats collapses into one line instead of floo
   assert.match(heartbeatLines[0], /^\S+  heartbeat  14 heartbeats over/);
 });
 
+// Issue #169: a task-failure message used to come out cut off mid-word -
+// the reason the task died was the one thing the log didn't say.
+const REOPEN_FAILURE =
+  "Could not reopen the ProductionLine for fabrica/20261014-t-aa from /Users/o/proj: " +
+  "git worktree add failed:\n" +
+  "fatal: 'fabrica/20261014-t-aa' is already used by worktree at '/Users/o/.fabrica/work/20261014-t-aa'\n" +
+  "hint: remove it with `git worktree remove`, or run the task again under a new id";
+
+test("runLogCommand: a failure's whole reason reaches the output, wrapped rather than cut", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "task-failed", details: { message: REOPEN_FAILURE } });
+
+  const io = captureIo();
+  const code = await runLogCommand(["t1"], { recordHome, wrapWidth: 72, ...io });
+
+  assert.equal(code, 0);
+  // Every word of the reason is somewhere in the output, and nothing
+  // trails off: wrapping moves text to the next line, it doesn't drop it.
+  const printed = io.out.join("\n");
+  for (const word of REOPEN_FAILURE.split(/\s+/)) {
+    assert.ok(printed.includes(word), `"${word}" went missing from:\n${printed}`);
+  }
+  assert.ok(!printed.includes("…"), `nothing should trail off:\n${printed}`);
+  for (const line of io.out) assert.ok(line.length <= 72, `line over the width (${line.length}): ${line}`);
+  // One event line, then continuation lines indented under it - the
+  // timestamp column still scans.
+  assert.match(io.out[1], /^\S+  task-failed  Could not reopen/);
+  assert.ok(io.out.length > 3, `expected the reason to need several lines, got ${io.out.length}`);
+  for (const line of io.out.slice(2)) assert.match(line, /^ {4}\S/);
+});
+
+test("runLogCommand: a caller that brought its own stdout gets unwrapped output, not this window's width", async () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "task-received" });
+  appendEvent(recordHome, { taskId: "t1", name: "task-failed", details: { message: "a".repeat(400) } });
+
+  const io = captureIo();
+  await runLogCommand(["t1"], { recordHome, ...io });
+
+  // No wrapWidth passed and stdout is not the real terminal, so the
+  // reason comes out on one line: a piped or captured `fabrica log` must
+  // not reflow to whatever size the window running it happens to be.
+  assert.equal(io.out.length, 2);
+  assert.ok(io.out[1].endsWith("a".repeat(400)));
+});
+
 test("runLogCommand: an unknown task id refuses plainly", async () => {
   const io = captureIo();
   const code = await runLogCommand(["no-such-task"], { recordHome: tempRecordHome(), ...io });

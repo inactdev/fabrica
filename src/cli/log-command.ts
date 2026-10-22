@@ -15,6 +15,11 @@ than as raw stored data. A consecutive run of heartbeats collapses into
 one line ("14 heartbeats over 3m") so a long stretch of liveness pings
 doesn't bury the real events around it.
 
+A long message - a failure's reason, say - is printed whole, wrapped to
+the terminal's width and indented under its own event, never cut off
+part-way through. Only a genuinely huge payload is shortened, and that
+line says so, with how much of it you are seeing.
+
   <taskId>       The task to show. See \`fabrica status\` for open ids.
   --transcript   Also print the worker's raw transcript, oldest first.
 
@@ -24,8 +29,23 @@ Environment:
 
 export interface RunLogCommandOptions {
   recordHome?: string;
+  /** What width to soft-wrap a long event detail at (issue #169).
+   * Omitted means "work it out": the real terminal's width when this is
+   * really writing to one, and no wrapping otherwise. Pass `null` for no
+   * wrapping explicitly. */
+  wrapWidth?: number | null;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+}
+
+/** The terminal's width, or null if stdout isn't a terminal - a piped or
+ * redirected `fabrica log` is read by something other than a pair of
+ * eyes, and reflowing it to whatever width this window happens to have
+ * would make its output unreproducible for no one's benefit. */
+function detectWrapWidth(): number | null {
+  if (!process.stdout.isTTY) return null;
+  const columns = process.stdout.columns;
+  return typeof columns === "number" && columns > 0 ? columns : null;
 }
 
 /** Returns the process exit code - never throws. */
@@ -46,7 +66,12 @@ export async function runLogCommand(argv: string[], opts: RunLogCommandOptions =
       );
     }
 
-    for (const line of formatEventLines(events)) stdout(line);
+    // Wrapping is a property of the terminal being written to, so it is
+    // only inferred when this really is the one writing to it: a caller
+    // that brought its own `stdout` gets unwrapped output, stable
+    // whatever size the window running it happens to be.
+    const wrapWidth = opts.wrapWidth !== undefined ? opts.wrapWidth : opts.stdout ? null : detectWrapWidth();
+    for (const line of formatEventLines(events, { wrapWidth })) stdout(line);
 
     if (transcript) {
       const entries = readTranscript(recordHome, taskId);
