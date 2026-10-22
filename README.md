@@ -288,6 +288,46 @@ report for your verdict, and records a refusal without creating a
 Client delivery. See `src/inspector/README.md` for the publishing
 boundary and the current compatibility limitation.
 
+## Who reviews the tests
+
+Inspector can judge a change's *test* edits with a model, not just run
+them - a project turns that on by listing its test files as `testPaths`
+in its own `.inspector.json`. That needs a model, and Fabrica names it.
+Put one in `~/.fabrica/projects.toml`:
+
+    [reviewer]
+    vendor = "<the reviewing vendor>"
+    model  = "<that vendor's model>"
+
+and its key in `~/.fabrica/brain.env` - the same 600-mode file the
+worker's own token lives in - as a single line:
+
+    <VENDOR>_API_KEY=<the key>
+
+spelling `<VENDOR>` in capitals (vendor `acme` reads `ACME_API_KEY`). If
+that vendor needs a base URL, add `<VENDOR>_BASE_URL` the same way;
+Fabrica forwards it when it is there and never insists on it. Either
+value may be set in the environment instead, which wins over the file.
+
+One project can have a reviewer of its own, which replaces the global
+one for that project:
+
+    [projects.spending-app.reviewer]
+    vendor = "<a different one>"
+    model  = "<that vendor's model>"
+
+**The reviewer must never be the worker's own vendor.** A model from the
+same house as the one that wrote the code is not an independent review,
+and Fabrica refuses outright rather than letting it happen quietly,
+naming both vendors when it does.
+
+Two other things are refused the same way - up front, by `fabrica do`,
+before any worker runs or a cent is spent, with the reason on stderr and
+nothing registered: a project that declares `testPaths` with no
+`[reviewer]` configured at all, and a reviewer whose `<VENDOR>_API_KEY`
+is nowhere to be found. A project that declares no `testPaths` needs no
+reviewer and is unaffected by any of this.
+
 While it runs, you can see where it stands without opening a record file
 yourself:
 

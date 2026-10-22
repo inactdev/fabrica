@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import {
@@ -11,6 +11,7 @@ import {
   hostFromOriginUrl,
   inspectorConfiguredOnOrigin,
   notSetUpMessage,
+  originSetup,
   originUrl,
   repoNameFromOriginUrl,
 } from "./origin.ts";
@@ -93,4 +94,34 @@ test("notSetUpMessage names the command that fixes it, with the real path", () =
   const message = notSetUpMessage("/srv/spending-app");
   assert.ok(message.startsWith("this project isn't set up for Fabrica yet: "));
   assert.ok(message.includes("run fabrica register /srv/spending-app --check ... --image ..."));
+});
+
+// `fabrica do` wants both answers before it registers anything, and
+// asking twice would mean fetching twice at network cost.
+test("originSetup answers both halves of the gate from one look at origin", () => {
+  const plain = makeFixtureRepo("exit 0");
+  assert.deepEqual(originSetup(plain), { inspectorConfigured: true, declaresTestPaths: false });
+
+  const judged = makeFixtureRepo("exit 0");
+  writeFileSync(join(judged, ".inspector.json"), '{"check":"./check.sh","image":"alpine","testPaths":"*.test.ts"}\n');
+  execFileSync("git", ["add", "-A"], { cwd: judged });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "judge my tests"], { cwd: judged });
+  execFileSync("git", ["push", "-q", "origin", "HEAD"], { cwd: judged });
+  assert.deepEqual(originSetup(judged), { inspectorConfigured: true, declaresTestPaths: true });
+
+  assert.deepEqual(originSetup(makeFixtureRepo("exit 0", { inspector: false })), {
+    inspectorConfigured: false,
+    declaresTestPaths: false,
+  });
+  assert.equal(originSetup(makeFixtureRepo("exit 0", { origin: false })), null, "could not find out is never a no");
+});
+
+// It is origin's default branch that decides - testPaths added only in
+// the Client's local checkout is a different commit than the one a
+// task's branch would be cut from.
+test("originSetup reads testPaths from origin, not the local checkout", () => {
+  const project = makeFixtureRepo("exit 0");
+  writeFileSync(join(project, ".inspector.json"), '{"check":"./check.sh","testPaths":"*.test.ts"}\n');
+
+  assert.deepEqual(originSetup(project), { inspectorConfigured: true, declaresTestPaths: false });
 });

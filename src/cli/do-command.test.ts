@@ -477,3 +477,53 @@ test("runDoCommand: a project whose setup state cannot be determined is not refu
   assert.doesNotMatch(io.err.join("\n"), /isn't set up for Fabrica yet/);
   assert.equal(io.out.length, 1, "it got as far as registering, so there is a task id and a record to read");
 });
+
+// The second half of the same gate: a project that asks for its test
+// changes to be judged by a model, with no reviewer configured to do the
+// judging, is refused in exactly the same place and for exactly the same
+// reason - nothing can properly judge the work, so no worker should run
+// and no money should be spent.
+test("runDoCommand: testPaths declared with no [reviewer] configured is refused before anything is registered", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  writeFileSync(
+    join(project, ".inspector.json"),
+    '{"check":"./check.sh","image":"alpine","testPaths":"*.test.ts"}\n'
+  );
+  execFileSync("git", ["add", "-A"], { cwd: project });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "judge my tests"], { cwd: project });
+  pushToOrigin(project);
+  const io = captureIo();
+
+  const code = await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, [], "nothing was registered, so there is no task id to print");
+  assert.match(io.err.join("\n"), /testPaths/);
+  assert.match(io.err.join("\n"), /\[reviewer\]/);
+  assert.equal(existsSync(join(recordHome, "events.jsonl")), false, "no event was recorded for a task never started");
+});
+
+// The ordinary case, stated as its own test so the gate above can never
+// quietly widen into "every project needs a reviewer".
+test("runDoCommand: a project that declares no testPaths needs no reviewer at all", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["small change", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(io.out.length, 1, "it got past the gate and registered a task");
+  assert.doesNotMatch(io.err.join("\n"), /\[reviewer\]/);
+});

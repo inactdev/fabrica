@@ -19,8 +19,10 @@ import type { RebaseConflict } from "../line/index.ts";
 // Type only: this module is a judgement's shape, not the rebase policy.
 import type { ConflictReportReason, PublishLease } from "./fix-rebase.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
+import type { ResolvedReviewer } from "../reviewer/index.ts";
 import type { Delivery } from "../inspector/types.ts";
 import { requireCheckCommand, resolveCheckCommand } from "./resolve-check.ts";
+import { requireReviewer } from "./reviewer.ts";
 import { ForemanError } from "./errors.ts";
 import { handToInspector } from "./inspection.ts";
 import { withClosesLine } from "./pr-body.ts";
@@ -71,11 +73,20 @@ export type CheckMode = { mode: "inspector"; inspector: Inspector } | { mode: "s
 /** Mode a when Inspector can run and the base commit asks for it; mode b
  * otherwise - never a refusal (Client ruling: no Inspector still works,
  * the Client is just the only reviewer). */
-export function chooseCheckMode(line: ProductionLine, baseCommit: string, inspector: Inspector | undefined): CheckMode {
+export function chooseCheckMode(
+  line: ProductionLine,
+  baseCommit: string,
+  inspector: Inspector | undefined,
+  /** Who judges this project's test changes, when one is configured
+   * (src/reviewer/resolve.ts) - handed to the real Inspector adapter
+   * as `-vendor`/`-model` plus that vendor's key on its environment. A
+   * caller-supplied Inspector (a test's fake) is used as given. */
+  reviewer?: ResolvedReviewer
+): CheckMode {
   if (!inspectorIsConfigured(line.workdir, baseCommit)) {
     return { mode: "self-test", reason: "no .inspector.json at the task base commit" };
   }
-  const chosen = inspector ?? defaultInspector();
+  const chosen = inspector ?? defaultInspector(reviewer === undefined ? {} : { reviewer });
   if (chosen.installed && !chosen.installed()) return { mode: "self-test", reason: "Inspector is not installed" };
   return { mode: "inspector", inspector: chosen };
 }
@@ -174,7 +185,16 @@ export function prepareRound(
   }
 ): { judge: Judge; mode: CheckMode } {
   const check = resolveCheckCommand(recordHome, line.project);
-  const mode = chooseCheckMode(line, baseCommit, opts.inspector);
+  // Settled before the mode is chosen, but only for a task that will
+  // actually be inspected: a project with no .inspector.json at its
+  // base commit is self-tested, and a reviewer it will never use has no
+  // business refusing it. Throws ForemanError("reviewer-not-ready")
+  // when one is required and cannot be settled - the same three
+  // refusals `fabrica do` already printed up front.
+  const reviewer = inspectorIsConfigured(line.workdir, baseCommit)
+    ? requireReviewer(recordHome, line.workdir, line.project, baseCommit)
+    : undefined;
+  const mode = chooseCheckMode(line, baseCommit, opts.inspector, reviewer);
   if (mode.mode === "self-test") {
     requireCheckCommand(line.workdir, check);
     appendEvent(recordHome, { taskId, name: "inspection-skipped", details: { reason: mode.reason } });

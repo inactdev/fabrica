@@ -10,8 +10,10 @@ export {
   hostFromOriginUrl,
   inspectorConfiguredOnOrigin,
   notSetUpMessage,
+  originSetup,
   repoNameFromOriginUrl,
 } from "./origin.ts";
+export type { OriginSetup } from "./origin.ts";
 export { checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.ts";
 export { appendProjectEntry, existingRegistration, isUsableProjectName } from "./registry-write.ts";
 export { pullRequestUrlIn, realRegisterTools } from "./tools.ts";

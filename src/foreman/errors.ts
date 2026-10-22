@@ -8,6 +8,9 @@ export type ForemanErrorCode =
   | "invalid-issue"
   | "missing-check"
   | "inspector-not-ready"
+  /** No reviewer could be settled for a project whose test changes need
+   * one judged - see src/reviewer/resolve.ts for the three grounds. */
+  | "reviewer-not-ready"
   | "project-not-a-repo"
   | "commit-failed"
   | "unknown-task"

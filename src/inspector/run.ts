@@ -3,10 +3,14 @@
 // its process result into the three verdicts the Foreman records.
 
 import { execFileSync, spawn } from "node:child_process";
-import { accessSync, constants, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { Inspection, Inspector } from "./types.ts";
+// Type only, erased at compile time: settling a reviewer needs the
+// Worker's own vendor, which this module has no business knowing about
+// (src/reviewer/resolve.ts's header).
+import type { ResolvedReviewer } from "../reviewer/index.ts";
 
 export const INSPECTOR_CONFIG = ".inspector.json";
 export const MAX_INSPECTION_REPORT_BYTES = 16 * 1024;
@@ -20,6 +24,44 @@ export function inspectorIsConfigured(workdir: string, revision?: string): boole
       stdio: ["ignore", "pipe", "pipe"],
     }).trim() === INSPECTOR_CONFIG
   );
+}
+
+/**
+ * Whether `.inspector.json` - as it stands at `revision`, or in the
+ * working tree when none is given - declares `testPaths`, the key that
+ * turns on Inspector's second, model-judged half and so makes a
+ * reviewer mandatory (src/reviewer/resolve.ts).
+ *
+ * Read through git rather than the filesystem whenever a revision is
+ * named, for the same reason `inspectorIsConfigured` is: the question
+ * is always about a particular commit, never about whatever the Client
+ * happens to have checked out. Anything unreadable or not valid JSON
+ * answers `false` - an unparseable config is Inspector's own refusal to
+ * make, not a reason for Fabrica to demand a reviewer.
+ */
+export function declaresTestPaths(workdir: string, revision?: string): boolean {
+  let text: string;
+  try {
+    text =
+      revision === undefined
+        ? readFileSync(join(workdir, INSPECTOR_CONFIG), "utf8")
+        : execFileSync("git", ["show", `${revision}:${INSPECTOR_CONFIG}`], {
+            cwd: workdir,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+  } catch {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null) return false;
+  const testPaths = (parsed as Record<string, unknown>).testPaths;
+  return Array.isArray(testPaths) ? testPaths.length > 0 : typeof testPaths === "string" && testPaths.length > 0;
 }
 
 export function inspectorConfigMatches(workdir: string, baseRevision: string): boolean {
@@ -37,8 +79,8 @@ export function inspectorConfigMatches(workdir: string, baseRevision: string): b
 }
 
 /** The production adapter for the Inspector command installed on PATH. */
-export function defaultInspector(): Inspector {
-  return inspectorAdapter();
+export function defaultInspector(opts: InspectorAdapterOptions = {}): Inspector {
+  return inspectorAdapter("inspector", opts);
 }
 
 /** Allows tests to run a throwaway command without invoking real Inspector. */
@@ -46,14 +88,28 @@ export interface InspectorAdapterOptions {
   /** The environment the inspector child starts from. Defaults to
    * Fabrica's own; never modified. */
   env?: NodeJS.ProcessEnv;
+  /** Who judges this project's test changes (src/reviewer/resolve.ts).
+   * Omitted, Inspector is called exactly as it was before: no
+   * `-vendor`/`-model`, no reviewer credential in its environment. */
+  reviewer?: ResolvedReviewer;
 }
 
 export function inspectorAdapter(command: string = "inspector", opts: InspectorAdapterOptions = {}): Inspector {
   const baseEnv = opts.env ?? process.env;
+  const reviewer = opts.reviewer;
   // Resolved once per adapter, then reused for every inspection: the
-  // child's environment only, never Fabrica's own.
+  // child's environment only, never Fabrica's own. The reviewer's key
+  // rides here for the same reason GITHUB_TOKEN does - an argv entry is
+  // visible to every process on the machine, an environment entry on a
+  // child Fabrica spawned is not.
   let childEnv: NodeJS.ProcessEnv | undefined;
-  const ensureEnv = (): NodeJS.ProcessEnv => (childEnv ??= { ...baseEnv, GITHUB_TOKEN: githubToken(baseEnv) });
+  const ensureEnv = (): NodeJS.ProcessEnv =>
+    (childEnv ??= {
+      ...baseEnv,
+      GITHUB_TOKEN: githubToken(baseEnv),
+      ...(reviewer === undefined ? {} : { [reviewer.apiKeyVar]: reviewer.apiKey }),
+      ...(reviewer?.baseUrl === undefined ? {} : { [reviewer.baseUrlVar]: reviewer.baseUrl }),
+    });
   return {
     async inspect({ branch, workdir, prTitle, prBody, expectedTip }) {
       let env: NodeJS.ProcessEnv;
@@ -62,7 +118,7 @@ export function inspectorAdapter(command: string = "inspector", opts: InspectorA
       } catch (err) {
         return { verdict: "refused", report: err instanceof Error ? err.message : String(err) };
       }
-      return runInspector(command, workdir, branch, env, prTitle, prBody, expectedTip);
+      return runInspector(command, workdir, branch, env, prTitle, prBody, expectedTip, reviewer);
     },
     installed() {
       return commandIsInstalled(command, baseEnv);
@@ -179,7 +235,8 @@ async function runInspector(
   env: NodeJS.ProcessEnv,
   prTitle?: string,
   prBody?: string,
-  expectedTip?: string
+  expectedTip?: string,
+  reviewer?: ResolvedReviewer
 ): Promise<Inspection> {
   // -branch is required by Inspector: the one branch it may publish to
   // after a green result. Without it, Inspector refuses every handoff.
@@ -188,6 +245,12 @@ async function runInspector(
   // Inspector has always done, and a missing expected tip must never be
   // dressed up as an empty one, which would lease against "no branch".
   if (expectedTip !== undefined) args.push("-expected-tip", expectedTip);
+  // The reviewer, when one is configured, goes on every call rather
+  // than only on a project whose .inspector.json declares testPaths:
+  // testPaths is what makes a reviewer *required*, not what makes one
+  // usable, and Inspector ignores a reviewer it has nothing to judge.
+  // The key itself never appears here - only in the child's env.
+  if (reviewer !== undefined) args.push("-vendor", reviewer.vendor, "-model", reviewer.model);
   if (prTitle !== undefined) args.push("-pr-title", prTitle);
   // prBody travels as a file, not an argument: a pull request body is
   // free-form, multi-line text, which an argv entry cannot carry safely

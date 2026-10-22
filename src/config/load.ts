@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import * as TOML from "smol-toml";
 import { ConfigError } from "./errors.ts";
-import type { Caps, FabricaConfig, PauseRule, ProjectConfig } from "./types.ts";
+import type { Caps, FabricaConfig, PauseRule, ProjectConfig, ReviewerConfig } from "./types.ts";
 
 /** Issue #189's defaults, as the Client gave them: "defaults 70 and 90
  * percent of the week". The 5-hour window refuses at 90 too, and never
@@ -53,7 +53,7 @@ export function loadConfig(recordHome: string): FabricaConfig {
     throw new ConfigError("malformed", `${path} must contain a TOML table at its root.`);
   }
 
-  const { caps: rawCaps, pause: rawPause, projects: rawProjects, ...rest } = parsed;
+  const { caps: rawCaps, pause: rawPause, projects: rawProjects, reviewer: rawReviewer, ...rest } = parsed;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     const staleTables = extra.filter((key) => isTable(rest[key]));
@@ -74,15 +74,16 @@ export function loadConfig(recordHome: string): FabricaConfig {
     throw new ConfigError(
       "malformed",
       `${path}: ${sentences.join(" ")} Projects live under [projects.<name>] ` +
-        `and globals under [caps] and [pause].`
+        `and globals under [caps], [pause] and [reviewer].`
     );
   }
 
   const caps = parseCaps(rawCaps, path);
   const pause = parsePause(rawPause, path);
   const projects = parseProjects(rawProjects, path);
+  const reviewer = parseReviewer(rawReviewer, `${path}: [reviewer]`);
 
-  return { caps, pause, projects };
+  return { caps, pause, projects, ...(reviewer === undefined ? {} : { reviewer }) };
 }
 
 /**
@@ -260,13 +261,13 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
       `${path}: [projects.${name}] must be a table with at least a "path" field.`
     );
   }
-  const { path: projectPath, check, hosts, maxRequestBytes, maxCallsPerTask, ...rest } = value;
+  const { path: projectPath, check, hosts, maxRequestBytes, maxCallsPerTask, reviewer, ...rest } = value;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path, check, hosts, maxRequestBytes and maxCallsPerTask are recognized.`
+        `Only path, check, hosts, maxRequestBytes, maxCallsPerTask and reviewer are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -287,7 +288,42 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   if (maxCallsPerTask !== undefined) {
     project.maxCallsPerTask = requirePositiveInteger(maxCallsPerTask, `${path}: [projects.${name}].maxCallsPerTask`);
   }
+  const ownReviewer = parseReviewer(reviewer, `${path}: [projects.${name}.reviewer]`);
+  if (ownReviewer !== undefined) project.reviewer = ownReviewer;
   return project;
+}
+
+/** A `[reviewer]` table, global or a project's own — the model
+ * Inspector judges that project's test changes with. Both fields are
+ * required together: half a reviewer is not something Inspector could
+ * be handed, and silently ignoring the half that is there would hide a
+ * typo behind "no reviewer configured". Which vendors are acceptable is
+ * not this function's business (src/reviewer/resolve.ts enforces the
+ * standing ruling against the Worker's own vendor); only the shape is. */
+function parseReviewer(value: unknown, label: string): ReviewerConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isTable(value)) {
+    throw new ConfigError(
+      "malformed",
+      `${label} must be a table with a "vendor" and a "model" field.`
+    );
+  }
+  const { vendor, model, ...rest } = value;
+  const extra = Object.keys(rest);
+  if (extra.length > 0) {
+    throw new ConfigError(
+      "malformed",
+      `${label} has unknown field(s): ${extra.join(", ")}. Only vendor and model are recognized.`
+    );
+  }
+  return { vendor: requireReviewerField(vendor, `${label}.vendor`), model: requireReviewerField(model, `${label}.model`) };
+}
+
+function requireReviewerField(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ConfigError("malformed", `${label} must be a non-empty string.`);
+  }
+  return value.trim();
 }
 
 /** The extra hosts a project's Workers may reach through the relay

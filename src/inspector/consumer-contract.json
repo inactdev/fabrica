@@ -7,7 +7,9 @@
       "description": "commit origin's copy of the branch is expected to be at, so a rewritten branch is published with force-with-lease; omitted when the branch was never published or was not rewritten"
     },
     { "name": "pr-title", "description": "pull request title to open after a green result" },
-    { "name": "pr-body-file", "description": "path to a file containing the pull request body" }
+    { "name": "pr-body-file", "description": "path to a file containing the pull request body" },
+    { "name": "vendor", "description": "the reviewer's vendor, for judging the change's test edits; its key is read from <VENDOR>_API_KEY" },
+    { "name": "model", "description": "the reviewer's model, named by the same vendor" }
   ],
   "exitCodes": {
     "green": 0,

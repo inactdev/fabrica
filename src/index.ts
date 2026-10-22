@@ -84,6 +84,10 @@ export { defaultBrainAdapter } from "./brain/index.ts";
 export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerTokenStatus } from "./brain/index.ts";
 export { relayImageStatus } from "./relay/index.ts";
 export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
+// Who judges a project's test changes, and the three grounds on which
+// that cannot be settled - `fabrica do` refuses up front on all three.
+export { resolveReviewer } from "./reviewer/index.ts";
+export type { ResolvedReviewer, ReviewerResolution } from "./reviewer/index.ts";
 export { requireGitRoot } from "./foreman/index.ts";
 export type { Brain, Caps, GateResult } from "../contract/surface.ts";
 export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
@@ -93,13 +97,25 @@ export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
 // before it ever calls createForeman.
 export { loadConfig, loadConfigOrProblem, projectsTomlPath, requireProject, DEFAULT_PAUSE_RULE } from "./config/index.ts";
 export { ConfigError } from "./config/index.ts";
-export type { ConfigErrorCode, ConfigProblem, PauseRule, ProjectConfig, FabricaConfig, CheckedProjectConfig } from "./config/index.ts";
+export type {
+  ConfigErrorCode,
+  ConfigProblem,
+  PauseRule,
+  ProjectConfig,
+  FabricaConfig,
+  CheckedProjectConfig,
+  ReviewerConfig,
+} from "./config/index.ts";
 
 // `fabrica register` (src/cli/register-command.ts): the one command
 // allowed to push, because it runs as the Client and only ever creates a
-// branch for him to merge. `inspectorConfiguredOnOrigin`/`notSetUpMessage`
-// are also what `fabrica do` refuses an unset-up project with, up front.
-export { registerProject, RegisterError, inspectorConfiguredOnOrigin, notSetUpMessage } from "./register/index.ts";
+// branch for him to merge. `originSetup`/`notSetUpMessage` are also
+// what `fabrica do`'s up-front gate refuses on: one look at origin's
+// default branch answering both "is this set up at all" and "does it
+// ask for its test changes judged" (`inspectorConfiguredOnOrigin` is
+// the narrower, first question on its own).
+export { registerProject, RegisterError, inspectorConfiguredOnOrigin, notSetUpMessage, originSetup } from "./register/index.ts";
+export type { OriginSetup } from "./register/index.ts";
 export type {
   RegisterErrorCode,
   RegisterOptions,

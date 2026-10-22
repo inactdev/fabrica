@@ -4,7 +4,14 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractPrUrl, inspectorAdapter, inspectorIsConfigured, reportForRecord, MAX_INSPECTION_REPORT_BYTES } from "./run.ts";
+import {
+  declaresTestPaths,
+  extractPrUrl,
+  inspectorAdapter,
+  inspectorIsConfigured,
+  reportForRecord,
+  MAX_INSPECTION_REPORT_BYTES,
+} from "./run.ts";
 
 /** A fake token, so no test here ever asks the machine's real `gh`. */
 function testAdapter(command: string) {
@@ -218,4 +225,91 @@ test("inspectorAdapter reports whether its command is installed", () => {
   assert.equal(inspectorAdapter(command(workdir, 0, "ok")).installed?.(), true);
   assert.equal(inspectorAdapter(join(workdir, "missing-inspector")).installed?.(), false);
   assert.equal(inspectorAdapter("sh").installed?.(), true, "a bare name is looked up on PATH");
+});
+
+// The reviewer (src/reviewer/): Inspector judges a change's test edits
+// with a model of its own, and Fabrica is the side that names it. The
+// flag spellings are derived from consumer-contract.json, like every
+// other flag above, so renaming one in run.ts without carrying it to
+// the file Inspector's own side is synced from fails here.
+const REVIEWER = {
+  vendor: "second-opinion",
+  model: "careful-reader",
+  apiKeyVar: "SECOND_OPINION_API_KEY",
+  apiKey: "secret-review-key",
+  baseUrlVar: "SECOND_OPINION_BASE_URL",
+};
+
+function argsEcho(dir: string, name: string): string {
+  const path = join(dir, name);
+  writeFileSync(path, "#!/bin/sh\nprintf '%s ' \"$@\"\nexit 0\n");
+  chmodSync(path, 0o755);
+  return path;
+}
+
+test("inspectorAdapter names the reviewer with -vendor and -model when one is configured", async () => {
+  const workdir = tempDir();
+  const path = argsEcho(workdir, "inspector-reviewer-args.sh");
+
+  const inspection = await inspectorAdapter(path, {
+    env: { GITHUB_TOKEN: "fake-test-token" },
+    reviewer: REVIEWER,
+  }).inspect({ branch: "fabrica/task-1", workdir });
+
+  assert.equal(
+    inspection.report,
+    [flag("repo"), workdir, flag("branch"), "fabrica/task-1", flag("vendor"), REVIEWER.vendor, flag("model"), REVIEWER.model].join(
+      " "
+    )
+  );
+});
+
+test("inspectorAdapter passes no reviewer flags at all when none is configured", async () => {
+  const workdir = tempDir();
+  const path = argsEcho(workdir, "inspector-no-reviewer-args.sh");
+
+  const inspection = await testAdapter(path).inspect({ branch: "fabrica/task-1", workdir });
+
+  assert.doesNotMatch(inspection.report, new RegExp(flag("vendor")));
+  assert.doesNotMatch(inspection.report, new RegExp(flag("model")));
+});
+
+// The key is a credential: it rides the child's environment, where only
+// that child can read it, never argv, which every process on the machine
+// can read out of the process table.
+test("inspectorAdapter hands the reviewer's key to the child's environment and never to its arguments", async () => {
+  const workdir = tempDir();
+  const path = join(workdir, "inspector-reviewer-env.sh");
+  writeFileSync(
+    path,
+    `#!/bin/sh\nprintf 'args=%s ' "$@"\nprintf 'key=%s base=%s' "$${REVIEWER.apiKeyVar}" "$${REVIEWER.baseUrlVar}"\nexit 0\n`
+  );
+  chmodSync(path, 0o755);
+
+  const inspection = await inspectorAdapter(path, {
+    env: { GITHUB_TOKEN: "fake-test-token" },
+    reviewer: { ...REVIEWER, baseUrl: "https://review.test/v1" },
+  }).inspect({ branch: "fabrica/task-1", workdir });
+
+  assert.match(inspection.report, /key=secret-review-key/, "the child must be able to read the key");
+  assert.match(inspection.report, /base=https:\/\/review\.test\/v1/, "a configured base url is forwarded too");
+  assert.doesNotMatch(inspection.report.split("key=")[0], /secret-review-key/, "the key must never be an argument");
+});
+
+test("declaresTestPaths reads the config at a commit, not the worktree a worker has touched", () => {
+  const workdir = tempDir();
+  writeFileSync(join(workdir, ".inspector.json"), '{"check":"./check.sh","image":"alpine"}\n');
+  assert.equal(declaresTestPaths(workdir), false);
+
+  writeFileSync(join(workdir, ".inspector.json"), '{"check":"./check.sh","testPaths":"*.test.ts"}\n');
+  assert.equal(declaresTestPaths(workdir), true);
+
+  writeFileSync(join(workdir, ".inspector.json"), '{"testPaths":["*.test.ts","spec/**"]}\n');
+  assert.equal(declaresTestPaths(workdir), true);
+
+  writeFileSync(join(workdir, ".inspector.json"), '{"testPaths":[]}\n');
+  assert.equal(declaresTestPaths(workdir), false, "an empty list asks for nothing to be judged");
+
+  writeFileSync(join(workdir, ".inspector.json"), "not json at all\n");
+  assert.equal(declaresTestPaths(workdir), false, "an unparseable config is Inspector's refusal to make, not a demand for a reviewer");
 });

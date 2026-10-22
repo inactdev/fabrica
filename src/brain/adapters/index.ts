@@ -182,6 +182,40 @@ export function selectedBrain(env: NodeJS.ProcessEnv, recordHome: string): Brain
   });
 }
 
+/** The vendor behind the CLI worker that runs by default, and the one
+ * behind the direct-API worker `FABRICA_BRAIN` opens. Named here
+ * because this directory is the only one anywhere under `src/` allowed
+ * to name a vendor at all (CONTRACT rule 8) - everything downstream
+ * compares these as opaque strings. */
+export const CLI_WORKER_VENDOR = "anthropic";
+export const DIRECT_WORKER_VENDOR = "openrouter";
+
+/**
+ * Which vendor the selected Worker belongs to - the one fact the
+ * standing ruling on reviewers tests against ("the reviewer must never
+ * be the worker's vendor", src/reviewer/resolve.ts).
+ *
+ * `Brain.name` is deliberately not this: it names the *adapter*, not
+ * the company whose model is answering, and two adapters could front
+ * the same vendor. Read from the same settings `selectedBrain` reads,
+ * so "who is the worker" and "whose vendor is that" can never disagree.
+ *
+ * Known limit: this is the selected adapter's own nominal vendor. The
+ * direct-API adapter pointed at some other OpenAI-compatible base URL
+ * still reports `DIRECT_WORKER_VENDOR`, since nothing in a base URL
+ * reliably names the company behind it.
+ */
+export function workerVendor(env: NodeJS.ProcessEnv, recordHome: string): string {
+  try {
+    return directBrainSettings(env, recordHome) === undefined ? CLI_WORKER_VENDOR : DIRECT_WORKER_VENDOR;
+  } catch {
+    // An unreadable or badly-permissioned brain.env is reported properly
+    // by the first real call; the default worker is the honest answer
+    // until something actually selects another one.
+    return CLI_WORKER_VENDOR;
+  }
+}
+
 /** What to call the selected brain before it has been built - a plain
  * look at the settings that never validates and never throws, so
  * building a `defaultBrainAdapter` stays free (see below). */
