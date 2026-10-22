@@ -142,7 +142,11 @@ return early" below.
    A self-tested task records `inspection-skipped`, with the reason (no
    `.inspector.json` at the base commit, or Inspector not installed),
    before its first attempt. Heartbeats continue while Inspector is
-   running so a valid wait is not reported as silence.
+   running so a valid wait is not reported as silence. Those events are
+   also what tells the Client which mode judged a task: `fabrica
+   status` and `fabrica log` read them back (issue #111, `src/cli/
+   render.ts`'s `checkModeFromEvents`) so a green Inspector reached and
+   a green the worker gave itself never read the same.
 
    One exception to "every attempt": a `fix` round whose Worker left the
    branch exactly where it already was - no new commit versus the HEAD

@@ -737,6 +737,30 @@ them can reach a running worker.
   than implying there were none. Nothing in these three commands polls
   GitHub - the read happens once, inside the round
   (`src/foreman/ci-checks.ts`); these only show what it recorded.
+- **Every `delivered` line also names which mode actually checked the
+  task** (issue #111). Since #108 a task is judged one of two very
+  different ways - Inspector's own independent, containerized run, or
+  the project's check run inside the worker's own box, which is the
+  builder checking the builder - and a green read identically either
+  way. The line now says `checked by Inspector` or `self-tested, not
+  independently checked`, read off the record by `render.ts`'s
+  `checkModeFromEvents` (`inspector-called`/`inspection-finished` vs.
+  `inspection-skipped` plus the box's own `check-run` events), latest
+  round wins. Two further readings, both Client rulings on issue #111:
+  a self-tested round where **no check ever ran** - one that went red on
+  its own write-up before any judge was called, changed nothing, or
+  whose box could not run the check at all (`notVerified`) - reads `not
+  checked - nothing ran` as its own third state, because self-tested
+  means a check actually ran; and a record carrying neither signal (a
+  task delivered before #108, an interrupted record) reads `check mode
+  unknown` rather than omitting the line, since a missing line looks
+  like nothing to say. Only a `delivered` line carries it: that is the
+  line where the Client is being asked to accept a green. `fabrica
+  log`'s own `inspection-skipped` line is the same decision at the
+  moment it was made, worded from the same constant
+  (`SELF_TESTED_MODE`) - "check mode: self-tested, not independently
+  checked - no .inspector.json at the task base commit" - rather than
+  as a step that was skipped.
 - **`status`** also marks a `delivered` task whose branch no longer
   contains origin's default tip: "behind origin/&lt;branch&gt;, a fix
   will rebase (origin last fetched 12m ago)", right after the verdict

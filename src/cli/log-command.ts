@@ -20,6 +20,13 @@ the terminal's width and indented under its own event, never cut off
 part-way through. Only a genuinely huge payload is shortened, and that
 line says so, with how much of it you are seeing.
 
+A task with no Inspector reads the mode it will be judged in, right
+where that was decided (before any work started): "check mode:
+self-tested, not independently checked - no .inspector.json at the task
+base commit". Nothing is skipped there - that is the only check the task
+gets. A task Inspector did judge says so in its own events, where
+Inspector was called and where it answered.
+
   <taskId>       The task to show. See \`fabrica status\` for open ids.
   --transcript   Also print the worker's raw transcript, oldest first.
 
