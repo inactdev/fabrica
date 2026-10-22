@@ -72,6 +72,25 @@ somewhere under `src/cli/` instead, far from the edit that caused it.
 `npm test` run classifies every state without fetching anything, and the
 fetch happens lazily only on the one branch that needs ordering.
 
+## A stale Inspector refuses with a flag error, and that is this work's own case
+
+A refusal reading `flag provided but not defined: -expected-tip` (or any
+other flag `src/inspector/run.ts` passes) is **not** a problem in this
+repository: it means the Inspector binary installed on the machine
+predates the flag Fabrica's own ratified
+`src/inspector/consumer-contract.json` already names. The two sides are
+kept in step by `.github/workflows/sync-inspector-contract.yml`, but
+nothing in that loop reinstalls the binary - so a merged contract change
+reaches every checkout immediately and the installed binary only when
+somebody reinstalls it, and in between, every publish refuses.
+
+That gap is exactly what the Inspector step added here closes: once
+`fabrica update` carries the binary forward with Fabrica, and `fabrica
+doctor` FAILs on one behind `main`, a binary too old for the flags
+Fabrica passes is caught by the health check before a publish ever
+refuses on it. The fix for an already-stale binary is the same
+`go install` line both of those print.
+
 ## The design chosen, and the one rejected
 
 **Chosen (safest first, then most accurate):** Fabrica reads the
