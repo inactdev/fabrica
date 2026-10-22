@@ -22,23 +22,13 @@ import {
   buildPausedByMeterDelivery,
   renderDeliveryMarkdown,
 } from "./delivery.ts";
+import { mergeGateDeclarations } from "./gate-declarations.ts";
 import { recordMeterPause } from "./meters.ts";
 import { deliverRebaseConflict } from "./fix-rebase.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf, recordCapStop, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps, ProductionLine } from "../../contract/surface.ts";
 import type { Delivery, Receipt } from "../inspector/types.ts";
-
-/** Rule 9's declaration travels across rounds: a fix round that leaves an
- * earlier round's declared gate change alone must not lose that
- * declaration from the delivery. Both rounds' declarations are kept when
- * they differ; the delivery reports the whole cumulative diff, so it must
- * account for all of it. */
-export function mergeGateDeclarations(prior: string | undefined, current: string | undefined): string | undefined {
-  if (!prior) return current;
-  if (!current || current === prior) return prior;
-  return `${prior}\n\n${current}`;
-}
 
 export type RoundRecordResult =
   /** Inspector reached no verdict - nothing recorded here, since
@@ -66,12 +56,29 @@ export function recordRoundResult(
     totalAttempts: number | undefined;
     mode: CheckMode;
     caps?: Caps;
-    /** A fix round's earlier receipts/gate declaration, carried forward
-     * so the delivery's attempt count and declared-gate-change wording
-     * stay cumulative across the whole task. Omitted for a first-ever or
-     * resumed-from-questions round, which has none. */
+    /** Every receipt the task's EARLIER rounds produced, read back off
+     * the record (`queries.ts`'s `receiptsOf`), so the delivery's attempt
+     * count stays cumulative across the whole task. Omitted for a
+     * first-ever or resumed-from-questions round, which has none. Not
+     * stored on this round's event: issue #68 - each "delivered" event
+     * carries its own round's receipts only, and the cumulative view is
+     * reconstructed on read. */
     priorReceipts?: Receipt[];
-    priorGateChanges?: string;
+    /** THIS round's own earlier worker passes' receipts, in order - a fix
+     * round that hands its worker more than one stopped rebase (issue
+     * #235) calls `runAttempts` once per pass, and every one of them is
+     * this round's. They go on this round's event with the last pass's. */
+    roundReceipts?: Receipt[];
+    /** Every gate declaration the task's EARLIER rounds made, oldest
+     * first (`queries.ts`'s `gateDeclarationsOf`) - see
+     * `gate-declarations.ts` for how they are merged into the one the
+     * delivery reports. */
+    priorGateDeclarations?: string[];
+    /** This round's own earlier worker passes' declarations, in order: a
+     * fix round that hands its worker more than one stopped rebase
+     * (issue #235) calls the worker more than once, and each pass's
+     * declaration is this round's as much as the last pass's is. */
+    roundGateDeclarations?: string[];
   },
   attempts: AttemptLoopResult
 ): RoundRecordResult {
@@ -90,9 +97,38 @@ export function recordRoundResult(
   // nothing is delivered for a Client ruling.
   if (lastJudgement.kind === "refused") return { kind: "refused" };
 
-  const declaredGateChanges = mergeGateDeclarations(ctx.priorGateChanges, roundGateChanges);
+  // This round's own declarations - every pass of it, the last one
+  // included - and the one text the delivery reports, newest declaration
+  // per gate (issue #68, `gate-declarations.ts`).
+  const roundGateDeclarations = [...(ctx.roundGateDeclarations ?? []), roundGateChanges].filter(
+    (text): text is string => typeof text === "string" && text.trim().length > 0
+  );
+  const declaredGateChanges = mergeGateDeclarations([...(ctx.priorGateDeclarations ?? []), ...roundGateDeclarations]);
   const priorReceipts = ctx.priorReceipts ?? [];
-  const allReceipts = [...priorReceipts, ...newReceipts];
+  const roundReceipts = [...(ctx.roundReceipts ?? []), ...newReceipts];
+  const allReceipts = [...priorReceipts, ...roundReceipts];
+
+  // What every "delivered" event below carries about this round's
+  // attempts (issue #68): THIS round's receipts, never the task's whole
+  // history re-stored on each append - a task taken through many fix
+  // rounds otherwise stores its early receipts once per later round, and
+  // `src/record/read.ts` parses all of it for every query. The cumulative
+  // view is reconstructed on read (`queries.ts`'s `receiptsOf`), and the
+  // one cumulative fact a reader cannot reconstruct from one event alone
+  // - how many attempts the task has had in all - rides along as a single
+  // number instead of an array.
+  const roundReceiptDetails = {
+    receipts: roundReceipts,
+    attemptsSoFar: allReceipts.length,
+    gateDeclarations: roundGateDeclarations,
+  };
+
+  // Which attempt's receipt holds this round's check output in full
+  // (issue #68): the last one that was actually judged. The delivery's
+  // `evidence` names it and shows an excerpt instead of storing the same
+  // text a second time - see delivery.ts's `checkEvidence`. Undefined
+  // when nothing was judged, which the builders report as such.
+  const evidenceAttempt = [...roundReceipts].reverse().find((receipt) => receipt.checks !== null)?.attempt;
 
   // Issue #189: the pause rule stopped an attempt mid-flight. Handled
   // before every branch below, for the same reason the rebase conflict
@@ -121,7 +157,7 @@ export function recordRoundResult(
       details: {
         outcome: delivery.outcome,
         delivery,
-        receipts: allReceipts,
+        ...roundReceiptDetails,
         project: line.project,
         totalAttempts: ctx.totalAttempts,
         baseCommit: ctx.baseCommit,
@@ -149,7 +185,7 @@ export function recordRoundResult(
       base: lastJudgement.base,
       conflict: lastJudgement.conflict,
       baseCommit: ctx.baseCommit,
-      receipts: allReceipts,
+      ...roundReceiptDetails,
       totalAttempts: ctx.totalAttempts,
       declaredGateChanges,
       reason: lastJudgement.reason,
@@ -180,7 +216,7 @@ export function recordRoundResult(
       details: {
         outcome: delivery.outcome,
         delivery,
-        receipts: allReceipts,
+        ...roundReceiptDetails,
         project: line.project,
         totalAttempts: ctx.totalAttempts,
         baseCommit: ctx.baseCommit,
@@ -223,6 +259,7 @@ export function recordRoundResult(
     const delivery = buildCommitFailureDelivery({
       attempts: allReceipts.length,
       lastGate,
+      evidenceAttempt,
       branch: line.branch,
       declaredGateChanges,
       error: commitError,
@@ -235,7 +272,7 @@ export function recordRoundResult(
       details: {
         outcome: delivery.outcome,
         delivery,
-        receipts: allReceipts,
+        ...roundReceiptDetails,
         project: line.project,
         totalAttempts: ctx.totalAttempts,
         baseCommit: ctx.baseCommit,
@@ -253,6 +290,7 @@ export function recordRoundResult(
     taskText: ctx.taskText,
     attempts: allReceipts.length,
     lastGate,
+    evidenceAttempt,
     branch: line.branch,
     files: diffFiles(line.project, line.branch, ctx.baseCommit),
     declaredGateChanges,
@@ -281,7 +319,7 @@ export function recordRoundResult(
     details: {
       outcome: delivery.outcome,
       delivery,
-      receipts: allReceipts,
+      ...roundReceiptDetails,
       project: line.project,
       totalAttempts: ctx.totalAttempts,
       baseCommit: ctx.baseCommit,

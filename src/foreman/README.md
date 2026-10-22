@@ -408,9 +408,11 @@ Worker left in the worktree, committed or not, ends up on the ordinary
 `fabrica/<taskId>` branch like any other outcome, declared gate change
 or not, and Fabrica does not compare it against anything. The only trace
 of rule 9 left on Fabrica's side is `gateChanges` itself — the Worker's
-own stated declaration, carried onto the delivery (`mergeGateDeclarations`
-in `round.ts` keeps an earlier round's declaration from being lost by a
-later round that leaves it alone), never verified against the diff.
+own stated declaration, carried onto the delivery
+(`gate-declarations.ts`'s `mergeGateDeclarations` keeps an earlier
+round's declaration from being lost by a later round that leaves that
+gate alone, while the newest declaration of a gate that WAS declared
+again is the one that stands), never verified against the diff.
 
 **Detection and enforcement both live outside Fabrica, in
 `.github/workflows/rule9-gate.yml`.** It queries the GitHub API for the
@@ -724,15 +726,53 @@ owned by `src/cli/README.md`'s step 5, not restated here.
 list of Receipts — only markdown/text files a person reads
 (`delivery.md`, `transcript.log`, …). Rather than invent a place to store
 structured data outside the record, `do()` puts the whole `Delivery`
-object and the full `Receipt[]` array into the `"delivered"` event's
+object and that round's `Receipt[]` into the `"delivered"` event's
 `details` field (alongside the `project` and `baseCommit` a later fix
 round needs, plus the `totalAttempts` `do()` ran with, kept as a record
 only - `queries.ts`'s `DeliveredDetails`, and "What a fix costs" below).
 An Inspector refusal has no Delivery, so its `"inspection-finished"`
-event carries the cumulative receipts and the same resume metadata
-instead. `deliveryOf` returns the latest delivery unless a newer refusal
-superseded it; `receiptsOf` reads the latest event carrying receipts. No
-reader parses markdown or creates a second source of truth.
+event carries the same resume metadata instead. `deliveryOf` returns the
+latest delivery unless a newer refusal superseded it. No reader parses
+markdown or creates a second source of truth.
+
+### Each round writes its own receipts, and nobody writes history (issue #68)
+
+A `"delivered"` event used to carry the **cumulative** `Receipt[]` -
+every receipt from every round so far, re-serialized on every append. Four
+fix rounds stored ten sets of receipts, five stored fifteen: growth as the
+square of the round count, in a file `src/record/read.ts` parses whole for
+every query, which is never pruned, so one heavily-fixed task slowed down
+every `fabrica` invocation permanently.
+
+Each event now stores only its own round's receipts, and the cumulative
+view is reconstructed on read - `queries.ts`'s `receiptsOf`
+(`reconstructReceipts` for a caller already holding the events), which
+walks every event carrying a receipt and keys them by attempt number,
+**latest wins**. Both sources matter: an attempt that ended with no
+delivery (Inspector refused) is only ever on its own
+`"receipt-recorded"` event, and a receipt a round corrected after
+recording it (the commit-failure path below) is only correct on the
+`"delivered"` event. Latest-wins is also what makes a record written
+before this change read back exactly as it did - every one of its
+`"delivered"` events restates the whole history, so the newest
+restatement of each attempt survives, which is the value that delivery
+itself reported. Nothing migrates or rewrites the record; read-side
+tolerance is the whole mechanism (Client ruling, issue #68).
+
+The one cumulative fact a reader holding a single event can no longer
+reconstruct - how many attempts the task has had in all - rides along as
+one number, `attemptsSoFar`. `fabrica log`'s delivered line prefers it
+and falls back to `receipts.length` for an older event, where the two
+agreed by construction.
+
+Rule 9's declarations had the same shape of problem and the same fix:
+the event carries `gateDeclarations`, this round's worker passes' own
+declarations, and `queries.ts`'s `gateDeclarationsOf` reads every round's
+back for `gate-declarations.ts`'s `mergeGateDeclarations` to fold into
+the one text the delivery reports - newest declaration per gate named,
+rather than a block appended per round forever. See that module's header
+for how a gate is named out of a worker's prose and why that reading is
+written to fail safe.
 `delivery.md` is still written for real deliveries as a human-readable
 rendering of the exact same object, matching the same "events.jsonl is
 authoritative; everything else is a convenience view of it" design
@@ -740,24 +780,28 @@ authoritative; everything else is a convenience view of it" design
 
 The one thing the record does *not* store whole is a check's output:
 `attempts.ts`'s `gateForRecord` keeps only the tail, behind a marker
-naming what was dropped. Every receipt is re-serialized onto each later
-result event of the same task, whether `"delivered"` or a refused
-`"inspection-finished"`. The whole events file is read and parsed for
-every query, so a check free to print any amount
-can't go in verbatim. The same cap applies wherever else check output is
-stored, not just to a receipt's `checks`: `delivery.ts` runs
-`ctx.lastGate` through that same `gateForRecord` before building a
-Delivery's `evidence` (both in `buildDelivery` and in
-`buildCommitFailureDelivery`), since a Delivery is stored on the very
-same event. The live `GateResult` is left untouched - the next attempt's
-correction brief still gets the complete output, because that is what the
-Worker needs to fix the failure, and it is never written to the record.
-The cap is a bound on the re-serialization, not a fix for it: the record's
-shape and the receipt duplication itself are deliberately left alone, filed
-as issue #68 (which also carries the cleaner design - a delivery pointing at
-its receipt instead of copying it). It was deferred so it wouldn't collide
-with issue #12's `status`/`log`/`watch` lane; that lane has since landed,
-so #68 is now only waiting on being picked up.
+naming what was dropped. The whole events file is read and parsed for
+every query, so a check free to print any amount can't go in verbatim.
+
+That output is stored in exactly one place: the receipt of the attempt it
+judged (`Receipt.checks`). A Delivery's `evidence` used to be a second,
+byte-identical copy of the same string on the same event. It is now a
+pointer - `delivery.ts`'s `checkEvidence` names the attempt whose receipt
+holds the output and shows its first `EVIDENCE_HEAD_LINES` and last
+`EVIDENCE_TAIL_LINES` lines, the tail being the larger half for the same
+reason `gateForRecord` keeps the tail. The argument for the copy was that
+a delivery should stand on its own as one readable thing; the Client
+ruled for the pointer plus an excerpt, which satisfies both, with the
+receipt as the source (issue #68, 2026-10-22). A caller that cannot name
+the attempt gets the output stored as it always was, never less.
+
+The live `GateResult` is left untouched - the next attempt's correction
+brief still gets the complete output, because that is what the Worker
+needs to fix the failure, and it is never written to the record. The one
+reader that needed the delivery's full copy, `queries.ts`'s
+`redPublishedChecksOf` (issue #267, what a fix round's worker is told
+GitHub found), reads the receipt directly and falls back to `evidence`
+only for a record written before this change.
 
 One consequence: the last attempt's `Receipt.outcome` can't be decided
 until *after* the attempt loop and the pre-teardown commit both finish
@@ -766,10 +810,12 @@ still turn into `"failed"` a moment later if that commit itself fails -
 `round.ts`'s own commit-failure path). Since `events.jsonl` is
 append-only, that receipt can't be corrected in place — so `do()`
 computes every receipt's final `outcome` before it ever calls
-`appendEvent`, and logs the whole batch once on the round's final result
-event, already correct. A `fix` verdict's round does the same, carrying
-cumulative receipts on either its new `"delivered"` event or a refused
-`"inspection-finished"` event.
+`appendEvent`, and logs the round's batch once on its final result event,
+already correct. That is the case `receiptsOf`'s latest-wins keying
+exists for: the same attempt's uncorrected receipt is already on the
+record as its own `"receipt-recorded"` event, appended before the commit
+was even attempted, and the `"delivered"` event's copy is the one that
+stands.
 
 ## A worker whose network is gone fails now, not in four minutes
 
@@ -921,19 +967,19 @@ whether a task is `"closed"`.
   `initialSession` set to the last receipt's session id and
   `startAttempt` continuing the numbering, so the record shows one
   running attempt count across the whole task, not a count that resets
-  per fix. A completed fix round records **cumulative** receipts (prior
-  + this round). A delivery appends a second `"delivered"` event; an
-  Inspector refusal appends only `"inspection-finished"` and supersedes
-  the prior delivery. `queries.ts` therefore reads the latest event
-  appropriate to each value rather than assuming every fix re-delivers.
-  The round's `priorReceipts` therefore come from `receiptsOf` (every
-  `"receipt-recorded"` event merged with the latest delivery's list),
-  not from the latest delivery alone: a refused round delivers nothing,
-  so reading only the delivery would restart `startAttempt` on a number
-  the task has already used — and `receiptsOf` de-duplicates by
-  `attempt`, so the new receipt would then vanish from the next
-  delivery's cumulative list. For a fix after an ordinary delivery the
-  two are the same set.
+  per fix. A completed fix round records **its own** receipts on its own
+  `"delivered"` event, with the task's cumulative count beside them as
+  `attemptsSoFar` (issue #68, above) — a round that passed over a
+  stopped rebase more than once puts all of its passes' receipts there,
+  since every pass is this round's. An Inspector refusal appends only
+  `"inspection-finished"` and supersedes the prior delivery.
+  `queries.ts` therefore reads the latest event appropriate to each
+  value rather than assuming every fix re-delivers. The round's
+  `priorReceipts` come from `receiptsOf`, which reconstructs the whole
+  task's list from every event carrying a receipt, not from the latest
+  delivery alone: a refused round delivers nothing, so reading only the
+  delivery would restart `startAttempt` on a number the task has already
+  used.
 
   **A round answering an Inspector refusal** (Client ruling: the dead end
   after a refused fix round). When the task's latest word is a refusal
@@ -1163,8 +1209,9 @@ derived from the record and a per-task cap still binds *between* passes —
 `spendLimitsFor` is re-read per pass, and a cap or meter stop ends the
 round instead of calling the worker again. The passes' receipts and
 declared gate changes are carried into `recordRoundResult` as
-`priorReceipts`/`priorGateChanges`, so the delivery accounts for all of
-them and not just the last.
+`roundReceipts`/`roundGateDeclarations`, so the delivery accounts for
+all of them and not just the last, and all of them land on this round's
+own `"delivered"` event.
 
 **What `baseCommit` means from then on.** After a successful rebase,
 origin's tip *is* the branch's fork point, so that is what the round's
@@ -1450,7 +1497,8 @@ A red read flips that attempt's gate to red, carrying the checks' own
 output (every red check by name, its link, and the tail of its job log),
 and sets `Judgement.ciRed` to the one-phrase summary. From there nothing
 downstream needed changing: `roundOutcome` yields `inspection-red`,
-`buildDelivery` puts the output in `evidence`, `attempts.ts`'s
+`buildDelivery` puts it on the attempt's receipt and points
+`evidence` at it, `attempts.ts`'s
 `correctionBrief` hands it to the next counted attempt, and
 `deliveredState` puts the task in front of the Client. `ciRed` exists so
 the delivery's *wording* can be honest — Inspector said green, and a
@@ -1459,8 +1507,9 @@ read off the judgement in `round.ts` exactly the way `writeupInvalid`
 already is, so no new field crosses `AttemptLoopResult`.
 
 A `fix` round on such a delivery gets the checks' output alongside the
-Client's note (`queries.ts`'s `redPublishedChecksOf` →
-`src/ci/report.ts`'s `checksCorrection`), the same shape
+Client's note (`queries.ts`'s `redPublishedChecksOf`, reading the
+round's own last judged receipt → `src/ci/report.ts`'s
+`checksCorrection`), the same shape
 `refusalCorrection` already has. Unlike a refusal, it does **not** unwrap
 `skipIfUnchanged`: the branch really was reviewed and published here, so
 a round whose worker changes nothing has nothing new for anybody, and
@@ -1486,10 +1535,11 @@ the verdict table, the three bounds, and the GitHub-side sharp edges.
 | `registered-project.ts` | `registeredProject(recordHome, projectPath)` - which `projects.toml` entry, if any, is this project, both sides resolved through `realpath`. Shared by `network-policy.ts` and `touched-tests.ts`; a malformed registry reads as "unregistered" here, since `resolve-check.ts` runs first in every round and is the right place for that error to surface loudly. |
 | `touched-tests.ts` | Issue #142's "run only the tests you touched": `onlyTouchedTestsFor` (the project's `onlyTouchedTests` setting, unless this task's own words ask for the full suite) and `workerBrief`, the one function every round calls to build the brief a Worker actually receives. See the section above. |
 | `network-policy.ts` | `networkPolicyFor(recordHome, taskId, projectPath)` - the hosts and relay limits a project declared in `projects.toml` (issue #186), matched to the project the same way `resolve-check.ts` matches its check, through `registered-project.ts`. `ask.ts`, `do.ts` and `verdict.ts` each wrap their `brain.ask`/`brain.work` call in the result (`src/brain/task-network.ts`), which is how a refused host reaches *this* task's record instead of nowhere; an unregistered project declares nothing, which means the adapter's own base hosts and the relay's default limits, never "nothing allowed". |
-| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. Commits every attempt the moment `work()` returns, with the worker's write-up as the message (`pr-body.ts`), or a fallback naming what is wrong. A missing or invalid write-up makes the attempt red on that alone (`write-up invalid: <reason>`, set as `Judgement.writeupInvalid`) without calling `judge()`, so it is never handed to Inspector; that fallback commit is unpublished, and the next attempt amends it - new changes and message together, or only the message - rather than stacking another. The next attempt's correction brief quotes the reason back; a round that ends on it delivers as `failure-report`, never `inspection-red` (`judge.ts`'s `roundOutcome`). Returns the last attempt's resolved message as `finalMessage`, which `do.ts`/`verdict.ts` use for their pre-teardown commit should anything be left uncommitted. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, and `delivery.ts`'s `evidence`. Also ticks `onHeartbeat` every `DEFAULT_HEARTBEAT_INTERVAL_MS` while a `brain.work` call is in flight, so a long opaque await still shows up on the record (issue #12) - and asks on the same tick whether that box's own network relay is still there (`src/brain/relay-health.ts`), failing the attempt with `ForemanError("worker-network-gone")` when it isn't, rather than waiting minutes for the worker to notice (see "A worker whose network is gone fails now" above) - `do.ts` and `verdict.ts` both wire it to a `"heartbeat"` event - and fires `onCheckStarted` right before the check runs, so `"check-run"` lands twice per attempt (`details.phase: "started"`, then the result-carrying one) and a task genuinely mid-check is distinguishable from one that already finished a check (`queries.ts`'s `stateOf`). `onTranscriptEntry` fires once per transcript entry, live, the moment a streaming-capable brain reports it through `src/brain/live-transcript.ts`'s workdir-keyed listener registry (issue #70) - registered before `brain.work()` is called and unregistered once it settles; any entry `workResult.transcript` carries that never arrived that way (every entry, for a brain with no finer-grained signal than "the whole call just finished") is delivered right after, from the return value's remainder - so every entry reaches `onTranscriptEntry` exactly once, in order, whether or not the brain streams. `do.ts`/`verdict.ts` wire it straight to an `appendTaskFile` call per entry. |
+| `attempts.ts` | The counted retry loop; builds each correction brief from the previous check's failure output. Commits every attempt the moment `work()` returns, with the worker's write-up as the message (`pr-body.ts`), or a fallback naming what is wrong. A missing or invalid write-up makes the attempt red on that alone (`write-up invalid: <reason>`, set as `Judgement.writeupInvalid`) without calling `judge()`, so it is never handed to Inspector; that fallback commit is unpublished, and the next attempt amends it - new changes and message together, or only the message - rather than stacking another. The next attempt's correction brief quotes the reason back; a round that ends on it delivers as `failure-report`, never `inspection-red` (`judge.ts`'s `roundOutcome`). Returns the last attempt's resolved message as `finalMessage`, which `do.ts`/`verdict.ts` use for their pre-teardown commit should anything be left uncommitted. `initialSession`/`startAttempt` (verdict's fix path) resume a session and continue attempt numbering instead of starting cold at 1. `gateForRecord` caps how much check output anything stored in the record keeps - a receipt's `checks`, which is where it lives, and the excerpt `delivery.ts`'s `checkEvidence` shows of it. Also ticks `onHeartbeat` every `DEFAULT_HEARTBEAT_INTERVAL_MS` while a `brain.work` call is in flight, so a long opaque await still shows up on the record (issue #12) - and asks on the same tick whether that box's own network relay is still there (`src/brain/relay-health.ts`), failing the attempt with `ForemanError("worker-network-gone")` when it isn't, rather than waiting minutes for the worker to notice (see "A worker whose network is gone fails now" above) - `do.ts` and `verdict.ts` both wire it to a `"heartbeat"` event - and fires `onCheckStarted` right before the check runs, so `"check-run"` lands twice per attempt (`details.phase: "started"`, then the result-carrying one) and a task genuinely mid-check is distinguishable from one that already finished a check (`queries.ts`'s `stateOf`). `onTranscriptEntry` fires once per transcript entry, live, the moment a streaming-capable brain reports it through `src/brain/live-transcript.ts`'s workdir-keyed listener registry (issue #70) - registered before `brain.work()` is called and unregistered once it settles; any entry `workResult.transcript` carries that never arrived that way (every entry, for a brain with no finer-grained signal than "the whole call just finished") is delivered right after, from the return value's remainder - so every entry reaches `onTranscriptEntry` exactly once, in order, whether or not the brain streams. `do.ts`/`verdict.ts` wire it straight to an `appendTaskFile` call per entry. |
 | `commit.ts` | Commits whatever a Worker left in the worktree onto the ProductionLine's branch, before teardown - unconditionally; it already asks the index directly and no-ops when nothing is staged. Runs for every outcome, declared or undeclared gate change included - see "Rule 9: blocked by CI, not by Fabrica, and not watched by Fabrica either" above. |
-| `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing - and `buildNothingChangedDelivery` for a fix round `judge.ts`'s `skipIfUnchanged` caught before it ever reached a check or Inspector. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. `deliveredState` treats `"nothing-changed"` as `"delivered"`, same as `"done"`/`"inspection-red"`/`"not-verified"` - and `"paused-by-meter"` (issue #189) too, since a paused round waits on the Client's own `fix` verdict and is explicitly never a failure. `buildPausedByMeterDelivery` builds that report. |
-| `round.ts` | `recordRoundResult` (issue #182) - the one place "judge the work, commit it, decide the outcome, hand over the delivery, write the record" is written: everything a round does once `runAttempts` resolves - the refused check, the fix-only "nothing changed" short-circuit, the pre-teardown commit (and its own failure-report path), building/validating the `Delivery`, and writing `delivery.md` plus the `"delivered"` event. `do.ts`'s `productionRound` and `verdict.ts`'s `runFixRound` both call this with the same `AttemptLoopResult` shape and differ only in what they pass as `ctx` - a pinned vs. freshly-cut `baseCommit`, and (fix only) `priorReceipts`/`priorGateChanges` to carry forward via `mergeGateDeclarations` (moved here from `verdict.ts`, its only caller) so rule 9's declaration survives a round that leaves it alone. Everything before this point (reopen vs. create the ProductionLine, the attempt budget, the `work-started` event, `runAttempts` itself) stays in each caller, since that's exactly where the two round-starters still differ. |
+| `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing - and `buildNothingChangedDelivery` for a fix round `judge.ts`'s `skipIfUnchanged` caught before it ever reached a check or Inspector. Its `evidence` for a check that reached a verdict is `checkEvidence`: a pointer to the attempt whose receipt holds the output, plus that output's first/last few lines, run through `attempts.ts`'s `gateForRecord` first so even the excerpt is byte-capped like a stored receipt (issue #68 - the receipt is the source; a caller that cannot name the attempt gets the capped output itself, as before). `deliveredState` treats `"nothing-changed"` as `"delivered"`, same as `"done"`/`"inspection-red"`/`"not-verified"` - and `"paused-by-meter"` (issue #189) too, since a paused round waits on the Client's own `fix` verdict and is explicitly never a failure. `buildPausedByMeterDelivery` builds that report. |
+| `round.ts` | `recordRoundResult` (issue #182) - the one place "judge the work, commit it, decide the outcome, hand over the delivery, write the record" is written: everything a round does once `runAttempts` resolves - the refused check, the fix-only "nothing changed" short-circuit, the pre-teardown commit (and its own failure-report path), building/validating the `Delivery`, and writing `delivery.md` plus the `"delivered"` event. `do.ts`'s `productionRound` and `verdict.ts`'s `runFixRound` both call this with the same `AttemptLoopResult` shape and differ only in what they pass as `ctx` - a pinned vs. freshly-cut `baseCommit`, and (fix only) `priorReceipts`/`priorGateDeclarations` (the task's earlier rounds, read back off the record) plus `roundReceipts`/`roundGateDeclarations` (this round's own earlier passes). Writes each round's receipts and gate declarations on that round's event alone, with the task's cumulative attempt count as `attemptsSoFar` (issue #68), and names the attempt whose receipt holds the check output so the delivery's `evidence` can point at it instead of copying it. Everything before this point (reopen vs. create the ProductionLine, the attempt budget, the `work-started` event, `runAttempts` itself) stays in each caller, since that's exactly where the two round-starters still differ. |
+| `gate-declarations.ts` | Rule 9's declarations across a task's rounds (issue #68): `gateNamesIn` finds the gates a worker's own prose names, and `mergeGateDeclarations` folds every round's declaration into the one text the delivery reports - newest per gate, so the text is bounded by the gates named rather than growing one block per round. Written to fail safe: a gate name it misreads can only ever keep an older declaration standing beside a newer one, never drop one, and rule 9's enforcement does not read this at all. |
 | `inspection.ts` | Records the configured Inspector handoff and its green, red, or refused result. A refusal reaches the record and task status but never becomes a red delivery. |
 | `ci-checks.ts` | Issue #267: records what the repository's own checks said about the pull request Inspector opened or updated - one `"ci-check-concluded"` per concluded check (name, conclusion, log URL, and the tail of its job log when red), then one `"ci-checks-finished"` summary carrying the phrase every task line shows and the checks that never concluded. `ChecksReader` is the seam the GitHub read sits behind (`src/ci/`'s `readPullRequestChecks` by default, a fake in tests, threaded from `createForeman`'s `checksReader` option the same way `inspector`/`checkBox` are); the record writing is here so no fake can skip it, exactly as with `inspection.ts`. Reads nothing itself and executes nothing - see "The pull request's own checks are part of the round" above. |
 | `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
@@ -1497,7 +1547,7 @@ the verdict table, the three bounds, and the GitHub-side sharp edges.
 | `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. Split in two (issue #123) so `src/cli/answer-command.ts` can detach the round: `recordAnswerDecision` (validate + record, no round) and `runRecordedAnswer` (re-derives the brief/ctx from the record and calls `runProductionRound`) - `answerTask` composes both, unchanged for every other caller. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong (wrong alone also closes a task Inspector refused with no delivery, via `queries.ts`'s `refusedWithNoDelivery`, or a task that failed before any delivery, via `failedWithNoDelivery`; accept and wrong both still rule on an earlier real delivery a later fix round's refusal supersedes, recording `supersedesRefusal: true`), re-enters the same line and worker on fix - including on a task whose latest word IS such a refusal (`queries.ts`'s `refusalAfterDelivery`), where the round's brief carries Inspector's own reason as a correction (`refusalCorrection`) and `"verdict-recorded"` notes `answersRefusal: true`. Split in two for its `fix` path (issue #123) so `src/cli/verdict-command.ts` can detach the round: `recordVerdictDecision` (validate + record, no round) and `runRecordedFix` (re-derives project/baseCommit/prior receipts/the note from the record and calls the module-private `runFixRound`) - `recordVerdict` composes both, unchanged for every other caller. `runFixRound` captures the branch's HEAD before the round's one attempt runs and wraps its judge with `judge.ts`'s `skipIfUnchanged`, so a round that lands no new commit delivers `"nothing-changed"` (`delivery.ts`'s `buildNothingChangedDelivery`) without ever calling Inspector or a self-test check - unless rule 10's cap already stopped the same round, which still wins, or the round is answering a refusal (nothing was reviewed, so the unchanged commit is handed over again rather than skipped); its tail, same as `do.ts`'s, is `round.ts`'s `recordRoundResult`. |
 | `stop.ts` | `recordStopDecision` (issue #203) - the record half of the Client stopping a task himself from the review page: refuses a task that is not `"working"`/`"checking"` (`not-running`, naming the state), otherwise appends `"stopped-by-owner"` carrying who stopped it (the Tailscale login), which state it was stopped from, and the worker's last transcript line with its timestamp. Signaling the process is deliberately NOT here - that needs `ps`, and `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`; `src/cli/task-process.ts` owns it, and `integrations/live-view/server.ts` composes the two the same way `src/cli/` composes `recordVerdictDecision` with `spawnDetachedResume`. |
-| `queries.ts` | `deliveryOf`, `receiptsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf`, `refusedWithNoDelivery`, `refusalAfterDelivery`, `failedWithNoDelivery`, `earlyStopKindOf` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal, while `receiptsOf` reads the latest event carrying receipts. `refusedWithNoDelivery` is narrower than that: true only when there is no `"delivered"` event at all and the latest `"inspection-finished"` is a refusal - `verdict.ts`'s one carve-out letting `wrong` close such a task. `refusalAfterDelivery` is its exact other side: the latest `"inspection-finished"` is a refusal, it is newer than the task's last `"delivered"` event, and there IS one - the state a `fix` verdict re-enters the worker for, carrying that refusal's own report as the correction. `failedWithNoDelivery` (issue #143) is the sibling carve-out for a task that never reached a delivery because it failed first - `stateOf` reads `"failed"` and no `"delivered"` event exists anywhere in its history. `earlyStopKindOf` names *why*, in words, for whichever of those two applies (Inspector's own report, or whichever of `"cap-refused"`/`"task-failed"`/`"ask-failed"` actually killed the task) - the one function `fabrica status` and the phone review page (`integrations/live-view/record-view.ts`'s `getReviewRows`) both call, so a task waiting on a `wrong` verdict for either reason can never read differently on the two surfaces. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. `stateOf` has two absorbing states rather than pure "last event wins": `"stopped"` (issue #203) and a recorded failure, which only `CLEARS_FAILURE`'s three event names take a task back out of - see "A recorded failure is absorbing too" above. |
+| `queries.ts` | `deliveryOf`, `receiptsOf`/`reconstructReceipts`, `gateDeclarationsOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf`, `refusedWithNoDelivery`, `refusalAfterDelivery`, `redPublishedChecksOf`, `failedWithNoDelivery`, `earlyStopKindOf` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal. `receiptsOf` reconstructs the task's whole receipt list from every event carrying one, keyed by attempt with the latest restatement winning, and `gateDeclarationsOf` does the same for rule 9's per-round declarations - both tolerate a record written before issue #68, when each event carried the cumulative view instead. `refusedWithNoDelivery` is narrower than that: true only when there is no `"delivered"` event at all and the latest `"inspection-finished"` is a refusal - `verdict.ts`'s one carve-out letting `wrong` close such a task. `refusalAfterDelivery` is its exact other side: the latest `"inspection-finished"` is a refusal, it is newer than the task's last `"delivered"` event, and there IS one - the state a `fix` verdict re-enters the worker for, carrying that refusal's own report as the correction. `failedWithNoDelivery` (issue #143) is the sibling carve-out for a task that never reached a delivery because it failed first - `stateOf` reads `"failed"` and no `"delivered"` event exists anywhere in its history. `earlyStopKindOf` names *why*, in words, for whichever of those two applies (Inspector's own report, or whichever of `"cap-refused"`/`"task-failed"`/`"ask-failed"` actually killed the task) - the one function `fabrica status` and the phone review page (`integrations/live-view/record-view.ts`'s `getReviewRows`) both call, so a task waiting on a `wrong` verdict for either reason can never read differently on the two surfaces. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. `stateOf` has two absorbing states rather than pure "last event wins": `"stopped"` (issue #203) and a recorded failure, which only `CLEARS_FAILURE`'s three event names take a task back out of - see "A recorded failure is absorbing too" above. |
 | `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |
 | `spend.ts` | Rule 10's ledger, derived from the record: `costFromTranscript` (now `{ costUsd, costBasis }`), `daySpend`/`taskSpend` (rolling 24 hours, returning `SpendTotals` - metered vs. subscription-estimate, issue #188), `unmeasuredSpend`, and the shared wording (`formatUsd`, `describeTaskCost`, `SPEND_UNKNOWN_LINE`). |

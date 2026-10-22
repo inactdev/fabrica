@@ -38,7 +38,11 @@ export interface FakeBrainHandle extends Brain {
 export function fakeBrain(
   opts: {
     onWork?: (brief: string, workdir: string, reasoningEffort?: string) => void;
-    gateChanges?: string;
+    /** Rule 9's declaration each work() call returns. A string is the same
+     * declaration every call; a function picks it per call (1-based), the
+     * way `costUsd` below does - which is what a test about declarations
+     * across several rounds needs. */
+    gateChanges?: string | ((call: number) => string | undefined);
     /** ask() returns these questions every time it's called. Omitted
      * (the default) means the task always looks clear enough to
      * proceed - matching a brain that has nothing to ask. */
@@ -178,7 +182,8 @@ export function fakeBrain(
         session,
         ...(writeup === null ? {} : { writeup }),
       };
-      if (opts.gateChanges !== undefined) result.gateChanges = opts.gateChanges;
+      const gateChanges = typeof opts.gateChanges === "function" ? opts.gateChanges(calls) : opts.gateChanges;
+      if (gateChanges !== undefined) result.gateChanges = gateChanges;
       return result;
     },
   };

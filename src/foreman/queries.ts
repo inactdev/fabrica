@@ -21,7 +21,23 @@ export function eventsOf(recordHome: string, taskId: string): FabricaEvent[] {
 export interface DeliveredDetails {
   outcome?: Delivery["outcome"];
   delivery?: Delivery;
+  /** THIS round's receipts only (issue #68). It used to be every receipt
+   * the task had ever produced, re-stored on every round's event, so four
+   * fix rounds stored ten sets of receipts and `src/record/read.ts`
+   * parsed all of them for every query. The cumulative view is
+   * reconstructed on read instead - `receiptsOf` below. */
   receipts?: Receipt[];
+  /** How many attempts the task has had in all, this round's included -
+   * the one cumulative fact a reader holding a single event cannot
+   * reconstruct from `receipts` any more. Absent on an event written
+   * before issue #68, where `receipts.length` was this same number. */
+  attemptsSoFar?: number;
+  /** Rule 9: the gate declarations THIS round's worker passes made, in
+   * order - the raw text, not the merged `delivery.gateChanges` the whole
+   * task reports. Kept per round for the same reason `receipts` is, and
+   * read back by `gateDeclarationsOf` below. Absent on an event written
+   * before issue #68. */
+  gateDeclarations?: string[];
   /** Resolved project path the ProductionLine was cut from — verdict's
    * "fix" path needs this to reopen the same line; not part of the
    * contract's Delivery shape, so it rides along here instead. */
@@ -126,10 +142,14 @@ export function refusalAfterDelivery(events: FabricaEvent[]): { report: string }
  * red, an invalid write-up, a rebase conflict).
  *
  * `summary` is the one-phrase version for a line of prose; `output` is
- * the delivery's own `evidence`, which is where the full per-check
- * output and job-log tails already live - rebuilding them from the
- * per-check events would be a second renderer to keep in step with
- * `src/ci/report.ts`.
+ * the full per-check output and job-log tails, read off the receipt of
+ * the last attempt that was judged - rebuilding them from the per-check
+ * events would be a second renderer to keep in step with
+ * `src/ci/report.ts`. It used to be read off the delivery's own
+ * `evidence`, which carried a byte-identical second copy of that same
+ * receipt field; issue #68 made `evidence` a pointer plus an excerpt, so
+ * the receipt is read directly. A record written before that still has
+ * the whole text on `evidence`, which is the fallback.
  */
 export function redPublishedChecksOf(events: FabricaEvent[]): { summary: string; output: string } | null {
   const names = events.map((event) => event.name);
@@ -145,25 +165,88 @@ export function redPublishedChecksOf(events: FabricaEvent[]): { summary: string;
   }
   const details = found?.details as { verdict?: string; summary?: string } | undefined;
   if (details?.verdict !== "red") return null;
-  const delivery = (events[deliveredIndex].details as DeliveredDetails | undefined)?.delivery;
-  const output = typeof delivery?.evidence === "string" ? delivery.evidence : "";
+  const delivered = events[deliveredIndex].details as DeliveredDetails | undefined;
+  const judged = [...(delivered?.receipts ?? [])].reverse().find((receipt) => receipt.checks !== null);
+  const output =
+    typeof judged?.checks?.output === "string" && judged.checks.output.trim().length > 0
+      ? judged.checks.output
+      : typeof delivered?.delivery?.evidence === "string"
+        ? delivered.delivery.evidence
+        : "";
   if (output.trim().length === 0) return null;
   return { summary: details.summary ?? "the pull request's own checks went red", output };
 }
 
 export function receiptsOf(recordHome: string, taskId: string): Receipt[] {
-  const events = readEventsForTask(recordHome, taskId);
-  const receiptEvent = events
-    .filter((event) => Array.isArray((event.details as { receipts?: unknown } | undefined)?.receipts))
-    .at(-1);
-  const receipts = [...((receiptEvent?.details as { receipts?: Receipt[] } | undefined)?.receipts ?? [])];
-  // An attempt that ended with no delivery (Inspector refused) is on the
-  // record only as its own "receipt-recorded" event.
+  return reconstructReceipts(readEventsForTask(recordHome, taskId));
+}
+
+/**
+ * Every receipt one task has produced, across every round, keyed by
+ * attempt number - the cumulative view issue #68 stopped storing and
+ * reconstructs on read instead. Takes the events the caller already
+ * holds, for the same reason `deliveredBranchOf` does.
+ *
+ * Two sources, both walked: each attempt's own `"receipt-recorded"`
+ * event, and the per-round list every `"delivered"` event carries. Both
+ * are needed - an attempt that ended with no delivery (Inspector refused)
+ * is only ever on the first, and a delivery is the only place a receipt
+ * the round itself corrected lands (round.ts's commit-failure path marks
+ * its last receipt `"failed"` after that receipt's own event was already
+ * appended).
+ *
+ * LATEST wins per attempt, which is what makes both of those true at
+ * once: the corrected copy comes after the original, so it stands. It is
+ * also what makes a record written BEFORE issue #68 read back exactly as
+ * it did then, with no migration and nothing rewritten - every one of its
+ * "delivered" events carries the whole history, so the newest restatement
+ * of each attempt is the one that survives, which is the value its own
+ * delivery reported.
+ */
+export function reconstructReceipts(events: FabricaEvent[]): Receipt[] {
+  const byAttempt = new Map<number, Receipt>();
   for (const event of events) {
-    const receipt = event.name === "receipt-recorded" ? (event.details as { receipt?: Receipt }).receipt : undefined;
-    if (receipt && !receipts.some((r) => r.attempt === receipt.attempt)) receipts.push(receipt);
+    const details = event.details as { receipt?: Receipt; receipts?: unknown } | undefined;
+    const carried: Receipt[] = [
+      ...(event.name === "receipt-recorded" && details?.receipt ? [details.receipt] : []),
+      ...(Array.isArray(details?.receipts) ? (details.receipts as Receipt[]) : []),
+    ];
+    for (const receipt of carried) {
+      if (typeof receipt?.attempt === "number") byAttempt.set(receipt.attempt, receipt);
+    }
   }
-  return receipts.sort((a, b) => a.attempt - b.attempt);
+  return [...byAttempt.values()].sort((a, b) => a.attempt - b.attempt);
+}
+
+/**
+ * Every gate declaration (rule 9) a task's rounds have made, oldest
+ * first - what `gate-declarations.ts`'s `mergeGateDeclarations` folds
+ * into the one text the next round's delivery reports. Read off the
+ * `"delivered"` events rather than carried forward through the previous
+ * delivery's already-merged string, so each round's own words stay
+ * separable and a declaration can be keyed by the gate it names.
+ *
+ * Read-side tolerance for a record written before issue #68, where no
+ * event carried a declaration of its own: that event's delivery held the
+ * merged, cumulative text, so it is taken whole as one declaration. That
+ * can only ever report more than the newest round's words, never less -
+ * the direction a rule 9 declaration must fail in.
+ */
+export function gateDeclarationsOf(events: FabricaEvent[]): string[] {
+  const declarations: string[] = [];
+  for (const event of events) {
+    if (event.name !== "delivered") continue;
+    const details = event.details as DeliveredDetails | undefined;
+    if (Array.isArray(details?.gateDeclarations)) {
+      for (const text of details.gateDeclarations) {
+        if (typeof text === "string" && text.trim().length > 0) declarations.push(text);
+      }
+      continue;
+    }
+    const merged = details?.delivery?.gateChanges;
+    if (typeof merged === "string" && merged.trim().length > 0) declarations.push(merged);
+  }
+  return declarations;
 }
 
 /** The most recent "delivered" event's details — a fix round appends a

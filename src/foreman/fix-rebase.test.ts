@@ -284,7 +284,15 @@ test("a later commit of the same rebase conflicting again goes back to the same 
     receipts.map((r) => r.attempt),
     [1, 2, 3, 4]
   );
-  assert.deepEqual(latestDeliveredDetails(recordHome, task.id)?.receipts?.length, 4);
+  // Issue #68: the event carries THIS round's receipts - both of its
+  // passes - and the task's cumulative count as a number, instead of
+  // re-storing the earlier round's receipts a second time.
+  const delivered = latestDeliveredDetails(recordHome, task.id);
+  assert.deepEqual(
+    delivered?.receipts?.map((r) => r.attempt),
+    [3, 4]
+  );
+  assert.equal(delivered?.attemptsSoFar, 4);
 });
 
 test("a worker that leaves markers behind is inspection-red, with the branch back where it was", async () => {
