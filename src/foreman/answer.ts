@@ -30,6 +30,7 @@ import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTask
 import type { Brain } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
 import { runProductionRound } from "./do.ts";
+import type { ChecksReader } from "./ci-checks.ts";
 import type { AskedDetails } from "./ask.ts";
 import { requireRoomToStart } from "./caps.ts";
 import { requireMeterRoomToStart } from "./meters.ts";
@@ -162,7 +163,7 @@ export function recordAnswerDecision(
 export async function runRecordedAnswer(
   recordHome: string,
   taskId: string,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; caps?: Caps }
 ): Promise<FabricaTask> {
   const events = readEventsForTask(recordHome, taskId);
   const askedIndex = events.map((e) => e.name).lastIndexOf("questions-asked");
@@ -186,6 +187,7 @@ export async function runRecordedAnswer(
     isRetry,
     inspector: opts.inspector,
     checkBox: opts.checkBox,
+    checksReader: opts.checksReader,
     caps: opts.caps,
   });
 }
@@ -198,7 +200,7 @@ export async function answerTask(
   recordHome: string,
   taskId: string,
   answerText: string,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; caps?: Caps }
 ): Promise<FabricaTask> {
   recordAnswerDecision(recordHome, taskId, answerText, { caps: opts.caps });
   return runRecordedAnswer(recordHome, taskId, opts);

@@ -3,7 +3,7 @@
 // identically everywhere it shows up rather than three slightly different
 // home-grown formats.
 
-import { DEFAULT_HEARTBEAT_INTERVAL_MS, formatAge, formatUsd } from "../index.ts";
+import { CHECKS_LABEL, DEFAULT_HEARTBEAT_INTERVAL_MS, formatAge, formatUsd } from "../index.ts";
 import type { FabricaEvent, FabricaTask, TranscriptEntry } from "../index.ts";
 import type { WorkerPresence } from "./task-process.ts";
 
@@ -76,6 +76,27 @@ export function prUrlFromEvents(events: FabricaEvent[]): string | null {
     if (events[i].name !== "pr-opened") continue;
     const details = events[i].details as { url?: string } | undefined;
     if (details?.url) return details.url;
+  }
+  return null;
+}
+
+/** What the repository's own checks on the pull request said (issue
+ * #267), as the one short phrase `src/ci/report.ts` built for a task line
+ * - "5 green, rehearsal red", "no checks reported", "could not be read:
+ * ...". Null until a read has finished for this task.
+ *
+ * Mirrors `prUrlFromEvents` above, latest-wins for the same reason: each
+ * attempt that reaches a pull request records its own
+ * `"ci-checks-finished"`, and the newest is the only one still true. The
+ * summary is taken verbatim off the event rather than rebuilt here, so
+ * `fabrica status`, `fabrica watch` and the live view cannot word the
+ * same read three ways. */
+export function checksSummaryFromEvents(events: FabricaEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].name !== "ci-checks-finished") continue;
+    const details = events[i].details as { summary?: string } | undefined;
+    const summary = typeof details?.summary === "string" ? details.summary.trim() : "";
+    return summary.length > 0 ? summary : null;
   }
   return null;
 }
@@ -228,11 +249,20 @@ export function formatStatusLine(
      * Client's live option, so it is the only one where "a fix will
      * rebase" is information rather than trivia. */
     baseStanding?: string | null;
+    /** Issue #267: `checksSummaryFromEvents`' own phrase for the checks
+     * the repository ran on this task's pull request - shown verbatim,
+     * labelled "CI:", on every state's line rather than only a delivered
+     * one: a round is red on them before the delivery lands, and a
+     * "delivered" with nothing said about CI is exactly the bare line
+     * this exists to replace. Omitted (or null) when no read has
+     * finished, which is most tasks most of the time. */
+    checksSummary?: string | null;
   }
 ): string {
   const project = opts.project ?? "unknown project";
   const age = formatAge(opts.ageMs);
-  const base = `${task.id}  ${project}  ${task.state}  ${age} old${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}`;
+  const checks = opts.checksSummary ? `  ${CHECKS_LABEL}: ${opts.checksSummary}` : "";
+  const base = `${task.id}  ${project}  ${task.state}  ${age} old${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}${checks}`;
 
   if (task.state === "delivered") {
     const pr = opts.prUrl ? `  pull request: ${opts.prUrl}` : "";
@@ -344,6 +374,10 @@ function nameLastSignal(event: FabricaEvent): string {
     }
     case "answers-given":
       return "the answer was recorded";
+    case "ci-check-concluded":
+      return "a pull request check concluded";
+    case "ci-checks-finished":
+      return "the pull request's checks were read";
     case "line-cut":
       return "the line was cut";
     case "task-received":
@@ -506,8 +540,20 @@ function describeLivenessFromRecord(state: FabricaTask["state"], events: Fabrica
  * none, only `wrong` is. */
 export function formatTerminalNotice(
   state: FabricaTask["state"],
-  ctx: { taskId: string; hasDelivery: boolean }
+  ctx: {
+    taskId: string;
+    hasDelivery: boolean;
+    /** Issue #267: `checksSummaryFromEvents`' own phrase. `fabrica
+     * watch` has no per-task line to carry it - it streams a
+     * transcript - so the one line it prints about a finished task is
+     * where the checks' state belongs, or the Client watching a round go
+     * red on GitHub sees only "task delivered". Appended to the
+     * delivered and failed notices; the dead-end and closed ones name a
+     * state no pull request read can change. */
+    checksSummary?: string | null;
+  }
 ): string | null {
+  const checks = ctx.checksSummary ? ` [${CHECKS_LABEL}: ${ctx.checksSummary}]` : "";
   if (isDeadEnd(state, ctx.hasDelivery)) {
     if (state === "refused") {
       // With a delivery behind it, the refusal is the loop's to clear,
@@ -527,9 +573,9 @@ export function formatTerminalNotice(
 
   switch (state) {
     case "delivered":
-      return `-- task delivered - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
+      return `-- task delivered${checks} - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
     case "failed":
-      return `-- task failed - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
+      return `-- task failed${checks} - nothing more expected on this transcript unless a \`fix\` verdict wakes the worker again --`;
     case "closed":
       // Rule 6: closed means the Client's verdict is recorded and final -
       // unlike "delivered", there is no fix path left to reopen this one.
@@ -620,6 +666,28 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     case "inspection-skipped": {
       const d = details as { reason?: string };
       return d.reason ? `Inspector skipped: ${d.reason}` : "Inspector skipped";
+    }
+
+    case "ci-check-concluded": {
+      // src/ci/watch.ts's CiCheckConcludedDetails. The log tail is
+      // deliberately not rendered - it is exactly the unbounded,
+      // many-line text this whole rendering exists to keep off a log
+      // line; `fabrica log` says a log was captured, and the delivery's
+      // evidence carries it.
+      const d = details as { name?: string; conclusion?: string; red?: boolean; url?: string | null; logTail?: string };
+      const verdict = d.red ? "red" : "green";
+      const named = d.conclusion && d.conclusion !== verdict ? ` (${d.conclusion})` : "";
+      const log = d.logTail ? ", job log captured" : "";
+      const where = d.url ? ` - ${d.url}` : "";
+      return `${CHECKS_LABEL} check "${d.name ?? "?"}": ${verdict}${named}${log}${where}`;
+    }
+
+    case "ci-checks-finished": {
+      // src/ci/watch.ts's CiChecksFinishedDetails - the same `summary`
+      // the task line shows, so the two can never disagree.
+      const d = details as { summary?: string; verdict?: string; prUrl?: string };
+      const summary = d.summary && d.summary.length > 0 ? d.summary : (d.verdict ?? "?");
+      return `${CHECKS_LABEL} checks finished: ${summary}${d.prUrl ? ` (${d.prUrl})` : ""}`;
     }
 
     case "delivered": {

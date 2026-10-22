@@ -638,6 +638,16 @@ them can reach a running worker.
   below. It
   takes no arguments at all, and refuses any it is given
   (`parseStatusArgs`) instead of ignoring them.
+- **Every one of those lines also carries what the repository's own
+  checks said about the task's pull request** (issue #267): `CI: 5 green,
+  rehearsal red`, read verbatim off the latest `"ci-checks-finished"`
+  event (`render.ts`'s `checksSummaryFromEvents`) rather than re-worded
+  here, so this line, `fabrica watch`'s own notice and the live view's
+  "Checks" column can never describe one read three ways. A task whose
+  pull request has not been read says nothing about CI at all, rather
+  than implying there were none. Nothing in these three commands polls
+  GitHub - the read happens once, inside the round
+  (`src/foreman/ci-checks.ts`); these only show what it recorded.
 - **`status`** also marks a `delivered` task whose branch no longer
   contains origin's default tip: "behind origin/&lt;branch&gt;, a fix
   will rebase (origin last fetched 12m ago)", right after the verdict
@@ -666,7 +676,10 @@ them can reach a running worker.
   buries the transcript entries printed just above it. When the task
   reaches a state nothing further is expected from, it prints a terminal
   notice (`formatTerminalNotice`) instead of polling on in a silence
-  indistinguishable from a hang: `delivered`, and a `failed` task that
+  indistinguishable from a hang - and that notice is where this command
+  carries the pull request's checks (`-- task delivered [CI: 5 green,
+  rehearsal red] - ... --`), since a streamed transcript has no per-task
+  line to put them on: `delivered`, and a `failed` task that
   reached a real delivery, say a `fix` verdict can still wake the worker;
   `asking` points at `fabrica answer`; and a `failed` task that never
   delivered says so plainly - `recordVerdict` would refuse a ruling on

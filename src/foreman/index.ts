@@ -54,3 +54,9 @@ export {
   standingOf,
 } from "./meters.ts";
 export type { MeterPausedDetails, MeterRefusedDetails, MeterStanding } from "./meters.ts";
+// Issue #267: the two events a round appends for the checks the
+// repository runs on its pull request, and the seam the GitHub read
+// itself sits behind. The record writing is here, not in `src/ci/`, so no
+// fake can skip it (see ci-checks.ts's own header).
+export { concludedDetails, defaultChecksReader, finishedDetails, handToPullRequestChecks } from "./ci-checks.ts";
+export type { ChecksReader, CiCheckConcludedDetails, CiChecksFinishedDetails } from "./ci-checks.ts";

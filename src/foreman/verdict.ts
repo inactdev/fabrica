@@ -22,10 +22,13 @@ import {
   failedWithNoDelivery,
   latestDeliveredDetails,
   receiptsOf,
+  redPublishedChecksOf,
   refusalAfterDelivery,
   refusedWithNoDelivery,
 } from "./queries.ts";
+import { checksCorrection } from "../ci/index.ts";
 import { prepareRound, skipIfUnchanged } from "./judge.ts";
+import type { ChecksReader } from "./ci-checks.ts";
 import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { workerBrief } from "./touched-tests.ts";
@@ -223,7 +226,7 @@ export function recordVerdictDecision(
 export async function runRecordedFix(
   recordHome: string,
   taskId: string,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; caps?: Caps }
 ): Promise<void> {
   const details = latestDeliveredDetails(recordHome, taskId);
   const totalAttempts = details?.totalAttempts;
@@ -237,6 +240,11 @@ export async function runRecordedFix(
   // task's latest word is - read back off the record exactly like the
   // note, the project and the base commit above.
   const refusal = refusalAfterDelivery(events);
+  // Issue #267: and the pull request's own red checks, when that is what
+  // the delivery being fixed went red on. Read back off the record the
+  // same way, and handed to the worker alongside the Client's note - his
+  // note says what he wants changed, this says what GitHub found.
+  const redChecks = redPublishedChecksOf(events);
 
   // Every receipt the task has, not just the ones the latest *delivery*
   // carried: a round Inspector refused delivers nothing, so its attempts
@@ -258,9 +266,11 @@ export async function runRecordedFix(
     baseCommit: baseCommit!,
     priorReceipts,
     refusalReport: refusal?.report,
+    redChecksOutput: redChecks?.output,
     priorGateChanges: details?.delivery?.gateChanges || undefined,
     inspector: opts.inspector,
     checkBox: opts.checkBox,
+    checksReader: opts.checksReader,
     caps: opts.caps,
   }));
 }
@@ -274,7 +284,7 @@ export async function recordVerdict(
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; caps?: Caps }
 ): Promise<void> {
   recordVerdictDecision(recordHome, taskId, ruling, note, { caps: opts.caps });
   if (ruling !== "fix") return;
@@ -344,14 +354,40 @@ async function runFixRound(
      * correction, and the round's judge is never wrapped with
      * `skipIfUnchanged` - see both call sites below. */
     refusalReport?: string;
+    /** Issue #267: the delivery's own evidence, set exactly when the
+     * delivery this round is fixing went red on the checks the
+     * repository runs on the pull request rather than on Inspector's
+     * verdict (`queries.ts`'s `redPublishedChecksOf`). One thing follows
+     * from it: the worker's brief carries it as a correction, after the
+     * Client's note. Unlike `refusalReport` it does NOT unwrap
+     * `skipIfUnchanged` - the branch WAS reviewed and published here, so
+     * a round whose worker changes nothing has genuinely nothing new to
+     * hand anybody, and re-reading the same commit's checks would only
+     * find the same red. */
+    redChecksOutput?: string;
     priorGateChanges: string | undefined;
     inspector?: Inspector;
     checkBox?: CheckBox;
+    /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
+     * the pull request's real checks from GitHub. */
+    checksReader?: ChecksReader;
     caps?: Caps;
   }
 ): Promise<void> {
-  const { brain, project, totalAttempts, baseCommit, priorReceipts, refusalReport, priorGateChanges, inspector, checkBox, caps } =
-    ctx;
+  const {
+    brain,
+    project,
+    totalAttempts,
+    baseCommit,
+    priorReceipts,
+    refusalReport,
+    redChecksOutput,
+    priorGateChanges,
+    inspector,
+    checkBox,
+    checksReader,
+    caps,
+  } = ctx;
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
@@ -413,6 +449,7 @@ async function runFixRound(
       inspector,
       checkBox,
       closesIssue,
+      checksReader,
       // Read at each handoff, not now: on the conflict path the rebase
       // is still stopped at this point and `lease` is only settled once
       // the host has finished it, inside `beforeCommit` below.
@@ -544,6 +581,7 @@ async function runFixRound(
               note,
               [
                 refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,
+                redChecksOutput !== undefined ? checksCorrection(redChecksOutput) : undefined,
                 handed ? rebaseConflictInstructions(handed) : undefined,
               ]
                 .filter((part): part is string => part !== undefined)

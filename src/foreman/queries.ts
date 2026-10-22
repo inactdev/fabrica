@@ -107,6 +107,50 @@ export function refusalAfterDelivery(events: FabricaEvent[]): { report: string }
   return { report: details.report ?? "Inspector reached no verdict and said nothing about why" };
 }
 
+/**
+ * The red read of the pull request's own checks that the task's CURRENT
+ * delivery was built from (issue #267), or null when that delivery was
+ * not red on them. What a `fix` round hands its worker as a correction,
+ * alongside the Client's own note - the counterpart of
+ * `refusalAfterDelivery` above, and read back off the record for the
+ * same reason everything else a fix round needs is: nothing is threaded
+ * across the detached-process boundary (issue #123).
+ *
+ * Scoped to one round deliberately. A round appends, in order,
+ * `"work-started"`, then (per attempt) `"ci-checks-finished"`, then
+ * `"delivered"` - so the latest `"ci-checks-finished"` lying between the
+ * last `"delivered"` and the `"work-started"` before it is exactly the
+ * read that delivery reports. Taking "the latest one anywhere" instead
+ * would hand a worker a stale red from two rounds ago whenever the round
+ * that actually delivered never reached a pull request at all (Inspector
+ * red, an invalid write-up, a rebase conflict).
+ *
+ * `summary` is the one-phrase version for a line of prose; `output` is
+ * the delivery's own `evidence`, which is where the full per-check
+ * output and job-log tails already live - rebuilding them from the
+ * per-check events would be a second renderer to keep in step with
+ * `src/ci/report.ts`.
+ */
+export function redPublishedChecksOf(events: FabricaEvent[]): { summary: string; output: string } | null {
+  const names = events.map((event) => event.name);
+  const deliveredIndex = names.lastIndexOf("delivered");
+  if (deliveredIndex === -1) return null;
+  const roundStart = names.lastIndexOf("work-started", deliveredIndex);
+  let found: FabricaEvent | undefined;
+  for (let i = deliveredIndex; i > roundStart; i--) {
+    if (names[i] === "ci-checks-finished") {
+      found = events[i];
+      break;
+    }
+  }
+  const details = found?.details as { verdict?: string; summary?: string } | undefined;
+  if (details?.verdict !== "red") return null;
+  const delivery = (events[deliveredIndex].details as DeliveredDetails | undefined)?.delivery;
+  const output = typeof delivery?.evidence === "string" ? delivery.evidence : "";
+  if (output.trim().length === 0) return null;
+  return { summary: details.summary ?? "the pull request's own checks went red", output };
+}
+
 export function receiptsOf(recordHome: string, taskId: string): Receipt[] {
   const events = readEventsForTask(recordHome, taskId);
   const receiptEvent = events

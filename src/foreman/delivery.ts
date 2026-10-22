@@ -58,6 +58,15 @@ export function buildDelivery(
     /** Set when the last attempt's write-up was missing or invalid: the
      * failure report says so, and that no check judged it. */
     writeupInvalid?: string;
+    /** Issue #267: set when the round is red because the checks the
+     * repository runs on the pull request went red after Inspector had
+     * already called the branch green - the one-phrase summary of them.
+     * The outcome is still `inspection-red` (it is a red result waiting
+     * on the Client's verdict, which is what that outcome means), but the
+     * wording must say what actually went red: Inspector said green, and
+     * a report claiming otherwise would send the Client to the wrong
+     * log. */
+    ciRed?: string;
   }
 ): Delivery {
   if (outcome === "cap-stopped") return buildCapStoppedDelivery(ctx);
@@ -69,7 +78,9 @@ export function buildDelivery(
       ? `Completed: ${ctx.taskText}`
       : outcome === "failure-report"
         ? `The project's check did not pass after ${ctx.attempts} attempt(s).`
-        : `Inspector reported the committed branch red after ${ctx.attempts} attempt(s).`;
+        : ctx.ciRed !== undefined
+          ? `The pull request's own checks went red after ${ctx.attempts} attempt(s): ${ctx.ciRed}.`
+          : `Inspector reported the committed branch red after ${ctx.attempts} attempt(s).`;
 
   const checkOutput = ctx.lastGate ? gateForRecord(ctx.lastGate).output : "";
 
@@ -79,7 +90,11 @@ export function buildDelivery(
     outcome === "failure-report"
       ? "The project's check did not pass; see evidence for the failure output."
       : outcome === "inspection-red"
-        ? "Inspector could not reach green after its mechanical repairs. The Client can give a fix verdict for work that needs the request's context."
+        ? ctx.ciRed !== undefined
+          ? "Inspector called this branch green and published it; the checks the repository itself runs on the " +
+            "pull request then went red. See evidence for each red check and the end of its job log. A fix " +
+            "verdict hands that same output back to the worker."
+          : "Inspector could not reach green after its mechanical repairs. The Client can give a fix verdict for work that needs the request's context."
         : "";
 
   // No Inspector: the builder checked the builder. Said plainly, and the

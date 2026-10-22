@@ -211,7 +211,7 @@ stream on the left.
 
 Each column's own derivation lives beside it in `record-view.ts`
 (`latestReceipt`/`workerLabel`, `networkPolicyLabel`, `triggerLabel`,
-`checksLabel`, `deliveryFromEvents`, `capsAtStart`). Four are worth
+`checksLabel`, `deliveryFromEvents`, `capsAtStart`). Five are worth
 knowing without reading the code:
 
 - **network policy** says what the record can actually say, which today
@@ -231,6 +231,17 @@ knowing without reading the code:
   explicitly (`--issue`, persisted as the task's own `issue` file).
   Every task begins as one `fabrica do`, so the round is the only part
   of "what triggered this" the record can answer differently per task.
+- **checks** is whatever most recently judged the work, in one short
+  phrase: the worker's own box running the project's check, Inspector's
+  independent verdict (which IS the check in Inspector mode - issue
+  #64), or, last of all because it happens last, what the repository
+  itself ran on the pull request - `CI: 5 green, rehearsal red` (issue
+  #267). That CI phrase is taken verbatim off the `"ci-checks-finished"`
+  event, with the same `CHECKS_LABEL` prefix `fabrica status` uses, so
+  this column and that line can never word one read two ways. Nothing
+  here polls GitHub: the read happens once, inside the round
+  (`src/foreman/ci-checks.ts`), and this column only shows what it
+  recorded.
 - **duration** runs to now for an open task and freezes at whatever a
   finished one last recorded, so the history page isn't full of
   counters still ticking. The server decides which; the page only

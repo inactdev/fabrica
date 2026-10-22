@@ -1348,6 +1348,54 @@ reading's own `observedAt` rather than by position in the log, since
 two tasks running at once append their receipts in the order their
 attempts *end*.
 
+## The pull request's own checks are part of the round (issue #267)
+
+Inspector's green is no longer the last word. Everything the repository
+runs on the pull request *after* Inspector has published — the
+protected-path gate, a formatter, a container rehearsal, `docker-tests` —
+used to be invisible here: nothing landed on the record when one went
+red, the worker never heard about it, and `status`/`watch`/the live view
+read "delivered" while the pull request page read red.
+
+`judge.ts`'s `inspectorJudge` now reads them, at exactly one point: right
+after `handToInspector` returns a **green** verdict that carried a
+`prUrl`. A red or refused inspection published nothing, so there is no
+pull request whose checks could say anything about that attempt; neither
+has a green run that opened none. The read itself is `src/ci/`
+(read-only, GET requests to GitHub's REST API, and nothing executed
+anywhere — issue #64's ruling is untouched); the record writing is
+`ci-checks.ts`'s `handToPullRequestChecks`, here, for the same reason
+`inspection.ts` rather than the `Inspector` adapter records Inspector's
+own call: a test fakes the outside call, and cannot fake the recording.
+
+A red read flips that attempt's gate to red, carrying the checks' own
+output (every red check by name, its link, and the tail of its job log),
+and sets `Judgement.ciRed` to the one-phrase summary. From there nothing
+downstream needed changing: `roundOutcome` yields `inspection-red`,
+`buildDelivery` puts the output in `evidence`, `attempts.ts`'s
+`correctionBrief` hands it to the next counted attempt, and
+`deliveredState` puts the task in front of the Client. `ciRed` exists so
+the delivery's *wording* can be honest — Inspector said green, and a
+summary blaming it would send the Client to the wrong log — and it is
+read off the judgement in `round.ts` exactly the way `writeupInvalid`
+already is, so no new field crosses `AttemptLoopResult`.
+
+A `fix` round on such a delivery gets the checks' output alongside the
+Client's note (`queries.ts`'s `redPublishedChecksOf` →
+`src/ci/report.ts`'s `checksCorrection`), the same shape
+`refusalCorrection` already has. Unlike a refusal, it does **not** unwrap
+`skipIfUnchanged`: the branch really was reviewed and published here, so
+a round whose worker changes nothing has nothing new for anybody, and
+re-reading the same commit's checks could only find the same red.
+
+Three results deliberately leave the round alone: an `unknown` (the
+bounded wait expired with checks still running), a `none` (the repository
+reports no checks), and an `unreadable` (the API could not be read). Each
+is recorded as itself and named in the delivery's own evidence — never
+silently dropped, and never turned into a red. Inventing a red out of a
+silence is the same lie as calling it green. See `src/ci/README.md` for
+the verdict table, the three bounds, and the GitHub-side sharp edges.
+
 ## Files
 
 | File | Holds |
@@ -1365,6 +1413,7 @@ attempts *end*.
 | `delivery.ts` | Builds the `Delivery` object and its `delivery.md` rendering, plus `buildCommitFailureDelivery` for the one path that isn't a normal outcome - the pre-teardown commit itself failing - and `buildNothingChangedDelivery` for a fix round `judge.ts`'s `skipIfUnchanged` caught before it ever reached a check or Inspector. Its `evidence` goes through `attempts.ts`'s `gateForRecord`, so a stored Delivery is capped exactly like a stored receipt. `deliveredState` treats `"nothing-changed"` as `"delivered"`, same as `"done"`/`"inspection-red"`/`"not-verified"` - and `"paused-by-meter"` (issue #189) too, since a paused round waits on the Client's own `fix` verdict and is explicitly never a failure. `buildPausedByMeterDelivery` builds that report. |
 | `round.ts` | `recordRoundResult` (issue #182) - the one place "judge the work, commit it, decide the outcome, hand over the delivery, write the record" is written: everything a round does once `runAttempts` resolves - the refused check, the fix-only "nothing changed" short-circuit, the pre-teardown commit (and its own failure-report path), building/validating the `Delivery`, and writing `delivery.md` plus the `"delivered"` event. `do.ts`'s `productionRound` and `verdict.ts`'s `runFixRound` both call this with the same `AttemptLoopResult` shape and differ only in what they pass as `ctx` - a pinned vs. freshly-cut `baseCommit`, and (fix only) `priorReceipts`/`priorGateChanges` to carry forward via `mergeGateDeclarations` (moved here from `verdict.ts`, its only caller) so rule 9's declaration survives a round that leaves it alone. Everything before this point (reopen vs. create the ProductionLine, the attempt budget, the `work-started` event, `runAttempts` itself) stays in each caller, since that's exactly where the two round-starters still differ. |
 | `inspection.ts` | Records the configured Inspector handoff and its green, red, or refused result. A refusal reaches the record and task status but never becomes a red delivery. |
+| `ci-checks.ts` | Issue #267: records what the repository's own checks said about the pull request Inspector opened or updated - one `"ci-check-concluded"` per concluded check (name, conclusion, log URL, and the tail of its job log when red), then one `"ci-checks-finished"` summary carrying the phrase every task line shows and the checks that never concluded. `ChecksReader` is the seam the GitHub read sits behind (`src/ci/`'s `readPullRequestChecks` by default, a fake in tests, threaded from `createForeman`'s `checksReader` option the same way `inspector`/`checkBox` are); the record writing is here so no fake can skip it, exactly as with `inspection.ts`. Reads nothing itself and executes nothing - see "The pull request's own checks are part of the round" above. |
 | `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
 | `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/inspect/result, shared with `answer.ts`'s resume path) - its tail, once a round's attempts are done, is `round.ts`'s `recordRoundResult`. |
 | `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. Split in two (issue #123) so `src/cli/answer-command.ts` can detach the round: `recordAnswerDecision` (validate + record, no round) and `runRecordedAnswer` (re-derives the brief/ctx from the record and calls `runProductionRound`) - `answerTask` composes both, unchanged for every other caller. |
