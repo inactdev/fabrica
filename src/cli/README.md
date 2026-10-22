@@ -517,17 +517,44 @@ the way `fabrica doctor`'s own "checkout" check does - reusing
 copy of that logic. A developer checkout refuses, before touching
 anything, if it isn't on `master` or has uncommitted changes
 (`git status --porcelain` non-empty); otherwise it runs
-`git pull --ff-only origin master`. An installed copy re-runs the
-documented install command, `npm install -g github:inactdev/fabrica`,
-with `--prefix` set to the prefix that copy is installed under -
-derived from its own path by `npm-prefix.ts`'s `prefixOfGlobalInstall`,
-never asked of npm, whose *default* global prefix is the folder node
-itself sits in and is read-only on a Nix-managed host. That is what
-makes an installed copy updatable from wherever it lives rather than
-only from npm's default. A copy that is neither a checkout nor a global
-install - `npx` extracts a throwaway one into its own cache, under no
-prefix at all - is refused outright, naming the install command,
-instead of being reinstalled somewhere it never lived.
+`git pull --ff-only origin master`. An installed copy is replaced in two
+npm steps (`global-reinstall.ts`): `npm pack github:inactdev/fabrica
+--pack-destination <throwaway dir>`, then `npm install -g` of the
+tarball that landed there, with `--prefix` set to the prefix that copy
+is installed under - derived from its own path by `npm-prefix.ts`'s
+`prefixOfGlobalInstall`, never asked of npm, whose *default* global
+prefix is the folder node itself sits in and is read-only on a
+Nix-managed host. That is what makes an installed copy updatable from
+wherever it lives rather than only from npm's default. A copy that is
+neither a checkout nor a global install - `npx` extracts a throwaway one
+into its own cache, under no prefix at all - is refused outright, naming
+the install command, instead of being reinstalled somewhere it never
+lived.
+
+**Why packing first, rather than one `npm install -g
+github:inactdev/fabrica`.** That one-step form does not install a copy
+of the package at all: npm clones the repo into its own cache, symlinks
+`<prefix>/lib/node_modules/fabrica` at the clone, and then deletes the
+clone. Reproduced on npm 11.16.0 / Node 24.18.0 on Linux - the install
+reports "added 1 package" and the installed `fabrica` is immediately
+"No such file or directory"; the Client hit the same thing from the
+other side, as a dependency's postinstall dying with `ENOENT` in a
+folder that no longer exists, and `--ignore-scripts` leaving the
+dangling symlink behind. `npm pack` of the same spec runs the package's
+own `prepare` script (so `build-info.json`, the commit `fabrica doctor`
+reads off an installed copy, is inside the tarball) and installing that
+tarball unpacks a **real directory** with a working executable.
+`--prefix` is passed to the install step only: npm forces a *non-global*
+command to run inside whatever `--prefix` names, and `pack` is one. The
+staging directory is read to find `fabrica-*.tgz` rather than handed to
+npm as a glob - npm is spawned directly, with no shell to expand one -
+and zero tarballs, or more than one, is reported rather than guessed at.
+Both commands are spelled once, in `npm-prefix.ts`
+(`packCommandArgs`/`installTarballCommandArgs`), and a failure's message
+names whichever one really failed. `npm install -g
+github:inactdev/fabrica` is still the install a *person* runs (README.md,
+and `fabrica doctor`'s "reinstall with" fix) - whether that documented
+first install should become the two-step form too is the Client's call.
 
 Then **Inspector comes forward too** - unconditionally, with no flag to
 skip it (Client ruling: "update means everything comes forward"). The
@@ -1030,8 +1057,9 @@ already recorded, and the response says `signaled: false`.
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). Issue #99 adds the reporting side on top of that same verification, for `status`/`watch`: `probeTaskWorker` (`alive`/`not-found`/`unknown`), `cachedProcessTable`, and `WORKER_PROBE_INTERVAL_MS`. |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
-| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); the install itself is spelled once, in `npm-prefix.ts`'s `installCommandArgs`, so the message a failure prints is the command that really ran; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
-| `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus `INSTALL_SPEC`/`installCommandArgs`, the one spelling of the documented install command, shared by `fabrica update`'s real call and every message that prints it. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
+| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); reinstalling an installed copy is `global-reinstall.ts`'s two npm steps, whose own failure message names the step that failed, printed through verbatim rather than reconstructed here; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
+| `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus every npm command those prefixes are for, each spelled exactly once: `INSTALL_SPEC`/`installCommandArgs` (the documented install a person runs, shared by every message that prints it) and `packCommandArgs`/`installTarballCommandArgs`/`isPackedTarball` (the two `fabrica update` really runs, and the tarball name it looks for between them). Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
+| `global-reinstall.ts` | Replacing an installed copy with the current code at `INSTALL_SPEC`, as `npm pack` into a throwaway staging directory followed by `npm install -g` of the tarball - because installing the git spec directly symlinks the package at a clone npm then deletes (reproduced; see the `fabrica update` section above). One injected `GlobalReinstallIo` covers every step that touches the machine, so its tests assert the exact argv npm is handed without running npm, making a directory, or reaching the network. Also home to `commandFailureMessage` (stderr if the command said anything, node's own message otherwise), which `update-command.ts`'s `git` calls share. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
