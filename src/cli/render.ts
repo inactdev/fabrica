@@ -596,13 +596,35 @@ export function formatTerminalNotice(
 
 /** A generic fallback for an event name this file has no specific
  * rendering for (an unimplemented one like "cap-refused", or a future one
- * this file hasn't been taught yet) - compact JSON, but capped, so an
- * event nobody anticipated can never repeat the same unbounded-line
- * mistake a specific renderer was written to fix. */
-const FALLBACK_DETAIL_LIMIT = 200;
+ * this file hasn't been taught yet) - compact JSON. It used to carry a
+ * flat 200-character cap of its own; that cap is gone, replaced by the
+ * one `capDetail` below applies to every renderer's output alike (issue
+ * #169), so "an event nobody anticipated can never dump an unbounded
+ * line" is now a property of the whole rendering rather than of this one
+ * function. */
 function fallbackDetail(details: unknown): string {
-  const json = JSON.stringify(details);
-  return json.length > FALLBACK_DETAIL_LIMIT ? `${json.slice(0, FALLBACK_DETAIL_LIMIT)}…` : json;
+  return JSON.stringify(details) ?? String(details);
+}
+
+/** The ceiling on one event's rendered detail (issue #169). Deliberately
+ * high: the cap this replaced was 200 characters, which cut ordinary
+ * failure messages off mid-sentence and concealed the very cause the
+ * Client was reading `fabrica log` to find - a git error with its whole
+ * stderr behind it runs to a few hundred characters, and a stack trace
+ * to a couple of thousand, so nothing that is actually a message ever
+ * reaches this number. The only thing it catches is a genuinely huge
+ * payload, which is what a ceiling is for; everything short of that is
+ * shown whole and wrapped.
+ *
+ * When it does bite, it says so in words on its own line rather than
+ * trailing off into an ellipsis the reader has to interpret - a reader
+ * who cannot tell "the message ended" from "the message was cut" is back
+ * to the bug this fixed. */
+export const DETAIL_CHAR_LIMIT = 10_000;
+
+function capDetail(detail: string): string {
+  if (detail.length <= DETAIL_CHAR_LIMIT) return detail;
+  return `${detail.slice(0, DETAIL_CHAR_LIMIT)}\n[shortened: ${DETAIL_CHAR_LIMIT} of ${detail.length} characters shown]`;
 }
 
 /** What `fabrica log` shows for one event's `details` - readable prose,
@@ -630,8 +652,11 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       const where = d.where ? ` in the ${d.where}` : "";
       if (d.phase === "started") return `check started${where} (attempt ${d.attempt})`;
       // The worker's box could not run the check at all: not verified,
-      // which must never read as red.
-      if (d.notVerified !== undefined) return `check could not run (attempt ${d.attempt}): ${d.notVerified.split("\n")[0]}`;
+      // which must never read as red. Its reason is given whole, not as
+      // its first line: this used to be one line per event, and the
+      // first line of "docker: Cannot connect to the Docker daemon" is
+      // exactly the line that doesn't say why (issue #169).
+      if (d.notVerified !== undefined) return `check could not run (attempt ${d.attempt}): ${d.notVerified}`;
       return `check finished (attempt ${d.attempt}): ${d.green ? "green" : "red"}`;
     }
 
@@ -648,6 +673,19 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
 
     case "cap-refused":
     case "cap-stopped": {
+      const d = details as { message?: string };
+      return d.message ?? fallbackDetail(details);
+    }
+
+    case "task-failed": {
+      // `task-failure.ts` emits this with `{ message }` (issue #73) for
+      // any error after "task-received" and before a delivery or
+      // refusal, so it is the one event a Client reads when a task died
+      // and he wants to know why. It had no rendering of its own and
+      // fell through to the JSON fallback, which showed the reason as an
+      // escaped string - every newline in a git error's own output as a
+      // literal "\n" - and then cut it off (issue #169). Given as the
+      // message it is, with its own layout intact.
       const d = details as { message?: string };
       return d.message ?? fallbackDetail(details);
     }
@@ -768,8 +806,13 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     case "stopped-by-owner": {
       // `stop.ts`'s StoppedByOwnerDetails (issue #203). The last
       // activity is a whole transcript line, which can be long and can
-      // have newlines in it - its first line only, like `task-failed`
-      // above, since this rendering is one line per event.
+      // have newlines in it - its first line only. Issue #169 made a
+      // detail free to run to several lines and un-cut `task-failed` and
+      // `check-run`'s reasons on that basis; this one stays a first line
+      // deliberately, because it is the worker's own narration rather
+      // than the cause of anything, nothing is concealed by shortening
+      // it, and the whole entry is in the transcript that
+      // `fabrica log --transcript` prints.
       const d = details as { by?: string; stoppedFrom?: string; lastActivity?: { text?: string } | null };
       const who = d.by ? ` by ${d.by}` : "";
       const from = d.stoppedFrom ? ` while ${d.stoppedFrom}` : "";
@@ -782,12 +825,97 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
   }
 }
 
-/** One line for `fabrica log` - timestamp, name, and a judged, readable
- * rendering of its details, so a whole task's history stays scannable
- * (issue #12, Client ruling: present it, don't dump it). */
-export function formatEventLine(event: FabricaEvent): string {
+/** What continuation lines of one event's detail are indented by, so the
+ * timestamped event lines still read as a column down the left and an
+ * event that needed four lines is visibly one event, not four (issue
+ * #169). */
+const DETAIL_CONTINUATION_INDENT = "    ";
+
+/** However narrow the terminal, a wrapped segment never gets less room
+ * than this - a few characters per line would be its own kind of
+ * unreadable, and the point of wrapping is to be read. On a window this
+ * narrow the timestamp and event name already overflow it on their own,
+ * so there is nothing to be gained by shredding the message to fit a
+ * margin the line has no hope of respecting anyway. */
+const MIN_WRAP_SEGMENT = 24;
+
+/** Soft-wraps `text` to `firstWidth` for its first line and `restWidth`
+ * for every line after it, breaking at whitespace where it can and hard
+ * at the margin for a single token longer than the whole line (a URL, a
+ * long path, a hash). Newlines already in `text` are kept: a git error's
+ * own layout is part of the message, not noise to reflow away. */
+export function wrapDetail(text: string, firstWidth: number, restWidth: number): string[] {
+  const lines: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    if (paragraph === "") {
+      lines.push("");
+      continue;
+    }
+    let rest = paragraph;
+    while (rest.length > 0) {
+      const width = Math.max(lines.length === 0 ? firstWidth : restWidth, MIN_WRAP_SEGMENT);
+      if (rest.length <= width) {
+        lines.push(rest);
+        break;
+      }
+      // lastIndexOf from the margin inclusive, so a space sitting exactly
+      // on it is a clean break rather than a hard one. Nothing to break
+      // at means a token wider than the line: cut it at the margin, which
+      // is the one case where splitting a word is better than running off
+      // the edge of the window.
+      const space = rest.lastIndexOf(" ", width);
+      const cut = space > 0 ? space : width;
+      lines.push(rest.slice(0, cut).trimEnd());
+      rest = rest.slice(cut).trimStart();
+    }
+  }
+  return lines;
+}
+
+export interface EventLineOptions {
+  /** The width to soft-wrap a long detail at. Null or omitted means no
+   * soft wrapping - the detail's own newlines still break the line, and
+   * continuation lines are still indented, but nothing is reflowed.
+   * That is deliberately the default for anything other than a real
+   * terminal: `fabrica log` gets piped, captured and diffed, and output
+   * that depends on how wide the window happened to be is output no
+   * script can rely on (issue #169). `log-command.ts` reads the real
+   * terminal's width only when it really is writing to one. */
+  wrapWidth?: number | null;
+}
+
+/** One event as `fabrica log` prints it - timestamp, name, and a judged,
+ * readable rendering of its details, so a whole task's history stays
+ * scannable (issue #12, Client ruling: present it, don't dump it). One
+ * event can be several lines: a detail is shown whole, wrapped and
+ * indented beneath its own event line rather than cut off at a character
+ * count (issue #169), because a failure message cut mid-sentence hides
+ * the one thing the Client opened the log to read. */
+function formatEventBlock(event: FabricaEvent, opts: EventLineOptions): string[] {
+  const prefix = `${event.occurredAt}  ${event.name}`;
   const detail = describeEventDetails(event);
-  return `${event.occurredAt}  ${event.name}${detail ? `  ${detail}` : ""}`;
+  if (detail === undefined || detail === "") return [prefix];
+
+  const head = `${prefix}  `;
+  const capped = capDetail(detail);
+  const wrapWidth = opts.wrapWidth ?? null;
+  const segments =
+    wrapWidth === null
+      ? capped.split("\n")
+      : wrapDetail(capped, wrapWidth - head.length, wrapWidth - DETAIL_CONTINUATION_INDENT.length);
+
+  return [
+    `${head}${segments[0]}`,
+    ...segments.slice(1).map((segment) => (segment === "" ? "" : `${DETAIL_CONTINUATION_INDENT}${segment}`)),
+  ];
+}
+
+/** One event rendered as text, newline-separated if its detail needed
+ * more than one line. `formatEventLines` is what `fabrica log` itself
+ * calls - this is the single-event form, for callers that want one
+ * string. */
+export function formatEventLine(event: FabricaEvent, opts: EventLineOptions = {}): string {
+  return formatEventBlock(event, opts).join("\n");
 }
 
 /** One transcript line, in the single format `log --transcript` and
@@ -802,20 +930,25 @@ export function formatTranscriptLine(entry: TranscriptEntry): string {
  * heartbeats over <span>" - so the fact worth keeping (the task was alive
  * for that whole stretch) survives without one line per 15s tick burying
  * the real events around it. A run of exactly one heartbeat reads as an
- * ordinary single heartbeat line, not "1 heartbeats over 0s". */
-export function formatEventLines(events: FabricaEvent[]): string[] {
+ * ordinary single heartbeat line, not "1 heartbeats over 0s".
+ *
+ * One element per output line, always - an event whose detail needed
+ * wrapping contributes several (issue #169), so the caller can keep
+ * printing this one line at a time without having to know that. */
+export function formatEventLines(events: FabricaEvent[], opts: EventLineOptions = {}): string[] {
   const lines: string[] = [];
   let i = 0;
   while (i < events.length) {
     if (events[i].name !== "heartbeat") {
-      lines.push(formatEventLine(events[i]));
+      lines.push(...formatEventBlock(events[i], opts));
       i++;
       continue;
     }
     let j = i + 1;
     while (j < events.length && events[j].name === "heartbeat") j++;
     const run = events.slice(i, j);
-    lines.push(run.length === 1 ? formatEventLine(run[0]) : formatHeartbeatRun(run));
+    if (run.length === 1) lines.push(...formatEventBlock(run[0], opts));
+    else lines.push(formatHeartbeatRun(run));
     i = j;
   }
   return lines;
