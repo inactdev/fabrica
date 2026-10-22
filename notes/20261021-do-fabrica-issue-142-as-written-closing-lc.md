@@ -79,3 +79,21 @@ own: it rethrows a malformed-config `ConfigError` instead of answering
 "unregistered", because it runs first in every round and is where that
 error should surface loudly. A setting with a sane default must never be
 the thing that reports a broken registry.
+
+## An Inspector binary older than a flag Fabrica passes refuses, it does not fail red
+
+Unrelated to this change, learned while landing it, and worth knowing
+before anyone chases a phantom bug in their own branch. The flags
+Fabrica passes Inspector are ratified in
+`src/inspector/consumer-contract.json`; when the *installed* Inspector
+predates one of them, Go's flag package rejects the whole invocation
+(`flag provided but not defined: -<name>`, then its usage text) and the
+round comes back as a **refusal** — no verdict, nothing about the work
+judged, the branch untouched.
+
+Read that shape carefully: the refusal quotes an error about a flag, so
+it reads like something in the tree is wrong, but the only fix is on the
+machine — update the installed Inspector. Removing the flag from
+Fabrica's call to make the refusal stop would be exactly backwards: that
+file is Fabrica's ratified side of the contract and syncs to Inspector's
+own test data, so matching an old binary breaks the real agreement.
