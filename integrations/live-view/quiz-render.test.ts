@@ -177,37 +177,151 @@ test("the review page draws a delivered task with no quiz, and no empty quiz blo
   assert.equal(document.querySelectorAll(".review-btn").length, 3);
 });
 
-test("the quiz page draws one card per accepted task, closed, with its count", async () => {
-  const document = await render("quiz.html", "/quiz", {
-    "/api/quiz": {
-      rows: [
-        { id: "20261021-newer-task-aa", title: "Newer", quiz: QUIZ, acceptedAtMs: Date.now() - 60_000 },
-        { id: "20261021-older-task-bb", title: "Older", quiz: QUIZ, acceptedAtMs: Date.now() - 7_200_000 },
-      ],
+/** One question as /api/quiz sends it. `standing`/`askable`/
+ * `intervalLabel` are the server's own derivation (src/quiz/), so the
+ * page is handed them rather than working them out. */
+function apiQuestion(over: Record<string, unknown> = {}): Record<string, unknown> & { status: string; askable: boolean } {
+  return {
+    taskId: "20261021-newer-task-aa",
+    index: 0,
+    taskTitle: "Newer",
+    question: QUIZ[0].question,
+    answer: QUIZ[0].answer,
+    acceptedAtMs: Date.UTC(2026, 9, 21, 12),
+    status: "live",
+    askable: true,
+    rewritten: false,
+    recheckNote: null,
+    staleBecause: null,
+    standing: { streak: 0, rightCount: 0, wrongCount: 0, lastAnsweredAtMs: null, dueAtMs: Date.UTC(2026, 9, 21, 12) },
+    intervalLabel: "never asked",
+    ...over,
+  };
+}
+
+function quizBody(questions: ReturnType<typeof apiQuestion>[]): unknown {
+  return {
+    questions,
+    counts: {
+      total: questions.length,
+      live: questions.filter((q) => q.status === "live").length,
+      due: questions.filter((q) => q.askable).length,
+      outdated: questions.filter((q) => q.status === "outdated").length,
+      retired: questions.filter((q) => q.status === "retired").length,
     },
+    now: Date.now(),
+  };
+}
+
+test("the quiz page opens in review mode: one question, its answer hidden, and the list put away", async () => {
+  const document = await render("quiz.html", "/quiz", {
+    "/api/quiz": quizBody([apiQuestion({ index: 0 }), apiQuestion({ index: 1, question: QUIZ[1].question, answer: QUIZ[1].answer })]),
   });
 
-  const cards = document.querySelectorAll(".review-card");
-  assert.equal(cards.length, 2);
-  // Newest acceptance first, the order the server sent them in.
-  assert.equal(cards[0].querySelector(".review-title")?.textContent, "Newer");
-  assert.equal(cards[1].querySelector(".review-title")?.textContent, "Older");
-  assert.equal(document.getElementById("count")?.textContent, "2");
+  // Review mode is the visible one; the full list is the secondary view.
+  assert.equal(document.getElementById("review")?.hidden, false);
+  assert.equal(document.getElementById("list")?.hidden, true);
+  assert.equal(document.getElementById("toggle")?.textContent, "All questions");
 
+  // Exactly one question is being asked, and its answer is not on screen.
+  const asked = document.querySelectorAll(".quiz-asked");
+  assert.equal(asked.length, 1);
+  assert.ok(QUIZ.map((q) => q.question).includes(asked[0].textContent));
+  assert.equal(document.querySelectorAll(".quiz-answer-shown").length, 0, "the answer must not be shown before it is asked for");
+
+  // The one control is the reveal - Right and Wrong only appear after it.
+  const buttons = document.getElementById("review")?.querySelectorAll("button") ?? [];
+  assert.deepEqual(
+    buttons.map((b) => b.textContent),
+    ["Show the answer"]
+  );
+
+  // The task that spawned the question and the date stay on the card.
+  const origin = document.getElementById("review")?.querySelector(".review-line");
+  assert.match(origin?.textContent ?? "", /from "Newer" · accepted 2026-10-21/);
+});
+
+test("the quiz page's list view carries every question, with the never-asked ones marked", async () => {
+  const document = await render("quiz.html", "/quiz", {
+    "/api/quiz": quizBody([
+      apiQuestion({ index: 0 }),
+      apiQuestion({
+        index: 1,
+        question: QUIZ[1].question,
+        answer: QUIZ[1].answer,
+        status: "outdated",
+        askable: false,
+        staleBecause: { touchedBy: "20261022-later-aa", files: ["a.ts"] },
+      }),
+      apiQuestion({
+        index: 2,
+        question: QUIZ[2].question,
+        answer: QUIZ[2].answer,
+        status: "retired",
+        askable: false,
+        recheckNote: "that code is gone",
+      }),
+    ]),
+  });
+
+  assert.equal(document.getElementById("count")?.textContent, "3");
+  assert.match(document.getElementById("counts")?.textContent ?? "", /1 due of 1 asked · 1 may be outdated · 1 retired/);
+
+  // Every question is on the list, and each answer is closed until it is
+  // tapped - the one structural claim this page has always made.
   const entries = entriesOf(document);
-  assert.equal(entries.length, 6, "both cards' three questions");
-  for (const entry of entries) assert.equal(entry.open, false);
+  assert.deepEqual(
+    entries.map((e) => e.question),
+    QUIZ.map((q) => q.question)
+  );
+  for (const entry of entries) {
+    assert.equal(entry.tag, "DETAILS", "the question has to be the thing that opens the answer");
+    assert.equal(entry.open, false, "an answer must start hidden, not shown");
+  }
 
-  // Nothing on this page records anything - it is a page for revisiting
-  // a ruling that was already made.
-  assert.equal(document.querySelectorAll("button").length, 0);
+  // The two that are never asked say which they are, and why.
+  assert.deepEqual(
+    document.getElementById("list")?.querySelectorAll(".quiz-status").map((s) => s.textContent),
+    ["due", "may be outdated", "retired"]
+  );
+  const notes = document.getElementById("list")?.querySelectorAll(".quiz-note") ?? [];
+  assert.match(notes[0].textContent, /may be outdated: 20261022-later-aa changed a\.ts/);
+  assert.match(notes[1].textContent, /retired by a re-check: that code is gone/);
 });
 
 test("the quiz page says so plainly when nothing has been accepted yet", async () => {
-  const document = await render("quiz.html", "/quiz", { "/api/quiz": { rows: [] } });
+  const document = await render("quiz.html", "/quiz", { "/api/quiz": quizBody([]) });
 
-  const empty = document.querySelector(".empty");
-  assert.ok(empty instanceof FakeElement, "an empty quiz page must say why it is empty");
-  assert.match(empty.textContent, /No quizzes yet/);
   assert.equal(document.getElementById("count")?.textContent, "0");
+  const asked = document.querySelector(".quiz-asked");
+  assert.ok(asked instanceof FakeElement, "review mode must say something rather than draw nothing");
+  assert.match(asked.textContent, /Nothing due right now/);
+  assert.match(document.getElementById("review")?.textContent ?? "", /No quizzes yet/);
+  // Nothing to ask means nothing to offer either.
+  assert.deepEqual(document.getElementById("review")?.querySelectorAll("button") ?? [], []);
+
+  const empty = document.getElementById("list")?.querySelector(".empty");
+  assert.ok(empty instanceof FakeElement, "an empty list view must say why it is empty");
+  assert.match(empty.textContent, /No quizzes yet/);
+});
+
+test("nothing due, but questions exist: the page says when the next one is back and offers one anyway", async () => {
+  const dueAtMs = Date.now() + 2 * 60 * 60 * 1000;
+  const document = await render("quiz.html", "/quiz", {
+    "/api/quiz": quizBody([
+      apiQuestion({
+        askable: false,
+        intervalLabel: "2 right in a row - back in 2 days",
+        standing: { streak: 2, rightCount: 2, wrongCount: 0, lastAnsweredAtMs: Date.now(), dueAtMs },
+      }),
+    ]),
+  });
+
+  const asked = document.querySelector(".quiz-asked");
+  assert.match(asked?.textContent ?? "", /Nothing due right now/);
+  assert.match(document.getElementById("review")?.textContent ?? "", /The next question is due in 2h/);
+  assert.deepEqual(
+    (document.getElementById("review")?.querySelectorAll("button") ?? []).map((b) => b.textContent),
+    ["Ask one anyway"]
+  );
 });

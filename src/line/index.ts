@@ -2,6 +2,8 @@ export { createProductionLine, fetchOriginDefaultBranch } from "./cut.ts";
 export { requireRepoRoot } from "./safety.ts";
 export { reopenProductionLine } from "./resume.ts";
 export { destroyProductionLine } from "./teardown.ts";
+export { createScratchCheckout, destroyScratchCheckout, scratchWorkdirPath } from "./scratch.ts";
+export type { ScratchCheckout } from "./scratch.ts";
 export { abortRebase, branchTip, finishRebase, rebaseInProgress, rebaseOntoOriginDefault } from "./rebase.ts";
 export type { BranchTips, RebaseConflict } from "./rebase.ts";
 export type { TeardownResult } from "./teardown.ts";

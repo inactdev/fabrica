@@ -172,6 +172,29 @@ export type FabricaEventName =
    * of the job log when it is red and the API served one. One event per
    * check, appended as it concludes. */
   | "ci-check-concluded"
+  /** The Client marked one of an accepted task's quiz questions right or
+   * wrong on the live view's review mode. Details: `src/quiz/events.ts`'s
+   * `QuizAnsweredDetails`. The record holds the whole spaced-repetition
+   * schedule - there is no browser storage anywhere in it - and this is
+   * the only event the schedule is derived from. */
+  | "quiz-answered"
+  /** A later accepted task touched a file this task's own accepted work
+   * touched, so every quiz question this task spawned "may be outdated"
+   * and stops being asked until a re-check round rules on it. Details:
+   * `src/quiz/events.ts`'s `QuizStaleDetails`. Per task rather than per
+   * question, because file overlap is a fact about the task. */
+  | "quiz-stale"
+  /** A re-check round ruled on one outdated quiz question: confirmed it,
+   * rewrote it, or retired it. Details: `src/quiz/events.ts`'s
+   * `QuizRecheckedDetails`. */
+  | "quiz-rechecked"
+  /** What one re-check round cost (details:
+   * `src/quiz/events.ts`'s `QuizRecheckCostDetails`), attributed to the
+   * task whose questions it re-checked. Its own name rather than a
+   * receipt: a re-check is not an attempt at the task and must never
+   * move its attempt numbering - the same reason the clarifying step has
+   * `"ask-cost-recorded"` instead of one. */
+  | "quiz-recheck-cost-recorded"
   /** The whole read of a pull request's checks ended - every check
    * concluded, the bounded wait expired, or the API could not be read
    * (issue #267). Details: `src/ci/watch.ts`'s `CiChecksFinishedDetails`

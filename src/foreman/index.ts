@@ -35,7 +35,13 @@ export { followTask } from "./follow.ts";
 export type { TaskFollower, TaskProgress } from "./follow.ts";
 export { fixRoundOf, eventsByTask, stateOf, deliveryOf, deliveredBranchOf, earlyStopKindOf } from "./queries.ts";
 export { capsActive } from "./caps.ts";
+// What a worker box is allowed to reach for one task (issue #186) - read
+// here by anything that calls a brain outside a production round, e.g.
+// src/quiz's re-check (`withTaskNetwork` needs the same policy a round
+// would have run under).
+export { networkPolicyFor } from "./network-policy.ts";
 export {
+  costFromTranscript,
   daySpend,
   describeTaskCost,
   describeUnmeasured,

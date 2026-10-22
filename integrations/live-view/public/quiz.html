@@ -11,20 +11,29 @@
 <body class="review-page">
 <header class="toolbar">
   <div class="toolbar-row">
-    <!-- Issue #98: the last ten accepted tasks' quizzes, kept so the
-         owner can revisit work he has already ruled on. Nothing here is
-         waiting on him and nothing here is decided - this page offers no
-         control at all, unlike /review. -->
+    <!-- Every accepted task's quiz questions, kept for as long as the
+         record keeps them. The page opens in review mode - one question
+         at a time, its answer hidden, right or wrong recorded on the
+         record (Client ruling) - and the whole list is the secondary
+         view behind the toggle. -->
     <span class="toolbar-title">Quiz · <span id="count">0</span></span>
+    <button id="toggle" class="review-btn">All questions</button>
     <a class="back-link" href="/review">Review</a>
   </div>
   <div class="toolbar-row toolbar-sub">
+    <span id="counts"></span>
     <span id="error" hidden></span>
   </div>
 </header>
 
 <main>
-  <div id="rows"></div>
+  <!-- Review mode: the default view, and the only part of this page that
+       records anything. -->
+  <section id="review"></section>
+  <!-- The full list: every question, the never-asked ones included, each
+       marked with why it is not asked (Client ruling: "hiding them would
+       hide what changed"). -->
+  <section id="list" hidden></section>
 </main>
 
 <!-- See index.html's own note: every page loads the banner strip. -->

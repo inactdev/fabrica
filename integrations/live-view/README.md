@@ -462,29 +462,87 @@ empty list.
 
 ## The quiz page: `/quiz`
 
-The last ten **accepted** tasks' quizzes, newest acceptance first, for
-the owner to revisit work he has already ruled on (issue #98). One card
-per task: its title, when he accepted it, the three questions with their
-answers hidden until tapped exactly as on `/review`, and a link to the
-task's own page. No buttons anywhere - everything on this page has
-already been decided, which is the whole difference between it and
-`/review`.
+Every **accepted** task's quiz questions - all of them, newest
+acceptance first, with none dropped for age (Client ruling: they are
+already on the record, so the page keeps the lot). The page opens in
+**review mode**, the full list is the secondary view behind the toolbar
+toggle, and the question's own task and the date it was accepted stay
+visible on every card in both.
 
-`record-view.ts`'s `getQuizRows` is deliberately its own list rather than
+Everything about which question may be asked, and when it comes back,
+lives in `src/quiz/` - read that module's README for the repetition
+scheme, the "may be outdated" rule and the re-check round. This page
+decides none of it: `/api/quiz` hands each question a `status`
+(`live`/`outdated`/`retired`), an `askable` flag and its `standing`, and
+`quiz.js` only draws them. That is deliberate - the repetition rule has
+one tested home, and a plain browser script with no build step cannot
+import it.
+
+### Review mode
+
+One question at a time, picked at random from the ones the server says
+are askable, with its answer hidden until the Client asks for it; then
+**Right** or **Wrong**, which `POST`s to `/api/quiz/answer`. The mark
+goes to the record and comes back on the next poll - nothing about the
+quiz is remembered in the browser. The only state `quiz.js` holds is
+which question is on screen and whether its answer has been revealed,
+which are facts about the tab, not about the quiz; both are held across
+polls, so a poll can never swap a question out from under a tap or close
+an answer that was just opened.
+
+When nothing is due, the page says so and names when the next question is
+back, with an **Ask one anyway** button: the schedule is there to space
+out revision, not to lock the Client out of his own quiz. A mark earned
+that way counts exactly like any other.
+
+### The list view
+
+Every question, including the ones that are never asked - an outdated one
+naming the later task that dated it and the files they have in common, a
+retired one naming the re-check's own reason, a rewritten one saying the
+words on screen are no longer its original worker's. Client ruling:
+hiding those would hide what changed. Cards are keyed by question and
+built once, so a poll leaves an opened answer open; only the status badge
+and the interval phrase are written through in place.
+
+### What is still true of it from before
+
+`record-view.ts`'s `getQuiz` is deliberately its own accessor rather than
 part of `getReviewRows`, for the same reason `getRunningRows` is: those
 rows are exactly the set `fabrica status` flags as waiting on the Client,
-and an accepted task is the opposite of waiting. It orders by the
-`"accept"` verdict event's own timestamp rather than by the task's last
-activity, since an accepted task can still record something afterwards
-(a hand-recorded cost, say).
+and an accepted task is the opposite of waiting.
 
 A task with no quiz is **skipped**, not listed empty: the field is
 required of new write-ups only, the record is append-only, and nothing
 was backfilled - so a task delivered before this existed simply has
 none. `quizEntriesOf` (exported from `src/index.ts`) is the one reader
-that decides "is there a showable quiz here", shared with `/review`, so
-a malformed quiz is skipped by that same rule rather than by a second
-judgment made here.
+that decides "is there a showable quiz here", shared with `/review` and
+with `src/quiz/` itself, so a malformed quiz is skipped by that same rule
+rather than by a second judgment made here.
+
+### The one write here that is not identity-gated
+
+`POST /api/quiz/answer` does **not** require the `Tailscale-User-Login`
+header the verdict, answer and stop routes do. Those spend money or close
+a task; a mark only moves a revision clock. The server binds to loopback
+either way, and requiring the header would make review mode unusable in
+the one place it is actually used - `fabrica up` opens
+`127.0.0.1:7777` in a browser on this machine, where there is no
+`tailscale serve` proxy to add it. Stated rather than hidden: anything
+that can reach this port can skew the Client's own quiz schedule. Every
+mark is an event, so it would be visible on the record, and it buys
+nothing else.
+
+### Accepting a task from this server also does the quiz's bookkeeping
+
+The verdict route's `accept` branch runs the same
+`onTaskAccepted` + detached-re-check pair `fabrica verdict` runs
+(`startQuizRecheck`), and reports it back as a `quiz` field on the
+response when there is anything to report. That is the moment the code
+changed, which is why it happens there and on no schedule and behind no
+button (Client ruling). It never throws: the ruling is already on the
+record by then, and the Client's decision must not come back as a failure
+because something about a quiz could not be read.
 
 ### One note box per card
 
@@ -679,6 +737,13 @@ Issue #98's quiz added `quizEntriesOf` and `WRITEUP_QUIZ_LENGTH` (plus
 the `WriteupQuizEntry` type) - the one reader that decides whether a
 write-up has a showable quiz, so `/review` and `/quiz` skip a quiz-less
 task by the same rule rather than each judging for itself.
+
+Review mode added four more, all of them `src/quiz/`'s own: the per-task
+derivation `/api/quiz` is built from (`quizQuestionsForTask`), the
+schedule's phrase (`describeInterval`), the Client's mark
+(`recordQuizAnswer`), and the accept-time bookkeeping the verdict route
+runs (`onTaskAccepted`). The page decides none of it; see that module's
+README.
 
 The staleness banner and the loud `projects.toml` added one export,
 `loadConfigOrProblem` - the reader that hands back usable defaults *plus*

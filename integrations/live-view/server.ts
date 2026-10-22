@@ -1,10 +1,13 @@
 // A tiny HTTP server for watching what the factory is doing (issue #26),
 // now with a few deliberate exceptions (issues #202, #203): every
 // handler still only ever reads (`readFileSync`/`readdirSync`, directly
-// or through src/index.ts) EXCEPT the three POST routes below that
-// record the Client's own decisions from the phone review page - his
-// verdict on a delivery, his answer to a worker's clarifying questions,
-// and his decision to stop a running task. See "Recording a decision
+// or through src/index.ts) EXCEPT the four POST routes below. Three of
+// them record the Client's own decisions from the phone review page -
+// his verdict on a delivery, his answer to a worker's clarifying
+// questions, and his decision to stop a running task - and the fourth
+// records a quiz mark from review mode on /quiz, which is the one write
+// here that is not a decision about work and is not identity-gated (see
+// `handleQuizAnswer` for that reasoning). See "Recording a decision
 // from the phone" lower in this file, and this module's README, for why
 // those writes are safe to allow here. The stop route is the only one
 // that reaches outside the record at all (it signals the task's own
@@ -24,7 +27,15 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { recordAnswerDecision, recordStopDecision, recordVerdictDecision, TASK_ID_PATTERN } from "../../src/index.ts";
+import {
+  onTaskAccepted,
+  QuizError,
+  recordAnswerDecision,
+  recordQuizAnswer,
+  recordStopDecision,
+  recordVerdictDecision,
+  TASK_ID_PATTERN,
+} from "../../src/index.ts";
 import { runningCopyCommit } from "../../src/cli/doctor-command.ts";
 import { loadConfigOrDefault } from "../../src/cli/load-config.ts";
 import { spawnDetachedResume } from "../../src/cli/spawn-detached.ts";
@@ -77,6 +88,11 @@ const REVIEW_ANSWER_PATH = /^\/api\/review\/tasks\/([^/]+)\/answer$/;
 /** Issue #203's one new write: stopping a running task. Same loose
  * capture and same decode-then-validate handling as the two above. */
 const REVIEW_STOP_PATH = /^\/api\/review\/tasks\/([^/]+)\/stop$/;
+/** The quiz's own write: the Client marking a question right or wrong in
+ * review mode. Deliberately not under /api/review - it is not a decision
+ * about a task's work, and it is not identity-gated the way the three
+ * routes above are (see `handleQuizAnswer`). */
+const QUIZ_ANSWER_PATH = /^\/api\/quiz\/answer$/;
 /** Serve adds this to a proxied request's headers for the authenticated
  * tailnet user, and strips it from anything a client tried to send
  * itself (Tailscale's own docs: "to avoid header spoofing") - so its
@@ -133,6 +149,10 @@ export function startLiveView(opts: {
    * default answer-entry script runs, exactly as a real
    * `fabrica answer <id> -m "..."` would. */
   answerEntryScript?: string;
+  /** Test-only: the same override for the quiz re-check round an
+   * "accept" can start, so a test can prove the handoff happens without
+   * a real worker reading a real checkout of master. */
+  quizRecheckEntryScript?: string;
   /** Test-only: replaces the half of `stop` that signals a real
    * process, so a test can prove the route's identity gate, refusals
    * and recorded event without a real worker to kill. Omitted, the real
@@ -146,7 +166,11 @@ export function startLiveView(opts: {
   // re-reads it, so this value cannot drift toward the checkout's.
   const startupCommit = readCheckoutCommit();
   const version: Version = { startupCommit, readCheckoutCommit };
-  const entryScripts = { fix: opts.fixEntryScript, answer: opts.answerEntryScript };
+  const entryScripts = {
+    fix: opts.fixEntryScript,
+    answer: opts.answerEntryScript,
+    quizRecheck: opts.quizRecheckEntryScript,
+  };
   const stopProcess = opts.stopProcess ?? defaultStopProcess;
   const server = createServer((req, res) => {
     handleRequest(req, res, view, version, opts.recordHome, entryScripts, stopProcess).catch((err) => {
@@ -186,6 +210,8 @@ interface Version {
 interface EntryScripts {
   fix: string | undefined;
   answer: string | undefined;
+  /** The quiz re-check an accept can start (`startQuizRecheck`). */
+  quizRecheck: string | undefined;
 }
 
 /** The process half of `stop` (issue #203): find the task's own
@@ -229,9 +255,14 @@ async function handleRequest(
       send(res, 400, "text/plain; charset=utf-8", "Not a task id.");
       return;
     }
-    if (verdictMatch) await handleRecordVerdict(req, res, recordHome, taskId, entryScripts.fix);
+    if (verdictMatch) await handleRecordVerdict(req, res, recordHome, taskId, entryScripts);
     else if (answerMatch) await handleRecordAnswer(req, res, recordHome, taskId, entryScripts.answer);
     else handleStopTask(req, res, recordHome, taskId, stopProcess);
+    return;
+  }
+
+  if (req.method === "POST" && QUIZ_ANSWER_PATH.test(url.pathname)) {
+    await handleQuizAnswer(req, res, recordHome);
     return;
   }
 
@@ -285,13 +316,18 @@ async function handleRequest(
   }
 
   if (url.pathname === "/api/quiz") {
-    // Issue #98: the last ten accepted tasks' quizzes, for the owner to
-    // revisit work he has already ruled on. Read-only like every route
-    // above the POSTs, and wrapped the same way /api/review is - a
-    // record read that throws answers with the error as data rather
-    // than taking the server down.
+    // Every accepted task's quiz questions - all of them, not a recent
+    // slice (they are already on the record, so the page keeps the lot) -
+    // each with its status, its schedule, and the task and date it came
+    // from. Read-only like every route above the POSTs, and wrapped the
+    // same way /api/review is: a record read that throws answers with
+    // the error as data rather than taking the server down.
+    //
+    // `askable` is computed server-side (src/quiz/questions.ts) rather
+    // than left to the page: which question may be asked right now is
+    // the repetition rule itself, and it has one tested home.
     try {
-      send(res, 200, "application/json", JSON.stringify({ rows: view.getQuizRows() }));
+      send(res, 200, "application/json", JSON.stringify(view.getQuiz()));
     } catch (err) {
       sendRecordError(res, err);
     }
@@ -506,7 +542,7 @@ async function handleRecordVerdict(
   res: ServerResponse,
   recordHome: string,
   taskId: string,
-  fixEntryScript: string | undefined
+  entryScripts: EntryScripts
 ): Promise<void> {
   if (refuseWithoutIdentity(req, res, "a verdict")) return;
 
@@ -531,10 +567,98 @@ async function handleRecordVerdict(
   try {
     const caps = loadConfigOrDefault(recordHome).caps;
     recordVerdictDecision(recordHome, taskId, ruling as "accept" | "fix" | "wrong", note, { caps });
-    if (ruling === "fix") spawnDetachedResume({ recordHome, taskId, kind: "fix", entryScript: fixEntryScript });
-    send(res, 200, "application/json", JSON.stringify({ ok: true, ruling }));
+    if (ruling === "fix") spawnDetachedResume({ recordHome, taskId, kind: "fix", entryScript: entryScripts.fix });
+    const quiz = ruling === "accept" ? startQuizRecheck(recordHome, taskId, entryScripts.quizRecheck) : undefined;
+    send(res, 200, "application/json", JSON.stringify({ ok: true, ruling, ...(quiz ? { quiz } : {}) }));
   } catch (err) {
     send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
+/**
+ * The quiz's bookkeeping on an accept - the exact same pair
+ * `src/cli/verdict-command.ts`'s own `quizNoticeAfterAccept` runs, for
+ * the same reason and in the same place in the sequence: an accepted
+ * task's files may be the files an older accepted task's quiz questions
+ * were written about, so those questions are marked and stop being asked
+ * until a cheap re-check round rules on them (Client ruling: on each
+ * accept, no schedule and no button).
+ *
+ * Never throws. The verdict is already on the record by the time this
+ * runs, and the Client's ruling must not come back as a failure because
+ * something about a quiz could not be read.
+ */
+function startQuizRecheck(
+  recordHome: string,
+  taskId: string,
+  entryScript: string | undefined
+): { marked: number; pending: number } | undefined {
+  try {
+    const { marked, pending } = onTaskAccepted(recordHome, taskId);
+    if (pending > 0) spawnDetachedResume({ recordHome, taskId, kind: "quiz-recheck", entryScript });
+    // Nothing to report when this change dated nothing and nothing was
+    // already waiting - the ordinary case, and the response says exactly
+    // what it said before the quiz had a memory.
+    if (marked.length === 0 && pending === 0) return undefined;
+    return { marked: marked.length, pending };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Recording a quiz mark - this server's fourth write, and the one that is
+ * deliberately NOT behind the `Tailscale-User-Login` gate the other three
+ * are.
+ *
+ * The three above spend money or close a task; a mark only moves a
+ * spaced-repetition clock. This server binds to loopback either way
+ * (HOST, above), and requiring the header would make review mode
+ * unusable in the one place it is actually used: `fabrica up` opens
+ * `127.0.0.1:7777` in a browser on this machine, where no `tailscale
+ * serve` proxy exists to add it. The cost of that choice, stated rather
+ * than hidden: anything that can reach this port can skew the Client's
+ * own quiz schedule. It would be visible on the record - every mark is an
+ * event - and it buys an attacker nothing else.
+ *
+ * Which question is being marked is validated by `recordQuizAnswer`
+ * itself (src/quiz/review.ts), so a question this record never held is
+ * refused in its words rather than a second wording invented here.
+ */
+async function handleQuizAnswer(req: IncomingMessage, res: ServerResponse, recordHome: string): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+    return;
+  }
+
+  const { taskId, index, right } = (typeof body === "object" && body !== null ? body : {}) as {
+    taskId?: unknown;
+    index?: unknown;
+    right?: unknown;
+  };
+  if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
+    send(res, 400, "application/json", JSON.stringify({ error: "Not a task id." }));
+    return;
+  }
+  if (typeof index !== "number" || typeof right !== "boolean") {
+    send(
+      res,
+      400,
+      "application/json",
+      JSON.stringify({ error: 'a mark needs a question and a result - send {"taskId": "...", "index": 0, "right": true}.' })
+    );
+    return;
+  }
+
+  try {
+    const question = recordQuizAnswer(recordHome, taskId, index, right);
+    send(res, 200, "application/json", JSON.stringify({ ok: true, question }));
+  } catch (err) {
+    const status = err instanceof QuizError ? 400 : 500;
+    send(res, status, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }
 }
 
