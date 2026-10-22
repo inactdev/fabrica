@@ -305,6 +305,46 @@ require a clean tree first. (That is why the Foreman commits a Worker's
 leftover changes onto the branch before tearing the line down - issue
 #9, see `src/foreman/README.md`.)
 
+## `createScratchCheckout` / `destroyScratchCheckout` — and why they are not a ProductionLine
+
+`scratch.ts` is a second, much smaller thing this module provides: a
+**throwaway read-of-master checkout**, for work that needs to look at the
+project as it stands today and has nothing to deliver. The one caller
+today is `src/quiz/`'s re-check round, which has to ask a Worker whether
+an old quiz question is still true, and so needs a workdir
+(`Brain.ask` takes none by construction).
+
+It is deliberately **not** a ProductionLine, and deliberately not called
+one:
+
+- `git worktree add --detach`, so there is **no branch at all** - nothing
+  is left in the project's refs afterwards, and two runs can never
+  contend over one name. A ProductionLine's `fabrica/<taskId>` branch is
+  kept on purpose after teardown, for the Client and Inspector; a branch
+  per re-check would just litter his repository.
+- It lives at `recordHome/scratch/<label>/worktree`, **not** under
+  `recordHome/tasks/`, so nothing that discovers tasks by reading that
+  directory (`fabrica status`, the live view) can mistake it for one -
+  the phantom-task problem issue #81 had to go and fix once already.
+- Nothing is ever committed in it. The worker's answer comes back as a
+  file the host reads out of the workdir.
+
+What it *does* share is every safety rule above: the project must be a
+repository root (`requireRepoRoot`), the base comes from origin and never
+from the local checkout (`fetchOriginDefaultBranch` - a failed fetch
+refuses rather than falling back), and nothing is removed without git
+itself confirming the exact path is a linked worktree of that project
+(`requireLinkedWorktree`). This module adds **no new way to delete
+anything**; teardown is idempotent in the same sense
+`destroyProductionLine` is, and refuses a path that is not exactly where
+its own label's checkout belongs.
+
+One extra behavior worth knowing: `createScratchCheckout` removes a
+leftover checkout at the same path first - through that same
+git-confirmed check - so one run killed mid-flight does not block the
+next forever. A directory that is there but is *not* a registered
+worktree is refused instead: that is not something this module put there.
+
 ## The `ProductionLine` fields
 
 `ProductionLine` is declared once, in `contract/surface.ts` (issue #45)

@@ -2,8 +2,11 @@
 // and report plainly what happened - CONTRACT rule 6, and the one command
 // SPEC.md needs before the Client can close the loop by hand.
 //
-// `accept` and `wrong` are instant (they only append a record event) and
-// still run synchronously, reporting the outcome directly. `fix` (issue
+// `accept` and `wrong` are instant (they only append record events) and
+// still run synchronously, reporting the outcome directly - though an
+// `accept` additionally marks whichever older quiz questions its files
+// may have dated, and can hand a cheap re-check of those to the same
+// detached mechanism `fix` uses (`quizNoticeAfterAccept`). `fix` (issue
 // #123) returns immediately instead: the ruling is validated and
 // recorded right here - a bad "fix" still fails on the spot - but the
 // round itself (the same warm worker re-entering the same line) is
@@ -11,7 +14,7 @@
 // There is no cap on how many rounds a task can have (issue #65) - see
 // `fixRoundOf` for where the round number printed below comes from.
 
-import { createForeman, fixRoundOf, recordVerdictDecision } from "../index.ts";
+import { createForeman, fixRoundOf, onTaskAccepted, recordVerdictDecision } from "../index.ts";
 import { parseVerdictArgs, VERDICT_USAGE } from "./verdict-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
@@ -49,8 +52,47 @@ export interface RunVerdictCommandOptions {
    * do-command.test.ts uses entryScript. Omitted, the real default
    * entry script runs, which is what every real invocation does. */
   entryScript?: string;
+  /** Test-only, "accept" only: the same override for the quiz re-check
+   * round an accept can start (see `quizNoticeAfterAccept`). */
+  quizRecheckEntryScript?: string;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+}
+
+/**
+ * The quiz's own bookkeeping on an accept, and the one line it prints
+ * about it: an accepted task's files may be the files an older accepted
+ * task's quiz questions were written about, which makes those questions
+ * possibly untrue, so they are marked and stop being asked until a cheap
+ * re-check round rules on them (src/quiz/). This is the moment the code
+ * changed, which is why it happens here and on no schedule and behind no
+ * button (Client ruling).
+ *
+ * Here rather than inside `recordVerdictDecision` for the same reason the
+ * "fix" round above is spawned here: the Foreman records the ruling, and
+ * everything that follows from it in the background belongs to the layer
+ * that has a process to spawn. A library caller using `Foreman.verdict`
+ * directly therefore marks nothing and starts nothing, exactly as it
+ * starts no fix round of its own.
+ *
+ * Never throws: an accept is already on the record by the time this runs,
+ * and a quiz the Client never asked about must not be able to turn a
+ * recorded verdict into a failed command. Returns null when there is
+ * nothing to say.
+ */
+function quizNoticeAfterAccept(recordHome: string, taskId: string, entryScript: string | undefined): string | null {
+  try {
+    const { marked, pending } = onTaskAccepted(recordHome, taskId);
+    if (pending === 0) return null;
+    spawnDetachedResume({ recordHome, taskId, kind: "quiz-recheck", entryScript });
+    const markedNow = marked.length > 0 ? `${marked.length} earlier ${marked.length === 1 ? "task's" : "tasks'"} ` : "";
+    return (
+      `quiz: ${markedNow}questions may be out of date after this change - ` +
+      `${pending} task${pending === 1 ? "" : "s"} queued for a re-check in the background.`
+    );
+  } catch (err) {
+    return `quiz: could not check whether this change dates any earlier questions (${(err as Error).message}).`;
+  }
 }
 
 /** Returns the process exit code - never throws. */
@@ -84,6 +126,8 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
       const prEvent = events.filter((e) => e.name === "pr-opened").at(-1);
       const url = (prEvent?.details as { url?: string } | undefined)?.url;
       stdout(`${ruling} recorded: ${taskId} is closed.${url ? ` pull request: ${url}` : ""}`);
+      const quizNotice = quizNoticeAfterAccept(recordHome, taskId, opts.quizRecheckEntryScript);
+      if (quizNotice !== null) stdout(quizNotice);
     } else {
       stdout(`${ruling} recorded: ${taskId} is closed.`);
     }

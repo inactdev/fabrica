@@ -331,6 +331,33 @@ as its correction (`src/foreman/README.md`'s `verdict()` section), and
 `status`/`watch` say so on the task's line rather than pointing at
 `fabrica log` alone.
 
+### What an `accept` additionally does for the quiz
+
+An accepted task's files may be the very files an *older* accepted task's
+quiz questions were written about, which makes those questions possibly
+untrue. So `accept` also runs `src/quiz/`'s `onTaskAccepted`: it marks
+every earlier accepted task that touched one of the same files, and those
+questions stop being asked on the live view's `/quiz` page until a cheap
+re-check round rules on them. This is the moment the code changed, which
+is why it happens here and on no schedule and behind no button (Client
+ruling).
+
+The re-check itself is a worker round, so it is handed to a detached
+process through the same `spawnDetachedResume` a `fix` uses - a third
+`kind`, `"quiz-recheck"`, whose entry is `quiz-recheck-entry.ts`. That
+process re-derives every outstanding outdated question from `recordHome`
+alone, exactly as the other two detached runners re-derive their rounds,
+so an accept that could not finish the queue is simply picked up by the
+next one. It writes no pid file: this is not a round of the task's own
+work, and `fabrica stop` must not be pointed at it.
+
+The command prints one extra line when there is anything to report, and
+never fails over it: the ruling is already on the record by then, and a
+quiz the Client never asked about must not turn a recorded verdict into a
+failed command. See `src/quiz/README.md` for the repetition scheme, the
+staleness rule, and why the library-level `Foreman.verdict` deliberately
+does none of this.
+
 ## `fabrica cost <taskId> <usd>`
 
 Issue #11, Client ruling 2026-10-08. While a spending cap is set in

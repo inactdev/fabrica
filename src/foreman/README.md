@@ -1323,6 +1323,22 @@ inside `spend.ts` only (it is never a Receipt). A null or missing cost is
 unknown, never zero: under a cap it blocks new work, named "the clarifying
 step", until `fabrica cost` records it.
 
+**A quiz re-check's cost counts too, the same way.** `src/quiz/`'s
+re-check round (see that module's README) is a worker call, so it reports
+what it spent, and the round records it as
+`"quiz-recheck-cost-recorded"` (`{ costUsd, costBasis, startedAt }`)
+against the task whose questions it re-checked. The ledger counts it like
+the clarifying step's: its own attempt slot inside `spend.ts` only, never
+a Receipt, so it moves no attempt numbering. It counts **backwards** -
+`QUIZ_RECHECK_FIRST_STEP = -1`, and the nth re-check of one task is `-n` -
+because later work can keep touching a task's files, so one task can be
+re-checked more than once and each round is its own spend. `fabrica
+status`'s unmeasured block names it "a quiz re-check" rather than
+printing an invented negative attempt number. The re-check itself tests
+for room read-only (`recheckRoomProblem`) rather than calling
+`requireRoomToStart`, which would append a `cap-refused` event to an
+already-closed task that never attempted a start.
+
 ## The pause rule: the subscription meters (issue #189)
 
 Rule 10's caps are dollars. The pause rule is the Client's flat-rate

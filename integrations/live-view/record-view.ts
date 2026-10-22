@@ -18,6 +18,7 @@ import {
   describeBaseStandingOf,
   describeTaskCost,
   describeMeters,
+  describeInterval,
   describeModel,
   earlyStopKindOf,
   finalMessageFor,
@@ -28,6 +29,7 @@ import {
   loadConfigOrProblem,
   modelFromEvents,
   quizEntriesOf,
+  quizQuestionsForTask,
   readTaskFile,
   refusalFor,
   standingOf,
@@ -41,6 +43,7 @@ import type {
   FabricaEvent,
   FabricaTask,
   PauseRule,
+  QuizQuestion,
   Receipt,
   TaskFollower,
   TranscriptEntry,
@@ -321,20 +324,39 @@ export interface AskingReviewRow {
   lastActivityMs: number;
 }
 
-/** One accepted task's quiz on the /quiz page (issue #98) - the owner
- * revisiting what he already ruled on, so there is nothing to decide
- * here and no control to offer: the title, the three questions with
- * their answers, and when he accepted it. */
-export interface QuizRow {
-  id: string;
-  title: string;
-  quiz: WriteupQuizEntry[];
-  /** When the "accept" verdict landed - what this page is ordered by. */
-  acceptedAtMs: number;
+/** One question on the /quiz page: the quiz question itself
+ * (`src/quiz/`'s `QuizQuestion`, verbatim - this page adds no field of
+ * its own to it) plus the two things only this layer can word, the
+ * review-mode phrase for its schedule and the task's own display title.
+ *
+ * The task that spawned a question and the date it was accepted stay on
+ * every card, so the Client can always see which change he is being
+ * asked about and how old it is. */
+export interface QuizQuestionRow extends QuizQuestion {
+  /** `describeInterval`'s phrase - "3 right in a row - back in 4 days",
+   * built from the same schedule the server computed `askable` from. */
+  intervalLabel: string;
 }
 
-/** How many accepted tasks' quizzes /quiz keeps (issue #98). */
-export const QUIZ_HISTORY_LENGTH = 10;
+/** What /quiz polls for: every accepted task's questions, and the counts
+ * the toolbar shows. Every question the record holds, newest acceptance
+ * first - none is dropped for age (the Client's own ruling: they are
+ * already on the record, so keep them all). */
+export interface QuizView {
+  questions: QuizQuestionRow[];
+  counts: {
+    total: number;
+    /** Still asked - due or not. */
+    live: number;
+    /** Askable right this moment: what review mode draws from. */
+    due: number;
+    outdated: number;
+    retired: number;
+  };
+  /** The server's own clock, so the page ages a due time against the
+   * same `now` the server decided `askable` with. */
+  now: number;
+}
 
 /** One running task on the review page (issue #203) - enough to
  * recognize what is about to be stopped, and nothing that invites a
@@ -487,22 +509,6 @@ function latestAttempt(events: FabricaEvent[]): number | null {
 function lastActivityMs(events: FabricaEvent[]): number {
   const last = events[events.length - 1];
   return last ? Date.parse(last.occurredAt) : 0;
-}
-
-/** When the Client accepted this task - the most recent "accept" verdict
- * event's own timestamp, or null when he never accepted it. Read from
- * that event rather than from the task's last activity: /quiz is ordered
- * by when the owner accepted the work, and an accepted task can still
- * record something afterwards (a hand-recorded cost, say). */
-function acceptedAtMs(events: FabricaEvent[]): number | null {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (event.name !== "verdict-recorded") continue;
-    if ((event.details as { ruling?: string } | undefined)?.ruling !== "accept") continue;
-    const parsed = Date.parse(event.occurredAt);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
 }
 
 /** When this task was first received - its own first event, which
@@ -959,31 +965,56 @@ export function createRecordView(recordHome: string, opts: { baseStanding?: Base
     return rows;
   }
 
-  /** The /quiz page (issue #98): the last ten accepted tasks' quizzes,
-   * newest acceptance first, for the owner to revisit after he has
-   * already ruled. A task with no quiz is skipped rather than listed
-   * empty - a write-up recorded before the field existed has none, and
-   * the record is append-only, so nothing was backfilled. An accepted
-   * task whose write-up is somehow malformed is skipped by the same
-   * rule, through the same `quizEntriesOf`.
+  /** The /quiz page: every accepted task's quiz questions, with where
+   * each one stands - live, outdated, or retired - and when it is next
+   * due. A task with no quiz contributes nothing rather than an empty
+   * card: a write-up recorded before the field existed has none, the
+   * record is append-only so nothing was backfilled, and a malformed one
+   * is skipped by the same rule (`quizEntriesOf`, inside
+   * `quizQuestionsForTask`).
+   *
+   * The whole derivation - status, schedule, whether a question may be
+   * asked at all - is `src/quiz/`'s, read here through the same per-task
+   * follower cache every other accessor on this view shares, so a 2Hz
+   * poll costs the bytes appended since the last one rather than a
+   * re-read of every task's history. Nothing about the quiz is decided
+   * in this file; it only words the schedule and borrows the task's own
+   * display title.
    *
    * Deliberately not folded into `getReviewRows`: these are exactly the
    * tasks that are NOT waiting on him, which is the one thing that list
    * means (the same reasoning `getRunningRows` is kept separate for). */
-  function getQuizRows(): QuizRow[] {
+  function getQuiz(now: number = Date.now()): QuizView {
     const { caps } = readConfig(recordHome);
-    const rows: QuizRow[] = discoverTaskIds(recordHome).flatMap((id): QuizRow[] => {
+    const questions: QuizQuestionRow[] = discoverTaskIds(recordHome).flatMap((id): QuizQuestionRow[] => {
       const { events } = followerFor(id).read();
-      const acceptedAt = acceptedAtMs(events);
-      if (acceptedAt === null) return [];
-      const task = buildTaskView(id, events, caps);
-      if (task.state !== "closed (accept)") return [];
-      const quiz = quizEntriesOf(task.writeup);
-      if (quiz.length === 0) return [];
-      return [{ id, title: task.title, quiz, acceptedAtMs: acceptedAt }];
+      const found = quizQuestionsForTask(id, events, now);
+      if (found.length === 0) return [];
+      const title = buildTaskView(id, events, caps, now).title;
+      return found.map((question) => ({
+        ...question,
+        taskTitle: title,
+        intervalLabel: describeInterval(question.standing),
+      }));
     });
-    rows.sort((a, b) => b.acceptedAtMs - a.acceptedAtMs);
-    return rows.slice(0, QUIZ_HISTORY_LENGTH);
+    // By acceptance alone, and on a stable sort, so a task's own three
+    // questions stay in the order its worker wrote them. An index
+    // tiebreak here would interleave two same-millisecond tasks'
+    // questions by position instead of keeping each task's together -
+    // see `allQuizQuestions`, which is sorted the same way for the same
+    // reason.
+    questions.sort((a, b) => b.acceptedAtMs - a.acceptedAtMs);
+    return {
+      questions,
+      counts: {
+        total: questions.length,
+        live: questions.filter((question) => question.status === "live").length,
+        due: questions.filter((question) => question.askable).length,
+        outdated: questions.filter((question) => question.status === "outdated").length,
+        retired: questions.filter((question) => question.status === "retired").length,
+      },
+      now,
+    };
   }
 
   /** Issue #189: the two subscription meters as the record last saw
@@ -1019,7 +1050,7 @@ export function createRecordView(recordHome: string, opts: { baseStanding?: Base
     return readConfig(recordHome).problem;
   }
 
-  return { getState, getTask, getTranscript, getReviewRows, getRunningRows, getQuizRows, getMeters, getConfigProblem };
+  return { getState, getTask, getTranscript, getReviewRows, getRunningRows, getQuiz, getMeters, getConfigProblem };
 }
 
 export type RecordView = ReturnType<typeof createRecordView>;

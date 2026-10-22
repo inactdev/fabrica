@@ -81,6 +81,23 @@ export type { TranscriptEntry, WorkerWriteup, WriteupQuizEntry } from "../contra
 // for "is there a showable quiz here", so every surface skips a
 // quiz-less task the same way.
 export { quizEntriesOf, WRITEUP_QUIZ_LENGTH } from "./brain/index.ts";
+// The quiz as a thing with a memory (src/quiz/): every accepted task's
+// questions, the repetition schedule derived from the Client's own
+// right/wrong marks, the "may be outdated" mark a later accept leaves,
+// and the re-check round that clears it. The live view and the CLI both
+// reach all of it through here, never into src/quiz directly.
+export {
+  allQuizQuestions,
+  describeInterval,
+  onTaskAccepted,
+  pendingRecheckCount,
+  quizQuestionsForTask,
+  QuizError,
+  QUIZ_SESSION_GAP_MS,
+  recordQuizAnswer,
+  runQuizRecheck,
+} from "./quiz/index.ts";
+export type { QuizErrorCode, QuizQuestion, QuizQuestionStatus, QuizStanding } from "./quiz/index.ts";
 export type {
   Delivery,
   FabricaTask,

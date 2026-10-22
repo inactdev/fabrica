@@ -421,11 +421,12 @@ test("createRecordView: getReviewRows shows only delivered tasks, with the real 
   assert.ok(!row.writeupBody.includes("What changed?"), "the quiz must not be rendered into the pull request body");
 });
 
-// Issue #98: the /quiz page. Accepted tasks only - the one list here
-// that is deliberately about tasks NOT waiting on the Client - newest
-// acceptance first, capped at ten, and a task whose write-up predates
-// the field is skipped rather than listed with nothing in it.
-test("createRecordView: getQuizRows lists the last ten accepted tasks' quizzes, newest first, skipping those with none", () => {
+// The /quiz page. Accepted tasks only - the one list here that is
+// deliberately about tasks NOT waiting on the Client - newest acceptance
+// first, EVERY one of them (no cap: the questions are already on the
+// record, so none is dropped for age), and a task whose write-up
+// predates the field contributes nothing rather than an empty card.
+test("createRecordView: getQuiz lists every accepted task's questions, newest first, skipping tasks with none", () => {
   const recordHome = tempRecordHome();
   const view = createRecordView(recordHome);
   const quizFor = (n: number) => [
@@ -468,8 +469,9 @@ test("createRecordView: getQuizRows lists the last ten accepted tasks' quizzes, 
     deviations: "None.",
   };
 
-  // Twelve accepted tasks, appended oldest first, so the two oldest fall
-  // off the end of the ten this page keeps.
+  // Twelve accepted tasks, appended oldest first. Twelve rather than a
+  // handful on purpose: this used to be capped at ten, and the cap is
+  // gone, so the count itself is what the first assertion below checks.
   const accepted: string[] = [];
   for (let n = 1; n <= 12; n++) accepted.push(ruledTask(n, "accept", { ...base, title: `Task ${n}`, quiz: quizFor(n) }));
 
@@ -486,20 +488,34 @@ test("createRecordView: getQuizRows lists the last ten accepted tasks' quizzes, 
   });
   const noQuiz = ruledTask(15, "accept", { ...base, title: "Task 15" });
 
-  const rows = view.getQuizRows();
+  const quiz = view.getQuiz();
 
-  assert.equal(rows.length, 10, "the page keeps exactly the last ten");
+  assert.equal(quiz.questions.length, 36, "every accepted task's three questions, with nothing dropped for age");
+  assert.equal(quiz.counts.total, 36);
   assert.deepEqual(
-    rows.map((r) => r.id),
-    [...accepted].reverse().slice(0, 10),
-    "newest acceptance first, oldest two dropped"
+    [...new Set(quiz.questions.map((q) => q.taskId))],
+    [...accepted].reverse(),
+    "newest acceptance first, and all twelve of them"
   );
   for (const id of [wrong, stillDelivered, noQuiz]) {
-    assert.ok(!rows.some((r) => r.id === id), `${id} must not appear on the quiz page`);
+    assert.ok(!quiz.questions.some((q) => q.taskId === id), `${id} must not appear on the quiz page`);
   }
-  assert.deepEqual(rows[0].quiz, quizFor(12));
-  assert.equal(rows[0].title, "Task 12");
-  assert.ok(rows[0].acceptedAtMs > 0, "the row must carry when it was accepted");
+  // The newest task's three questions, in the order its worker wrote
+  // them, each carrying the task and the date it came from.
+  const newest = quiz.questions.slice(0, 3);
+  assert.deepEqual(
+    newest.map((q) => [q.index, q.question, q.answer]),
+    quizFor(12).map((entry, index) => [index, entry.question, entry.answer])
+  );
+  assert.equal(newest[0].taskTitle, "Task 12");
+  assert.ok(newest[0].acceptedAtMs > 0, "the card must carry when it was accepted");
+  // Nothing has been answered, nothing has been dated, so every question
+  // is live and askable right now.
+  assert.equal(quiz.counts.live, 36);
+  assert.equal(quiz.counts.due, 36);
+  assert.equal(quiz.counts.outdated, 0);
+  assert.equal(quiz.counts.retired, 0);
+  assert.equal(newest[0].intervalLabel, "never asked");
 });
 
 test("questionsFromEvents: the latest questions-asked wins, and a details shape that isn't a list of questions reads as none", () => {

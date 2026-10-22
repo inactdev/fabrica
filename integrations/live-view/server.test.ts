@@ -14,6 +14,31 @@ import { startLiveView } from "./server.ts";
 
 const FAKE_VERDICT_FIX_ENTRY = fileURLToPath(new URL("../../src/cli/helpers/fake-verdict-fix-entry.ts", import.meta.url));
 const FAKE_ANSWER_ENTRY = fileURLToPath(new URL("../../src/cli/helpers/fake-answer-entry.ts", import.meta.url));
+const FAKE_QUIZ_RECHECK_ENTRY = fileURLToPath(new URL("../../src/cli/helpers/fake-quiz-recheck-entry.ts", import.meta.url));
+
+/** The record home the fake re-check runner says it was handed, or null
+ * while it has not run yet - how a test tells "the detached process was
+ * spawned and did its job" from "nothing happened", for a round whose
+ * whole output is events it may legitimately not have appended. */
+function markerOf(recordHome: string): string | null {
+  try {
+    return readFileSync(join(recordHome, "fake-quiz-recheck.marker"), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Polls `done` until it is true or the wait runs out. A detached
+ * process's own work lands whenever it lands; there is nothing here to
+ * await. */
+async function waitFor(done: () => boolean, timeoutMs = 20_000): Promise<void> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if (done()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail("the detached process never did what this test was waiting for");
+}
 /** A real connection carrying Tailscale's own identity header - this is
  * what `tailscale serve` adds while proxying a request in from the
  * tailnet (server.ts); a test fetch has to set it by hand since nothing
@@ -417,6 +442,13 @@ test("startLiveView: every response carries Cache-Control: no-store - pages, scr
         body: JSON.stringify({ ruling: "accept" }),
       }),
     });
+    checked.push({
+      what: "400 quiz mark on no such question",
+      res: await fetch(`${base}/api/quiz/answer`, {
+        method: "POST",
+        body: JSON.stringify({ taskId, index: 0, right: true }),
+      }),
+    });
 
     for (const { what, res } of checked) {
       await res.text(); // drain, so no connection is left open behind this
@@ -682,7 +714,7 @@ test("startLiveView: /api/review lists a delivered task with its write-up, Inspe
 // Issue #98: the quiz outlives the ruling. /api/review drops a task the
 // moment it is accepted (it is no longer waiting on anyone); /api/quiz
 // is where it then shows up, for the owner to revisit.
-test("startLiveView: /api/quiz keeps an accepted task's quiz after /api/review has let it go", async () => {
+test("startLiveView: /api/quiz keeps an accepted task's questions after /api/review has let it go", async () => {
   const recordHome = tempRecordHome();
   const task = await deliveredTask(recordHome);
   const view = await startLiveView({ recordHome, port: 0 });
@@ -690,7 +722,7 @@ test("startLiveView: /api/quiz keeps an accepted task's quiz after /api/review h
     const base = `http://127.0.0.1:${view.port}`;
 
     // Nothing accepted yet, so nothing to revisit.
-    assert.deepEqual((await (await fetch(`${base}/api/quiz`)).json()).rows, []);
+    assert.deepEqual((await (await fetch(`${base}/api/quiz`)).json()).questions, []);
 
     const accept = await fetch(`${base}/api/review/tasks/${task.id}/verdict`, {
       method: "POST",
@@ -700,11 +732,20 @@ test("startLiveView: /api/quiz keeps an accepted task's quiz after /api/review h
     assert.equal(accept.status, 200);
 
     assert.deepEqual((await (await fetch(`${base}/api/review`)).json()).rows, []);
-    const { rows } = await (await fetch(`${base}/api/quiz`)).json();
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].id, task.id);
-    assert.equal(rows[0].quiz.length, 3);
-    assert.ok(rows[0].acceptedAtMs > 0);
+    const quiz = await (await fetch(`${base}/api/quiz`)).json();
+    assert.equal(quiz.questions.length, 3);
+    assert.deepEqual(quiz.counts, { total: 3, live: 3, due: 3, outdated: 0, retired: 0 });
+    for (const [index, question] of quiz.questions.entries()) {
+      assert.equal(question.taskId, task.id);
+      assert.equal(question.index, index);
+      assert.equal(typeof question.question, "string");
+      assert.equal(typeof question.answer, "string");
+      assert.equal(question.status, "live");
+      assert.equal(question.askable, true);
+      assert.ok(question.acceptedAtMs > 0, "the date stays on the card");
+      assert.equal(typeof question.taskTitle, "string");
+      assert.equal(typeof question.intervalLabel, "string");
+    }
 
     // The page itself is served, and loads its own script.
     const page = await fetch(`${base}/quiz`);
@@ -712,6 +753,120 @@ test("startLiveView: /api/quiz keeps an accepted task's quiz after /api/review h
     const html = await page.text();
     assert.match(html, /<script src="\/quiz\.js"><\/script>/);
     assert.equal((await fetch(`${base}/quiz.js`)).status, 200);
+  } finally {
+    await view.close();
+  }
+});
+
+// Review mode's one write. Deliberately NOT behind the Tailscale
+// identity gate the verdict/answer/stop routes are: a mark moves a
+// revision clock, not a task, and the live view is used on this machine
+// at 127.0.0.1 where no Serve proxy exists to add that header at all
+// (server.ts's handleQuizAnswer says why in full).
+test("startLiveView: POST /api/quiz/answer records a mark, with no Tailscale identity needed", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+    await fetch(`${base}/api/review/tasks/${task.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+
+    const marked = await fetch(`${base}/api/quiz/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ taskId: task.id, index: 1, right: true }),
+    });
+    assert.equal(marked.status, 200);
+    const body = await marked.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.question.standing.streak, 1);
+    assert.equal(body.question.askable, false, "answered right, so not asked again today");
+
+    // It is on the record, and the next poll shows it.
+    const events = readEventsForTask(recordHome, task.id);
+    const marks = events.filter((event) => event.name === "quiz-answered");
+    assert.equal(marks.length, 1);
+    assert.deepEqual(marks[0].details, { index: 1, right: true });
+    const quiz = await (await fetch(`${base}/api/quiz`)).json();
+    assert.equal(quiz.counts.due, 2);
+    assert.equal(quiz.questions[1].standing.rightCount, 1);
+  } finally {
+    await view.close();
+  }
+});
+
+test("startLiveView: POST /api/quiz/answer refuses a mark it cannot attribute to a real question", async () => {
+  const recordHome = tempRecordHome();
+  const task = await deliveredTask(recordHome);
+  const view = await startLiveView({ recordHome, port: 0 });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+    const post = (body: unknown) =>
+      fetch(`${base}/api/quiz/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    // A real task id, but nobody accepted it, so it has no questions.
+    assert.equal((await post({ taskId: task.id, index: 0, right: true })).status, 400);
+    assert.equal((await post({ taskId: "../../etc/passwd", index: 0, right: true })).status, 400);
+    assert.equal((await post({ taskId: task.id, index: "first", right: true })).status, 400);
+    assert.equal((await post({ taskId: task.id, index: 0 })).status, 400);
+    assert.equal(readEventsForTask(recordHome, task.id).filter((e) => e.name === "quiz-answered").length, 0);
+  } finally {
+    await view.close();
+  }
+});
+
+// The accept that dates an older task's questions, and the background
+// re-check it hands off - the exact pair `fabrica verdict` runs for the
+// same ruling.
+test("startLiveView: accepting a task marks the earlier questions its files date, and starts the re-check", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  // Both workers touch the same file, which is the whole reason the
+  // older task's questions become suspect: the delivery's own `files`
+  // list is what staleness is derived from, so a worker that changes
+  // nothing dates nothing.
+  const touching = (text: string) =>
+    fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "shared.ts"), `${text}\n`) });
+  const older = await foreman.do("first change", { project, brain: touching("first") });
+  await foreman.verdict(older.id, "accept");
+  const newer = await foreman.do("second change", { project, brain: touching("second") });
+
+  const view = await startLiveView({ recordHome, port: 0, quizRecheckEntryScript: FAKE_QUIZ_RECHECK_ENTRY });
+  try {
+    const base = `http://127.0.0.1:${view.port}`;
+    // Both tasks ran on the same fixture project, so both deliveries
+    // name the same touched file - which is what dates the older one.
+    const accept = await fetch(`${base}/api/review/tasks/${newer.id}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...IDENTITY_HEADERS },
+      body: JSON.stringify({ ruling: "accept" }),
+    });
+    assert.equal(accept.status, 200);
+    const body = await accept.json();
+    assert.deepEqual(body.quiz, { marked: 1, pending: 1 });
+
+    const quiz = await (await fetch(`${base}/api/quiz`)).json();
+    const olderQuestions = quiz.questions.filter((question: { taskId: string }) => question.taskId === older.id);
+    assert.equal(olderQuestions.length, 3);
+    for (const question of olderQuestions) {
+      assert.equal(question.status, "outdated");
+      assert.equal(question.askable, false, "an outdated question is never asked");
+      assert.equal(question.staleBecause.touchedBy, newer.id);
+    }
+
+    // The detached runner really was handed the job - the fake entry
+    // script writes a marker file rather than calling a brain.
+    await waitFor(() => markerOf(recordHome) !== null);
+    assert.equal(markerOf(recordHome), recordHome);
   } finally {
     await view.close();
   }

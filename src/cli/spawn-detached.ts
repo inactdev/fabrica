@@ -29,6 +29,7 @@ const BOOTSTRAP = fileURLToPath(new URL("./tsx-bootstrap.mjs", import.meta.url))
 const DEFAULT_ENTRY_SCRIPT = fileURLToPath(new URL("./run-task-entry.ts", import.meta.url));
 const DEFAULT_ANSWER_ENTRY_SCRIPT = fileURLToPath(new URL("./answer-entry.ts", import.meta.url));
 const DEFAULT_VERDICT_FIX_ENTRY_SCRIPT = fileURLToPath(new URL("./verdict-fix-entry.ts", import.meta.url));
+const DEFAULT_QUIZ_RECHECK_ENTRY_SCRIPT = fileURLToPath(new URL("./quiz-recheck-entry.ts", import.meta.url));
 const DEFAULT_LIVE_VIEW_ENTRY_SCRIPT = fileURLToPath(new URL("../../integrations/live-view/start.ts", import.meta.url));
 
 export interface SpawnDetachedTaskOptions {
@@ -108,12 +109,20 @@ export interface SpawnDetachedResumeOptions {
   taskId: string;
   /** "answer" resumes a clarified task; "fix" re-enters a delivered
    * task's warm worker with the Client's note (verdict.ts's
-   * runRecordedFix). Picks the real default entry script; tests
+   * runRecordedFix); "quiz-recheck" re-checks whichever accepted tasks'
+   * quiz questions a just-recorded accept marked as possibly out of date
+   * (src/quiz/recheck.ts). Picks the real default entry script; tests
    * override with `entryScript` the same way spawnDetachedTask's
    * callers do. */
-  kind: "answer" | "fix";
+  kind: "answer" | "fix" | "quiz-recheck";
   entryScript?: string;
 }
+
+const RESUME_ENTRY_SCRIPTS: Record<SpawnDetachedResumeOptions["kind"], string> = {
+  answer: DEFAULT_ANSWER_ENTRY_SCRIPT,
+  fix: DEFAULT_VERDICT_FIX_ENTRY_SCRIPT,
+  "quiz-recheck": DEFAULT_QUIZ_RECHECK_ENTRY_SCRIPT,
+};
 
 /**
  * Hands an already-validated-and-recorded round (issue #123:
@@ -129,7 +138,7 @@ export interface SpawnDetachedResumeOptions {
  */
 export function spawnDetachedResume(opts: SpawnDetachedResumeOptions): void {
   const { recordHome, taskId, kind } = opts;
-  const entryScript = opts.entryScript ?? (kind === "answer" ? DEFAULT_ANSWER_ENTRY_SCRIPT : DEFAULT_VERDICT_FIX_ENTRY_SCRIPT);
+  const entryScript = opts.entryScript ?? RESUME_ENTRY_SCRIPTS[kind];
 
   mkdirSync(recordHome, { recursive: true });
   const logFd = openSync(join(recordHome, "cli.log"), "a");

@@ -17,11 +17,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createForeman } from "../index.ts";
+import { allQuizQuestions, createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { runVerdictCommand } from "./verdict-command.ts";
@@ -29,6 +29,18 @@ import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { readEventsForTask } from "../record/index.ts";
 
 const FAKE_VERDICT_FIX_ENTRY = fileURLToPath(new URL("./helpers/fake-verdict-fix-entry.ts", import.meta.url));
+const FAKE_QUIZ_RECHECK_ENTRY = fileURLToPath(new URL("./helpers/fake-quiz-recheck-entry.ts", import.meta.url));
+
+/** Polls `done` until it is true or the wait runs out - a detached
+ * process's work lands whenever it lands, and there is nothing to await. */
+async function waitFor(done: () => boolean, timeoutMs = 20_000): Promise<void> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if (done()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail("the detached process never did what this test was waiting for");
+}
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-verdict-command-"));
@@ -67,6 +79,65 @@ test("runVerdictCommand: accept closes the task and reports so", async () => {
 
   const mine = (await createForeman({ recordHome, inspector: fixtureInspector() }).status()).find((t) => t.id === task.id);
   assert.equal(mine?.state, "closed");
+});
+
+// The quiz's own bookkeeping on an accept (src/quiz/): an accepted
+// task's files can date an older accepted task's quiz questions, which
+// then stop being asked until a cheap re-check round rules on them. It
+// happens on the accept itself - no schedule, no button - and the
+// re-check is handed to a detached process the same way a "fix" round is.
+test("runVerdictCommand: accept marks the earlier quiz questions its files date, and starts the re-check", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  // Both workers touch the same file - the delivery's own `files` list is
+  // what staleness is read from, so a worker that changes nothing dates
+  // nothing.
+  const touching = (text: string) =>
+    fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "shared.ts"), `${text}\n`) });
+
+  const older = await foreman.do("first change", { project, brain: touching("first") });
+  assert.equal(await runVerdictCommand([older.id, "accept"], { recordHome, ...captureIo() }), 0);
+  const newer = await foreman.do("second change", { project, brain: touching("second") });
+
+  const io = captureIo();
+  const code = await runVerdictCommand([newer.id, "accept"], {
+    recordHome,
+    quizRecheckEntryScript: FAKE_QUIZ_RECHECK_ENTRY,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(io.err, []);
+  assert.equal(io.out.length, 2, "the ruling, then one line about the quiz");
+  assert.match(io.out[1], /^quiz: 1 earlier task's questions may be out of date after this change - 1 task queued/);
+
+  for (const question of allQuizQuestions(recordHome).filter((q) => q.taskId === older.id)) {
+    assert.equal(question.status, "outdated");
+    assert.equal(question.askable, false);
+  }
+
+  // The detached runner really ran: the fake entry script confirms every
+  // question it was asked about, which puts them back in the rotation.
+  await waitFor(() =>
+    allQuizQuestions(recordHome)
+      .filter((q) => q.taskId === older.id)
+      .every((q) => q.status === "live")
+  );
+  const rechecks = readEventsForTask(recordHome, older.id).filter((e) => e.name === "quiz-rechecked");
+  assert.equal(rechecks.length, 3);
+});
+
+test("runVerdictCommand: an accept that dates nothing says nothing about the quiz", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  assert.equal(await runVerdictCommand([task.id, "accept"], { recordHome, ...io }), 0);
+  assert.equal(io.out.length, 1, "no quiz line when there is nothing to report");
 });
 
 test("runVerdictCommand: accept prints the reported pull request url exactly once", async () => {

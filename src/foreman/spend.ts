@@ -81,6 +81,20 @@ interface HandCost extends CostRecordedDetails {
  * like any attempt's, but never a Receipt (receiptsOf never sees it). */
 export const CLARIFYING_STEP = 0;
 
+/** And a quiz re-check (src/quiz/recheck.ts) counts backwards from -1:
+ * real money spent against a task, never an attempt at it, and a task
+ * can be re-checked more than once as later work keeps touching its
+ * files - so the nth re-check of one task is attempt -n, which keeps
+ * each one its own ledger entry rather than the second overwriting the
+ * first. */
+export const QUIZ_RECHECK_FIRST_STEP = -1;
+
+/** True for any attempt number this ledger invented for something that
+ * was not an attempt at the task - used only for wording. */
+function isQuizRecheckStep(attempt: number): boolean {
+  return attempt <= QUIZ_RECHECK_FIRST_STEP;
+}
+
 function askSpendIn(event: FabricaEvent): AttemptSpend | undefined {
   if (event.name !== "ask-cost-recorded") return undefined;
   const details = event.details as { costUsd?: number | null; startedAt?: string };
@@ -93,6 +107,22 @@ function askSpendIn(event: FabricaEvent): AttemptSpend | undefined {
   };
 }
 
+/** One quiz re-check's cost (src/quiz/events.ts's
+ * `QuizRecheckCostDetails`), as a ledger entry. `nth` is how many
+ * re-checks of this same task the ledger has already seen, so the
+ * attempt number it gets is unique within the task. */
+function quizRecheckSpendIn(event: FabricaEvent, nth: number): AttemptSpend | undefined {
+  if (event.name !== "quiz-recheck-cost-recorded") return undefined;
+  const details = event.details as { costUsd?: number | null; costBasis?: unknown; startedAt?: string };
+  return {
+    taskId: event.taskId,
+    attempt: QUIZ_RECHECK_FIRST_STEP - nth,
+    startedAtMs: Date.parse(details.startedAt ?? event.occurredAt),
+    costUsd: typeof details.costUsd === "number" ? details.costUsd : null,
+    costBasis: details.costBasis === "subscription-estimate" ? "subscription-estimate" : "metered",
+  };
+}
+
 function receiptsIn(event: FabricaEvent): Receipt[] {
   const details = event.details as { receipt?: Receipt; receipts?: Receipt[] } | undefined;
   if (event.name === "receipt-recorded" && details?.receipt) return [details.receipt];
@@ -102,10 +132,17 @@ function receiptsIn(event: FabricaEvent): Receipt[] {
 function ledger(events: FabricaEvent[]): { attempts: AttemptSpend[]; handCosts: HandCost[] } {
   const byAttempt = new Map<string, AttemptSpend>();
   const handCosts: HandCost[] = [];
+  const rechecksSeen = new Map<string, number>();
   for (const event of events) {
     if (event.name === "cost-recorded") {
       const details = event.details as CostRecordedDetails;
       handCosts.push({ taskId: event.taskId, usd: details.usd, attempts: details.attempts });
+      continue;
+    }
+    const recheck = quizRecheckSpendIn(event, rechecksSeen.get(event.taskId) ?? 0);
+    if (recheck) {
+      rechecksSeen.set(event.taskId, (rechecksSeen.get(event.taskId) ?? 0) + 1);
+      byAttempt.set(`${recheck.taskId}\u0000${recheck.attempt}`, recheck);
       continue;
     }
     const ask = askSpendIn(event);
@@ -233,7 +270,12 @@ export function describeUnmeasured(unmeasured: { taskId: string; attempts: numbe
   return unmeasured.map(({ taskId, attempts }) => {
     const parts: string[] = [];
     if (attempts.includes(CLARIFYING_STEP)) parts.push("the clarifying step");
-    const real = attempts.filter((a) => a !== CLARIFYING_STEP);
+    // Both of this ledger's non-attempt steps are worded rather than
+    // printed as their own invented number: "attempt -1" would read as a
+    // bug, not as the quiz re-check it is.
+    const rechecks = attempts.filter(isQuizRecheckStep).length;
+    if (rechecks > 0) parts.push(rechecks === 1 ? "a quiz re-check" : `${rechecks} quiz re-checks`);
+    const real = attempts.filter((a) => a !== CLARIFYING_STEP && !isQuizRecheckStep(a));
     if (real.length > 0) parts.push(`attempt${real.length === 1 ? "" : "s"} ${real.join(", ")}`);
     return `task ${taskId}, ${parts.join(" and ")}: record its real cost with \`fabrica cost ${taskId} <usd>\``;
   });
