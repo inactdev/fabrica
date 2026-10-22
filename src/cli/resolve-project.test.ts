@@ -13,13 +13,17 @@ test("resolveProjectPath: a registered name resolves to its configured path", ()
   const config: FabricaConfig = {
     caps: {},
     pause: DEFAULT_PAUSE_RULE,
-    projects: { spending: { path: "/repos/spending-app", check: "npm test" } },
+    projects: { spending: { path: "/repos/spending-app", check: "npm test", onlyTouchedTests: true } },
   };
   assert.equal(resolveProjectPath(config, "spending"), "/repos/spending-app");
 });
 
 test("resolveProjectPath: a registered name with no check refuses with exact instructions", () => {
-  const config: FabricaConfig = { caps: {}, pause: DEFAULT_PAUSE_RULE, projects: { spending: { path: "/repos/spending-app" } } };
+  const config: FabricaConfig = {
+    caps: {},
+    pause: DEFAULT_PAUSE_RULE,
+    projects: { spending: { path: "/repos/spending-app", onlyTouchedTests: true } },
+  };
   assert.throws(
     () => resolveProjectPath(config, "spending"),
     (err: unknown) => err instanceof ConfigError && err.code === "missing-check"

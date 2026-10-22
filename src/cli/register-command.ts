@@ -59,7 +59,12 @@ anything is created:
      otherwise a check that is about to be green would read as red.
   4. Commits, pushes the fabrica/register branch with your own git
      credentials, and opens a pull request with \`gh pr create\`.
-  5. Appends [projects.<name>] to projects.toml.
+  5. Appends [projects.<name>] to projects.toml, including
+     onlyTouchedTests = true - the standing instruction every Worker on
+     this project is given: run the tests covering what you touched,
+     not the whole suite, since the check runs in full afterwards
+     anyway. Set it to false there to turn it off for this project, or
+     say "run the full suite" in a task's own text for that one task.
 
 This is the one Fabrica command that pushes. It only ever creates a
 branch for you to merge - never a merge, never a force-push, never an
