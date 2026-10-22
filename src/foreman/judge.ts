@@ -30,7 +30,7 @@ import { requireReviewer } from "./reviewer.ts";
 import { ForemanError } from "./errors.ts";
 import { handToInspector } from "./inspection.ts";
 import { withClosesLine } from "./pr-body.ts";
-import type { FinalMessageForCommit } from "./pr-body.ts";
+import type { ClosesIssue, FinalMessageForCommit } from "./pr-body.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 
 /** One attempt's judgement. Only "verdict" is a red or green result; the
@@ -114,14 +114,13 @@ export function inspectorJudge(
   line: ProductionLine,
   baseCommit: string,
   inspector: Inspector,
-  /** The issue number this task's pull request should close (issue
-   * "make every pull request it opens close its issue on merge"), or
-   * undefined when this task is not the whole of one issue's work.
-   * Resolved once per round by the caller (do.ts/verdict.ts) via
-   * pr-body.ts's `closesIssueFor` and applied only to the body Inspector
-   * is asked to open the pull request with - never to the commit
-   * message itself. */
-  closesIssue?: number,
+  /** The issue this task's pull request should close (issue "make every
+   * pull request it opens close its issue on merge"), or undefined when
+   * this task is not the whole of one issue's work. Resolved once per
+   * round by the caller (do.ts/verdict.ts) via pr-body.ts's
+   * `closesIssueFor` and applied only to the body Inspector is asked to
+   * open the pull request with - never to the commit message itself. */
+  closesIssue?: ClosesIssue,
   /** Asked once per handoff, not resolved up front (inspector#53): a fix
    * round whose rebase stopped on a conflict only finishes moving the
    * branch after this judge already exists, so the lease its publish may
@@ -238,7 +237,7 @@ export function prepareRound(
   opts: {
     inspector?: Inspector;
     checkBox?: CheckBox;
-    closesIssue?: number;
+    closesIssue?: ClosesIssue;
     /** A fix round's own (verdict.ts); asked at each handoff rather than
      * now - see `inspectorJudge`. Nothing else has a rebase to lease. */
     publishLease?: () => PublishLease | undefined;

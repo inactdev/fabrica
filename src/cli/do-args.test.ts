@@ -72,15 +72,34 @@ test("parseDoArgs: --issue=<value> form", () => {
   });
 });
 
-test("parseDoArgs: --issue must be a positive integer", () => {
+// The two spellings that name a repository (Client ruling on carrying an
+// issue into the brief) travel as the text they were typed as: which
+// repository a bare number means is only knowable once the project's
+// origin remote is read, at registration, so the CLI deliberately
+// resolves nothing here - it only refuses a value that names no issue at
+// all, before a detached process is spawned for it.
+test("parseDoArgs: --issue owner/repo#N and a pasted issue URL are kept as typed", () => {
+  for (const value of ["inactdev/inspector#45", "https://github.com/inactdev/inspector/issues/45"]) {
+    assert.deepEqual(parseDoArgs(["do the Fabrica half", "--project", "fabrica", "--issue", value]), {
+      taskText: "do the Fabrica half",
+      projectArg: "fabrica",
+      issue: value,
+    });
+  }
+});
+
+test("parseDoArgs: --issue must name an issue", () => {
   assert.throws(
     () => parseDoArgs(["fix it", "--project", "spending-app", "--issue", "0"]),
     (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--issue")
   );
-  assert.throws(
-    () => parseDoArgs(["fix it", "--project", "spending-app", "--issue", "nope"]),
-    (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--issue")
-  );
+  for (const bad of ["nope", "-3", "owner/repo#", "https://github.com/inactdev/fabrica/pull/4"]) {
+    assert.throws(
+      () => parseDoArgs(["fix it", "--project", "spending-app", "--issue", bad]),
+      (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--issue"),
+      bad
+    );
+  }
 });
 
 test("parseDoArgs: an unknown flag refuses", () => {

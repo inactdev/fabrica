@@ -310,6 +310,68 @@ missing a spelling is small: the notice is advice to a Worker, not a
 restriction on it, so a task that misses still gets what it asked for by
 the Worker simply running the tests it wants.
 
+## The issue a task names is fetched once and carried in full
+
+`fabrica do "<task text>" --project <p> --issue <N>` used to mean one
+thing only: put `Closes #N` on the pull request. It now also means "read
+#N" — `task-issue.ts` fetches that issue's title and body from GitHub at
+registration and every round's brief carries them verbatim, so a task
+worded "do issue #142 as written" never has to ask what #142 says, and
+nobody has to paste an issue's text into a task to get it to the Worker.
+HANDBOOK.md's case 1 tells the chat session exactly that.
+
+Four decisions, all the Client's:
+
+- **Which repository.** A bare `--issue N` resolves against the
+  project's `origin` remote — the same remote every task branch is cut
+  from (`src/line/cut.ts`) — read as `owner/repo` out of its URL
+  (`src/register/origin.ts`'s `ownerRepoFromOriginUrl`). `owner/repo#N`
+  and a pasted issue URL are explicit overrides. An origin that is not
+  on github.com has no repository to resolve a bare number against, and
+  is refused naming those two spellings rather than asked about on
+  api.github.com as if its last two path segments were an owner and a
+  repository.
+- **Fetched once, then frozen.** The record is append-only and a task
+  answers the request as it was made, so the issue is read exactly once,
+  at registration, and written to the task's own `issue.md`. Every later
+  round — a resumed round, a fix round in another process — reads that
+  file (`taskIssueText`) and asks GitHub nothing. An issue edited
+  afterwards is a new task.
+- **Verbatim and in full, or not at all.** No truncation, no summary,
+  on any round. Past a hard 64 KB ceiling of title plus body
+  (`src/github`'s `MAX_ISSUE_BYTES`) the task is refused at
+  registration, naming the real size — a Worker silently handed half an
+  issue would answer half a request, and nothing downstream would know.
+- **A failure refuses before anything is cut.** The fetch sits after the
+  cap and meter guards and before `brain.ask()`, inside the same
+  `recordingFailure` wrapper, so an unreadable issue cuts no
+  ProductionLine, spends nothing, lands on the record as `task-failed`
+  with the cause, and makes `fabrica do` exit non-zero with GitHub's own
+  explanation.
+
+The token is the one Inspector publishes with — `GITHUB_TOKEN`, else `gh
+auth token`, resolved in `src/inspector/run.ts` so the two sides can
+never disagree about which token Fabrica has. Nothing here spawns a
+process: the call is a plain HTTPS request (`src/github/`), which is also
+what keeps `no-host-check.test.ts`'s "nothing but git" rule true for this
+module. See `src/github/README.md` for why `gh issue view` was not used.
+
+Two things travel on the record, not through a parameter: `issue` (what
+a pull request closes — a bare number, or `owner/repo#N` when the issue
+is somewhere other than where the pull request is opened, which is
+GitHub's own documented spelling for a cross-repository closing keyword)
+and `issue.md` (the words). `do.ts` and `verdict.ts` both read them
+through `storedClosesIssue`/`taskIssueText`, so a first round and a fix
+round can never disagree about what a task closes or what it was asked
+to do.
+
+The `--issue` flag is the only path that fetches. A task text's own
+`Issue #N:` prefix still closes the issue (`pr-body.ts`'s
+`issueNamedByTaskText`) but reads nothing: that prefix means the Client
+wrote the task out himself, and a prefix silently turning into a network
+read would make an offline `fabrica do` fail on task text that works
+today.
+
 ## Rule 9: blocked by CI, not by Fabrica, and not watched by Fabrica either
 
 Three earlier designs here, all superseded by Client rulings. First, an

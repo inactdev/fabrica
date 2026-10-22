@@ -182,22 +182,43 @@ export function issueNamedByTaskText(taskText: string): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
-/** The issue a pull request for this task should close: whichever the
- * chat agent named explicitly (`Foreman.do`'s `issue` option, persisted
- * at registration - see src/foreman/ask.ts) takes priority, since it was
- * stated outright; otherwise whatever `taskText` itself names per
- * `issueNamedByTaskText`. Undefined either way means this task is not
- * the whole of one issue's work, and nothing is closed. */
-export function closesIssueFor(taskText: string, explicitIssue: number | undefined): number | undefined {
-  return explicitIssue ?? issueNamedByTaskText(taskText);
+/** The issue a pull request closes, and where it lives. `repo`
+ * (`"owner/repo"`) is set only when the issue is NOT in the repository
+ * the pull request itself is opened in - the case `fabrica do --issue
+ * owner/repo#N` (or a pasted URL for another repository) creates. */
+export interface ClosesIssue {
+  number: number;
+  repo?: string;
 }
 
-/** The pull request body a reviewer sees - `body` with "Closes #N" as its
- * very first line when `issue` is set (the Client's template, ruling
+/** The issue a pull request for this task should close: whichever the
+ * chat agent named explicitly (`Foreman.do`'s `issue` option, fetched
+ * and persisted at registration - see src/foreman/task-issue.ts) takes
+ * priority, since it was stated outright; otherwise whatever `taskText`
+ * itself names per `issueNamedByTaskText`, which can only ever mean this
+ * project's own repository. Undefined either way means this task is not
+ * the whole of one issue's work, and nothing is closed. */
+export function closesIssueFor(taskText: string, explicitIssue: ClosesIssue | undefined): ClosesIssue | undefined {
+  if (explicitIssue !== undefined) return explicitIssue;
+  const fromText = issueNamedByTaskText(taskText);
+  return fromText === undefined ? undefined : { number: fromText };
+}
+
+/** The pull request body a reviewer sees - `body` with its closing line
+ * first when an issue is set (the Client's template, ruling
  * 2026-10-18), unchanged otherwise. Deliberately never applied to the
  * commit message `body` also renders into (renderCommitMessage): GitHub
  * closes an issue from a merged pull request's body, not from an
- * intermediate attempt's own commit. */
-export function withClosesLine(body: string, issue: number | undefined): string {
-  return issue === undefined ? body : `Closes #${issue}\n\n${body}`;
+ * intermediate attempt's own commit.
+ *
+ * An issue in another repository is named in full - `Closes
+ * owner/repo#N`, which is GitHub's own documented spelling for a closing
+ * keyword across repositories ("Linking a pull request to an issue":
+ * `KEYWORD OWNER/REPOSITORY#ISSUE-NUMBER`). A bare `Closes #N` there
+ * would close whatever issue happens to carry that number in *this*
+ * repository, which is the one outcome worse than closing nothing. */
+export function withClosesLine(body: string, issue: ClosesIssue | undefined): string {
+  if (issue === undefined) return body;
+  const named = issue.repo === undefined ? `#${issue.number}` : `${issue.repo}#${issue.number}`;
+  return `Closes ${named}\n\n${body}`;
 }

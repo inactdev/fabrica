@@ -73,6 +73,11 @@ test("runDoCommand: --issue <N> survives the detached process and lands on the t
   assert.equal(code, 0);
   const taskId = io.out[0];
   assert.equal(readTaskFile(recordHome, taskId, "issue"), "186");
+  // And the issue's own words, read at registration in that detached
+  // process and frozen on the record (src/foreman/task-issue.ts) - a
+  // fixture issue here, since the entry script hands over a fake reader
+  // exactly as it does for the Inspector and the worker's box.
+  assert.match(readTaskFile(recordHome, taskId, "issue.md") ?? "", /#186: Fixture issue/);
 });
 
 test("runDoCommand: --issue must be a positive integer", async () => {

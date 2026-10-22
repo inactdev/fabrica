@@ -6,6 +6,12 @@ export type ForemanErrorCode =
   | "no-brain"
   | "invalid-attempts"
   | "invalid-issue"
+  /** `--issue` named a real-looking issue that could not be read before
+   * the task started: no GitHub repository to resolve it against, no
+   * token, GitHub unreachable, no such issue, or one past the ceiling
+   * for an issue carried into a brief. Carries the cause verbatim -
+   * see src/foreman/task-issue.ts. */
+  | "issue-unavailable"
   | "missing-check"
   | "inspector-not-ready"
   /** No reviewer could be settled for a project whose test changes need

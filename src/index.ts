@@ -100,6 +100,14 @@ export { CHECKS_LABEL } from "./ci/index.ts";
 export type { ChecksVerdict } from "./ci/index.ts";
 export type { CiCheckConcludedDetails, CiChecksFinishedDetails } from "./foreman/index.ts";
 export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
+// Where `fabrica do --issue <N>` reads that issue from: the real GitHub
+// by default, a fake in tests (src/foreman/helpers/fake-issue-reader.ts).
+// src/cli/ only ever names the type - it never picks a source - and
+// shares one parser for `--issue`'s three spellings, so the flag and
+// registration can never disagree about which values are legal.
+export { ISSUE_ARG_FORMS, parseIssueArg, GitHubError } from "./github/index.ts";
+export type { FetchedIssue, GitHubErrorCode, IssueRef, IssueRequest, IssueSource } from "./github/index.ts";
+export type { IssueReader } from "./foreman/index.ts";
 // Who judges a project's test changes, and the three grounds on which
 // that cannot be settled - `fabrica do` refuses up front on all three.
 export { resolveReviewer } from "./reviewer/index.ts";

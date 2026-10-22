@@ -11,6 +11,8 @@ export {
   inspectorConfiguredOnOrigin,
   notSetUpMessage,
   originSetup,
+  originUrl,
+  ownerRepoFromOriginUrl,
   repoNameFromOriginUrl,
 } from "./origin.ts";
 export type { OriginSetup } from "./origin.ts";

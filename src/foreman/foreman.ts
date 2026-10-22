@@ -10,6 +10,7 @@ import { answerTask } from "./answer.ts";
 import { recordVerdict } from "./verdict.ts";
 import { defaultBrainAdapter } from "../brain/index.ts";
 import type { Brain, CheckBox } from "../brain/index.ts";
+import type { IssueReader } from "./task-issue.ts";
 import type { Foreman, Inspector } from "../inspector/types.ts";
 import type { Caps } from "../../contract/surface.ts";
 import { recordCost } from "./caps.ts";
@@ -50,6 +51,12 @@ export interface ForemanOptions {
    * ever reached by a round whose green inspection printed a pull
    * request URL. */
   checksReader?: ChecksReader;
+  /** Where `do(..., { issue })` reads that issue's title and body from
+   * (src/foreman/task-issue.ts). Omitted uses the real GitHub, with the
+   * token Inspector publishes with; tests supply a fake
+   * (src/foreman/helpers/fake-issue-reader.ts) so no suite ever needs a
+   * token or a network. */
+  issueReader?: IssueReader;
   /** Told each new task's id the moment it is registered - before any
    * step that can fail - so a caller can label what it logs for it. */
   onTaskRegistered?: (taskId: string) => void;
@@ -66,7 +73,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
 
   return {
     async do(taskText, callOpts) {
-      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, caps, onTaskRegistered: opts.onTaskRegistered });
+      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, issueReader: opts.issueReader, caps, onTaskRegistered: opts.onTaskRegistered });
       if (callOpts.brain) brainByTask.set(task.id, callOpts.brain);
       return task;
     },

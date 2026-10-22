@@ -34,11 +34,18 @@ export type TaskFile =
   | "inspector-latest.json"
   /** The run file latest.json's "run" field named, under `.inspector/runs/`. */
   | "inspector-run.json"
-  /** The issue number the chat agent named explicitly at `fabrica do`
-   * time (`do(..., { issue })`), plain text, written once at
-   * registration - never derived from task text, which is re-read from
-   * request.md instead. See src/foreman/pr-body.ts's `closesIssueFor`. */
+  /** The issue the chat agent named explicitly at `fabrica do` time
+   * (`do(..., { issue })`), plain text, written once at registration -
+   * never derived from task text, which is re-read from request.md
+   * instead. A bare number for an issue in the project's own
+   * repository, `owner/repo#N` for one explicitly pointed elsewhere.
+   * See src/foreman/task-issue.ts's `storedClosesIssue`. */
   | "issue"
+  /** That issue's own title and body, fetched once at registration and
+   * frozen for the life of the task - what every round's brief carries,
+   * so a task worded "do issue #N as written" never has to ask what #N
+   * says. See src/foreman/task-issue.ts. */
+  | "issue.md"
   /** The caps (rule 10) this task actually started under, as JSON,
    * written once at registration - so a cost meter shown weeks later
    * reports the ceiling the task was held to rather than whatever

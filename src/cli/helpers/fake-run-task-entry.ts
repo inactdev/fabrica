@@ -16,13 +16,14 @@
 import { fakeBrain } from "../../brain/helpers/fake-brain.ts";
 import { fixtureInspector } from "../../../contract/helpers/fake-inspector.ts";
 import { fixtureCheckBox } from "../../../contract/helpers/fake-check-box.ts";
+import { fakeIssueReader } from "../../foreman/helpers/fake-issue-reader.ts";
 import { runTask } from "../run-task.ts";
 import { prefixTaskLog } from "../task-log.ts";
 
 const setLogTaskId = prefixTaskLog();
 
 const [, , recordHome, projectPath, taskText, issueArg] = process.argv;
-const issue = issueArg !== undefined ? Number(issueArg) : undefined;
+const issue = issueArg;
 
 try {
   const askQuestions = taskText.includes("ASK_ME_SOMETHING")
@@ -38,6 +39,9 @@ try {
     checkBox: fixtureCheckBox().box,
     onTaskRegistered: setLogTaskId,
     issue,
+    // Neither the real GitHub nor a real token: a fixture issue, for the
+    // same reason the Inspector and the box above are fakes.
+    issueReader: fakeIssueReader().reader,
   });
 } catch (err) {
   console.error(`fake-run-task-entry: ${(err as Error).message}`);

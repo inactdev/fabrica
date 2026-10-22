@@ -22,6 +22,8 @@ import { ForemanError } from "./errors.ts";
 import { requireRoomToStart } from "./caps.ts";
 import { requireMeterRoomToStart } from "./meters.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
+import { fetchTaskIssue, parseIssueArgOrRefuse, withIssueText } from "./task-issue.ts";
+import type { IssueReader } from "./task-issue.ts";
 import type { Caps } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with
@@ -73,12 +75,19 @@ export async function registerAndAsk(
     project: string;
     brain?: Brain;
     attempts?: number;
-    /** The issue number the chat agent names explicitly, the alternative
-     * to `taskText` itself starting with "Issue #N:" - see
-     * src/foreman/pr-body.ts's `closesIssueFor`. Persisted once here,
-     * since nothing about it lives in `taskText` for a later round to
-     * re-derive. */
-    issue?: number;
+    /** The issue the chat agent names explicitly, the alternative to
+     * `taskText` itself starting with "Issue #N:" - see
+     * src/foreman/pr-body.ts's `closesIssueFor`. A number, or any
+     * spelling src/github's `parseIssueArg` accepts (`owner/repo#N`, a
+     * pasted issue URL). Its title and body are fetched here, once, and
+     * persisted - nothing about it lives in `taskText` for a later
+     * round to re-derive. */
+    issue?: number | string;
+    /** Where that issue is read from. Omitted uses the real GitHub,
+     * with the token Inspector publishes with; tests supply a fake
+     * (src/foreman/helpers/fake-issue-reader.ts) so no suite ever needs
+     * a token or a network. */
+    issueReader?: IssueReader;
     caps?: Caps;
     onTaskRegistered?: (taskId: string) => void;
   }
@@ -101,12 +110,10 @@ export async function registerAndAsk(
   }
   const totalAttempts = opts.attempts ?? DEFAULT_ATTEMPTS;
 
-  if (opts.issue !== undefined && (!Number.isInteger(opts.issue) || opts.issue < 1)) {
-    throw new ForemanError(
-      "invalid-issue",
-      `fabrica do: issue must be a positive integer, got ${opts.issue}.`
-    );
-  }
+  // The value's own shape, refused before anything is registered -
+  // `resolveIssueRef` re-reads it below, once the project is known to be
+  // a repository, to work out which repository it names.
+  if (opts.issue !== undefined) parseIssueArgOrRefuse(opts.issue);
 
   const { id: taskId } = registerTask(recordHome, taskText);
   opts.onTaskRegistered?.(taskId);
@@ -117,11 +124,6 @@ export async function registerAndAsk(
   // `fabrica answer` only has to append a round to answers.md and
   // re-derive brief.md from what's already there.
   writeTaskFile(recordHome, taskId, "brief.md", taskText);
-  // Persisted once, up front, the same way brief.md is: a later fix
-  // round (verdict.ts) re-derives this the same way it re-derives
-  // taskText from request.md, rather than it being threaded through a
-  // parameter that round never receives.
-  if (opts.issue !== undefined) writeTaskFile(recordHome, taskId, "issue", String(opts.issue));
   // Rule 10's numbers as of this moment, persisted once (issue #203):
   // these are the caps this task is actually held to, and a cost meter
   // read weeks later should show the ceiling that applied rather than
@@ -146,6 +148,26 @@ export async function registerAndAsk(
     // use (see meters.ts) - never refuses on an unread number.
     requireMeterRoomToStart(recordHome, taskId, { project: opts.project });
 
+    // The issue this task names, read once and frozen (Client ruling:
+    // "fetched once at registration and frozen for the life of the task
+    // ... an issue edited later is a new task"). Persisted to the record
+    // here - both the issue's own words and what a pull request should
+    // close - so every later round, including a fix round in another
+    // process, reads it back rather than asking GitHub again.
+    //
+    // Deliberately placed here, after the guards and before the
+    // clarifying step: a task whose issue cannot be read is refused
+    // before any ProductionLine is cut and before anything spends,
+    // naming the cause (ForemanError("issue-unavailable"), recorded as
+    // "task-failed" by the wrapper around this body), and the clarifying
+    // step itself is handed the issue's words - the whole point of
+    // fetching it, since a task worded "do issue #N as written" would
+    // otherwise have to ask what #N says.
+    const issueText =
+      opts.issue === undefined
+        ? undefined
+        : await fetchTaskIssue(recordHome, taskId, opts.project, opts.issue, opts.issueReader);
+
     // A task must never look started when its very first step never ran -
     // "ask-failed" is what lets an outside observer (fabrica do's own
     // process, src/cli/wait-for-ask-outcome.ts) tell that apart from
@@ -163,7 +185,13 @@ export async function registerAndAsk(
       // too - a host it is refused lands on this task's record, not
       // nowhere. Nothing about `ask(brief)`'s own ratified signature
       // changes; see src/brain/task-network.ts.
-      asked = await withTaskNetwork(networkPolicyFor(recordHome, taskId, opts.project), () => brain.ask(taskText));
+      asked = await withTaskNetwork(networkPolicyFor(recordHome, taskId, opts.project), () =>
+        // The task's own words plus the issue they refer to, in full -
+        // every round's worker brief carries the same section
+        // (do.ts/verdict.ts, via `withIssueText`), so the clarifying
+        // step and the work see the same request.
+        brain.ask(withIssueText(taskText, issueText))
+      );
     } catch (err) {
       const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };
       appendEvent(recordHome, { taskId, name: "ask-failed", details });

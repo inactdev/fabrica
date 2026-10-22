@@ -87,13 +87,23 @@ The one command this issue builds. What it does, in order:
 1. **Parses arguments** (`do-args.ts`). Exactly one positional (the task
    text - quote it if it has spaces), one required `--project`
    (`--project <value>` or `--project=<value>`, either order), and one
-   optional `--issue <N>`/`--issue=<N>` (a positive integer) - the chat
-   agent's explicit alternative to `<task text>` itself starting with
-   "Issue #N:", so the opened pull request's body ends with "Closes #N"
-   (`src/foreman/pr-body.ts`'s `closesIssueFor`; see `foreman/README.md`).
-   Anything else - missing task text, missing `--project`, an
-   unrecognized flag, a non-positive-integer `--issue`, two positionals -
-   refuses with the exact usage line, exit 1, nothing spawned.
+   optional `--issue <N>`/`--issue=<N>` - the chat agent's explicit
+   alternative to `<task text>` itself starting with "Issue #N:", so the
+   opened pull request's body closes the issue
+   (`src/foreman/pr-body.ts`'s `closesIssueFor`; see `foreman/README.md`)
+   **and** that issue's own title and body are fetched at registration
+   and carried into every round's brief, in full
+   (`src/foreman/task-issue.ts`). `--issue` accepts three spellings - a
+   positive integer, `owner/repo#N`, or a pasted
+   `https://github.com/owner/repo/issues/N` - checked here against the
+   one parser registration itself uses (`src/github`'s `parseIssueArg`,
+   re-exported from `src/index.ts`), so the flag and the task can never
+   disagree about which values are legal. Which repository a bare number
+   means is deliberately **not** resolved here: that needs the project's
+   `origin` remote, which the registration step reads. Anything else -
+   missing task text, missing `--project`, an unrecognized flag, an
+   `--issue` naming no issue, two positionals - refuses with the exact
+   usage line, exit 1, nothing spawned.
 2. **Reads config** (`loadConfig`, from `src/index.ts`) for the record
    home's project registry and caps. A record home with no
    `projects.toml` at all yet (a brand-new install) is not an error -
@@ -147,7 +157,8 @@ The one command this issue builds. What it does, in order:
    ask -> maybe isolate/work in one call (SPEC.md step 2, "Clarify-or-
    proceed" - see `src/foreman/README.md`'s "The ask-first seam"). This
    polls that task's own record for whichever of `"questions-asked"`,
-   `"ask-failed"`, or `"work-started"` lands first:
+   `"ask-failed"`, `"task-failed"`, `"cap-refused"` or `"work-started"`
+   lands first:
    - **Materially ambiguous** → stops, printing the numbered questions
      and how to answer them (`fabrica answer <id> -m "<text>"`) to
      **stderr**. No Worker ever ran; nothing keeps running in the
@@ -158,6 +169,12 @@ The one command this issue builds. What it does, in order:
      #8 follow-up: "a failed task must never look like a started one").
      `ask.ts`'s `registerAndAsk` already wrote this to the record as
      `"ask-failed"` before this process ever sees it.
+   - **The issue `--issue` named could not be read** (wrong number, no
+     access, GitHub unreachable, or one past the 64 KB ceiling) → the
+     same stop: the real cause to **stderr**, exit non-zero, nothing
+     cut and nothing spent. The registration step refuses before the
+     clarifying step runs, so this lands as `"task-failed"` with
+     GitHub's own explanation (`src/foreman/task-issue.ts`).
    - **Otherwise, or if the wait times out** → nothing further to print;
      this process then exits, and the task keeps running in the
      background. See "Why detached execution needs its own file" below

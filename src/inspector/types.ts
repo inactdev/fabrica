@@ -170,8 +170,12 @@ export interface Foreman {
     taskText: string,
     /** `issue` mirrors contract/surface.ts's `Foreman.do` - the chat
      * agent's explicit alternative to `taskText` starting with
-     * "Issue #N:" (src/foreman/pr-body.ts's `closesIssueFor`). */
-    opts: { project: string; attempts?: number; brain?: Brain; issue?: number }
+     * "Issue #N:" (src/foreman/pr-body.ts's `closesIssueFor`) - widened
+     * to the two other spellings the Client asked for, `owner/repo#N`
+     * and a pasted issue URL (src/github's `parseIssueArg`). A plain
+     * number, the only form the ratified type names, still means
+     * exactly what it always did. */
+    opts: { project: string; attempts?: number; brain?: Brain; issue?: number | string }
   ): Promise<FabricaTask>;
   answer(taskId: string, text: string): Promise<FabricaTask>;
   deliveryOf(taskId: string): Promise<Delivery | null>;
