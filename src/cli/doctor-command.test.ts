@@ -245,22 +245,59 @@ test("checkout check: an installed copy reports its version and commit against o
   assert.match(behind.detail, /behind origin\/master, latest is zzz999/);
 });
 
-test("checkout check: an installed copy with no build-info.json fails, naming reinstall into its own prefix", async () => {
+test("checkout check: an installed copy whose commit is unknown fails, saying so and why", async () => {
   const { checkoutCheck } = await import("./doctor-command.ts");
-  const copy = { kind: "installed" as const, root: "/usr/local/lib/node_modules/fabrica", branch: null, commit: null, version: "1.2.3" };
+  const copy = {
+    kind: "installed" as const,
+    root: "/usr/local/lib/node_modules/fabrica",
+    branch: null,
+    commit: null,
+    version: "1.2.3",
+    commitUnknownReason: "there is no .git at /tmp/x, and no field npm set for the prepare step named one",
+  };
   const check = checkoutCheck(copy, "aaa111");
   assert.equal(check.ok, false);
-  // The prefix this copy lives under, not npm's default - which is
-  // read-only on a Nix-managed host (issue #171).
-  assert.match(check.fix ?? "", /npm install -g --prefix \/usr\/local github:inactdev\/fabrica/);
+  assert.match(check.detail, /commit unknown/);
+  // Whatever could not produce a commit gets to say why, verbatim -
+  // "unknown" with no reason is what sent the Client looking in the
+  // first place.
+  assert.match(check.detail, /no field npm set for the prepare step named one/);
+  // The clone-then-pack procedure, into the prefix this copy lives
+  // under rather than npm's default - which is read-only on a
+  // Nix-managed host (issue #171).
+  assert.match(check.fix ?? "", /^fabrica update, or by hand: /);
+  assert.match(check.fix ?? "", /git clone --depth 1 --branch master https:\/\/github\.com\/inactdev\/fabrica\.git/);
+  assert.match(check.fix ?? "", /npm install -g --prefix \/usr\/local "\$d"\/fabrica-\*\.tgz/);
+  // Never the one-step install of the GitHub spec: that is the install
+  // whose packed tree has no .git, so advising it here would advise the
+  // very install that produced this line.
+  assert.equal((check.fix ?? "").includes("install -g github:"), false);
 });
 
-test("checkout check: an installed copy under no npm prefix at all still names the plain install command", async () => {
+test("checkout check: an installed copy with no build-info.json at all fails the same way, saying that instead", async () => {
+  const { checkoutCheck } = await import("./doctor-command.ts");
+  const copy = {
+    kind: "installed" as const,
+    root: "/usr/local/lib/node_modules/fabrica",
+    branch: null,
+    commit: null,
+    version: "1.2.3",
+    commitUnknownReason: "there is no build-info.json in it to record one",
+  };
+  const check = checkoutCheck(copy, "aaa111");
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /commit unknown - there is no build-info\.json/);
+});
+
+test("checkout check: an installed copy under no npm prefix at all still names the procedure, unprefixed", async () => {
   const { checkoutCheck } = await import("./doctor-command.ts");
   const copy = { kind: "installed" as const, root: "/home/me/.npm/_npx/0a1b2c3d/node_modules/fabrica", branch: null, commit: null, version: "1.2.3" };
   const check = checkoutCheck(copy, "aaa111");
   assert.equal(check.ok, false);
-  assert.match(check.fix ?? "", /npm install -g github:inactdev\/fabrica/);
+  // Nothing recorded a reason - the line still has to say what it knows.
+  assert.match(check.detail, /commit unknown - nothing in it records one/);
+  assert.match(check.fix ?? "", /npm install -g "\$d"\/fabrica-\*\.tgz/);
+  assert.equal((check.fix ?? "").includes("--prefix"), false);
 });
 
 // Issue #171: a leftover `npm link` symlink standing where an installed
@@ -434,11 +471,46 @@ test("detectCopy: a directory with no .git reads build-info.json as an installed
   const { detectCopy } = await import("./doctor-command.ts");
   const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-installed-"));
   writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
-  writeFileSync(join(dir, "build-info.json"), JSON.stringify({ commit: "abc123" }));
+  writeFileSync(join(dir, "build-info.json"), JSON.stringify({ commit: "abc123", source: "git rev-parse HEAD" }));
   const copy = detectCopy(dir, () => {
     throw new Error("an installed copy must never shell out to git");
   });
   assert.deepEqual(copy, { kind: "installed", root: dir, branch: null, commit: "abc123", version: "1.2.3" });
+});
+
+// The state `scripts/write-build-info.mjs` records when it had no source
+// for the commit: an empty string, never a null, plus the named failure -
+// which is carried through to the Client verbatim rather than flattened
+// into "unknown".
+test("detectCopy: a build-info.json with an empty commit carries its own named failure out", async () => {
+  const { detectCopy } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-empty-commit-"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
+  writeFileSync(
+    join(dir, "build-info.json"),
+    JSON.stringify({ commit: "", source: "none", error: "there is no .git at /x, and no field npm set named one" })
+  );
+  const copy = detectCopy(dir, () => null);
+  assert.deepEqual(copy, {
+    kind: "installed",
+    root: dir,
+    branch: null,
+    commit: null,
+    version: "1.2.3",
+    commitUnknownReason: "there is no .git at /x, and no field npm set named one",
+  });
+});
+
+// A copy built before the script said why - its `{"commit":null}` - is
+// the same state, and still gets a reason rather than a bare unknown.
+test("detectCopy: a build-info.json with a null commit and no reason is reported as recording none", async () => {
+  const { detectCopy } = await import("./doctor-command.ts");
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-null-commit-"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
+  writeFileSync(join(dir, "build-info.json"), JSON.stringify({ commit: null }));
+  const copy = detectCopy(dir, () => null);
+  assert.equal(copy.commit, null);
+  assert.match(copy.commitUnknownReason ?? "", /records no commit, and does not say why/);
 });
 
 test("detectCopy: a directory with neither .git nor build-info.json is installed with an unknown commit", async () => {
@@ -446,7 +518,14 @@ test("detectCopy: a directory with neither .git nor build-info.json is installed
   const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-bare-"));
   writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
   const copy = detectCopy(dir, () => null);
-  assert.deepEqual(copy, { kind: "installed", root: dir, branch: null, commit: null, version: "1.2.3" });
+  assert.deepEqual(copy, {
+    kind: "installed",
+    root: dir,
+    branch: null,
+    commit: null,
+    version: "1.2.3",
+    commitUnknownReason: "there is no build-info.json in it to record one",
+  });
 });
 
 test("runningCopyCommit: exactly the commit detectCopy would compute for this root - the same question /api/version and fabrica up's stale-live-view check both ask", async () => {

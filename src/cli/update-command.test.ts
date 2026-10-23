@@ -308,7 +308,11 @@ test("runUpdateCommand: a copy that is neither a checkout nor a global install i
   const err = io.err.join("\n");
   assert.match(err, /_npx/);
   assert.match(err, /needs an installed or checked-out copy/);
-  assert.match(err, /npm install -g github:inactdev\/fabrica/);
+  // The install procedure that records a commit, not the one-step GitHub
+  // spec - which installs a copy that cannot say which commit it is.
+  assert.match(err, /git clone --depth 1 --branch master https:\/\/github\.com\/inactdev\/fabrica\.git/);
+  assert.match(err, /npm pack --pack-destination/);
+  assert.equal(err.includes("install -g github:"), false);
 });
 
 // Client ruling: "Restart unconditionally when the commit changed; if

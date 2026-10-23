@@ -56,28 +56,46 @@ on a different one. It is the same version the check box and the Worker
 container run, which is the point - `fabrica doctor` reports a mismatch
 as a FAIL.
 
-    npm install -g github:inactdev/fabrica
+    d=$(mktemp -d) && git clone --depth 1 --branch master https://github.com/inactdev/fabrica.git "$d/fabrica" && (cd "$d/fabrica" && npm pack --pack-destination "$d") && npm install -g "$d"/fabrica-*.tgz
+
+Three steps, so paste the whole line: clone the repository into a
+throwaway directory, build the published tarball from inside that clone
+(`npm pack`, which runs Fabrica's own build step - that is what records
+the exact commit being installed, see `fabrica doctor` below), then
+install that tarball globally. If your machine's default npm prefix is
+read-only - a Nix-managed host, for one - add `--prefix <your prefix>`
+to the last `npm install -g`.
+
+**Not `npm install -g github:inactdev/fabrica`.** That one-liner does
+install a working command, but npm fetches a GitHub spec as GitHub's
+tarball of the tree, with no `.git` in it, so the build step has no way
+to record which commit it just installed - and `fabrica doctor` then
+reports `commit unknown`, which stops `fabrica up`. The clone above is
+the whole difference. (It also sidesteps a second problem with that
+form: on npm 11.16.0 it can leave the package a symlink into a clone npm
+deletes straight afterwards, so the installed `fabrica` is "No such file
+or directory" the first time you run it.)
 
 If you have ever run `npm link` from a checkout of this repository, run
-`npm unlink -g fabrica` first - that leftover symlink makes this install
-fail with `ENOTDIR`, and `fabrica doctor` reports it with the same fix.
+`npm unlink -g fabrica` first - that leftover symlink makes any global
+install of `fabrica` fail with `ENOTDIR`, and `fabrica doctor` reports it
+with the same fix.
 
 That's the whole install. It puts a fixed, standalone copy of `fabrica`
 on your `PATH`, working from any directory - verified against a real
-install: npm clones the repo, runs its own build step (recording the
-exact commit it was built from, see `fabrica doctor` below), and copies
-the result into place. Nothing under this command's control touches
-your shell profile or any other file on the machine.
+install. Nothing under this command's control touches your shell profile
+or any other file on the machine, and the throwaway directory is yours to
+delete (`rm -rf "$d"`).
 
 That installed copy is frozen: it does not change when some other
 checkout of this repository changes, including one you are actively
 editing, mid-merge, or on a branch - the problem that motivated this
 install method. To upgrade later, run `fabrica update` (or the same
-install command again); `fabrica update` reinstalls into the prefix this
-copy actually lives under, which matters on a host whose default npm
-prefix is read-only, and brings the installed Inspector and the live
-view forward with it. There is no uninstall step beyond the ordinary
-`npm uninstall -g fabrica`.
+procedure again); `fabrica update` runs exactly those three steps for
+you, reinstalling into the prefix this copy actually lives under - which
+matters on a host whose default npm prefix is read-only - and brings the
+installed Inspector and the live view forward with it. There is no
+uninstall step beyond the ordinary `npm uninstall -g fabrica`.
 
 **`npm link` is a separate, developer-only install**, documented above
 under "Developing Fabrica itself" - it points the `fabrica` command at

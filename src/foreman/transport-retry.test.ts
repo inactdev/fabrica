@@ -258,7 +258,18 @@ test("a brain that drops both calls fails the task, naming the model and the err
   const failed = events.find((e) => e.name === "task-failed")?.details as { message?: string } | undefined;
   assert.match(failed?.message ?? "", /Connection closed mid-response/, "the record does not name the error");
   assert.match(failed?.message ?? "", /fake-1/, "the record does not name the model");
-  // A call that never came back is not an attempt, so it leaves no
-  // receipt - and no second model was tried behind the Client's back.
-  assert.equal(receiptsOf(recordHome, taskId).length, 0);
+  // A call that never came back is still one attempt, not two: the
+  // retry happened inside attempt 1, so exactly one receipt lands - the
+  // UNMEASURED one issue #167 requires of any attempt whose worker call
+  // crashed (minutes of worker time may have been billed, and rule 10
+  // never counts unknown spend as zero). It names the same model
+  // throughout, so no second model was tried behind the Client's back.
+  const receipts = receiptsOf(recordHome, taskId);
+  assert.equal(receipts.length, 1, "one attempt, one receipt - a retry is not an attempt of its own");
+  assert.equal(receipts[0].attempt, 1);
+  assert.equal(receipts[0].outcome, "failed");
+  assert.equal(receipts[0].costUsd, null, "never $0 for spend nobody measured");
+  assert.equal(receipts[0].costUnknown, true);
+  assert.equal(receipts[0].checks, null, "nothing judged an attempt whose call never arrived");
+  assert.equal(receipts[0].model, "fake-1");
 });
