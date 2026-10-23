@@ -263,6 +263,94 @@ test("checkout check: an installed copy under no npm prefix at all still names t
   assert.match(check.fix ?? "", /npm install -g github:inactdev\/fabrica/);
 });
 
+// Client ruling 2026-10-23: which copy of fabrica is on this disk, and
+// whether it is the newest one, makes no task impossible - so none of
+// this check's failures may stop `fabrica up` from starting a session.
+// They are all still FAIL lines in `fabrica doctor` itself, which is
+// what the exit-code assertions below are for: this is a severity, not
+// a downgrade to OK.
+test("checkout check: no failure here stops a task - still a doctor FAIL, never a refused session", async () => {
+  const { checkoutCheck, stopsATask } = await import("./doctor-command.ts");
+  const noBuildInfo = checkoutCheck(
+    { kind: "installed" as const, root: "/usr/local/lib/node_modules/fabrica", branch: null, commit: null, version: "1.2.3" },
+    "aaa111"
+  );
+  const offMaster = checkoutCheck(
+    { kind: "dev-checkout" as const, root: "/src/fabrica", branch: "fm/some-feature", commit: "aaa111", version: "0.0.0" },
+    "aaa111"
+  );
+
+  for (const check of [noBuildInfo, offMaster]) {
+    assert.equal(check.ok, false, check.detail);
+    assert.equal(check.blocking, false, check.detail);
+    assert.equal(stopsATask(check), false, check.detail);
+  }
+
+  const { code, lines } = await doctor(healthyHome(), okProbes({ checkout: () => noBuildInfo }));
+  assert.equal(code, 1, "fabrica doctor itself must still fail on it");
+  assert.ok(lines.some((l) => l.startsWith("FAIL checkout")), lines.join("\n"));
+});
+
+test("checkout check: being behind origin/master is a note for the session to print, naming fabrica update", async () => {
+  const { checkoutCheck } = await import("./doctor-command.ts");
+  const installed = { kind: "installed" as const, root: "/usr/local/lib/node_modules/fabrica", branch: null, commit: "aaa111", version: "1.2.3" };
+  const dev = { kind: "dev-checkout" as const, root: "/src/fabrica", branch: "master", commit: "aaa111", version: "0.0.0" };
+
+  for (const copy of [installed, dev]) {
+    const behind = checkoutCheck(copy, "zzz999");
+    assert.equal(behind.ok, true);
+    assert.match(behind.note ?? "", /behind origin\/master, latest is zzz999/);
+    assert.match(behind.note ?? "", /fabrica update/);
+
+    assert.equal(checkoutCheck(copy, "aaa111").note, undefined, "up to date has nothing to warn about");
+    assert.equal(checkoutCheck(copy, null).note, undefined, "a comparison nobody could make is not a warning either");
+  }
+});
+
+test("npm link check: a leftover symlink stops no task either - it breaks the next install, nothing else", async () => {
+  const { npmLinkCheck, stopsATask } = await import("./doctor-command.ts");
+  const leftover = npmLinkCheck([{ prefix: "/usr/local", linkTarget: "/src/fabrica", dangling: false, npmDefault: true }], {
+    kind: "installed",
+    root: "/home/me/.npm-global/lib/node_modules/fabrica",
+    branch: null,
+    commit: "aaa111",
+    version: "1.2.3",
+  });
+
+  assert.equal(leftover.ok, false);
+  assert.equal(stopsATask(leftover), false);
+  assert.equal((await doctor(healthyHome(), okProbes({ npmLink: () => leftover }))).code, 1);
+});
+
+test("stopsATask: absent blocking means a failure stops a task - a new check is never advisory by accident", async () => {
+  const { stopsATask } = await import("./doctor-command.ts");
+  assert.equal(stopsATask({ ok: false, label: "brand new check", detail: "broken" }), true);
+  assert.equal(stopsATask({ ok: false, label: "x", detail: "broken", blocking: true }), true);
+  assert.equal(stopsATask({ ok: false, label: "x", detail: "broken", blocking: false }), false);
+  assert.equal(stopsATask({ ok: true, label: "x", detail: "fine" }), false);
+});
+
+test("advisoryLine: one warning line for a non-blocking failure or a note, and nothing for anything else", async () => {
+  const { advisoryLine } = await import("./doctor-command.ts");
+
+  assert.equal(
+    advisoryLine({ ok: false, blocking: false, label: "checkout", detail: "no build-info.json", fix: "reinstall it" }),
+    "WARN checkout: no build-info.json - fix: reinstall it"
+  );
+  assert.equal(advisoryLine({ ok: true, label: "checkout", detail: "fine", note: "behind origin/master" }), "WARN checkout: behind origin/master");
+  assert.equal(advisoryLine({ ok: true, label: "docker", detail: "reachable" }), null);
+  assert.equal(advisoryLine({ ok: false, label: "docker", detail: "not reachable" }), null, "a blocking failure is never a warning");
+});
+
+test("formatDoctorLine: exactly the lines fabrica doctor prints, so one renderer serves both commands", async () => {
+  const { formatDoctorLine } = await import("./doctor-command.ts");
+  assert.equal(formatDoctorLine({ ok: true, label: "docker", detail: "reachable" }), "OK   docker: reachable");
+  assert.equal(formatDoctorLine({ ok: false, label: "docker", detail: "not reachable", fix: "start it" }), "FAIL docker: not reachable - fix: start it");
+
+  const { lines } = await doctor(healthyHome(), okProbes());
+  assert.ok(lines.includes("OK   docker: fine"), lines.join("\n"));
+});
+
 // Issue #171: a leftover `npm link` symlink standing where an installed
 // copy belongs. The wording/pass-fail cases are pure; the three below
 // them build real symlinks, since the point of that half is reading a

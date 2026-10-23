@@ -258,7 +258,19 @@ test("a brain that drops both calls fails the task, naming the model and the err
   const failed = events.find((e) => e.name === "task-failed")?.details as { message?: string } | undefined;
   assert.match(failed?.message ?? "", /Connection closed mid-response/, "the record does not name the error");
   assert.match(failed?.message ?? "", /fake-1/, "the record does not name the model");
-  // A call that never came back is not an attempt, so it leaves no
-  // receipt - and no second model was tried behind the Client's back.
-  assert.equal(receiptsOf(recordHome, taskId).length, 0);
+
+  // Both calls dropping is exactly the crash issue #167 rules on: minutes
+  // of worker time may have been billed and from out here nobody can tell
+  // whether any money moved, so the attempt leaves ONE receipt with an
+  // unknown cost - never $0, never none at all. What this test has always
+  // been about is still true alongside it: rule 3 counts attempts, so the
+  // two calls are one attempt and no second model was tried behind the
+  // Client's back.
+  const receipts = receiptsOf(recordHome, taskId);
+  assert.equal(receipts.length, 1, "one attempt, one receipt");
+  assert.equal(receipts[0].attempt, 1);
+  assert.equal(receipts[0].outcome, "failed");
+  assert.equal(receipts[0].costUnknown, true);
+  assert.equal(receipts[0].costUsd, null, "never $0 for spend nobody measured");
+  assert.equal(receipts[0].model, "fake-1", "both calls went to the same model");
 });
