@@ -19,7 +19,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
-import { runDoctorCommand, runningCopyCommit, type DoctorProbes } from "./doctor-command.ts";
+import {
+  advisoryLine,
+  collectDoctorChecks,
+  formatDoctorLine,
+  runningCopyCommit,
+  stopsATask,
+  type DoctorProbes,
+} from "./doctor-command.ts";
+import { ensureDockerDaemon, type DockerDaemonOutcome, type EnsureDockerDaemonOptions } from "./docker-daemon.ts";
 import { spawnDetachedLiveView } from "./spawn-detached.ts";
 import { findLiveViewProcess as locateLiveViewProcess, stopLiveViewProcess as terminateLiveViewProcess } from "./live-view-process.ts";
 
@@ -30,16 +38,24 @@ export const UP_HELP = `Usage: ${UP_USAGE}
 Starts a working session from inside a registered project's folder, in
 order:
 
-  1. Runs the same checks as \`fabrica doctor\` - stops here, with the
-     doctor output, if any check fails.
-  2. Starts the live view in the background (http://localhost:7777)
+  1. On a Mac, if Docker is installed but not running, starts it
+     (\`open -a Docker\`) and waits up to two minutes for the daemon,
+     saying what it is waiting on.
+  2. Runs the same checks as \`fabrica doctor\` - stops here, with the
+     doctor output, only on a finding that makes a task impossible (no
+     Docker, no worker image, no token, a project folder gone).
+     Anything that stops no task - a missing or commit-less
+     build-info.json, being behind origin/master, a leftover \`npm link\`
+     symlink - is printed as a warning above the session instead, and
+     is still a FAIL in \`fabrica doctor\` itself.
+  3. Starts the live view in the background (http://localhost:7777)
      and opens it in your default browser - unless one is already
      listening there and running this exact copy's code (checked via
      its own /api/version), in which case its address is printed
      instead of opening a browser. One running older code (e.g. left
      over from before a merge) is stopped first and replaced with a
      fresh one - never reused, and never a second copy either way.
-  3. Launches your chat harness in this folder, with HANDBOOK.md
+  4. Launches your chat harness in this folder, with HANDBOOK.md
      appended to its system prompt and this harness's own settings
      loaded through its own command-line flags - nothing is ever
      written into this folder.
@@ -432,8 +448,17 @@ export interface RunUpCommandOptions {
   cwd?: string;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
-  /** Forwarded to runDoctorCommand verbatim - see its own DoctorProbes. */
+  /** Forwarded to collectDoctorChecks verbatim - see its own DoctorProbes. */
   doctorProbes?: DoctorProbes;
+  /** Forwarded to the macOS "start Docker and wait for its daemon" step
+   * verbatim (minus its two output callbacks, which this command owns) -
+   * see src/cli/docker-daemon.ts. A test overrides `platform` here to
+   * reach that step at all, since it is skipped before anything is
+   * spawned on every other platform. */
+  dockerDaemonOptions?: Omit<EnsureDockerDaemonOptions, "notify" | "warn">;
+  /** Test-only seam replacing that step wholesale, for a test that only
+   * cares whether it ran and what came after it. */
+  ensureDockerDaemon?: (opts: EnsureDockerDaemonOptions) => Promise<DockerDaemonOutcome>;
   /** Test-only: a different port than the documented 7777, so a test
    * never has to bind the one address this command is actually
    * specified against. */
@@ -499,21 +524,43 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   const recordHome = opts.recordHome ?? resolveRecordHome();
   const cwd = opts.cwd ?? process.cwd();
 
-  // Step 1: the same checks fabrica doctor runs, spending nothing.
-  const doctorLines: string[] = [];
-  const doctorExit = await runDoctorCommand([], {
-    recordHome,
-    probes: opts.doctorProbes,
-    stdout: (line) => doctorLines.push(line),
-    stderr: (line) => doctorLines.push(line),
-  });
-  if (doctorExit !== 0) {
-    doctorLines.forEach((line) => stdout(line));
-    stderr("fabrica up: doctor checks failed - fix the above, then try again.");
+  // Step 1: on a Mac, Docker installed but not running is the one
+  // doctor finding `up` can just fix - start it and wait for the daemon
+  // before anything asks whether it's there. Everywhere else, and
+  // whenever the daemon already answers, this does nothing and prints
+  // nothing (src/cli/docker-daemon.ts). Nothing here can fail the
+  // command: if Docker doesn't come up, the docker check in step 2
+  // fails exactly as it did before, with its own fix.
+  const ensureDocker = opts.ensureDockerDaemon ?? ensureDockerDaemon;
+  await ensureDocker({ ...opts.dockerDaemonOptions, notify: stdout, warn: stderr });
+
+  // Step 2: the same checks fabrica doctor runs, spending nothing - but
+  // read per finding, not off one exit code (Client ruling 2026-10-23):
+  // only a finding that makes a task impossible stops a session.
+  // Everything else is a warning above the session, since refusing to
+  // start over it costs the Client a session and buys nothing. Doctor
+  // itself is unchanged - these are all still FAIL lines there.
+  const checks = await collectDoctorChecks({ recordHome, probes: opts.doctorProbes });
+  const blockers = checks.filter(stopsATask);
+  if (blockers.length > 0) {
+    // The whole report, exactly as doctor renders it - including any
+    // FAIL that would not have stopped anything on its own, since
+    // hiding those would make this output disagree with `fabrica
+    // doctor` - and then which of those lines is the one in the way.
+    checks.forEach((check) => stdout(formatDoctorLine(check)));
+    stderr(
+      `fabrica up: doctor checks failed - ${blockers.map((check) => check.label).join(", ")} ` +
+        `must be fixed before a task can run. Fix that, then try again.`
+    );
     return 1;
   }
+  const warnings = checks.map(advisoryLine).filter((line): line is string => line !== null);
+  if (warnings.length > 0) {
+    warnings.forEach((line) => stderr(line));
+    stderr("fabrica up: none of the above stops a task from running - starting the session anyway.");
+  }
 
-  // Step 2: the live view - started detached, the same way fabrica do
+  // Step 3: the live view - started detached, the same way fabrica do
   // backgrounds a task, unless one is already listening AND running
   // the same commit this copy of fabrica is. A live view running
   // older code (e.g. left over from before a merge) is stopped and
@@ -556,7 +603,7 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
     await startFreshLiveView();
   }
 
-  // Step 2.5: any optional integration that wants to react to this
+  // Step 3.5: any optional integration that wants to react to this
   // session starting - e.g. mirroring it into some other tool - the
   // same discovered-at-runtime, src/-never-names-it shape as the
   // harness launcher below. A hook that fails to load, or throws, never
@@ -575,7 +622,7 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
     }
   }
 
-  // Step 3: the harness itself, in the foreground.
+  // Step 4: the harness itself, in the foreground.
   const found = await loadHarnessLauncher(opts.skillDir ?? SKILL_DIR);
   for (const failure of found.loadFailures) stderr(`${failure.path} ${failure.problem}`);
   const launcher = opts.launcher ?? found.launcher;

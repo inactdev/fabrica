@@ -169,6 +169,22 @@ unmeasured spend blocking new work. `fabrica doctor --live`
 additionally spends a few cents to confirm the worker token actually
 authenticates.
 
+Every `FAIL` here is worth fixing, but they are not all equally urgent,
+and `fabrica up` treats them differently: it refuses to start a session
+only over a finding that makes a task *impossible* - no Docker, no
+worker image, no token, a project folder gone - and prints the rest as
+`WARN` lines above the session, with their fixes, before starting it
+anyway. Today those are the **checkout** line (an installed copy with no
+recorded commit in `build-info.json`, a developer checkout off `master`,
+or either one behind `origin/master`) and a leftover `npm link`
+symlink: which
+copy of `fabrica` is on the disk, and whether it is the newest one,
+stops no task from running.
+
+On a Mac, `fabrica up` doesn't even report Docker not running - it runs
+`open -a Docker` for you and waits up to two minutes for the daemon,
+saying what it's waiting on, before any check asks.
+
 The **inspector** line also reports which build of Inspector you have:
 the commit the installed binary was built from, against the tip of
 Inspector's own `main`. A binary behind `main` is a `FAIL`, and the fix
