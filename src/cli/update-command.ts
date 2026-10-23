@@ -7,10 +7,13 @@
 // has uncommitted changes (a fast-forward pull on a dirty tree, or one
 // not tracking master's history, is exactly the kind of surprise this
 // refuses rather than risks); an installed copy is replaced with the
-// current code at `github:inactdev/fabrica` in two npm steps - pack the
-// spec into a throwaway directory, then install that tarball
-// (global-reinstall.ts, which carries the reason one `npm install -g
-// github:...` cannot do it).
+// current code on master in three steps - clone it into a throwaway
+// directory, pack the tarball from inside that clone, install that
+// tarball (global-reinstall.ts, which carries the reasons neither one
+// `npm install -g github:...` nor a pack of that spec can do it: the
+// first installs a symlink to a clone npm deletes, the second packs a
+// tree with no `.git`, leaving the installed copy unable to say which
+// commit it is).
 //
 // That install is run with `--prefix` set to the prefix the running
 // copy is actually installed under, derived from its own path
@@ -60,7 +63,7 @@ import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { detectCopy, git, short, type CopyInfo } from "./doctor-command.ts";
 import { commandFailureMessage, realGlobalReinstallIo, reinstallGlobalCopy } from "./global-reinstall.ts";
-import { INSTALL_SPEC, prefixOfGlobalInstall } from "./npm-prefix.ts";
+import { clonePackInstallProcedure, prefixOfGlobalInstall } from "./npm-prefix.ts";
 import { LIVE_VIEW_PORT, refreshStaleLiveView, type LiveViewStaleOutcome } from "./up-command.ts";
 
 export const UPDATE_USAGE = "fabrica update";
@@ -76,17 +79,20 @@ session:
        - Checkout: runs \`git pull --ff-only origin master\` - refused
          first, with a clear message, if the checkout isn't on master
          or has uncommitted changes.
-       - Installed: builds the published tarball from
-         \`github:inactdev/fabrica\` into a throwaway directory (\`npm
-         pack\`) and installs that tarball globally, with \`--prefix\`
-         set to the prefix this copy is installed under rather than
-         npm's default - so a copy installed outside that default (on
-         a host whose default prefix is read-only, say) updates where
-         it actually lives. Two steps rather than one \`npm install -g
+       - Installed: clones master into a throwaway directory, builds
+         the published tarball from inside that clone (\`npm pack\`),
+         and installs that tarball globally, with \`--prefix\` set to
+         the prefix this copy is installed under rather than npm's
+         default - so a copy installed outside that default (on a host
+         whose default prefix is read-only, say) updates where it
+         actually lives. Three steps rather than one \`npm install -g
          github:...\` because that form installs a symlink to a clone
-         npm then deletes, leaving the command broken. A copy that is
-         neither of the two - \`npx\` runs one out of its own cache -
-         is refused.
+         npm then deletes, leaving the command broken - and the clone
+         rather than a pack of the same spec because npm fetches that
+         spec as GitHub's tarball of the tree, with no \`.git\` for the
+         build step to read the commit from, leaving an installed copy
+         that cannot say which commit it is. A copy that is neither of
+         the two - \`npx\` runs one out of its own cache - is refused.
   2. Brings the installed Inspector forward too, since the two sides
      agree on the exact shape of the call between them: it reads the
      commit the installed \`inspector\` was built from, reads the tip of
@@ -146,9 +152,9 @@ export interface UpdateProbes {
   /** Runs `git pull --ff-only origin master`. Dev-checkout only. */
   pull(root: string): { ok: boolean; message: string };
   /** Replaces the installed copy under one npm prefix - the one the
-   * running copy is installed under - with the current code at the
-   * documented spec, as global-reinstall.ts's two npm steps. A
-   * failure's `message` already names the exact command that failed.
+   * running copy is installed under - with the current code on master,
+   * as global-reinstall.ts's clone, pack and install steps. A failure's
+   * `message` already names the exact command that failed.
    * Installed-copy only. */
   reinstall(prefix: string): { ok: boolean; message: string };
   /** Inspector's side of the same update (see `updateInspector`). */
@@ -250,7 +256,7 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
       stderr(
         `fabrica update: this copy of fabrica runs from ${before.root}, which is neither a checkout nor a global ` +
           `npm install (npx, for one, runs a throwaway copy out of its own cache) - fabrica update needs an ` +
-          `installed or checked-out copy to update. Install one with: npm install -g ${INSTALL_SPEC}`
+          `installed or checked-out copy to update. Install one with: ${clonePackInstallProcedure(null)}`
       );
       return 1;
     }

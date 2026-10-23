@@ -1,35 +1,55 @@
-// Replacing an installed copy of `fabrica`: two npm commands, asserted
-// as the exact argv npm is handed. Every step that would touch the
-// machine is injected, so nothing here runs npm, makes a directory, or
+// Installing a copy of `fabrica` from the current code on master: three
+// commands, asserted as the exact argv git and npm are handed and the
+// directory each runs in. Every step that would touch the machine is
+// injected, so nothing here runs git or npm, makes a directory, or
 // reaches the network - the point is the commands themselves, since a
-// flag typed wrong is an update that silently breaks the installed
-// command (which is what the one-step `npm install -g github:...` this
-// replaced did).
+// flag typed wrong is an install that silently breaks (which is what the
+// one-step `npm install -g github:...` this replaced did) or one that
+// cannot say which commit it is (which is what packing that same spec
+// did).
+//
+// The chain really running, against a real local remote and a real npm,
+// is installed-commit.test.ts.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { commandFailureMessage, reinstallGlobalCopy, type CommandOutcome, type GlobalReinstallIo } from "./global-reinstall.ts";
 
 const STAGING = "/tmp/fabrica-update-x1y2";
+const CLONE = `${STAGING}/fabrica`;
 const PREFIX = "/home/me/.npm-global";
 const TARBALL = "fabrica-0.0.0.tgz";
 
-const PACK_ARGS = ["pack", "github:inactdev/fabrica", "--pack-destination", STAGING];
+const CLONE_ARGS = ["clone", "--depth", "1", "--branch", "master", "https://github.com/inactdev/fabrica.git", CLONE];
+const PACK_ARGS = ["pack", "--pack-destination", STAGING];
 const INSTALL_ARGS = ["install", "-g", "--prefix", PREFIX, `${STAGING}/${TARBALL}`];
 
-/** Records every npm call in order, answers each from `answers` by
+/** One call of either command, so the order between them is asserted
+ * too - a pack before its clone is as broken as a mistyped flag. */
+interface Call {
+  command: "git" | "npm";
+  args: string[];
+  cwd: string;
+}
+
+/** Records every git/npm call in order, answers each from `answers` by
  * position (success otherwise), and tracks the staging directory's
  * lifetime. `files` is what the directory holds once `pack` has run. */
 function fakeIo(
   options: { answers?: CommandOutcome[]; files?: string[] } = {}
-): GlobalReinstallIo & { calls: string[][]; made: number; removed: string[] } {
-  const calls: string[][] = [];
+): GlobalReinstallIo & { calls: Call[]; made: number; removed: string[] } {
+  const calls: Call[] = [];
   const removed: string[] = [];
   const state = { made: 0 };
+  const answer = () => options.answers?.[calls.length - 1] ?? { ok: true, message: "added 1 package" };
   const io: GlobalReinstallIo = {
-    npm: (args) => {
-      calls.push(args);
-      return options.answers?.[calls.length - 1] ?? { ok: true, message: "added 1 package" };
+    git: (args, cwd) => {
+      calls.push({ command: "git", args, cwd });
+      return answer();
+    },
+    npm: (args, cwd) => {
+      calls.push({ command: "npm", args, cwd });
+      return answer();
     },
     makeStagingDir: () => {
       state.made += 1;
@@ -48,18 +68,29 @@ function fakeIo(
   };
 }
 
-test("reinstallGlobalCopy: packs the spec into a staging dir, then installs that tarball - in that order", () => {
+test("reinstallGlobalCopy: clones master, packs from inside that clone, then installs that tarball - in that order", () => {
   const io = fakeIo();
 
   const result = reinstallGlobalCopy(PREFIX, io);
 
   assert.equal(result.ok, true, result.message);
-  assert.deepEqual(io.calls, [PACK_ARGS, INSTALL_ARGS]);
+  assert.deepEqual(io.calls, [
+    { command: "git", args: CLONE_ARGS, cwd: STAGING },
+    // Inside the clone: that is what makes the clone the package being
+    // packed, so its `.git` is what the `prepare` step reads the commit
+    // from.
+    { command: "npm", args: PACK_ARGS, cwd: CLONE },
+    { command: "npm", args: INSTALL_ARGS, cwd: CLONE },
+  ]);
   assert.equal(io.made, 1);
-  // Never the one-step form: installing a git spec globally symlinks the
-  // package at a clone npm then deletes.
-  for (const args of io.calls) {
-    assert.equal(args.includes("github:inactdev/fabrica") && args.includes("-g"), false);
+  // Never a GitHub spec: installing one globally symlinks the package at
+  // a clone npm then deletes, and packing one packs a tree with no
+  // `.git`, leaving the installed copy unable to name its commit.
+  for (const { args } of io.calls) {
+    assert.equal(
+      args.some((arg) => arg.startsWith("github:")),
+      false
+    );
   }
 });
 
@@ -69,7 +100,11 @@ test("reinstallGlobalCopy: with no prefix to name, installs into npm's own defau
   const result = reinstallGlobalCopy(null, io);
 
   assert.equal(result.ok, true, result.message);
-  assert.deepEqual(io.calls, [PACK_ARGS, ["install", "-g", `${STAGING}/${TARBALL}`]]);
+  assert.deepEqual(io.calls.at(-1), {
+    command: "npm",
+    args: ["install", "-g", `${STAGING}/${TARBALL}`],
+    cwd: CLONE,
+  });
 });
 
 test("reinstallGlobalCopy: the staging directory is removed on the way out of a successful run", () => {
@@ -80,9 +115,9 @@ test("reinstallGlobalCopy: the staging directory is removed on the way out of a 
   assert.deepEqual(io.removed, [STAGING]);
 });
 
-test("reinstallGlobalCopy: a failed pack is reported with the command that failed, and nothing is installed", () => {
+test("reinstallGlobalCopy: a failed clone is reported with the command that failed, and nothing is packed or installed", () => {
   const io = fakeIo({
-    answers: [{ ok: false, message: "npm error 404 Not Found - GET https://codeload.github.com/..." }],
+    answers: [{ ok: false, message: "fatal: could not read from remote repository" }],
   });
 
   const result = reinstallGlobalCopy(PREFIX, io);
@@ -90,15 +125,29 @@ test("reinstallGlobalCopy: a failed pack is reported with the command that faile
   assert.equal(result.ok, false);
   assert.equal(
     result.message,
-    `npm ${PACK_ARGS.join(" ")} failed: npm error 404 Not Found - GET https://codeload.github.com/...`
+    `git ${CLONE_ARGS.join(" ")} failed: fatal: could not read from remote repository`
   );
-  assert.deepEqual(io.calls, [PACK_ARGS], "nothing to install from, so nothing is installed");
+  assert.deepEqual(io.calls.map((call) => call.command), ["git"], "no clone, nothing to pack");
+  assert.deepEqual(io.removed, [STAGING]);
+});
+
+test("reinstallGlobalCopy: a failed pack is reported with the command that failed, and nothing is installed", () => {
+  const io = fakeIo({
+    answers: [{ ok: true, message: "" }, { ok: false, message: "npm error code ENOENT" }],
+  });
+
+  const result = reinstallGlobalCopy(PREFIX, io);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.message, `npm ${PACK_ARGS.join(" ")} failed: npm error code ENOENT`);
+  assert.deepEqual(io.calls.map((call) => call.command), ["git", "npm"], "nothing to install from");
   assert.deepEqual(io.removed, [STAGING]);
 });
 
 test("reinstallGlobalCopy: a failed install is reported with the exact install command, tarball path and all", () => {
   const io = fakeIo({
     answers: [
+      { ok: true, message: "" },
       { ok: true, message: TARBALL },
       { ok: false, message: "npm error EACCES: permission denied" },
     ],
@@ -122,7 +171,7 @@ test("reinstallGlobalCopy: a pack that produced no tarball installs nothing, and
   assert.equal(result.ok, false);
   assert.match(result.message, /wrote no fabrica tarball/);
   assert.match(result.message, /nothing was installed/);
-  assert.deepEqual(io.calls, [PACK_ARGS]);
+  assert.deepEqual(io.calls.map((call) => call.command), ["git", "npm"]);
 });
 
 test("reinstallGlobalCopy: more than one tarball is refused rather than guessed between", () => {
@@ -132,19 +181,18 @@ test("reinstallGlobalCopy: more than one tarball is refused rather than guessed 
 
   assert.equal(result.ok, false);
   assert.match(result.message, /wrote 2 tarballs \(fabrica-0\.0\.0\.tgz, fabrica-0\.1\.0\.tgz\)/);
-  assert.deepEqual(io.calls, [PACK_ARGS]);
+  assert.deepEqual(io.calls.map((call) => call.command), ["git", "npm"]);
 });
 
-// A pack destination is read, not globbed, and npm writes its own
-// notices in there too on some configurations - only this package's
-// tarball counts.
+// A pack destination is read, not globbed, and the clone itself sits in
+// there beside the tarball - only this package's tarball counts.
 test("reinstallGlobalCopy: files in the staging dir that are not this package's tarball are ignored", () => {
-  const io = fakeIo({ files: [".DS_Store", "fabrica-0.0.0.tgz", "some-other-pkg-1.0.0.tgz"] });
+  const io = fakeIo({ files: ["fabrica", ".DS_Store", "fabrica-0.0.0.tgz", "some-other-pkg-1.0.0.tgz"] });
 
   const result = reinstallGlobalCopy(PREFIX, io);
 
   assert.equal(result.ok, true, result.message);
-  assert.deepEqual(io.calls, [PACK_ARGS, INSTALL_ARGS]);
+  assert.deepEqual(io.calls.at(-1), { command: "npm", args: INSTALL_ARGS, cwd: CLONE });
 });
 
 test("commandFailureMessage: what the command said on stderr, or node's own message when it said nothing", () => {

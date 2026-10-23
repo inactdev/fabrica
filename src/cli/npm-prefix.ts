@@ -2,12 +2,12 @@
 // needs from it: which prefix a given copy of this package is installed
 // under, which prefix the executable on `PATH` came from, and - the
 // reverse - where any prefix keeps its copy of this package. Plus the
-// npm commands those prefixes are for, each spelled exactly once - the
-// documented install a person runs (`installCommandArgs`) and the two
-// `fabrica update` runs to replace an installed copy in place
-// (`packCommandArgs`, `installTarballCommandArgs`) - since a command
-// that is printed in one place and run in another must be the same
-// command.
+// commands those prefixes are for, each spelled exactly once - the three
+// steps that install a copy which knows its own commit
+// (`cloneCommandArgs`, `packInCloneCommandArgs`,
+// `installTarballCommandArgs`, and `clonePackInstallProcedure` for
+// printing them to a person) - since a command that is printed in one
+// place and run in another must be the same command.
 //
 // Taken from npm's own current documentation (`configuring-npm/folders`:
 // "Global installs on Unix systems go to `{prefix}/lib/node_modules`"
@@ -82,54 +82,84 @@ export function globalPackagePath(prefix: string): string {
   return join(prefix, "lib", "node_modules", GLOBAL_PACKAGE_NAME);
 }
 
-/** What README.md's "Installing the command" tells a Client to run. */
-export const INSTALL_SPEC = "github:inactdev/fabrica";
+/** Where Fabrica's own code comes from, over plain https: the one
+ * spelling shared by every command that reads or clones it (this
+ * module's clone step, and `fabrica doctor`'s side-effect-free
+ * `git ls-remote` against master). */
+export const UPSTREAM_GIT_URL = "https://github.com/inactdev/fabrica.git";
 
-/** The documented install command, as one spelling shared by everything
- * that prints it - `fabrica doctor`'s own "reinstall with" fix, and the
- * advice a copy that can't be updated in place is given - so none of
- * them can drift from the others. Carries `--prefix` whenever the prefix
- * to install into is known, since npm's default is read-only on some
- * hosts; `null` falls back to npm's default, which is all anyone can say
- * when nothing names a prefix.
+/** The branch an install or an update takes its code from - the same one
+ * `fabrica doctor` reports a copy against and `fabrica update` pulls a
+ * dev checkout from. */
+export const UPSTREAM_BRANCH = "master";
+
+/** Step one of installing or replacing a copy: clone the repository into
+ * a throwaway directory.
  *
- * This is the command a *person* runs, from README.md. It is no longer
- * what `fabrica update` itself runs: installing a git spec globally
- * leaves the package a symlink into npm's own clone directory, which npm
- * then deletes (see global-reinstall.ts), so updating in place packs
- * first and installs the tarball - `packCommandArgs` plus
- * `installTarballCommandArgs` below. */
-export function installCommandArgs(prefix: string | null): string[] {
-  return prefix === null
-    ? ["install", "-g", INSTALL_SPEC]
-    : ["install", "-g", "--prefix", prefix, INSTALL_SPEC];
+ * This step exists for one reason: `.git`. A *hosted* GitHub spec
+ * (`github:inactdev/fabrica`, and every `git+https`/`git+ssh` spelling
+ * of it, which npm resolves to the same codeload tarball) is fetched as
+ * GitHub's tarball of the tree, so the package's `prepare` script runs
+ * somewhere with no `.git` and no commit in any field npm sets - and the
+ * copy that gets installed cannot say which commit it is
+ * (`scripts/write-build-info.mjs`). A real clone has `.git`, so packing
+ * from inside it records the commit exactly as a developer checkout
+ * does. `--depth 1` because only HEAD is ever read; `--branch` names the
+ * line being installed rather than trusting whatever the remote's
+ * default happens to be. */
+export function cloneCommandArgs(destination: string): string[] {
+  return ["clone", "--depth", "1", "--branch", UPSTREAM_BRANCH, UPSTREAM_GIT_URL, destination];
 }
 
-/** Step one of updating an installed copy: build the published tarball
- * from the documented spec into a directory of our own choosing.
+/** Step two: build the published tarball from inside that clone.
  *
- * `--pack-destination` is npm's own documented flag for that
- * ("Directory in which `npm pack` will save tarballs",
+ * `--pack-destination` is npm's own documented flag for choosing where
+ * the tarball lands ("Directory in which `npm pack` will save tarballs",
  * `commands/npm-pack.md`); `--prefix` is deliberately absent, since npm
  * forces a *non-global* command to run inside whatever `--prefix` names
- * on the command line, and `pack` is one. No `--ignore-scripts` either:
- * packing a git spec runs the package's `prepare` script first (npm's
- * documented behaviour for git dependencies, verified), which is what
- * puts `build-info.json` - the commit `fabrica doctor` reads off an
- * installed copy - into the tarball at all. */
-export function packCommandArgs(destination: string): string[] {
-  return ["pack", INSTALL_SPEC, "--pack-destination", destination];
+ * on the command line, and `pack` is one. No spec is named either - the
+ * clone itself is the package being packed, which is what makes its
+ * `.git` the one the `prepare` script sees. No `--ignore-scripts`: that
+ * `prepare` run is what puts `build-info.json` - the commit `fabrica
+ * doctor` reads off an installed copy - into the tarball at all. */
+export function packInCloneCommandArgs(destination: string): string[] {
+  return ["pack", "--pack-destination", destination];
 }
 
-/** Step two: install that tarball globally. Same `--prefix` rule as
- * `installCommandArgs` - named whenever it is known, npm's default
- * otherwise - and the only difference is what is being installed: a
- * local file, which npm unpacks into a real directory, instead of a git
- * spec, which it symlinks to a clone it is about to delete. */
+/** Step three: install that tarball globally. Carries `--prefix`
+ * whenever the prefix to install into is known, since npm's own default
+ * global prefix is read-only on some hosts; `null` falls back to that
+ * default, which is all anyone can say when nothing names a prefix.
+ *
+ * A local file, never a git spec - a git spec installed globally leaves
+ * the package a symlink into a clone npm then deletes (see
+ * global-reinstall.ts), while a tarball unpacks into a real directory. */
 export function installTarballCommandArgs(prefix: string | null, tarball: string): string[] {
   return prefix === null
     ? ["install", "-g", tarball]
     : ["install", "-g", "--prefix", prefix, tarball];
+}
+
+/** The three steps above as one line a person can paste into a shell -
+ * what README.md's "Installing the command" tells a Client to run, and
+ * what `fabrica doctor` names as the fix for an installed copy that does
+ * not know its commit. Built from the very argv `fabrica update` itself
+ * runs, so the printed procedure and the performed one cannot drift.
+ *
+ * `mktemp -d` rather than a fixed path: the directory is throwaway, and
+ * naming a fixed one would collide with whatever is already there. The
+ * tarball is named with a `*` glob because its version comes from the
+ * `package.json` being packed - a person's shell expands that, which is
+ * exactly why the code path reads the directory instead
+ * (`isPackedTarball`). */
+export function clonePackInstallProcedure(prefix: string | null): string {
+  const clone = `"$d/${GLOBAL_PACKAGE_NAME}"`;
+  return [
+    "d=$(mktemp -d)",
+    `git ${cloneCommandArgs(clone).join(" ")}`,
+    `(cd ${clone} && npm ${packInCloneCommandArgs('"$d"').join(" ")})`,
+    `npm ${installTarballCommandArgs(prefix, `"$d"/${GLOBAL_PACKAGE_NAME}-*.tgz`).join(" ")}`,
+  ].join(" && ");
 }
 
 /** Whether a file name in the pack destination is the tarball npm just

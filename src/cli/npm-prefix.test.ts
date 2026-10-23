@@ -10,15 +10,18 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  cloneCommandArgs,
+  clonePackInstallProcedure,
   GLOBAL_PACKAGE_NAME,
   globalPackagePath,
-  installCommandArgs,
   installTarballCommandArgs,
   isPackedTarball,
   normalizedPrefix,
-  packCommandArgs,
+  packInCloneCommandArgs,
   prefixOfGlobalBin,
   prefixOfGlobalInstall,
+  UPSTREAM_BRANCH,
+  UPSTREAM_GIT_URL,
 } from "./npm-prefix.ts";
 
 test("GLOBAL_PACKAGE_NAME is this package's own name - every path built here is wrong otherwise", () => {
@@ -72,43 +75,70 @@ test("globalPackagePath: npm's documented global package location, and the exact
   }
 });
 
-test("installCommandArgs: carries --prefix when the prefix is known, and is README.md's own command when it isn't", () => {
-  assert.deepEqual(installCommandArgs("/home/me/.npm-global"), [
-    "install",
-    "-g",
-    "--prefix",
-    "/home/me/.npm-global",
-    "github:inactdev/fabrica",
+// The three commands `fabrica update` really runs to replace an
+// installed copy, and that README.md tells a Client to run for a first
+// install. Asserted as exact argv: git and npm are spawned with these
+// arrays verbatim, so a flag typed wrong here is a broken install, not a
+// failing match somewhere downstream.
+test("cloneCommandArgs: clones the upstream branch, shallowly, into the directory it is given", () => {
+  assert.deepEqual(cloneCommandArgs("/tmp/fabrica-update-x1y2/fabrica"), [
+    "clone",
+    "--depth",
+    "1",
+    "--branch",
+    "master",
+    "https://github.com/inactdev/fabrica.git",
+    "/tmp/fabrica-update-x1y2/fabrica",
   ]);
-  assert.deepEqual(installCommandArgs(null), ["install", "-g", "github:inactdev/fabrica"]);
-
-  // The documented install command, verbatim - the one thing a Client
-  // is told to type (README.md's "Installing the command").
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const readme = readFileSync(join(root, "README.md"), "utf8");
-  assert.ok(
-    readme.includes(`npm ${installCommandArgs(null).join(" ")}`),
-    "README.md must name the same install command this builds"
-  );
+  assert.equal(UPSTREAM_BRANCH, "master");
+  assert.ok(cloneCommandArgs("/tmp/x").includes(UPSTREAM_GIT_URL));
 });
 
-// The two commands `fabrica update` really runs to replace an installed
-// copy. Asserted as exact argv, like installCommandArgs above: npm is
-// spawned with these arrays verbatim, so a flag typed wrong here is a
-// broken update, not a failing match somewhere downstream.
-test("packCommandArgs: packs the documented spec into the directory it is given, and nothing else", () => {
-  assert.deepEqual(packCommandArgs("/tmp/fabrica-update-x1y2"), [
+test("packInCloneCommandArgs: packs the clone it runs in, naming no spec and nothing else", () => {
+  assert.deepEqual(packInCloneCommandArgs("/tmp/fabrica-update-x1y2"), [
     "pack",
-    "github:inactdev/fabrica",
     "--pack-destination",
     "/tmp/fabrica-update-x1y2",
   ]);
+  const args = packInCloneCommandArgs("/tmp/fabrica-update-x1y2");
+  // No spec: the clone this runs inside is the package being packed,
+  // which is what puts its `.git` in front of the `prepare` step. A
+  // hosted GitHub spec is fetched as a tarball of the tree instead, with
+  // no `.git` and so no commit - the whole reason for the clone.
+  assert.equal(
+    args.some((arg) => arg.includes("github:") || arg.includes("github.com")),
+    false
+  );
   // No --prefix (npm forces a non-global command to run inside it) and
   // no --ignore-scripts (the package's own `prepare` script is what puts
   // build-info.json in the tarball).
-  const args = packCommandArgs("/tmp/fabrica-update-x1y2");
   assert.equal(args.includes("--prefix"), false);
   assert.equal(args.includes("--ignore-scripts"), false);
+});
+
+test("clonePackInstallProcedure: the three steps as one pasteable line, built from the argv that really runs", () => {
+  const procedure = clonePackInstallProcedure("/home/me/.npm-global");
+  assert.equal(
+    procedure,
+    'd=$(mktemp -d) && git clone --depth 1 --branch master https://github.com/inactdev/fabrica.git "$d/fabrica" && ' +
+      '(cd "$d/fabrica" && npm pack --pack-destination "$d") && ' +
+      'npm install -g --prefix /home/me/.npm-global "$d"/fabrica-*.tgz'
+  );
+  // No prefix to name: npm's own default, which is all anyone can say.
+  assert.match(clonePackInstallProcedure(null), /npm install -g "\$d"\/fabrica-\*\.tgz$/);
+  // Never the one-step install of the GitHub spec, which is the install
+  // that leaves a copy unable to say which commit it is.
+  assert.equal(procedure.includes("install -g github:"), false);
+
+  // The documented install procedure, verbatim - what a Client is told
+  // to run (README.md's "Installing the command").
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const readme = readFileSync(join(root, "README.md"), "utf8");
+  assert.ok(
+    readme.includes(clonePackInstallProcedure(null)),
+    "README.md must name the same install procedure this builds"
+  );
+  assert.ok(readme.includes(UPSTREAM_GIT_URL), "README.md must name the repository that procedure clones");
 });
 
 test("installTarballCommandArgs: installs the packed tarball globally, under the prefix when there is one", () => {
