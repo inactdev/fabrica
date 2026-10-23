@@ -10,6 +10,19 @@ function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-wait-ask-"));
 }
 
+/** Waits for something the test is expecting to happen, however long a
+ * loaded machine takes to get there. The ceiling is only so a real
+ * regression fails the test instead of hanging it - it is never the
+ * thing being measured. Same shape as the helper in await-command.test.ts. */
+async function waitFor(condition: () => boolean, timeoutMs = 20_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return condition();
+}
+
 test("waitForAskOutcome: resolves 'asking' with the questions once questions-asked lands", async () => {
   const recordHome = tempRecordHome();
   appendEvent(recordHome, { taskId: "t1", name: "task-received" });
@@ -51,21 +64,40 @@ test("waitForAskOutcome: waits for a later event to appear rather than deciding 
 // step is waited out, saying so on a fixed interval, instead of being
 // reported as "proceeding" after 60s - which is how a task that never
 // started used to look like one that did.
+//
+// The wait is ended by the notices themselves, never by a real sleep
+// (#132): counting how many notices arrive during a fixed 200ms of
+// wall-clock time counts timer ticks a loaded machine managed to fit
+// into it, which is not what this test is about and failed half the
+// time on a busy two-core box.
 test("waitForAskOutcome: has no fixed cutoff - it keeps waiting, saying so every notice interval, until an outcome lands", async () => {
   const recordHome = tempRecordHome();
   appendEvent(recordHome, { taskId: "t1", name: "task-received" });
   const notices: string[] = [];
+  // A cutoff of its own would show up as the wait ending before three
+  // notices land - the one failure this must not sit and wait out.
+  let ended = false;
 
   const promise = waitForAskOutcome(recordHome, "t1", {
     pollMs: 5,
     noticeMs: 30,
     onStillWaiting: (line) => notices.push(line),
   });
-  await new Promise((r) => setTimeout(r, 200));
+  promise.then(
+    () => (ended = true),
+    () => (ended = true)
+  );
+
+  // Only once three notices really have arrived does the outcome land.
+  await waitFor(() => notices.length >= 3 || ended);
   appendEvent(recordHome, { taskId: "t1", name: "work-started" });
 
   assert.equal((await promise).status, "proceeding");
-  assert.ok(notices.length >= 3, `expected several notices across the wait, got ${notices.length}`);
+  assert.ok(
+    notices.length >= 3,
+    `expected the wait to keep going and keep saying so, got ${notices.length} notices` +
+      (ended ? " before it stopped waiting on its own" : "")
+  );
   assert.ok(notices.every((n) => n === "still waiting on the clarifying step"));
 });
 
