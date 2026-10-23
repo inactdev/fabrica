@@ -412,7 +412,8 @@ ref anywhere is mutated), never failing the check on its own, only
 `commit unknown`, carrying whatever `build-info.json` itself recorded
 about why (or that there is no such file), with the clone-then-pack
 install procedure as the fix, never the one-step GitHub-spec install that
-produces that state; **any leftover `npm link`
+produces that state, and never stopping a session (see "Which findings
+stop a session" below); **any leftover `npm link`
 symlink** standing where an installed copy belongs (issue #171 - while
 one is at `<prefix>/lib/node_modules/fabrica`, any global install of
 `fabrica` fails with `ENOTDIR`, so this check prints
@@ -441,6 +442,51 @@ Inspector-specific checks live beside those modules
 (`src/brain/adapters/doctor-checks.ts`,
 `src/relay/container/doctor-check.ts`,
 `src/inspector/doctor-checks.ts`); this command only prints them.
+
+### Which findings stop a session, and which are only warnings
+
+`fabrica doctor` itself treats every `FAIL` the same: one `FAIL` line
+with its fix, exit 1. It is the Client asking what is wrong with this
+machine, and answering "nothing" because nothing happens to be blocked
+right this minute would be a different, less useful command.
+
+`fabrica up` is the one that has to decide, and since the 2026-10-23
+ruling it decides per finding rather than off doctor's exit code: only a
+finding that makes a *task* impossible stops a session (no Docker, no
+worker image, no token, an unparseable `projects.toml`, a project folder
+gone, a stale Inspector, a SPEND UNKNOWN block, no caps). Anything that
+stops no task is printed as a `WARN` line above the session - with its
+fix, which is still the thing to do about it, just not now - and the
+session starts.
+
+The mechanism is `DoctorCheck.blocking`, read in exactly one place
+(`stopsATask`). **Absent means blocking**, deliberately: a check added
+later keeps stopping `up` until someone decides otherwise, rather than
+slipping in as advisory because nobody thought about it. Two checks opt
+out today, both of them about which copy of `fabrica` is on this disk
+and how it got there - facts no task needs answered:
+
+- every `checkout` failure: an installed copy that cannot say which
+  commit it is, and a dev checkout that isn't on `master`. This was the
+  ruling's own first example, and it was not a corner case: a one-step
+  global install of the GitHub spec leaves no `.git` for the `prepare`
+  step to read a commit from, so a copy installed that way failed this
+  check and could never start a session at all (the install side of that
+  is answered separately, by the clone-then-pack procedure the fix now
+  prints);
+- a leftover `npm link` symlink. By the time it is called leftover it is
+  standing at a prefix the running copy did not come from, so it breaks
+  the next `npm install -g` and nothing else.
+
+A passing check can also carry a `note`, printed as the same kind of
+`WARN` line: today only "behind origin/master, latest is <sha>", which
+doctor has always reported inside an `OK` line and never failed. `up`
+would otherwise swallow it entirely, since it prints doctor's own output
+only when it stops.
+
+Both commands build their list through one `collectDoctorChecks` and
+render through one `formatDoctorLine`, so they can never disagree about
+which checks ran, in what order, or how a line reads.
 
 ### The inspector line
 
@@ -489,18 +535,24 @@ cannot derive is simply not searched rather than guessed at):
 
 A symlink pointing at the dev checkout that is running right now is the
 documented developer install (README.md's "Developing Fabrica itself"),
-reported `OK` and never failed: `fabrica up` stops on any doctor FAIL,
-so failing it would refuse to start a session on every linked checkout,
-which is not what #171 is about. Anything else - a link to some other
-checkout, or one whose target is gone - is leftover and fails with the
-fix.
+reported `OK` and never failed - it is not a problem at all, which is a
+different thing from the `blocking: false` a leftover one now carries
+("Which findings stop a session" above). Anything else - a link to some
+other checkout, or one whose target is gone - is leftover and fails with
+the fix, which `fabrica up` prints above the session rather than
+refusing over.
 
 ## `fabrica up`
 
 Starts a working session from inside a registered project's folder, in
-three steps (`up-command.ts`): (1) runs `fabrica doctor`'s own checks in
-process and stops, printing the doctor output, on any FAIL - nothing
-below ever runs if the machine itself isn't ready; (2) starts the live
+four steps (`up-command.ts`): (0) on a Mac, starts Docker if its daemon
+isn't answering and waits for it (below); (1) runs `fabrica doctor`'s own
+checks in process and stops, printing the doctor output, on any finding
+that makes a task impossible - nothing below ever runs if the machine
+itself isn't ready, while a finding that stops no task is printed as a
+`WARN` line above the session instead of refusing it (see "Which
+findings stop a session, and which are only warnings" in the `doctor`
+section above for the rule and the two checks it covers); (2) starts the live
 view (`integrations/live-view`) the same detached way `fabrica do`
 backgrounds a task (`spawnDetachedLiveView`, reusing `spawn-detached.ts`'s
 mechanism), unless something is already listening on `127.0.0.1:7777` -
@@ -579,6 +631,32 @@ directory `launch.ts` was found in.
 judgment like `verdict`/`answer`/`cost` do, but because it launches a
 second interactive session from inside the one already running; an AI
 driving the Bash tool must never be allowed to spawn a copy of itself.
+
+### Starting Docker, on a Mac
+
+Docker Desktop is a desktop app: it doesn't come up with the machine
+unless it was told to, and until it does, every task is impossible and
+doctor's docker line says so. The Client's answer to that line has
+always been to run the one command in its own fix text and try again -
+so `fabrica up` runs it (Client ruling 2026-10-23). Before any check
+asks whether Docker is reachable, `docker-daemon.ts`'s
+`ensureDockerDaemon` probes the daemon once (`docker info`, the same
+question doctor's check and `src/containment` both ask) and, if it
+doesn't answer, runs `open -a Docker` and polls for up to two minutes,
+printing what it is waiting on and how long it has been waiting.
+
+macOS only, the same gate and reasoning as
+`src/containment/caffeinate.ts`: `open` is a macOS binary and Docker
+Desktop a macOS app, and on every other platform the whole step returns
+before a single process is spawned - so this project's own Linux tests
+and CI never touch it.
+
+Nothing here can fail the command. A `open -a Docker` that fails (Docker
+Desktop not installed - `open`'s own words are passed straight through,
+never guessed at) or a daemon that never answers in two minutes just
+leaves the docker check in step 1 to fail exactly as it did before, with
+its own fix. And a daemon that was already up prints nothing at all, so
+the common case reads the same as it always did.
 
 `fabrica up -c`/`--continue` forwards the harness's own flag for
 continuing the most recent conversation in this folder -

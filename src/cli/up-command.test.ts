@@ -189,6 +189,222 @@ test("runUpCommand: refuses when a doctor check fails, printing the doctor outpu
   assert.equal(launchTouched, false, "must never reach the harness launch step");
 });
 
+// Client ruling 2026-10-23: a finding that stops no task from running
+// is a warning above the session, never a refusal. The two the ruling
+// names are both the checkout check's (a missing or commit-less
+// build-info.json, and being behind origin); the mechanism is per-check
+// severity, so these tests drive it through injected checks rather than
+// through whatever this machine's own copy of fabrica happens to be.
+test("runUpCommand: a failing check that stops no task is a warning above the session, not a refusal", async () => {
+  const io = captureIo();
+  let launched = false;
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes({
+      checkout: () => ({
+        ok: false,
+        blocking: false,
+        label: "checkout",
+        detail: "installed copy at /usr/local/lib/node_modules/fabrica has no build-info.json, so its commit is unknown",
+        fix: "reinstall with: npm install -g github:inactdev/fabrica",
+      }),
+    }),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async () => {
+        launched = true;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.ok(launched, "the session must start - no build-info.json makes no task impossible");
+  assert.match(io.err.join("\n"), /WARN checkout: .*no build-info\.json/);
+  assert.match(io.err.join("\n"), /reinstall with: npm install -g github:inactdev\/fabrica/, "the fix is still printed, just not enforced");
+  assert.match(io.err.join("\n"), /none of the above stops a task from running/);
+});
+
+test("runUpCommand: a passing check's own note (being behind origin) is printed above the session too", async () => {
+  const io = captureIo();
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes({
+      checkout: () => ({
+        ok: true,
+        label: "checkout",
+        detail: "installed copy v1.2.3, commit aaa111 (behind origin/master, latest is zzz999)",
+        note: "behind origin/master, latest is zzz999 - bring it up to date with: fabrica update",
+      }),
+    }),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.match(io.err.join("\n"), /WARN checkout: behind origin\/master, latest is zzz999 - bring it up to date with: fabrica update/);
+});
+
+test("runUpCommand: a healthy machine prints no warnings at all", async () => {
+  const io = captureIo();
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(io.err.join("\n"), "", "nothing to warn about must print nothing");
+});
+
+test("runUpCommand: one blocking finding still refuses even alongside findings that stop no task", async () => {
+  const io = captureIo();
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes({
+      checkout: () => ({ ok: false, blocking: false, label: "checkout", detail: "no build-info.json" }),
+      workerImage: () => ({ ok: false, label: "worker image", detail: "not built", fix: "build it" }),
+    }),
+    isLiveViewListening: async () => {
+      throw new Error("must stop before the live view");
+    },
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  // The whole doctor report, rendered exactly as doctor renders it -
+  // both failures included, the advisory one as the FAIL it still is.
+  assert.match(io.out.join("\n"), /FAIL worker image: not built - fix: build it/);
+  assert.match(io.out.join("\n"), /FAIL checkout: no build-info\.json/);
+  // And the refusal names which of those two lines is actually in the way.
+  assert.match(io.err.join("\n"), /doctor checks failed - worker image must be fixed/);
+  assert.doesNotMatch(io.err.join("\n"), /checkout must be fixed/);
+});
+
+test("runUpCommand: Docker is started before anything asks whether it is reachable", async () => {
+  const io = captureIo();
+  const order: string[] = [];
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    dockerDaemonOptions: {
+      platform: "darwin",
+      daemonUp: (() => {
+        let up = false;
+        return () => {
+          const answer = up;
+          up = true; // the app this "started" brings the daemon up
+          return answer;
+        };
+      })(),
+      startDockerApp: () => {
+        order.push("docker started");
+        return { ok: true, detail: "" };
+      },
+      pollIntervalMs: 1,
+      timeoutMs: 2_000,
+    },
+    doctorProbes: okProbes({
+      docker: () => {
+        order.push("docker checked");
+        return ok("docker");
+      },
+    }),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.deepEqual(order, ["docker started", "docker checked"]);
+  assert.match(io.out.join("\n"), /starting it with `open -a Docker`/);
+});
+
+test("runUpCommand: a Docker that never comes up doesn't fail the command itself - the docker check does", async () => {
+  const io = captureIo();
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    dockerDaemonOptions: {
+      platform: "darwin",
+      daemonUp: () => false,
+      startDockerApp: () => ({ ok: false, detail: "Unable to find application named 'Docker'" }),
+      pollIntervalMs: 1,
+      timeoutMs: 50,
+    },
+    doctorProbes: okProbes({
+      docker: () => ({ ok: false, label: "docker", detail: "not reachable", fix: "start Docker (e.g. open -a Docker), then try again" }),
+    }),
+    isLiveViewListening: async () => {
+      throw new Error("must stop at the docker check");
+    },
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /could not start Docker/);
+  assert.match(io.out.join("\n"), /FAIL docker: not reachable/, "the finding that stops the session is still doctor's own");
+});
+
+test("runUpCommand: nothing about Docker is started or printed on a machine that isn't a Mac", async () => {
+  const io = captureIo();
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    dockerDaemonOptions: {
+      platform: "linux",
+      daemonUp: () => {
+        throw new Error("must not ask about the daemon off a Mac");
+      },
+      startDockerApp: () => {
+        throw new Error("must not try to start Docker off a Mac");
+      },
+    },
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.doesNotMatch(io.out.join("\n"), /Docker/);
+});
+
 test("runUpCommand: a live view already listening and running this exact commit is reused, not stopped or started twice, and no browser is opened", async () => {
   const io = captureIo();
   let captured: unknown;
