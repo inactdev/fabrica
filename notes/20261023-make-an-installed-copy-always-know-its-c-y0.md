@@ -91,6 +91,30 @@ unknown: `fabrica update: unknown -> b8a4afa7589a - ... - live view
 started.` The Inspector step failed (`proxy.golang.org` is Forbidden from
 a worker box) and, as designed, warned without failing the update.
 
+## One red test inherited from master, and how it was reconciled
+
+`src/foreman/transport-retry.test.ts`'s last end-to-end test asserted
+that a model call which never came back leaves no receipt. That was true
+when issue #199 was written and false by the time it merged: issue #167
+landed first and made any attempt whose `brain.work()` call crashed
+record an UNMEASURED receipt (`src/foreman/attempts.ts`'s `catch`, and
+`src/foreman/crashed-attempt-spend.test.ts` end to end), because minutes
+of worker time may have been billed and rule 10 never counts unknown
+spend as zero. Neither pull request's own check could see the
+contradiction - each was green against the tree it was cut from - so it
+only went red once both were on `master`.
+
+Reconciled in favour of #167, which is the later ruling in code, has a
+dedicated end-to-end test, and is about money rather than about counting:
+the assertion now expects exactly one receipt for the one attempt, with
+`costUsd: null`, `costUnknown: true`, `checks: null`, `outcome:
+"failed"`, and the same model throughout - which still proves #199's own
+point, that a retry is not a second attempt and no other model was tried.
+The durable fact worth keeping: **a crashed worker call always leaves one
+unmeasured receipt**, so "it failed" and "it left no spend on the record"
+are two different things, and only a failure *before* the worker was ever
+called records nothing.
+
 ## The shape of the fix, for the next person
 
 `build-info.json` is now `{commit, source}` on success and
