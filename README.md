@@ -277,6 +277,33 @@ If the repository already has `.inspector.json` on origin's default
 branch, it is set up already - only the `projects.toml` entry is added,
 and `--check`/`--image` aren't needed.
 
+### If you don't know what to put in `.inspector.json`
+
+Leave both flags off and Fabrica proposes the file, from what the
+repository already says - an existing `check.sh`, `package.json`'s
+scripts and `engines`, `go.mod`:
+
+    fabrica register <path> > <path>/.inspector.json
+
+The proposed document is the **only** thing on stdout, so that redirect
+writes exactly it. Every field's reasoning goes to stderr instead, one
+line per field - including why `network` is on or off, which JSON itself
+has nowhere to say - along with any disagreement between two signals
+(an existing `check.sh` always wins one, and the disagreement is named
+rather than dropped).
+
+It **prints the file and never writes it**, and exits non-zero, because
+nothing was written and nothing was registered. Read it, replace
+anything marked `REPLACE-ME-with-...` (the image is the one field no
+repository usually names; the placeholder is a deliberately invalid
+Docker reference, so it cannot be committed by accident), commit it
+yourself, and run `fabrica register <path>` again.
+
+That asymmetry is on purpose: `.inspector.json` is the file deciding how
+Fabrica's own work is judged, so Fabrica never puts it in your
+repository unasked. The `--check`/`--image` route above does write it -
+onto a branch, in a pull request you review before it merges.
+
 ## Running a task
 
     fabrica do "<task text>" --project <path-or-name> [--model <name>]

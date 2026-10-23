@@ -5,7 +5,7 @@
 // like every other command here.
 
 import { resolve } from "node:path";
-import { RegisterError, registerProject } from "../index.ts";
+import { RegisterError, RegisterProposalError, registerProject } from "../index.ts";
 import type { RegisterResult, RegisterTools } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
@@ -73,6 +73,22 @@ existing branch - and it only runs as you, never inside a worker.
 If origin's default branch already has .inspector.json, the repository
 is set up already: step 5 is all that runs, --check and --image are not
 needed, and the recorded check is the repository's own ./check.sh.
+
+Run it without --check and --image on a repository that is *not* set up
+and it proposes an .inspector.json instead, derived from what the
+repository already says (an existing check.sh, package.json's scripts
+and engines, go.mod), and stops having created nothing:
+
+    fabrica register <path> > <path>/.inspector.json
+
+The proposed document is the only thing on stdout, so that redirect
+writes exactly it. Every field's reasoning - including why network is on
+or off, which JSON itself has nowhere to say - goes to stderr, one line
+per field, along with any disagreement between two signals. It exits
+non-zero, because nothing was written and nothing was registered: read
+the proposal, replace anything marked REPLACE-ME..., commit it yourself,
+and run this again. Fabrica never writes that file for you unasked - the
+file defining how Fabrica's own work is judged is yours to commit.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -148,6 +164,20 @@ export async function runRegisterCommand(argv: string[], opts: RunRegisterComman
     for (const line of registerSummary(result)) stdout(line);
     return 0;
   } catch (err) {
+    // A proposed .inspector.json (issue #114). The document goes to
+    // stdout and nothing else does, so `fabrica register <path> >
+    // .inspector.json` writes exactly the file - one console.log, so it
+    // ends in exactly one newline. Every field's reasoning goes to
+    // stderr instead, because JSON has nowhere to put a comment.
+    //
+    // Still exit 1: nothing was written and nothing was registered, so
+    // `fabrica register <path> && fabrica do ...` must not read this as
+    // a successful registration.
+    if (err instanceof RegisterProposalError) {
+      stdout(err.proposal.json);
+      stderr(err.message);
+      return 1;
+    }
     if (err instanceof CliError || err instanceof RegisterError) {
       stderr(err.message);
       return 1;

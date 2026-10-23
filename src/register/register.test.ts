@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fingerprint, makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { loadConfig, projectsTomlPath } from "../config/index.ts";
-import { RegisterError } from "./errors.ts";
+import { RegisterError, RegisterProposalError } from "./errors.ts";
 import { registerProject } from "./register.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, REGISTER_BRANCH } from "./origin.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
@@ -406,17 +406,37 @@ test("register: a name that cannot be a projects.toml table refuses, pointing at
   );
 });
 
-test("register: a repository needing setup refuses without --check and --image, naming both", async () => {
+// Issue #114: a repository that needs setting up, with nothing said
+// about how, gets a proposed .inspector.json rather than a bare refusal -
+// and the proposal is still a refusal in every other respect. Nothing is
+// written, nothing is pushed, nothing is registered, and the Client's own
+// checkout comes out byte for byte identical.
+test("register: a repository needing setup proposes an .inspector.json, having created nothing", async () => {
   const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  const before = fingerprint(dir);
 
   await assert.rejects(
-    registerProject({ recordHome, path: project({ inspector: false }) }, { tools: fakeRegisterTools() }),
-    (err: unknown) =>
-      err instanceof RegisterError &&
-      err.code === "missing-check-or-image" &&
-      err.message.includes("--check") &&
-      err.message.includes("--image")
+    registerProject({ recordHome, path: dir }, { tools: fakeRegisterTools() }),
+    (err: unknown) => {
+      assert.ok(err instanceof RegisterProposalError, `${err}`);
+      assert.equal(err.code, "proposed");
+      // The fixture commits a check.sh, so that is the check, and the
+      // one path the proposal protects.
+      const config = JSON.parse(err.proposal.json) as Record<string, unknown>;
+      assert.equal(config.check, RECORDED_CHECK);
+      assert.deepEqual(config.protectedPaths, [CHECK_SCRIPT]);
+      // The other way out is still named, since it is still there.
+      assert.ok(err.message.includes("--check"), err.message);
+      assert.ok(err.message.includes("--image"), err.message);
+      return true;
+    }
   );
+
+  assert.equal(existsSync(projectsTomlPath(recordHome)), false);
+  assert.equal(originHasBranch(dir, REGISTER_BRANCH), false);
+  assert.equal(linkedWorktreeCount(dir), 0);
+  assert.equal(fingerprint(dir), before, "the Client's own checkout is only ever read");
 });
 
 // gh's documented sharp edge: it can exit non-zero having already

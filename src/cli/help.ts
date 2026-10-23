@@ -25,11 +25,13 @@ export const TOP_LEVEL_HELP = `fabrica - hand in a task; get it done in isolatio
 Usage: fabrica <command> [args]
 
 Commands:
-  register <path> --check "<command>" --image <docker image>
+  register <path> [--check "<command>" --image <docker image>]
       Set a repository up for Fabrica and register it - run this once
       per project, before the first task. Writes .inspector.json and
       check.sh, runs your check inside the image, then opens a pull
-      request for you to merge. The one command that pushes.
+      request for you to merge. The one command that pushes. Without
+      those two flags it proposes an .inspector.json instead, on
+      stdout, and writes nothing.
   do "<task text>" --project <path-or-name>
       Run a task against a project. If it's materially ambiguous, prints
       numbered questions and stops - answer with \`fabrica answer\`.

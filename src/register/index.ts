@@ -1,7 +1,9 @@
 export { registerProject, commitMessageFor, pullRequestBodyFor } from "./register.ts";
 export type { RegisterRequest, RegisterResult, RegisterOptions } from "./register.ts";
-export { RegisterError } from "./errors.ts";
+export { RegisterError, RegisterProposalError } from "./errors.ts";
 export type { RegisterErrorCode } from "./errors.ts";
+export { proposeInspectorConfig, readProposalSignals } from "./propose.ts";
+export type { InspectorProposal, ProposalSignals } from "./propose.ts";
 export {
   CHECK_SCRIPT,
   INSPECTOR_CONFIG,

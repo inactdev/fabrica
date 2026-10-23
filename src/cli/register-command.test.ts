@@ -119,6 +119,37 @@ test("runRegisterCommand: a refusal exits 1 with the message on stderr and nothi
   assert.equal(existsSync(projectsTomlPath(recordHome)), false);
 });
 
+// Issue #114: without --check and --image, a repository that needs
+// setting up gets a proposed .inspector.json instead. The two streams
+// are the contract - the document alone on stdout, so it can be piped
+// into the file, and every field's reasoning on stderr, where JSON has
+// nowhere to put a comment.
+test("runRegisterCommand: a repository needing setup prints a proposal, JSON alone on stdout", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  const io = captureIo();
+
+  const code = await runRegisterCommand([dir], { recordHome, tools: fakeRegisterTools(), ...io });
+
+  // Still a refusal: nothing was written, nothing was registered, so
+  // `fabrica register <path> && fabrica do ...` must not continue.
+  assert.equal(code, 1);
+  assert.equal(existsSync(projectsTomlPath(recordHome)), false);
+  assert.equal(existsSync(join(dir, ".inspector.json")), false, "it prints the file, it never writes it");
+
+  // stdout is exactly one JSON document and nothing else.
+  assert.equal(io.out.length, 1, io.out.join("\n"));
+  const config = JSON.parse(io.out[0]) as Record<string, unknown>;
+  assert.equal(config.check, "./check.sh");
+
+  // ...and every field's reasoning is on stderr instead.
+  const stderr = io.err.join("\n");
+  for (const key of ["check:", "image:", "network:", "timeoutSeconds:", "protectedPaths:"]) {
+    assert.ok(stderr.includes(key), `${key} should be explained on stderr: ${stderr}`);
+  }
+  assert.ok(stderr.includes("Nothing was written"), stderr);
+});
+
 test("runRegisterCommand: a bad invocation refuses with the usage line, touching nothing", async () => {
   const io = captureIo();
   const code = await runRegisterCommand(["--check", "exit 0"], { recordHome: tempHome(), ...io });

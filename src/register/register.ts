@@ -22,6 +22,9 @@
 //   6. the project name is usable, and isn't registered already
 //   7. does origin's default branch already carry .inspector.json?
 //        yes -> the projects.toml half only, and stop (step 11)
+//        no, and no --check/--image -> print a proposed .inspector.json,
+//        derived from what the repository already says, and stop having
+//        created nothing (issue #114, see propose.ts)
 //   8. a temporary worktree of origin's default branch, on
 //      fabrica/register - never the Client's own checkout
 //   9. write .inspector.json and check.sh; run check.sh inside --image
@@ -34,7 +37,8 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LineError, fetchOriginDefaultBranch, requireRepoRoot } from "../line/index.ts";
-import { RegisterError } from "./errors.ts";
+import { RegisterError, RegisterProposalError } from "./errors.ts";
+import { proposeInspectorConfig, readProposalSignals } from "./propose.ts";
 import {
   CHECK_SCRIPT,
   INSPECTOR_CONFIG,
@@ -373,15 +377,26 @@ export async function registerProject(
   // flags it cannot be done without are required - checked here rather
   // than at parse time, because the shortcut case above genuinely
   // doesn't need them.
-  const missing = [
-    ...(request.check === undefined || request.check.trim().length === 0 ? ['--check "<command>"'] : []),
-    ...(request.image === undefined || request.image.trim().length === 0 ? ["--image <docker image>"] : []),
-  ];
-  if (missing.length > 0) {
-    throw new RegisterError(
-      "missing-check-or-image",
-      `fabrica register: ${project} has no ${INSPECTOR_CONFIG} on origin/${defaultBranch} yet, so it needs ` +
-        `setting up - and that needs ${missing.join(" and ")}. Nothing was changed.`
+  //
+  // Without them, this is where the proposal lands (issue #114): the
+  // Client has a repository that needs setting up and has not said what
+  // to set it up with, so Fabrica derives an .inspector.json from what
+  // the repository itself says, prints it, and stops - having created
+  // nothing. Deliberately *after* prepare()'s whole refusal cascade, so
+  // a project already registered, badly named, or sitting on an
+  // unreadable origin still gets its own words rather than a config
+  // proposal it cannot use.
+  const missing =
+    request.check === undefined ||
+    request.check.trim().length === 0 ||
+    request.image === undefined ||
+    request.image.trim().length === 0;
+  if (missing) {
+    throw new RegisterProposalError(
+      proposeInspectorConfig(readProposalSignals(project, `origin/${defaultBranch}`), {
+        projectPath: project,
+        defaultBranch,
+      })
     );
   }
   const check = request.check!;
