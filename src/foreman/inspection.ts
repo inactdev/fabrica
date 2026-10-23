@@ -21,6 +21,16 @@ import type { PublishLease } from "./fix-rebase.ts";
 
 interface InspectionOptions {
   heartbeatIntervalMs?: number;
+  /** Resume metadata for a round Inspector refuses, which delivers
+   * nothing: with these set, `"inspection-finished"` carries what a
+   * `"delivered"` event otherwise would. No caller passes them today -
+   * `judge.ts`'s one call site passes only the pull request's title and
+   * body, and every attempt's receipt reaches the record through its own
+   * `"receipt-recorded"` event (`caps.ts`'s `recordReceipt`). If this is
+   * ever wired up, `receipts` is **this round's** receipts, like every
+   * `"delivered"` event's since issue #68 - never the task's whole
+   * history re-stored, which is what `queries.ts`'s `receiptsOf`
+   * reconstructs on read. */
   receipts?: Receipt[];
   totalAttempts?: number;
   prTitle?: string;

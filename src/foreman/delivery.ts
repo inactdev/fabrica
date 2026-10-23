@@ -16,6 +16,57 @@ import { formatPercent } from "./meters.ts";
 import { SELF_TESTED } from "./judge.ts";
 import { describeInvalidWriteup } from "./pr-body.ts";
 
+/**
+ * How many lines of a check's output a delivery's `evidence` shows. The
+ * tail is the larger half for the same reason `gateForRecord` keeps the
+ * tail rather than the head: a check announces what failed at the end.
+ */
+export const EVIDENCE_HEAD_LINES = 5;
+export const EVIDENCE_TAIL_LINES = 15;
+
+/**
+ * A delivery's `evidence` for a check that reached a verdict (issue #68,
+ * Client ruling 2026-10-22): a pointer to the receipt that holds the
+ * output, plus the first and last few lines so the report still reads on
+ * its own.
+ *
+ * The receipt is the source. The same text used to be stored twice - once
+ * as the receipt's `checks.output` and once here - and every later
+ * `"delivered"` event of the same task re-stored this copy, while
+ * `src/record/read.ts` parses the whole file for every query. The copy
+ * was weighed against keeping it ("a delivery is meant to stand on its
+ * own and travel to the Client as one readable thing") and the pointer
+ * plus excerpt was chosen as what satisfies both.
+ *
+ * `attempt` is the attempt whose receipt holds it. Undefined means the
+ * caller could not name one, in which case the output is shown as it was
+ * stored rather than pointing at a receipt that may not exist - never
+ * less than before.
+ */
+export function checkEvidence(gate: GateResult | undefined, attempt: number | undefined): string {
+  if (gate === undefined) return "No check reached a verdict.";
+  const output = gateForRecord(gate).output;
+  if (attempt === undefined) return output;
+
+  const lines = output.split("\n");
+  // A trailing newline leaves an empty last element that is not a line of
+  // output; dropping it keeps the excerpt's own count honest.
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const where =
+    `Full check output: on attempt ${attempt}'s receipt in this task's record (its "receipt-recorded" ` +
+    `event).`;
+  if (lines.length <= EVIDENCE_HEAD_LINES + EVIDENCE_TAIL_LINES) {
+    return `${where} It ran as:\n\n${lines.join("\n")}`;
+  }
+  const dropped = lines.length - EVIDENCE_HEAD_LINES - EVIDENCE_TAIL_LINES;
+  const excerpt = [
+    ...lines.slice(0, EVIDENCE_HEAD_LINES),
+    `[... ${dropped} line(s) not shown here - the receipt has them ...]`,
+    ...lines.slice(lines.length - EVIDENCE_TAIL_LINES),
+  ];
+  return `${where} Its first ${EVIDENCE_HEAD_LINES} and last ${EVIDENCE_TAIL_LINES} lines:\n\n${excerpt.join("\n")}`;
+}
+
 /** Where a task stands once this outcome is delivered: anything handed to
  * the Client for a ruling is "delivered"; the rest are honest failures. */
 export function deliveredState(outcome: Delivery["outcome"] | undefined): "delivered" | "failed" {
@@ -41,6 +92,9 @@ export function buildDelivery(
     attempts: number;
     /** The last red or green verdict - absent when none was reached. */
     lastGate: GateResult | undefined;
+    /** The attempt whose receipt holds `lastGate`'s output in full - what
+     * `evidence` points at instead of copying the text (issue #68). */
+    evidenceAttempt?: number;
     branch: string;
     files: string[];
     declaredGateChanges: string | undefined;
@@ -82,9 +136,7 @@ export function buildDelivery(
           ? `The pull request's own checks went red after ${ctx.attempts} attempt(s): ${ctx.ciRed}.`
           : `Inspector reported the committed branch red after ${ctx.attempts} attempt(s).`;
 
-  const checkOutput = ctx.lastGate ? gateForRecord(ctx.lastGate).output : "";
-
-  const evidence = checkOutput;
+  const evidence = checkEvidence(ctx.lastGate, ctx.evidenceAttempt);
 
   const gaps =
     outcome === "failure-report"
@@ -182,6 +234,7 @@ function buildNotVerifiedDelivery(ctx: {
 function buildCapStoppedDelivery(ctx: {
   attempts: number;
   lastGate: GateResult | undefined;
+  evidenceAttempt?: number;
   branch: string;
   files: string[];
   declaredGateChanges: string | undefined;
@@ -208,7 +261,7 @@ function buildCapStoppedDelivery(ctx: {
     outcome: "cap-stopped",
     confidence: 0,
     summary,
-    evidence: ctx.lastGate ? gateForRecord(ctx.lastGate).output : "",
+    evidence: checkEvidence(ctx.lastGate, ctx.evidenceAttempt),
     assumptions: "",
     gaps,
     branch: ctx.branch,
@@ -272,6 +325,7 @@ export function buildPausedByMeterDelivery(ctx: {
 export function buildCommitFailureDelivery(ctx: {
   attempts: number;
   lastGate: GateResult | undefined;
+  evidenceAttempt?: number;
   branch: string;
   declaredGateChanges: string | undefined;
   error: string;
@@ -282,7 +336,9 @@ export function buildCommitFailureDelivery(ctx: {
     summary:
       `The Worker's changes could not be committed onto the branch ` +
       `after ${ctx.attempts} attempt(s).`,
-    evidence: ctx.lastGate ? `Last check: ${gateForRecord(ctx.lastGate).output}` : "No check reached a verdict.",
+    evidence: ctx.lastGate
+      ? `Last check: ${checkEvidence(ctx.lastGate, ctx.evidenceAttempt)}`
+      : "No check reached a verdict.",
     assumptions: "",
     gaps:
       `Committing the Worker's changes onto \`${ctx.branch}\` failed: ${ctx.error}. The throwaway ` +

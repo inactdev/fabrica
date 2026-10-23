@@ -20,6 +20,7 @@ import { networkPolicyFor } from "./network-policy.ts";
 import { ForemanError } from "./errors.ts";
 import {
   failedWithNoDelivery,
+  gateDeclarationsOf,
   latestDeliveredDetails,
   receiptsOf,
   redPublishedChecksOf,
@@ -36,7 +37,7 @@ import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
 import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { runAttempts } from "./attempts.ts";
-import { mergeGateDeclarations, recordRoundResult } from "./round.ts";
+import { recordRoundResult } from "./round.ts";
 import {
   continueStoppedRebase,
   publishLeaseAfterRebase,
@@ -162,9 +163,12 @@ export function recordVerdictDecision(
     );
   }
 
+  // Only what this half actually decides on: a "fix" needs a line to
+  // reopen, and that needs both of these. The round itself re-derives
+  // everything else from the record (`runRecordedFix` below), receipts
+  // included - and since issue #68 a single delivery's `receipts` is one
+  // round's anyway, never the task's whole list.
   const details = latestDeliveredDetails(recordHome, taskId);
-  const totalAttempts = details?.totalAttempts;
-  const priorReceipts = details?.receipts ?? [];
   const project = details?.project;
   const baseCommit = details?.baseCommit;
 
@@ -270,7 +274,12 @@ export async function runRecordedFix(
     priorReceipts,
     refusalReport: refusal?.report,
     redChecksOutput: redChecks?.output,
-    priorGateChanges: details?.delivery?.gateChanges || undefined,
+    // Every earlier round's own declaration, not the previous delivery's
+    // already-merged text (issue #68): keeping them separate is what lets
+    // each one be keyed by the gate it names, so the newest declaration
+    // per gate is the one this round's delivery reports instead of every
+    // round's being appended forever.
+    priorGateDeclarations: gateDeclarationsOf(events),
     inspector: opts.inspector,
     checkBox: opts.checkBox,
     checksReader: opts.checksReader,
@@ -368,7 +377,9 @@ async function runFixRound(
      * hand anybody, and re-reading the same commit's checks would only
      * find the same red. */
     redChecksOutput?: string;
-    priorGateChanges: string | undefined;
+    /** Every gate declaration this task's earlier rounds made, oldest
+     * first (`queries.ts`'s `gateDeclarationsOf`). */
+    priorGateDeclarations: string[];
     inspector?: Inspector;
     checkBox?: CheckBox;
     /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
@@ -385,7 +396,7 @@ async function runFixRound(
     priorReceipts,
     refusalReport,
     redChecksOutput,
-    priorGateChanges,
+    priorGateDeclarations,
     inspector,
     checkBox,
     checksReader,
@@ -514,7 +525,7 @@ async function runFixRound(
     // delivery's attempt count and declared gate changes still cover
     // every worker call the round made, not just the last one.
     const earlierReceipts: Receipt[] = [];
-    let earlierGateChanges = priorGateChanges;
+    const earlierGateDeclarations: string[] = [];
     let session = lastSession;
 
     // Issue #186: a fix round's worker box reaches the network under the
@@ -652,7 +663,7 @@ async function runFixRound(
         // `stopped` is already this pass's new conflict (set above).
         session = result.receipts.at(-1)?.session ?? session;
         earlierReceipts.push(...result.receipts);
-        earlierGateChanges = mergeGateDeclarations(earlierGateChanges, result.declaredGateChanges);
+        if (result.declaredGateChanges) earlierGateDeclarations.push(result.declaredGateChanges);
       }
     });
 
@@ -679,8 +690,10 @@ async function runFixRound(
         totalAttempts,
         mode,
         caps,
-        priorReceipts: [...priorReceipts, ...earlierReceipts],
-        priorGateChanges: earlierGateChanges,
+        priorReceipts,
+        roundReceipts: earlierReceipts,
+        priorGateDeclarations,
+        roundGateDeclarations: earlierGateDeclarations,
       },
       attemptsResult
     );

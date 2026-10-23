@@ -284,7 +284,13 @@ export function deliverRebaseConflict(
     base: string;
     conflict: RebaseConflict;
     baseCommit: string;
+    /** THIS round's receipts only, with the task's cumulative count
+     * beside them and the round's own gate declarations - the shape every
+     * "delivered" event carries since issue #68. See
+     * `queries.ts`'s `DeliveredDetails`. */
     receipts: Receipt[];
+    attemptsSoFar: number;
+    gateDeclarations: string[];
     totalAttempts: number | undefined;
     declaredGateChanges: string | undefined;
     reason: ConflictReportReason;
@@ -309,6 +315,8 @@ export function deliverRebaseConflict(
       outcome: delivery.outcome,
       delivery,
       receipts: ctx.receipts,
+      attemptsSoFar: ctx.attemptsSoFar,
+      gateDeclarations: ctx.gateDeclarations,
       project: line.project,
       totalAttempts: ctx.totalAttempts,
       baseCommit: ctx.baseCommit,

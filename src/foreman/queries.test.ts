@@ -8,7 +8,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEvent } from "../record/index.ts";
-import { eventsByTask, refusalAfterDelivery, refusedWithNoDelivery, stateOf, statusOf } from "./queries.ts";
+import {
+  eventsByTask,
+  gateDeclarationsOf,
+  reconstructReceipts,
+  redPublishedChecksOf,
+  refusalAfterDelivery,
+  refusedWithNoDelivery,
+  stateOf,
+  statusOf,
+} from "./queries.ts";
+import type { Receipt } from "../inspector/types.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-foreman-queries-"));
@@ -210,5 +220,161 @@ test("refusalAfterDelivery: a refusal that said nothing still gets words, never 
   assert.deepEqual(
     refusalAfterDelivery([DELIVERED, { occurredAt: "t2", taskId: "t1", name: "inspection-finished", details: { verdict: "refused" } }]),
     { report: "Inspector reached no verdict and said nothing about why" }
+  );
+});
+
+// Issue #68's read-side tolerance. These build the record by hand
+// because the shape being read is one no current writer produces any
+// more: a record written before each "delivered" event carried its own
+// round's receipts alone. Nothing rewrites such a record, so the reader
+// has to keep answering the way it always did.
+
+/** One receipt, with only the fields these tests look at. */
+function receipt(attempt: number, over: Partial<Receipt> = {}): Receipt {
+  return {
+    task: "t1",
+    attempt,
+    brain: "fake",
+    model: "fake-1",
+    startedAt: new Date(attempt * 1000).toISOString(),
+    durationMs: 1,
+    costUsd: 1,
+    costUnknown: false,
+    costBasis: "metered",
+    session: null,
+    reasoningEffort: null,
+    checks: { green: true, output: `attempt ${attempt} ran` },
+    outcome: "delivered",
+    ...over,
+  } as Receipt;
+}
+
+test("reconstructReceipts: a record in the old cumulative shape reads back exactly as it did", () => {
+  const recordHome = tempRecordHome();
+  // Three rounds, each re-storing every receipt before it - the growth
+  // issue #68 removed.
+  appendEvent(recordHome, { taskId: "t1", name: "receipt-recorded", details: { receipt: receipt(1) } });
+  appendEvent(recordHome, { taskId: "t1", name: "delivered", details: { receipts: [receipt(1)] } });
+  appendEvent(recordHome, { taskId: "t1", name: "receipt-recorded", details: { receipt: receipt(2) } });
+  appendEvent(recordHome, { taskId: "t1", name: "delivered", details: { receipts: [receipt(1), receipt(2)] } });
+  appendEvent(recordHome, { taskId: "t1", name: "receipt-recorded", details: { receipt: receipt(3) } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { receipts: [receipt(1), receipt(2), receipt(3)] },
+  });
+
+  assert.deepEqual(
+    reconstructReceipts(eventsByTask(recordHome).get("t1")!).map((r) => r.attempt),
+    [1, 2, 3],
+    "each attempt appears once, however many times it was re-stored"
+  );
+});
+
+test("reconstructReceipts: an attempt with no delivery behind it still counts", () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "receipt-recorded", details: { receipt: receipt(1) } });
+  appendEvent(recordHome, { taskId: "t1", name: "delivered", details: { receipts: [receipt(1)] } });
+  // Inspector refused this round, so it delivered nothing at all.
+  appendEvent(recordHome, { taskId: "t1", name: "receipt-recorded", details: { receipt: receipt(2) } });
+  appendEvent(recordHome, { taskId: "t1", name: "inspection-finished", details: { verdict: "refused" } });
+
+  assert.deepEqual(
+    reconstructReceipts(eventsByTask(recordHome).get("t1")!).map((r) => r.attempt),
+    [1, 2]
+  );
+});
+
+test("reconstructReceipts: a receipt a round corrected after recording it wins over the original", () => {
+  const recordHome = tempRecordHome();
+  // round.ts's commit-failure path marks its last receipt "failed" after
+  // that receipt's own event is already on the record.
+  appendEvent(recordHome, { taskId: "t1", name: "receipt-recorded", details: { receipt: receipt(1) } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { receipts: [receipt(1, { outcome: "failed" })] },
+  });
+
+  assert.equal(reconstructReceipts(eventsByTask(recordHome).get("t1")!)[0].outcome, "failed");
+});
+
+test("gateDeclarationsOf: each round's own declaration, oldest first", () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { gateDeclarations: ["check.sh: added a step."], delivery: { gateChanges: "check.sh: added a step." } },
+  });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { gateDeclarations: [], delivery: { gateChanges: "check.sh: added a step." } },
+  });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: {
+      gateDeclarations: ["CONTRACT.md: nothing - it was reverted."],
+      delivery: { gateChanges: "whatever was merged" },
+    },
+  });
+
+  assert.deepEqual(gateDeclarationsOf(eventsByTask(recordHome).get("t1")!), [
+    "check.sh: added a step.",
+    "CONTRACT.md: nothing - it was reverted.",
+  ]);
+});
+
+test("gateDeclarationsOf: an event from before issue #68 gives up its delivery's merged text whole", () => {
+  const recordHome = tempRecordHome();
+  // No `gateDeclarations` field at all: the only declaration such an
+  // event has is the cumulative one its delivery reported. Taken whole,
+  // which can report more than the newest round said but never less.
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { delivery: { gateChanges: "check.sh: added a step.\n\nCONTRACT.md: reworded rule 9." } },
+  });
+  appendEvent(recordHome, { taskId: "t1", name: "delivered", details: { delivery: { gateChanges: "" } } });
+
+  assert.deepEqual(gateDeclarationsOf(eventsByTask(recordHome).get("t1")!), [
+    "check.sh: added a step.\n\nCONTRACT.md: reworded rule 9.",
+  ]);
+});
+
+test("redPublishedChecksOf: the worker gets the receipt's full output, not the delivery's excerpt", () => {
+  const recordHome = tempRecordHome();
+  const full = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n");
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, { taskId: "t1", name: "ci-checks-finished", details: { verdict: "red", summary: "nixfmt red" } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: {
+      receipts: [receipt(1, { checks: { green: false, output: full } })],
+      delivery: { evidence: "a pointer and an excerpt, not the whole thing" },
+    },
+  });
+
+  assert.deepEqual(redPublishedChecksOf(eventsByTask(recordHome).get("t1")!), {
+    summary: "nixfmt red",
+    output: full,
+  });
+});
+
+test("redPublishedChecksOf: a record from before issue #68 still answers off the delivery's evidence", () => {
+  const recordHome = tempRecordHome();
+  appendEvent(recordHome, { taskId: "t1", name: "work-started", details: { project: "/p" } });
+  appendEvent(recordHome, { taskId: "t1", name: "ci-checks-finished", details: { verdict: "red", summary: "nixfmt red" } });
+  appendEvent(recordHome, {
+    taskId: "t1",
+    name: "delivered",
+    details: { delivery: { evidence: "the whole red output, as it was stored then" } },
+  });
+
+  assert.equal(
+    redPublishedChecksOf(eventsByTask(recordHome).get("t1")!)?.output,
+    "the whole red output, as it was stored then"
   );
 });
