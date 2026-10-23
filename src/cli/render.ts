@@ -485,9 +485,10 @@ export function formatQuietNotice(elapsedMs: number, lastSignal: string): string
  * exhaustive for a "working" task's last event (verified against
  * `stateOf`'s switch in `src/foreman/queries.ts`). An Inspector refusal
  * is the one terminal liveness case, named below before a quiet reading:
- * `task-received` and
- * `line-cut` are the only things that can land before `work-started`
- * (the pre-work window), `heartbeat` and a finished `check-run` are the
+ * `task-received`, `line-cut` and a clarifying call's `transport-retry`
+ * (issue #199) are the only things that can land before `work-started`
+ * (the pre-work window), `heartbeat`, a worker call's `transport-retry`
+ * and a finished `check-run` are the
  * only things that can land after it without changing the state away
  * from "working" (a `check-run` with `phase: "started"` produces
  * "checking" instead, handled by `describeLiveness`'s other branch, so
@@ -509,6 +510,8 @@ function nameLastSignal(event: FabricaEvent): string {
     }
     case "answers-given":
       return "the answer was recorded";
+    case "transport-retry":
+      return "the dropped model call was retried";
     case "ci-check-concluded":
       return "a pull request check concluded";
     case "ci-checks-finished":
@@ -932,6 +935,20 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     case "heartbeat": {
       const d = details as { attempt?: number };
       return d.attempt !== undefined ? `heartbeat (attempt ${d.attempt})` : "heartbeat";
+    }
+
+    case "transport-retry": {
+      // `src/foreman/transport-retry.ts`'s TransportRetryDetails (issue
+      // #199). Says which model, so a Client reading a task's history
+      // can see at a glance that the retry went back to the same one -
+      // the whole point of the event is that nothing was swapped.
+      const d = details as { call?: string; reason?: string; error?: string; model?: string; attempt?: number };
+      if (d.reason === undefined) return fallbackDetail(details);
+      const which = d.call === "ask" ? "clarifying call" : "model call";
+      const where = d.attempt !== undefined ? ` (attempt ${d.attempt})` : "";
+      const model = d.model ? ` on ${d.model}` : "";
+      const said = d.error ? `: ${d.error}` : "";
+      return `${which} dropped${where} - ${d.reason}${said}; retrying once${model}`;
     }
 
     case "questions-asked": {

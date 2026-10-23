@@ -52,6 +52,12 @@ export {
   unmeasuredSpend,
 } from "./spend.ts";
 export { requireGitRoot } from "./task-failure.ts";
+// Issue #199: one retry on a dropped model call, on the same model,
+// recorded. Exported for the one model call Fabrica makes outside a
+// production round (src/quiz's re-check), which is as droppable as any
+// other and gets the same single retry.
+export { transportFailureReason, withTransportRetry, TRANSPORT_RETRY_WAIT_MS } from "./transport-retry.ts";
+export type { ModelCall, TransportRetryDetails } from "./transport-retry.ts";
 // Issue #189's pause rule: the thresholds, the readings, and the
 // wording `fabrica status` and the review page both show.
 export {

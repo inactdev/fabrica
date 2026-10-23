@@ -647,6 +647,11 @@ async function runFixRound(
           onHeartbeat: (attempt) => {
             appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
           },
+          // Issue #199: a fix round's worker call is retried once on a
+          // dropped connection exactly like any other, and recorded.
+          onTransportRetry: (details) => {
+            appendEvent(recordHome, { taskId, name: "transport-retry", details });
+          },
           // Issue #70: fires as each entry is known, not once per attempt -
           // see runAttempts' own onTranscriptEntry doc for why every entry
           // lands here exactly once either way.

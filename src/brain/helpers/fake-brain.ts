@@ -53,6 +53,15 @@ export function fakeBrain(
      * distinct from askQuestions (a brain that answered, just with
      * questions). Ignored if askQuestions is also set. */
     askError?: Error;
+    /** Issue #199: work() throws this instead of returning, standing in
+     * for a model call that was dropped in transit (or refused). A
+     * function picks per call (1-based, counting every call this fake
+     * receives - a transport retry is a second call and so a second
+     * number), and returning undefined for a call lets that one
+     * through: `(call) => (call === 1 ? dropped : undefined)` is a brain
+     * that drops the first call and answers the retry. An Error alone
+     * throws on every call. */
+    workError?: Error | ((call: number) => Error | undefined);
     /** Rule 10: what each work() call reports spending, on a "usage"
      * transcript entry (contract/surface.ts's TranscriptEntry). A number
      * is the same cost every call; a function picks it per call (1-based).
@@ -126,6 +135,11 @@ export function fakeBrain(
       calls += 1;
       workOptions.push(workOpts);
       reasoningEffortsRequested.push(workOpts?.reasoningEffort);
+      // Issue #199: thrown before anything is recorded on this fake, the
+      // way a call that never came back leaves no transcript, no session
+      // and no write-up behind it.
+      const workError = typeof opts.workError === "function" ? opts.workError(calls) : opts.workError;
+      if (workError) throw workError;
       opts.onWork?.(brief, workdir, workOpts?.reasoningEffort);
 
       const session = workOpts?.session ?? `fake-session-${++nextSessionId}`;

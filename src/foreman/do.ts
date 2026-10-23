@@ -301,6 +301,12 @@ async function productionRound(
         onHeartbeat: (attempt) => {
           appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
         },
+        // Issue #199: a dropped model call is retried once, on the same
+        // model, and the record says so - never a silent reconnect, and
+        // never a silent downgrade to a different model.
+        onTransportRetry: (details) => {
+          appendEvent(recordHome, { taskId, name: "transport-retry", details });
+        },
         // Issue #70: fires as each entry is known, not once per attempt -
         // see runAttempts' own onTranscriptEntry doc for why every entry
         // lands here exactly once either way.

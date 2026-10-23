@@ -361,3 +361,26 @@ test("recheckBrief names the three outcomes it will accept, and never asks for a
   assert.match(brief, /change nothing else/);
   assert.match(brief, /abc123/);
 });
+
+// Issue #199: a re-check's own model call is as droppable as a worker's.
+// It gets the same single retry on the same model, recorded against the
+// task whose questions were being re-checked - so a blip costs the run
+// nothing, and the record still says a reconnect happened.
+test("a re-check whose model call is dropped is retried once, recorded, and still lands its verdicts", async () => {
+  const recordHome = quizRecordHome();
+  const project = makeFixtureProject();
+  const id = acceptedOnProject(recordHome, project, "Ship it", ["a.ts"]);
+  appendQuizStale(recordHome, id, { touchedBy: "later", files: ["a.ts"] });
+  const brain = fakeBrain({
+    workError: (call) => (call === 1 ? new Error("Connection closed mid-response") : undefined),
+    onWork: (_brief, workdir) =>
+      writeFileSync(join(workdir, "quiz-recheck.json"), JSON.stringify({ verdicts: [{ index: 0, outcome: "confirmed" }] })),
+  });
+
+  await runQuizRecheck(recordHome, { brain });
+
+  const retries = readEvents(recordHome).filter((event) => event.name === "transport-retry");
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].taskId, id, "the retry is recorded against the task being re-checked");
+  assert.equal(statusesOf(recordHome, id)[0], "live", "the retry's own answer was still used");
+});

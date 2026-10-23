@@ -21,6 +21,8 @@ import { costFromTranscript } from "./spend.ts";
 import { describeInvalidWriteup, finalMessageFor, renderCommitMessage } from "./pr-body.ts";
 import type { FinalMessageForCommit } from "./pr-body.ts";
 import { commitWorktreeChanges } from "./commit.ts";
+import { withTransportRetry } from "./transport-retry.ts";
+import type { TransportRetryDetails } from "./transport-retry.ts";
 import { ForemanError } from "./errors.ts";
 
 /** How often a "heartbeat" event lands while a Worker's single `brain.work`
@@ -124,6 +126,15 @@ export async function runAttempts(opts: {
   /** Fires roughly every `heartbeatIntervalMs` while a `brain.work` call
    * for `attempt` is still in flight. Omitted, no heartbeat runs. */
   onHeartbeat?: (attempt: number) => void;
+  /** Issue #199: fires once per `brain.work` call that failed the way a
+   * dropped connection fails and is about to be retried, on the same
+   * model. The caller records it as a "transport-retry" event. A retry
+   * is NOT an attempt - it happens inside one turn of this loop and
+   * never moves its counter (rule 3 counts attempts, not reconnects) -
+   * so a long task can carry several of these against one attempt
+   * number. Omitted, the retry still happens; only the record misses
+   * it. */
+  onTransportRetry?: (details: TransportRetryDetails) => void;
   /** Test-only override of DEFAULT_HEARTBEAT_INTERVAL_MS - a short value
    * lets a test observe a heartbeat without waiting 15 real seconds. */
   heartbeatIntervalMs?: number;
@@ -173,6 +184,7 @@ export async function runAttempts(opts: {
     startAttempt,
     onTranscriptEntry,
     onHeartbeat,
+    onTransportRetry,
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
     relayGoneGraceMs,
     spendLimits,
@@ -184,6 +196,14 @@ export async function runAttempts(opts: {
   } = opts;
 
   const fallbackTitle = commitLabel ? `fabrica: ${taskId} ${commitLabel}` : `fabrica: ${taskId}`;
+
+  // Issue #199: which model a dropped call is reported against. There is
+  // no transcript to read the model actually running off (the call never
+  // came back), so the best this can honestly say is what the task asked
+  // for, or failing that the brain's own label - and `receiptModel`'s
+  // rule applies here too: a placeholder label names no model, and the
+  // record says "unknown" rather than implying a choice nobody made.
+  const modelForDroppedCall = receiptModel(modelChoice.declaredModel, brain.model);
 
   const receipts: Receipt[] = [];
   let session: string | undefined = initialSession;
@@ -285,7 +305,38 @@ export async function runAttempts(opts: {
       workResult = await withHeartbeat(
         tick,
         heartbeatIntervalMs,
-        () => brain.work(thisBrief, workdir, Object.keys(workOpts).length > 0 ? workOpts : undefined),
+        // Issue #199: a call dropped in transit is made once more, on
+        // the same model, inside this one attempt. Wrapped by the
+        // heartbeat rather than around it, deliberately: the heartbeat
+        // keeps ticking through the wait and the second call, so a
+        // retrying task never reads as quiet, and the relay-health
+        // probe below still fails the whole thing if this box's network
+        // is what died - that failure is raised outside this wrapper
+        // and so is never itself retried.
+        () =>
+          withTransportRetry(
+            () => brain.work(thisBrief, workdir, Object.keys(workOpts).length > 0 ? workOpts : undefined),
+            {
+              which: "work",
+              model: modelForDroppedCall,
+              // The pause rule already decided to stop this worker
+              // (issue #189): the call ending is Fabrica's own doing a
+              // moment earlier, not a dropped connection, and calling
+              // the worker again is the last thing wanted here.
+              giveUp: () => meterStop !== undefined,
+              onRetry: (details) => {
+                // The dropped call's live entries stay delivered - they
+                // really were produced, and they are already in
+                // transcript.log - but they are no longer a prefix of
+                // anything: the retry returns its OWN transcript, and
+                // the catch-up below slices by this array's length. Not
+                // clearing it would silently drop the first entries of
+                // the transcript that did come back.
+                liveEntries.length = 0;
+                onTransportRetry?.({ ...details, attempt });
+              },
+            }
+          ),
         // Every tick also asks whether this box's own network is still
         // there (src/brain/relay-health.ts). A worker whose relay died
         // keeps running for minutes against an address with nothing
