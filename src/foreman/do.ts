@@ -18,6 +18,7 @@ import { deliveredState } from "./delivery.ts";
 import { recordRoundResult } from "./round.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
+import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { readModelChoice } from "./model.ts";
@@ -170,6 +171,16 @@ async function productionRound(
   // registration, so a resumed round reports the same declaration as
   // the first one even if projects.toml has changed since.
   const modelChoice = readModelChoice(recordHome, taskId);
+  // The knowledge-base notes this project names, read off the disk now -
+  // not from the record, because unlike the issue they are not the
+  // request: they are what the project knows today, and a note corrected
+  // between rounds is one this round should read corrected (see
+  // task-knowledge.ts).
+  //
+  // Read HERE, before the line is cut below, so a project naming a note
+  // that cannot be read fails the task with no ProductionLine behind it,
+  // naming which - the Client's own condition on this.
+  const knowledgeNotes = knowledgeNotesFor(recordHome, project);
   // `isRetry` is an explicit signal the caller derives from the RECORD -
   // answer.ts sets it true only when this exact taskId, in this exact
   // record home, already has a "line-cut" event: proof that
@@ -270,7 +281,10 @@ async function productionRound(
         // brief also carries the only-touched-tests ruling. Built here,
         // not at each caller, so a resumed round (answer.ts) and a
         // first attempt resolve it identically.
-        brief: workerBrief(recordHome, line.project, withIssueText(brief, issueText)),
+        // The task's own words, the issue it names, then the project's
+        // knowledge notes - all inside what `workerBrief` puts the
+        // standing prefix in front of.
+        brief: workerBrief(recordHome, line.project, withKnowledge(withIssueText(brief, issueText), knowledgeNotes)),
         workdir: line.workdir,
         taskId,
         judge,

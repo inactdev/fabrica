@@ -7,10 +7,10 @@
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import * as TOML from "smol-toml";
 import { ConfigError } from "./errors.ts";
-import type { Caps, FabricaConfig, PauseRule, ProjectConfig, ReviewerConfig } from "./types.ts";
+import type { Caps, FabricaConfig, KnowledgeConfig, PauseRule, ProjectConfig, ReviewerConfig } from "./types.ts";
 
 /** Issue #189's defaults, as the Client gave them: "defaults 70 and 90
  * percent of the week". The 5-hour window refuses at 90 too, and never
@@ -269,6 +269,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     maxRequestBytes,
     maxCallsPerTask,
     reviewer,
+    knowledge,
     onlyTouchedTests,
     ...rest
   } = value;
@@ -277,7 +278,8 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, reviewer and onlyTouchedTests are recognized.`
+        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, reviewer, knowledge and ` +
+        `onlyTouchedTests are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -326,7 +328,93 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   }
   const ownReviewer = parseReviewer(reviewer, `${path}: [projects.${name}.reviewer]`);
   if (ownReviewer !== undefined) project.reviewer = ownReviewer;
+  const ownKnowledge = parseKnowledge(knowledge, path, `${path}: [projects.${name}.knowledge]`);
+  if (ownKnowledge !== undefined) project.knowledge = ownKnowledge;
   return project;
+}
+
+/**
+ * A `[projects.<name>.knowledge]` table: where this project's knowledge
+ * base is, and which of its notes every brief carries. Both fields are
+ * required together, for the same reason `[reviewer]` requires both of
+ * its own — half of this names nothing — and the path is resolved here,
+ * against the directory `projects.toml` itself sits in, so every reader
+ * downstream holds an absolute path and nobody has to re-derive what a
+ * relative one was relative to.
+ *
+ * Only the shape is checked. Whether that path exists, whether it has a
+ * `notes/` folder, and whether each named note is in it are questions
+ * about the disk rather than about the file, and a task is refused on
+ * them (src/knowledge/, src/foreman/task-knowledge.ts) — a knowledge
+ * base that is merely unmounted this minute must not make the whole
+ * registry unreadable for `fabrica status`.
+ */
+function parseKnowledge(value: unknown, tomlPath: string, label: string): KnowledgeConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isTable(value)) {
+    throw new ConfigError(
+      "malformed",
+      `${label} must be a table with a "path" field and a "notes" list.`
+    );
+  }
+  const { path: basePath, notes, ...rest } = value;
+  const extra = Object.keys(rest);
+  if (extra.length > 0) {
+    throw new ConfigError(
+      "malformed",
+      `${label} has unknown field(s): ${extra.join(", ")}. Only path and notes are recognized.`
+    );
+  }
+  if (typeof basePath !== "string" || basePath.trim().length === 0) {
+    throw new ConfigError(
+      "malformed",
+      `${label}.path must be the knowledge base's own folder, as a non-empty string.`
+    );
+  }
+  if (!Array.isArray(notes) || notes.some((entry) => typeof entry !== "string")) {
+    throw new ConfigError(
+      "malformed",
+      `${label}.notes must be a list of note names (for example ["worker-boxes"]).`
+    );
+  }
+  const expanded = expandLeadingTilde(basePath.trim());
+  return {
+    // `dirname` of projects.toml rather than the record home as such:
+    // "relative to projects.toml" is what the path means, and that is
+    // the one fact this function can state without being told it.
+    path: resolve(dirname(tomlPath), expanded),
+    notes: (notes as string[]).map((entry, index) => requireNoteName(entry, `${label}.notes[${index}]`)),
+  };
+}
+
+/**
+ * One note name, as written. Bare names only: `.md` is appended when the
+ * note is read, and the folder is read flat, so a name carrying its own
+ * extension or a path separator is refused here rather than turned into
+ * a lookup nobody meant (`foo.md` -> `notes/foo.md.md`, `a/b` -> outside
+ * `notes/` entirely). Refusing also means no name can ever walk out of
+ * the knowledge base's own `notes/` folder.
+ */
+function requireNoteName(value: string, label: string): string {
+  const name = value.trim();
+  if (name.length === 0) {
+    throw new ConfigError("malformed", `${label} is empty; remove it or name a note.`);
+  }
+  if (name.endsWith(".md")) {
+    throw new ConfigError(
+      "malformed",
+      `${label} is "${name}"; name notes by their bare name ("${name.slice(0, -".md".length)}") - ` +
+        `the .md is added when the note is read.`
+    );
+  }
+  if (name.includes("/") || name.includes("\\") || name === "." || name === "..") {
+    throw new ConfigError(
+      "malformed",
+      `${label} is "${name}"; a note name is a bare file name in the knowledge base's own notes/ folder, ` +
+        `with no path in it.`
+    );
+  }
+  return name;
 }
 
 /** A `[reviewer]` table, global or a project's own — the model

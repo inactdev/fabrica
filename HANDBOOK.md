@@ -61,6 +61,12 @@ registered project's settings (`onlyTouchedTests`, README.md's
 the Client wants the opposite for one task, his own words asking to run
 the full suite are enough — pass them through as he said them.
 
+Don't paste in background a project already carries, either: a project
+can name notes from a knowledge base in its own settings
+(`[projects.<name>.knowledge]`, README.md's "Notes from a knowledge base
+in every brief"), and every worker on it is handed those notes in full,
+on every task and every round.
+
 Report the task id `fabrica do` prints. It prints immediately, before the
 work is done — say which of the three real outcomes happened (started,
 asked a question, or failed before starting), never "it's done," and

@@ -57,6 +57,9 @@ export interface ProjectConfig {
    * overriding the global `[reviewer]` table outright (not field by
    * field: a project that names one names both fields). */
   reviewer?: ReviewerConfig;
+  /** `[projects.<name>.knowledge]` — the knowledge-base notes every
+   * brief on this project carries, in full. Absent means none. */
+  knowledge?: KnowledgeConfig;
   /** The Client's standing ruling (issue #142): a Worker on this project
    * runs only the tests covering what it touched, never the whole suite,
    * since the project's own check runs in full afterwards either way.
@@ -67,6 +70,29 @@ export interface ProjectConfig {
    * opts out by saying so in its own text (src/foreman/touched-tests.ts).
    */
   onlyTouchedTests: boolean;
+}
+
+/** `[projects.<name>.knowledge]` — the knowledge base this project's
+ * briefs draw on, and which of its notes every Worker on the project is
+ * handed. Both fields are required together: a path naming no notes
+ * puts nothing in a brief, and a list of notes with no path has nowhere
+ * to read them from.
+ *
+ * Nothing is fetched: the notes are read off the local disk, as they
+ * are, every time a brief is built (src/knowledge/). */
+export interface KnowledgeConfig {
+  /** The knowledge base repository's own root, holding a `notes/`
+   * folder. Absolute by the time the loader is done with it: written
+   * relative, it is resolved against the directory `projects.toml`
+   * itself sits in, and a leading `~` is expanded like a project's own
+   * path. */
+  path: string;
+  /** Bare note names — `"worker-boxes"` for `<path>/notes/worker-boxes.md`.
+   * Flat only: a name carrying a path separator, or its own `.md`, is
+   * refused by the loader rather than quietly looked for in the wrong
+   * place. May be empty, which means this project adds no notes to a
+   * brief. */
+  notes: string[];
 }
 
 /** The pause rule (issue #189): how full the provider's own

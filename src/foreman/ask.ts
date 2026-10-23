@@ -24,6 +24,7 @@ import { resolveModelChoice, writeModelChoice } from "./model.ts";
 import { requireMeterRoomToStart } from "./meters.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
 import { fetchTaskIssue, parseIssueArgOrRefuse, withIssueText } from "./task-issue.ts";
+import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
 import type { IssueReader } from "./task-issue.ts";
 import type { Caps } from "../../contract/surface.ts";
 
@@ -181,6 +182,19 @@ export async function registerAndAsk(
         ? undefined
         : await fetchTaskIssue(recordHome, taskId, opts.project, opts.issue, opts.issueReader);
 
+    // The knowledge-base notes this project names, read off the disk
+    // here and handed to the clarifying step along with the task's own
+    // words: a Worker's brief carries the same section on every round
+    // (do.ts/verdict.ts, via `withKnowledge`), so the step deciding
+    // whether the task is clear reads what the work will read.
+    //
+    // Placed with the issue fetch and for the same reason: a project
+    // whose named notes cannot be read refuses here, before any
+    // ProductionLine is cut and before anything spends, naming the note
+    // or the folder (ForemanError("knowledge-unavailable"), recorded as
+    // "task-failed" by the wrapper around this body).
+    const knowledgeNotes = knowledgeNotesFor(recordHome, opts.project);
+
     // A task must never look started when its very first step never ran -
     // "ask-failed" is what lets an outside observer (fabrica do's own
     // process, src/cli/wait-for-ask-outcome.ts) tell that apart from
@@ -199,11 +213,12 @@ export async function registerAndAsk(
       // nowhere. Nothing about `ask(brief)`'s own ratified signature
       // changes; see src/brain/task-network.ts.
       asked = await withTaskNetwork(networkPolicyFor(recordHome, taskId, opts.project), () =>
-        // The task's own words plus the issue they refer to, in full -
-        // every round's worker brief carries the same section
-        // (do.ts/verdict.ts, via `withIssueText`), so the clarifying
-        // step and the work see the same request.
-        brain.ask(withIssueText(taskText, issueText))
+        // The task's own words plus the issue they refer to, in full,
+        // plus the project's knowledge notes - every round's worker
+        // brief carries the same sections (do.ts/verdict.ts, via
+        // `withIssueText`/`withKnowledge`), so the clarifying step and
+        // the work see the same request and the same notes.
+        brain.ask(withKnowledge(withIssueText(taskText, issueText), knowledgeNotes))
       );
     } catch (err) {
       const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };

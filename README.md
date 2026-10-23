@@ -330,6 +330,42 @@ report for your verdict, and records a refusal without creating a
 Client delivery. See `src/inspector/README.md` for the publishing
 boundary and the current compatibility limitation.
 
+## Notes from a knowledge base in every brief
+
+A project can name notes it keeps in a knowledge base - a separate
+repository with a `notes/` folder in it - and every Worker on that
+project is handed them in full, in every brief, without you retyping
+anything into a task:
+
+    [projects.spending-app]
+    path = "/Users/you/inkling-umbrella/spending-app"
+    check = "./check.sh"
+
+    [projects.spending-app.knowledge]
+    path = "../inkling-umbrella/knowledge-base"
+    notes = ["worker-boxes", "money-rounding"]
+
+`path` is the knowledge base's own folder. Written relative, it is
+relative to `projects.toml` itself, not to wherever you happen to run
+`fabrica` from; a leading `~` works here like anywhere else. Nothing is
+fetched over the network - the files are read off your disk, as they are
+at the moment each brief is built, so a note you correct between rounds
+is the note the next round reads.
+
+`notes` names them by their bare names, flat: `"worker-boxes"` is
+`<path>/notes/worker-boxes.md`. No subfolders, and no `.md` in the name -
+either is refused when the registry is read, rather than looked for
+somewhere nobody meant. Each note needs a `title:` in its own front
+matter: that title becomes the heading its words sit under in the brief,
+after the task's own text.
+
+Anything missing fails the task immediately, before a branch is cut and
+before anything is spent, naming what is missing - a knowledge base that
+isn't there, a `notes/` folder that isn't there, a note with no file, a
+note with no title. A note is carried whole or not at all: nothing is
+ever shortened to fit, so a brief that would be too big with the notes in
+it is refused too, naming the notes and by how much.
+
 ## Who reviews the tests
 
 Inspector can judge a change's *test* edits with a model, not just run

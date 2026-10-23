@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DEFAULT_PAUSE_RULE, loadConfig, loadConfigOrProblem, projectsTomlPath } from "./load.ts";
 import { ConfigError } from "./errors.ts";
 import { makeTestHome } from "./helpers/test-home.ts";
@@ -699,4 +699,115 @@ test("loadConfig: an empty project model is refused rather than read as 'no mode
       `model = ${value} must be refused`
     );
   }
+});
+
+// A project can name notes from a knowledge base to be carried into
+// every brief on it. Only the shape is this file's business: whether the
+// knowledge base is really there, and what is in it, is src/knowledge's.
+test("loadConfig: a project's knowledge table is read, with its path resolved against projects.toml", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/app"
+
+    [projects.spending-app.knowledge]
+    path = "../knowledge-base"
+    notes = ["worker-boxes", "  the-record  "]
+
+    [projects.other]
+    path = "~/other"
+  `);
+
+  assert.deepEqual(loadConfig(recordHome).projects["spending-app"].knowledge, {
+    // Relative to the file, not to whatever directory the command ran in.
+    path: resolve(recordHome, "../knowledge-base"),
+    notes: ["worker-boxes", "the-record"],
+  });
+  assert.equal(loadConfig(recordHome).projects.other.knowledge, undefined);
+});
+
+test("loadConfig: an absolute or ~-prefixed knowledge path is kept as it is meant", () => {
+  const recordHome = makeTestHome(`
+    [projects.a]
+    path = "~/a"
+    [projects.a.knowledge]
+    path = "/srv/knowledge"
+    notes = []
+
+    [projects.b]
+    path = "~/b"
+    [projects.b.knowledge]
+    path = "~/knowledge"
+    notes = []
+  `);
+
+  const config = loadConfig(recordHome);
+  assert.equal(config.projects.a.knowledge?.path, "/srv/knowledge");
+  assert.equal(config.projects.b.knowledge?.path, join(homedir(), "knowledge"));
+});
+
+test("loadConfig: a knowledge table missing either half is refused", () => {
+  for (const table of [`path = "/srv/k"`, `notes = ["a"]`, ""]) {
+    assert.throws(
+      () => loadConfig(makeTestHome(`[projects.app]\npath = "~/app"\n[projects.app.knowledge]\n${table}\n`)),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /\[projects\.app\.knowledge\]\.(path|notes)/);
+        return true;
+      },
+      `knowledge table "${table}" must be refused`
+    );
+  }
+});
+
+test("loadConfig: a note name that is not a bare name is refused, naming what to write", () => {
+  const cases: [string, RegExp][] = [
+    ['["worker-boxes.md"]', /bare name \("worker-boxes"\)/],
+    ['["sub/worker-boxes"]', /no path in it/],
+    ['["../secrets"]', /no path in it/],
+    ['["  "]', /is empty/],
+    ["[42]", /must be a list of note names/],
+  ];
+  for (const [notes, expected] of cases) {
+    assert.throws(
+      () =>
+        loadConfig(
+          makeTestHome(`[projects.app]\npath = "~/app"\n[projects.app.knowledge]\npath = "/srv/k"\nnotes = ${notes}\n`)
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, expected);
+        return true;
+      },
+      `notes = ${notes} must be refused`
+    );
+  }
+});
+
+test("loadConfig: an unknown field inside a knowledge table is refused", () => {
+  assert.throws(
+    () =>
+      loadConfig(
+        makeTestHome(
+          `[projects.app]\npath = "~/app"\n[projects.app.knowledge]\npath = "/srv/k"\nnotes = []\nnote = "typo"\n`
+        )
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /unknown field\(s\): note\. Only path and notes are recognized/);
+      return true;
+    }
+  );
+});
+
+test("loadConfig: knowledge is a known project field, not an unknown one", () => {
+  assert.throws(
+    () => loadConfig(makeTestHome(`[projects.app]\npath = "~/app"\nnope = 1\n`)),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /reviewer, knowledge and onlyTouchedTests are recognized/);
+      return true;
+    }
+  );
 });

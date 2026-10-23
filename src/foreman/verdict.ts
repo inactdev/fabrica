@@ -32,6 +32,7 @@ import type { ChecksReader } from "./ci-checks.ts";
 import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
+import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
 import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { runAttempts } from "./attempts.ts";
@@ -403,6 +404,12 @@ async function runFixRound(
   // the declaration this task was registered with, not whatever
   // projects.toml says by the time the Client rules on it.
   const modelChoice = readModelChoice(recordHome, taskId);
+  // The project's knowledge notes, read off the disk now - a fix round
+  // reads them as they are today, not as the first round found them
+  // (task-knowledge.ts). Read before the line is reopened below, so a
+  // note that has gone missing fails the round with the same message,
+  // and in the same place, as it would on a task's first one.
+  const knowledgeNotes = knowledgeNotesFor(recordHome, project);
 
   // Reopens the same line directly rather than going through
   // runProductionRound, so this round appends "work-started" below but
@@ -592,10 +599,11 @@ async function runFixRound(
             // than one winning: each describes a different part of the
             // state this worker is being handed.
             buildFixBrief(
-              // The issue this task names rides along on a fix round
-              // too: the Client's note corrects the work, it does not
-              // replace the request the issue spells out.
-              withIssueText(originalBrief, issueText),
+              // The issue this task names, and the project's knowledge
+              // notes, ride along on a fix round too: the Client's note
+              // corrects the work, it does not replace the request the
+              // issue spells out or the notes the project stands on.
+              withKnowledge(withIssueText(originalBrief, issueText), knowledgeNotes),
               note,
               [
                 refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,
