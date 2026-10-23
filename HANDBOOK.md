@@ -285,8 +285,17 @@ and don't merge it yourself.
 
 **If the CI workflow doesn't tell you the check or the image** - there
 is no workflow, or it's too indirect to read a single command out of -
-say so and ask him for them. Guessing a check command is guessing what
-"correct" means for every future task on that project.
+don't guess: guessing a check command is guessing what "correct" means
+for every future task on that project. Run it with no flags instead,
+
+    fabrica register <path>
+
+which writes nothing, registers nothing, exits non-zero, and prints a
+proposed `.inspector.json` on stdout with one line of reasoning per
+field on stderr, derived from what the repository itself says. Show him
+both halves and ask him to confirm or correct the check and the image.
+The `REPLACE-ME-with-...` image placeholder means no signal named one -
+that is the field to ask about first.
 
 **On no**, that's the end of it. Don't run `fabrica register`, and don't
 retry the `fabrica do`.

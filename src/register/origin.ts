@@ -130,6 +130,20 @@ export function fileExistsOnRef(project: string, ref: string, path: string): boo
   }
 }
 
+/** `path`'s contents in `ref`'s tree, or `null` when it isn't there -
+ * asked of git for the same reason `fileExistsOnRef` is: the question is
+ * always about a particular commit, never about whatever the Client
+ * happens to have in his working tree. Trailing whitespace is trimmed,
+ * which every caller here wants (a JSON document, a shell script's
+ * body). */
+export function readFileOnRef(project: string, ref: string, path: string): string | null {
+  try {
+    return git(project, ["show", `${ref}:${path}`]);
+  } catch {
+    return null;
+  }
+}
+
 /** Whether origin has a branch by this name, read straight from the
  * remote (no fetch, no reliance on a local remote-tracking ref that may
  * never have been updated). Throws when origin can't be read at all -

@@ -29,8 +29,18 @@ export function protectedPathsFor(extra: readonly string[]): string[] {
  * this repository's own .inspector.json, the one live example of the
  * schema in reach. */
 export function inspectorConfigJson(opts: {
+  /** The command that must pass. `./check.sh` unless told otherwise -
+   * which only `propose.ts` ever does, for a repository whose own
+   * evidence names an indirect command (`npm test`) and that has no
+   * check.sh for `register` to point at. */
+  check?: string;
   image: string;
-  protectedPaths: readonly string[];
+  /** Omitted from the document entirely when `undefined` - which is not
+   * the same as an empty list: `[]` is "nothing is protected", stated,
+   * and is what `register` writes when `protectedPathsFor` somehow
+   * produces nothing. `propose.ts` passes `undefined` for a check the
+   * Client has to pick the protected paths for himself. */
+  protectedPaths?: readonly string[];
   /** `--network`: writes `network: true`, so the check box can reach the
    * network - what a check that fetches its own project dependencies
    * needs. */
@@ -40,7 +50,7 @@ export function inspectorConfigJson(opts: {
 }): string {
   return `${JSON.stringify(
     {
-      check: RECORDED_CHECK,
+      check: opts.check ?? RECORDED_CHECK,
       image: opts.image,
       // Each of these is written only when asked for. "Off" is the
       // absence of the key, never `network: false` or `timeoutSeconds:
@@ -50,7 +60,7 @@ export function inspectorConfigJson(opts: {
       // own config uses).
       ...(opts.network === true ? { network: true } : {}),
       ...(opts.timeoutSeconds !== undefined ? { timeoutSeconds: opts.timeoutSeconds } : {}),
-      protectedPaths: [...opts.protectedPaths],
+      ...(opts.protectedPaths !== undefined ? { protectedPaths: [...opts.protectedPaths] } : {}),
     },
     null,
     2

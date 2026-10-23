@@ -88,6 +88,90 @@ A box that could not start at all is reported separately from a check
 that ran and failed (`BoxCheckResult`'s own distinction): neither one
 registers anything, but only the second is a statement about the check.
 
+## Proposing an `.inspector.json` instead of demanding one (issue #114)
+
+Writing `.inspector.json` by hand means knowing Inspector's schema and
+the protected-path trap. So a repository that needs setting up, run
+without `--check` and `--image`, gets a **proposal** — step 7 above,
+where the old "that needs `--check` and `--image`" refusal used to be:
+
+    fabrica register <path> > <path>/.inspector.json
+
+`src/register/propose.ts` derives it from three signals, read off
+**origin's default branch** (never the working tree — the same ref step 7
+just asked the `.inspector.json` question against, and the ref a task's
+base commit is cut from): an existing `check.sh`, `package.json`'s
+`scripts`/`engines`/dependencies, and `go.mod`. Reading is one function,
+deriving is a pure one over the three strings it read, so every rule
+below is tested with no repository at all.
+
+It **prints the proposal and never writes it** — the issue's own words. A
+tool that quietly writes the file defining how its own work is judged is
+the off-the-books edit this project exists to prevent, so the Client keeps
+the pen. The two streams are the contract (Client ruling, issue #114's
+clarification):
+
+- **stdout: the JSON document, alone.** One `console.log`, so the
+  redirect above yields a file ending in exactly one newline.
+- **stderr: every field's reasoning, one line per field** — including
+  `network`'s, which JSON itself has nowhere to put — plus any
+  disagreement between two signals.
+
+It is still a **refusal**: exit 1, nothing written, nothing registered,
+nothing pushed (`RegisterProposalError`, the one refusal carrying data
+alongside its message). So `fabrica register <path> && fabrica do ...`
+cannot read a proposal as a successful registration.
+
+### How each field is derived
+
+- **`check`** — an existing `check.sh` wins over everything, and any
+  signal it contradicts is **named** on stderr rather than dropped (the
+  Client's ruling on question 3). Otherwise `package.json`'s `test`
+  script makes it `npm test`, a `go.mod` makes it `go test ./...`, and a
+  repository naming no command at all is told to write `check.sh`.
+- **`image`** — the only declaration-to-image pairing there is live
+  evidence for is an exactly-pinned `engines.node` against
+  `cimg/node:<version>`, which is this repository's own `.inspector.json`.
+  Everything else gets `REPLACE-ME-with-...`, not a guess: a version
+  *range* names no single tag, and `go.mod`'s toolchain version has no
+  in-repo precedent for a Go image. The placeholder carries uppercase on
+  purpose — a Docker repository name must be lowercase, so it is an
+  *invalid* reference and fails loudly on the first pull instead of
+  resolving to something plausible.
+- **`network`** — on only when the check's own text names a dependency
+  installer (`npm ci`, `pip install`, `go mod download`, ...), since
+  fetching is the only thing network access buys. Declared dependencies
+  with *no* install step are named on stderr instead of answered with a
+  `true` that would not help: `npm test` with no `npm ci` in front of it
+  fails in a fresh box for want of `node_modules` whether the network is
+  there or not.
+- **`timeoutSeconds`** — always omitted, and the line says why. Nothing
+  in a `package.json`, a `go.mod` or a `check.sh` says how long a check
+  takes, and the invented number would be the one deciding whether a real
+  check is killed mid-run. (A CI workflow's `timeout-minutes:` is the one
+  real signal in a repository and is deliberately not read: workflow
+  files aren't among the signals issue #114 names, and this repository
+  ships no YAML parser.)
+- **`protectedPaths`** — a file-path check (`./check.sh`) is listed; an
+  indirect one lists nothing and says the decision is the Client's, since
+  which file freezing `npm test` means (the script, the `package.json`
+  holding it, the lockfile, all three) is a judgment about his
+  repository. `.inspector.json` and the CI workflow files are **never**
+  listed: the gate protects those on its own.
+
+That last point is a deliberate disagreement with `protectedPathsFor`
+below, which always lists `.inspector.json` next to `check.sh`. Two
+different authorities, not a bug in either — if they should ever agree,
+`protectedPathsFor` is the one to change, under a ruling.
+
+### Why the proposal lands where it does
+
+After `prepare()`'s whole refusal cascade, not before it. Building it in
+the CLI layer first would be friendlier to someone whose `gh` login is
+stale (a proposal needs no `gh` and no Docker), and it would also answer
+"this project is already registered" with a config proposal he cannot
+use. Refusals first, proposal last.
+
 ## `.inspector.json`'s schema, and where it came from
 
 Up to five keys: `check` (always `./check.sh`), `image`,

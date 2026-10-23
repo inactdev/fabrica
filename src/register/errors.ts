@@ -8,6 +8,11 @@
 // say which step it was, in its own words - "register failed" would
 // leave the Client guessing whether anything reached origin.
 
+// Type only, erased at compile time: the proposal's shape belongs to
+// propose.ts, and the one refusal that carries it lives here with every
+// other refusal rather than off on its own.
+import type { InspectorProposal } from "./propose.ts";
+
 export type RegisterErrorCode =
   /** <path> isn't an existing git repository's root. */
   | "not-a-repo"
@@ -25,8 +30,11 @@ export type RegisterErrorCode =
   | "already-registered"
   /** The project name isn't usable as a projects.toml table key. */
   | "bad-name"
-  /** The full setup needs --check and --image; one or both is missing. */
-  | "missing-check-or-image"
+  /** The repository has no .inspector.json and wasn't told what to write
+   * one from, so a proposal was printed instead and nothing happened -
+   * see propose.ts. Carried by RegisterProposalError below, the one
+   * refusal with data attached. */
+  | "proposed"
   /** The repo already has .inspector.json on origin, but no check.sh. */
   | "no-check-script"
   /** The check ran in the image and failed. */
@@ -51,5 +59,29 @@ export class RegisterError extends Error {
     super(message);
     this.name = "RegisterError";
     this.code = code;
+  }
+}
+
+/**
+ * The one refusal that carries data as well as words: a repository with
+ * no `.inspector.json` that `register` was not told what to write one
+ * from gets a *proposal* instead (issue #114), and a proposal has two
+ * streams - the document, which must reach stdout alone so it can be
+ * piped into the file, and the per-field reasoning, which must not.
+ *
+ * It is a refusal and not a result on purpose: nothing was written,
+ * nothing was registered, and the exit code is non-zero, so
+ * `fabrica register <path> && fabrica do ...` cannot read a proposal as a
+ * successful registration. `message` is the stderr block verbatim, so a
+ * caller that only knows how to print a RegisterError still says
+ * something useful.
+ */
+export class RegisterProposalError extends RegisterError {
+  readonly proposal: InspectorProposal;
+
+  constructor(proposal: InspectorProposal) {
+    super("proposed", proposal.notes.join("\n"));
+    this.name = "RegisterProposalError";
+    this.proposal = proposal;
   }
 }

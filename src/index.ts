@@ -184,9 +184,24 @@ export type {
 // default branch answering both "is this set up at all" and "does it
 // ask for its test changes judged" (`inspectorConfiguredOnOrigin` is
 // the narrower, first question on its own).
-export { registerProject, RegisterError, inspectorConfiguredOnOrigin, notSetUpMessage, originSetup } from "./register/index.ts";
+// A repository with no `.inspector.json` that register wasn't told what
+// to write one from gets a *proposal* instead, printed and never written
+// (issue #114): RegisterProposalError is how that reaches the CLI, which
+// has to put the document on stdout alone and the reasoning on stderr.
+export {
+  registerProject,
+  proposeInspectorConfig,
+  readProposalSignals,
+  RegisterError,
+  RegisterProposalError,
+  inspectorConfiguredOnOrigin,
+  notSetUpMessage,
+  originSetup,
+} from "./register/index.ts";
 export type { OriginSetup } from "./register/index.ts";
 export type {
+  InspectorProposal,
+  ProposalSignals,
   RegisterErrorCode,
   RegisterOptions,
   RegisterRequest,
