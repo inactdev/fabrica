@@ -96,3 +96,28 @@ objects; `formatDoctorLine(check)` renders the one line doctor prints.
 uses the same pair - so the two commands can never disagree about which
 checks ran, in what order, or how a line reads. Anything else that needs
 doctor's findings should go through them rather than a third list.
+
+## A red test this branch did not cause: two rulings that met at the merge
+
+`src/foreman/transport-retry.test.ts`'s "a brain that drops both calls
+fails the task" asserted that such a task leaves **no** receipt ("a call
+that never came back is not an attempt"). It was written on a branch cut
+before issue #167's ruling landed, which says the opposite for exactly
+this case: a `brain.work()` call that crashes may have billed minutes of
+worker time nobody can measure from outside, so rule 10 requires one
+UNMEASURED receipt (`costUsd: null`, `costUnknown: true`,
+`outcome: "failed"`) rather than none - see `attempts.ts`'s own comment
+at the `catch` around the worker call, and
+`crashed-attempt-spend.test.ts` for the end-to-end version.
+
+Each branch was green on its own; the default branch went red the moment
+both were merged, with neither pull request touching a line the other
+did. Nothing in the gates catches that - it is a semantic conflict, not a
+textual one - so the first task to run a full check after such a merge is
+where it surfaces, on a branch that did not cause it.
+
+The reconciliation kept issue #167's behaviour (money accounting is the
+newer and stricter ruling) and repointed the stale assertion at it, while
+keeping what issue #199's test was really about: the two dropped calls
+are still **one** attempt against rule 3's budget, and both went to the
+same model, so no model was swapped behind the Client's back.
