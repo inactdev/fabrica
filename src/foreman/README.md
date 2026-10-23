@@ -1351,6 +1351,45 @@ still has its spend on the record. Receipts that only ever landed on a
 once per task and attempt. A restart, a second process, or a fresh
 Foreman all get the same total.
 
+**A crashed attempt leaves an UNMEASURED receipt (issue #167).** When
+`brain.work()` throws - the model connection dropped mid-response, the
+box died, the relay went away - the attempt still appends a
+`"receipt-recorded"` event with `costUsd: null` and `costUnknown: true`,
+outcome `"failed"`, before the error is rethrown
+(`attempts.ts`' `catch` around the worker call; both callers already
+wire `onReceipt` to `recordReceipt`). It used to append nothing at all,
+so 18 minutes of billed worker time left the task's cost at its previous
+value and the daily cap blind to the whole attempt. Three deliberate
+details:
+
+- **The cost is forced to null, not derived** from whatever usage
+  entries arrived live before the crash. The figure a worker reports
+  rides on an entry it only produces when it reaches the end of its own
+  run, so a partial figure would be a *known* cost on the record for
+  spend that is in fact unknown - understating it, and clearing a block
+  it must not clear.
+- **Only the worker's own call counts as spend that may have happened.**
+  A failure in Fabrica's own code before `brain.work()` was ever reached
+  - a missing check command, a line that could not be cut, a project
+  that moved - records no receipt, because it spent nothing and an
+  unmeasured receipt there would block every new task over money that
+  never moved. That holds by construction: those failures happen outside
+  `runAttempts` entirely (Client's clarification, 2026-10-23).
+- **The receipt is spend, not progress.** `stateOf` ignores
+  `"receipt-recorded"`, and the round still appends `"task-failed"` on
+  its way out, so the task reads as failed with no delivery to rule on.
+
+Clearing it is the ordinary path below - `fabrica cost <id> <usd>`, no
+new mechanism. One sharp edge worth knowing: the ledger keys on `(task,
+attempt)` and keeps the first receipt it sees for a pair, while
+`runProductionRound` always numbers from attempt 1, so a crashed
+answered round that is answered again leaves two receipts for attempt 1
+and the unmeasured one wins. That is the safe direction (the block
+persists until a real figure is recorded, and `recordCost` covers every
+still-unknown attempt of the task at once) and is left as is: letting a
+later known cost overwrite an earlier unknown one would clear a block
+for spend nobody measured.
+
 **"Daily" is a rolling 24 hours ending now, not a calendar day.** It
 uses each receipt's `startedAt`. No clock or time zone decides when the
 day ends, and there is no midnight at which a full day's budget comes
