@@ -35,13 +35,18 @@ import {
   latestMeterReading,
   networkPolicyFor,
   pauseRuleFor,
+  receiptModel,
   refusalFor,
   standingOf,
   unmeasuredSpend,
+  withTransportRetry,
 } from "../foreman/index.ts";
 import { createScratchCheckout, destroyScratchCheckout } from "../line/index.ts";
 import type { ScratchCheckout } from "../line/index.ts";
-import { readEvents } from "../record/index.ts";
+// `appendEvent` directly rather than through this module's own
+// events.ts: a "transport-retry" is not a quiz event, it is the same
+// event every other model call in Fabrica records (issue #199).
+import { appendEvent, readEvents } from "../record/index.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { PauseRule } from "../config/index.ts";
 import type { FabricaEvent } from "../record/index.ts";
@@ -289,7 +294,21 @@ async function recheckOneTask(
     // task would have run under - a re-check's worker box is no more
     // trusted than any other.
     const work = await withTaskNetwork(networkPolicyFor(recordHome, taskId, project), () =>
-      brain.work(brief, checkout.workdir)
+      // Issue #199: a re-check is a model call like any other, and is
+      // dropped in transit like any other - one retry, on the same
+      // model, recorded against the task whose questions are being
+      // re-checked. Both calls failing throws, which the catch below
+      // already turns into this task's "left outdated" note, now
+      // naming the model and the error instead of a bare socket
+      // message. The model named is the brain's own label rather than
+      // the task's original declaration: a re-check runs on whatever
+      // brain this run was given, which need not be the one that did
+      // the work.
+      withTransportRetry(() => brain.work(brief, checkout.workdir), {
+        which: "work",
+        model: receiptModel(null, brain.model),
+        onRetry: (details) => appendEvent(recordHome, { taskId, name: "transport-retry", details }),
+      })
     );
 
     const { costUsd, costBasis } = costFromTranscript(work.transcript);

@@ -152,6 +152,18 @@ export type FabricaEventName =
    * `"round-ended"`, `"round-failed"` - see `src/foreman/fix-rebase.ts`).
    * Purely the record saying what the host did; no decision reads it. */
   | "rebase-conflicted"
+  /** A model call Fabrica made - a worker's `work()` or the clarifying
+   * step's `ask()` - failed the way a dropped connection fails, and is
+   * being retried once on the SAME model (issue #199). Details:
+   * `src/foreman/transport-retry.ts`'s `TransportRetryDetails` - which
+   * call it was, Fabrica's own short reason, the failed call's own
+   * message verbatim, the model, the wait, and (for a worker's call) the
+   * attempt it belongs to. One event per retried call, so a long task
+   * may carry several. Never an attempt: rule 3 counts attempts, not
+   * reconnects. Here rather than in the contract for the same reason as
+   * the names above it - a reconnect is Fabrica's own bookkeeping, not a
+   * new promise to the Client about a seam. */
+  | "transport-retry"
   /** Issue #189's pause rule refused to START anything - a new task, a
    * resumed round, or a fix round - because a subscription meter was
    * past its refuse threshold. Details:

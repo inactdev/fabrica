@@ -20,7 +20,8 @@ import type { Brain, BrainAskResult } from "../brain/index.ts";
 import { networkPolicyFor } from "./network-policy.ts";
 import { ForemanError } from "./errors.ts";
 import { requireRoomToStart } from "./caps.ts";
-import { resolveModelChoice, writeModelChoice } from "./model.ts";
+import { receiptModel, resolveModelChoice, writeModelChoice } from "./model.ts";
+import { withTransportRetry } from "./transport-retry.ts";
 import { requireMeterRoomToStart } from "./meters.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
 import { fetchTaskIssue, parseIssueArgOrRefuse, withIssueText } from "./task-issue.ts";
@@ -137,7 +138,8 @@ export async function registerAndAsk(
   // same way caps.json below does. Every later round reads it back
   // rather than re-resolving against a projects.toml that may have
   // changed under it.
-  writeModelChoice(recordHome, taskId, resolveModelChoice(recordHome, opts.project, opts.model));
+  const modelChoice = resolveModelChoice(recordHome, opts.project, opts.model);
+  writeModelChoice(recordHome, taskId, modelChoice);
   // Rule 10's numbers as of this moment, persisted once (issue #203):
   // these are the caps this task is actually held to, and a cost meter
   // read weeks later should show the ceiling that applied rather than
@@ -213,12 +215,27 @@ export async function registerAndAsk(
       // nowhere. Nothing about `ask(brief)`'s own ratified signature
       // changes; see src/brain/task-network.ts.
       asked = await withTaskNetwork(networkPolicyFor(recordHome, taskId, opts.project), () =>
-        // The task's own words plus the issue they refer to, in full,
-        // plus the project's knowledge notes - every round's worker
-        // brief carries the same sections (do.ts/verdict.ts, via
-        // `withIssueText`/`withKnowledge`), so the clarifying step and
-        // the work see the same request and the same notes.
-        brain.ask(withKnowledge(withIssueText(taskText, issueText), knowledgeNotes))
+        // Issue #199: this call is as droppable as a worker's own, and
+        // gets the same one retry on the same model, recorded. Both
+        // failing throws ForemanError("model-call-failed"), which the
+        // catch below records as this task's "ask-failed" - naming the
+        // model and the real error, rather than leaving a task dead
+        // with nothing said about why.
+        withTransportRetry(
+          () =>
+            // The task's own words plus the issue they refer to, in
+            // full, plus the project's knowledge notes - every round's
+            // worker brief carries the same sections (do.ts/verdict.ts,
+            // via `withIssueText`/`withKnowledge`), so the clarifying
+            // step and the work see the same request and the same
+            // notes.
+            brain.ask(withKnowledge(withIssueText(taskText, issueText), knowledgeNotes)),
+          {
+            which: "ask",
+            model: receiptModel(modelChoice.declaredModel, brain.model),
+            onRetry: (details) => appendEvent(recordHome, { taskId, name: "transport-retry", details }),
+          }
+        )
       );
     } catch (err) {
       const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };

@@ -47,6 +47,13 @@ export type ForemanErrorCode =
   /** `stop` (issue #203) on a task that isn't running - already
    * delivered, already closed, waiting on an answer, or never started. */
   | "not-running"
+  /** A model call failed twice (issue #199): it failed the way a
+   * dropped connection fails, was retried once on the same model after
+   * a short wait, and failed again. Carries the model, the first
+   * failure's kind and the second failure's own words - see
+   * src/foreman/transport-retry.ts. No model is ever swapped in to
+   * recover from this; the task stops instead. */
+  | "model-call-failed"
   /** The network a Worker's box was running on is gone (2026-10-18): its
    * task's own relay container stopped serving mid-attempt, so every
    * request the box makes is refused by an address with nothing
