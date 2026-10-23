@@ -207,7 +207,11 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     "answers-given",
     "line-cut",
     "work-started",
-    // The first resume threw: #73 records that, so it never reads as working.
+    // The first resume's worker threw. Issue #167: whatever that attempt
+    // spent before it died is unknowable from out here, so it leaves an
+    // unmeasured receipt rather than nothing at all - and #73 then
+    // records the failure itself, so the task never reads as working.
+    "receipt-recorded",
     "task-failed",
     "answers-given",
     "line-cut",

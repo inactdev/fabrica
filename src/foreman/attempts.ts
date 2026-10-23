@@ -18,6 +18,7 @@ import type { ModelChoice } from "./model.ts";
 import type { Judge, Judgement } from "./judge.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { costFromTranscript } from "./spend.ts";
+import type { AttemptCost } from "./spend.ts";
 import { describeInvalidWriteup, finalMessageFor, renderCommitMessage } from "./pr-body.ts";
 import type { FinalMessageForCommit } from "./pr-body.ts";
 import { commitWorktreeChanges } from "./commit.ts";
@@ -30,6 +31,14 @@ import { ForemanError } from "./errors.ts";
  * `fabrica status`/`watch` treat a gap much longer than this as "quiet too
  * long" rather than assuming progress. */
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+
+/** What an attempt cost when the attempt never finished (issue #167):
+ * nobody knows. The basis is "metered" for the same reason
+ * `costFromTranscript` defaults to it - with nothing to go on, the
+ * conservative assumption is real money - though it changes nothing
+ * here: an unknown cost blocks under any cap regardless of basis,
+ * because there is no basis to know yet. */
+const UNMEASURED: AttemptCost = { costUsd: null, costBasis: "metered" };
 
 export interface AttemptLoopResult {
   /** One per attempt actually run, in order. Each entry's `outcome`
@@ -280,6 +289,51 @@ export async function runAttempts(opts: {
             readAndJudgeMeters();
           };
 
+    /** This attempt's receipt. One builder for all three ways an attempt
+     * can end - judged, paused by the meter, or crashed (issue #167) -
+     * so the facts that are the same in every one of them (which
+     * attempt, which brain and model, the meters, the session) can never
+     * be recorded three different ways. Everything that genuinely
+     * differs is a parameter. `transcript` is whatever this attempt
+     * produced: the worker's own complete one when `work()` returned,
+     * the live prefix when it did not. */
+    const receiptFor = (args: {
+      transcript: TranscriptEntry[];
+      /** Measured by each caller at the moment the worker's call
+       * settled, never here: by the time a judged attempt's receipt is
+       * built, its check or Inspector has already run, and charging that
+       * to the worker would overstate every ordinary attempt. */
+      durationMs: number;
+      cost: AttemptCost;
+      checks: GateResult | null;
+      outcome: Receipt["outcome"];
+    }): Receipt => ({
+      task: taskId,
+      attempt,
+      brain: brain.name,
+      // Issue #184: the model the worker reported actually running, out
+      // of its own transcript - never the brain's placeholder label
+      // (see model.ts's receiptModel).
+      model: receiptModel(modelFromTranscript(args.transcript), brain.model),
+      declaredModel: modelChoice.declaredModel,
+      modelSource: modelChoice.modelSource,
+      startedAt,
+      durationMs: args.durationMs,
+      costUsd: args.cost.costUsd,
+      costUnknown: args.cost.costUsd === null,
+      costBasis: args.cost.costBasis,
+      // Issue #189: every receipt records both subscription meters. The
+      // worker's own reading out of its transcript is the authoritative
+      // one for this attempt; the last heartbeat tick's is the fallback
+      // for a brain that reports readings live but nothing at the end,
+      // and null means nobody could say - never 0%.
+      meters: meterReadingFromTranscript(args.transcript) ?? tickReading ?? null,
+      session: session ?? null,
+      reasoningEffort: null,
+      checks: args.checks,
+      outcome: args.outcome,
+    });
+
     let workResult: BrainWorkResult | undefined;
     try {
       workResult = await withHeartbeat(
@@ -301,7 +355,44 @@ export async function runAttempts(opts: {
       // anything - the stop was Fabrica's own doing, decided a moment
       // earlier. Swallowed only in that case; every other error is the
       // attempt's real failure and still propagates.
-      if (meterStop === undefined) throw err;
+      if (meterStop === undefined) {
+        // Issue #167: the attempt crashed - the model connection dropped
+        // mid-round, the box died, the relay went away. Minutes of worker
+        // time may have been billed, and from out here nobody can tell
+        // whether any money moved or how much: the cost arrives on a
+        // usage entry the worker only produces when it reaches the end of
+        // its own run, which this one never did. Rule 10 says unknown
+        // spend is never counted as zero, so the attempt leaves an
+        // UNMEASURED receipt rather than none at all - which is what used
+        // to happen, leaving the task's cost at its previous value and
+        // the daily cap blind to the whole attempt. With a cap set, the
+        // unknown blocks every new start until `fabrica cost <id> <usd>`
+        // records the real figure (caps.ts's `requireRoomToStart`).
+        //
+        // Deliberately not derived from whatever arrived live before the
+        // crash: a partial figure would land on the record as a KNOWN
+        // cost, which understates the spend and clears nothing.
+        //
+        // Only the worker's own call is wrapped by this try, so a
+        // failure in Fabrica's own code before `brain.work()` was ever
+        // reached - a missing check command, a line that could not be
+        // cut - still records nothing, by construction rather than by a
+        // condition that could be got wrong (Client's clarification).
+        //
+        // Handed to `onReceipt` only, not pushed onto `receipts`: this
+        // rethrows, so the loop's own result never reaches a caller, and
+        // the record is where the spend has to land either way.
+        onReceipt?.(
+          receiptFor({
+            transcript: liveEntries,
+            durationMs: Date.now() - t0,
+            cost: UNMEASURED,
+            checks: null,
+            outcome: "failed",
+          })
+        );
+        throw err;
+      }
     } finally {
       unregisterLiveTranscript();
     }
@@ -352,29 +443,9 @@ export async function runAttempts(opts: {
         // (round.ts's own commit) will report it if it persists.
         if (!(err instanceof ForemanError) || err.code !== "commit-failed") throw err;
       }
-      const { costUsd, costBasis } = costFromTranscript(transcript);
-      if (costUsd !== null && costBasis === "metered") spentUsd += costUsd;
-      const receipt: Receipt = {
-        task: taskId,
-        attempt,
-        brain: brain.name,
-        // Issue #184: the model the worker reported actually running,
-        // out of its own transcript - never the brain's placeholder
-        // label (see model.ts's receiptModel).
-        model: receiptModel(modelFromTranscript(transcript), brain.model),
-        declaredModel: modelChoice.declaredModel,
-        modelSource: modelChoice.modelSource,
-        startedAt,
-        durationMs,
-        costUsd,
-        costUnknown: costUsd === null,
-        costBasis,
-        meters: meterReadingFromTranscript(transcript) ?? tickReading ?? null,
-        session: session ?? null,
-        reasoningEffort: null,
-        checks: null,
-        outcome: "paused-by-meter",
-      };
+      const cost = costFromTranscript(transcript);
+      if (cost.costUsd !== null && cost.costBasis === "metered") spentUsd += cost.costUsd;
+      const receipt = receiptFor({ transcript, durationMs, cost, checks: null, outcome: "paused-by-meter" });
       receipts.push(receipt);
       onReceipt?.(receipt);
       break;
@@ -438,36 +509,18 @@ export async function runAttempts(opts: {
     lastJudgement = judgement;
     if (gate) lastGate = gate;
 
-    const { costUsd, costBasis } = costFromTranscript(work.transcript);
+    const cost = costFromTranscript(work.transcript);
     // Issue #188: only metered spend counts toward the running total a
     // per-task cap checks against - a subscription estimate is recorded
     // on the receipt but never moves this number.
-    if (costUsd !== null && costBasis === "metered") spentUsd += costUsd;
-    const receipt: Receipt = {
-      task: taskId,
-      attempt,
-      brain: brain.name,
-      // Issue #184: what actually ran, from this attempt's own
-      // transcript, with the declaration it was started under beside it.
-      model: receiptModel(modelFromTranscript(work.transcript), brain.model),
-      declaredModel: modelChoice.declaredModel,
-      modelSource: modelChoice.modelSource,
-      startedAt,
+    if (cost.costUsd !== null && cost.costBasis === "metered") spentUsd += cost.costUsd;
+    const receipt = receiptFor({
+      transcript: work.transcript,
       durationMs,
-      costUsd,
-      costUnknown: costUsd === null,
-      costBasis,
-      // Issue #189: every receipt records both subscription meters. The
-      // worker's own reading out of its transcript is the authoritative
-      // one for this attempt; the last heartbeat tick's is the fallback
-      // for a brain that reports readings live but nothing at the end,
-      // and null means nobody could say - never 0%.
-      meters: meterReadingFromTranscript(work.transcript) ?? tickReading ?? null,
-      session: session ?? null,
-      reasoningEffort: null,
+      cost,
       checks: gate ? gateForRecord(gate) : null,
       outcome: gate?.green ? "delivered" : "failed",
-    };
+    });
     receipts.push(receipt);
 
     // Rule 10: an unknown cost under any cap, or the task's own spend at
@@ -475,7 +528,7 @@ export async function runAttempts(opts: {
     // its own terms, in which case nothing was cut short.
     const finishedGreen = gate !== undefined && gate.green && (stopEarlyOnGreen || attempt === lastAttempt);
     if (spendLimits && !finishedGreen) {
-      if (spendLimits.capsActive && costUsd === null) {
+      if (spendLimits.capsActive && cost.costUsd === null) {
         capStop = { reason: "spend-unknown", attempt, spentUsd };
       } else if (spendLimits.perTaskUsd !== undefined && spentUsd >= spendLimits.perTaskUsd) {
         capStop = { reason: "per-task-cap", attempt, spentUsd, capUsd: spendLimits.perTaskUsd };

@@ -13,6 +13,7 @@ import { registerMeterSource } from "../brain/meters.ts";
 import { METER_READING_MAX_AGE_MS } from "./meters.ts";
 import { DEFAULT_PAUSE_RULE } from "../config/index.ts";
 import type { Brain } from "../brain/index.ts";
+import type { Receipt } from "../inspector/types.ts";
 import type { Judge } from "./judge.ts";
 
 const HEAD_MARKER = "FIRST-LINE-OF-CHECK-OUTPUT";
@@ -667,6 +668,133 @@ test("runAttempts: a receipt records the model the worker reported, and the decl
   assert.equal(receipts[0].model, "small-5-20260202", "what ran, not what was asked for");
   assert.equal(receipts[0].declaredModel, "small-5");
   assert.equal(receipts[0].modelSource, "flag");
+});
+
+// Issue #167: the model connection dropped mid-round and 18 minutes of
+// worker time produced no receipt at all - the task's cost stayed at its
+// previous value and the daily cap never saw the attempt. Rule 10 says
+// unknown spend is never counted as zero, so a crashed attempt leaves an
+// unmeasured receipt behind on its way out.
+function crashingBrain(message: string): Brain {
+  return {
+    name: "crashing",
+    model: "crashing-1",
+    async ask() {
+      return {};
+    },
+    async work() {
+      throw new Error(message);
+    },
+  };
+}
+
+test("runAttempts: a brain.work() that throws still hands over an unmeasured receipt, and still rethrows", async () => {
+  const handed: Receipt[] = [];
+
+  await assert.rejects(
+    runAttempts({
+      brain: crashingBrain("API Error: Connection closed mid-response"),
+      brief: "do it",
+      workdir: scratchWorkdir(),
+      taskId: "t1",
+      judge: greenJudge,
+      totalAttempts: 2,
+      stopEarlyOnGreen: true,
+      modelChoice: { declaredModel: "small-5", modelSource: "flag" },
+      onReceipt: (receipt) => handed.push(receipt),
+    }),
+    /Connection closed mid-response/
+  );
+
+  assert.equal(handed.length, 1, "the crashed attempt's spend must reach the record exactly once");
+  const [receipt] = handed;
+  assert.equal(receipt.costUnknown, true);
+  assert.equal(receipt.costUsd, null, "never $0 - nobody measured it");
+  assert.equal(receipt.outcome, "failed");
+  assert.equal(receipt.checks, null, "nothing judged an attempt that never finished");
+  assert.equal(receipt.task, "t1");
+  assert.equal(receipt.attempt, 1);
+  assert.equal(receipt.brain, "crashing");
+  assert.equal(receipt.declaredModel, "small-5", "the attempt still says what it was started under");
+  assert.equal(receipt.modelSource, "flag");
+});
+
+test("runAttempts: a crashed attempt's receipt is unmeasured even when usage entries arrived live first", async () => {
+  // A streaming worker can report a partial cost before it dies. Taking
+  // it would put a KNOWN figure on the record for spend that is in fact
+  // unknown - understating it, and clearing a block it must not clear.
+  const live = { occurredAt: new Date().toISOString(), kind: "usage", text: JSON.stringify({ totalCostUsd: 0.37 }) };
+  const handed: Receipt[] = [];
+
+  await assert.rejects(
+    runAttempts({
+      brain: {
+        name: "crashes-after-reporting",
+        model: "crashing-1",
+        async ask() {
+          return {};
+        },
+        async work(_brief, workdir) {
+          emitLiveTranscriptEntry(workdir, live);
+          throw new Error("the container died");
+        },
+      },
+      brief: "do it",
+      workdir: scratchWorkdir(),
+      taskId: "t1",
+      judge: greenJudge,
+      totalAttempts: 1,
+      stopEarlyOnGreen: true,
+      onReceipt: (receipt) => handed.push(receipt),
+    }),
+    /the container died/
+  );
+
+  assert.equal(handed[0].costUnknown, true);
+  assert.equal(handed[0].costUsd, null);
+});
+
+test("runAttempts: a crashed attempt's receipt still carries the meters its box last reported", async () => {
+  const handed: Receipt[] = [];
+  const workdir = scratchWorkdir();
+
+  await assert.rejects(
+    runAttempts({
+      brain: {
+        name: "crashes-after-a-tick",
+        model: "crashing-1",
+        async ask() {
+          return {};
+        },
+        async work() {
+          const unregister = registerMeterSource(workdir, {
+            reading: () => ({ ...FRESH_READING, sevenDayPercent: 41 }),
+            pause: () => {},
+          });
+          try {
+            // Long enough for one heartbeat tick to read the meters.
+            await new Promise((r) => setTimeout(r, 30));
+          } finally {
+            unregister();
+          }
+          throw new Error("the relay went away");
+        },
+      },
+      brief: "do it",
+      workdir,
+      taskId: "t1",
+      judge: greenJudge,
+      totalAttempts: 1,
+      stopEarlyOnGreen: true,
+      heartbeatIntervalMs: 5,
+      onHeartbeat: () => {},
+      onReceipt: (receipt) => handed.push(receipt),
+    }),
+    /the relay went away/
+  );
+
+  assert.equal(handed[0].meters?.sevenDayPercent, 41);
+  assert.equal(handed[0].costUnknown, true);
 });
 
 test("runAttempts: a brain that reports no model per call falls back to its own label, never to 'default'", async () => {
