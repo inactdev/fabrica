@@ -108,6 +108,113 @@ export function checksSummaryFromEvents(events: FabricaEvent[]): string | null {
   return null;
 }
 
+/** Which way a task's work was actually judged (issue #111) - issue #64's
+ * two modes, plus the two honest gaps between them. Deliberately NOT
+ * `src/foreman/judge.ts`'s own `CheckMode`: that one is a round's
+ * decision at the moment it is made (and carries the Inspector it will
+ * use); this is a reading of what the record says happened, taken
+ * afterwards by the surfaces that only ever read.
+ *
+ * - `"inspector"` - handed to Inspector's own independent, containerized
+ *   run (`inspector-called`/`inspection-finished`).
+ * - `"self-tested"` - no Inspector (`inspection-skipped`), and the
+ *   project's check really did run inside the worker's own box
+ *   (`check-run`): the builder checking the builder.
+ * - `"not-checked"` - no Inspector and no check ever ran at all. A round
+ *   that went red on its own write-up before any judge was called
+ *   (`attempts.ts`), a fix round that changed nothing, or one whose box
+ *   could not run the check at all (`judge.ts`'s `selfTestJudge`,
+ *   delivered as `not-verified`) all look like this. Client ruling
+ *   (issue #111 clarification): its own third state, never borrowing
+ *   "self-tested"'s words, because self-tested means a check actually
+ *   ran. Why the box could not run it is `fabrica log`'s own
+ *   `check-run` line and the delivery's; this says only that nothing
+ *   checked the work.
+ * - `"unknown"` - the record carries none of those events: a task
+ *   delivered before Fabrica recorded the mode at all, or an interrupted
+ *   record. Still rendered, in words - a missing line reads as "there is
+ *   nothing to say about this", which is the one thing it must not say.
+ */
+export type TaskCheckMode = "inspector" | "self-tested" | "not-checked" | "unknown";
+
+/** One forward pass, latest round wins - the same "whichever event last
+ * carried it" rule `projectFromEvents`/`prUrlFromEvents` above follow,
+ * and for the same reason: a `fix` round can be judged in a different
+ * mode from the round before it (Inspector installed in between, or
+ * `.inspector.json` added to the project), and only the newest is still
+ * true. `check-run` is reset by each `inspection-skipped`, which
+ * `judge.ts`'s `prepareRound` appends once per self-tested round before
+ * that round's first attempt, so "nothing ran" is read per round rather
+ * than from the whole history.
+ *
+ * One deliberate limit: an Inspector-mode round that never reached its
+ * judge at all (an invalid write-up, a rebase conflict, a meter pause)
+ * appends nothing of its own, so a task Inspector checked in an earlier
+ * round still reads `"inspector"`. Nothing on the record distinguishes
+ * that from the mode simply not having changed, and reporting "unknown"
+ * for a task Inspector genuinely did check would be the worse of the two
+ * readings. */
+export function checkModeFromEvents(events: FabricaEvent[]): TaskCheckMode {
+  let mode: "inspector" | "self-test" | null = null;
+  let checkRan = false;
+  for (const event of events) {
+    switch (event.name) {
+      case "inspector-called":
+      case "inspection-finished":
+        mode = "inspector";
+        break;
+      case "inspection-skipped":
+        mode = "self-test";
+        checkRan = false;
+        break;
+      case "check-run":
+        // The latest `check-run` of the round decides, and the one thing
+        // that makes it "no": `notVerified`, which `selfTestJudge`
+        // appends when the box could not run the check at all. A
+        // `"started"` phase does count - a check that started and then
+        // hung did run (whether it is stuck is the quiet ceiling's
+        // question, above, not this one) - and it is also why the
+        // not-verified case has to be read off the LAST event rather
+        // than any event: that attempt records its `"started"` one
+        // first, then the refusal.
+        checkRan = (event.details as { notVerified?: string } | undefined)?.notVerified === undefined;
+        break;
+      default:
+        break;
+    }
+  }
+  if (mode === null) return "unknown";
+  if (mode === "inspector") return "inspector";
+  return checkRan ? "self-tested" : "not-checked";
+}
+
+/** The exact words for issue #64's mode b, in one place: `fabrica
+ * status`'s delivered line and `fabrica log`'s own mode line both read
+ * them from here, so the two surfaces can never word the same mode two
+ * ways. Deliberately the short form - `src/foreman/judge.ts`'s
+ * `SELF_TESTED` is the longer sentence a delivery's own evidence
+ * carries, and a one-line-per-task listing has no room for it. */
+export const SELF_TESTED_MODE = "self-tested, not independently checked";
+
+/** What a `TaskCheckMode` reads as (issue #111). A green that Inspector
+ * reached and a green the worker gave itself are very different claims,
+ * and before this a listing showed them identically. */
+export function describeCheckMode(mode: TaskCheckMode): string {
+  switch (mode) {
+    case "inspector":
+      return "checked by Inspector";
+    case "self-tested":
+      return SELF_TESTED_MODE;
+    case "not-checked":
+      return "not checked - nothing ran";
+    case "unknown":
+      // Spelled out rather than left to a `default`, so adding a fifth
+      // reading above is a compile error here instead of silently
+      // reading as "unknown".
+      return "check mode unknown";
+  }
+}
+
 /** The most recent moment anything was recorded for this task - any event
  * counts as activity, heartbeats included. Null for a task with no events
  * at all (never happens for a real task; only for defensive callers). */
@@ -270,6 +377,15 @@ export function formatStatusLine(
      * this exists to replace. Omitted (or null) when no read has
      * finished, which is most tasks most of the time. */
     checksSummary?: string | null;
+    /** Issue #111: which way this task's work was actually judged
+     * (`checkModeFromEvents`). Shown on a delivered task's own line and
+     * nowhere else - that is the line where the Client is being asked to
+     * accept a green, so it is the one place "Inspector said so" and
+     * "the worker said so about itself" must stop looking identical.
+     * Omitting it does NOT omit the line: a delivered task with no mode
+     * supplied reads "check mode unknown" (Client ruling, issue #111
+     * clarification - a missing line looks like nothing to say). */
+    checkMode?: TaskCheckMode;
   }
 ): string {
   const project = opts.project ?? "unknown project";
@@ -279,6 +395,11 @@ export function formatStatusLine(
   const base = `${task.id}  ${project}  ${task.state}  ${age} old${model}${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}${checks}`;
 
   if (task.state === "delivered") {
+    // Issue #111: in the fact columns, before the call-to-action - it is
+    // a fact about the green being offered, not part of the command the
+    // Client is being pointed at. Never conditional: every delivered
+    // line says how it was checked, "check mode unknown" included.
+    const mode = `  ${describeCheckMode(opts.checkMode ?? "unknown")}`;
     const pr = opts.prUrl ? `  pull request: ${opts.prUrl}` : "";
     // Before the pull request link rather than after it: a long URL at
     // the end of the line is where the eye stops, and this is a fact
@@ -286,11 +407,11 @@ export function formatStatusLine(
     const standing = opts.baseStanding ? `  ${opts.baseStanding}` : "";
     if (opts.pausedByMeter !== undefined) {
       return (
-        `${base}  <- PAUSED BY THE SUBSCRIPTION METER: ${opts.pausedByMeter} - nothing restarts by itself: ` +
+        `${base}${mode}  <- PAUSED BY THE SUBSCRIPTION METER: ${opts.pausedByMeter} - nothing restarts by itself: ` +
         `\`fabrica verdict ${task.id} fix\` continues it${standing}${pr}`
       );
     }
-    return `${base}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${standing}${pr}`;
+    return `${base}${mode}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${standing}${pr}`;
   }
   if (isDeadEnd(task.state, opts.hasDelivery)) {
     if (task.state === "failed") {
@@ -734,8 +855,15 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     }
 
     case "inspection-skipped": {
+      // Issue #111: this event is where the round's judging mode was
+      // decided (`judge.ts`'s `prepareRound`, before any work starts), so
+      // it reads as that decision rather than as something being skipped
+      // - "Inspector skipped" sounded like a step that was passed over,
+      // when what it really says is that the only check this task will
+      // get is the worker checking itself. Same words `fabrica status`
+      // puts on the delivered line, from the same constant.
       const d = details as { reason?: string };
-      return d.reason ? `Inspector skipped: ${d.reason}` : "Inspector skipped";
+      return d.reason ? `check mode: ${SELF_TESTED_MODE} - ${d.reason}` : `check mode: ${SELF_TESTED_MODE}`;
     }
 
     case "ci-check-concluded": {

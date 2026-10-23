@@ -150,12 +150,18 @@ test("fabrica log, Inspector installed: shows Inspector's call and verdict, and 
   assert.ok(!io.out.some((l) => l.includes("check started")));
 });
 
-test("fabrica log, Inspector not installed: says why Inspector was skipped and that the box ran the check", async () => {
+// Issue #111: that event reads as the round's judging mode now, with the
+// same reason it always carried - nothing was "skipped", the worker
+// checking itself is the only check this task gets.
+test("fabrica log, Inspector not installed: names the self-tested mode and its reason, and that the box ran the check", async () => {
   const { recordHome, foreman, project } = setup(false);
   const task = await foreman.do("small change", { project, brain: fakeBrain() });
   const io = captureIo();
   assert.equal(await runLogCommand([task.id], { recordHome, ...io }), 0);
-  assert.ok(io.out.some((l) => l.includes("Inspector skipped: Inspector is not installed")));
+  assert.ok(
+    io.out.some((l) => l.includes("check mode: self-tested, not independently checked - Inspector is not installed")),
+    JSON.stringify(io.out)
+  );
   assert.ok(io.out.some((l) => l.includes("check started in the worker's box")));
   assert.ok(!io.out.some((l) => l.includes("Inspector called")));
 });
@@ -184,6 +190,29 @@ test("fabrica status, Inspector not installed: a red self-test shows failed, wit
   assert.equal((await foreman.deliveryOf(task.id))?.outcome, "failure-report");
   assert.match(line, /failed/);
   assert.doesNotMatch(line, /AWAITING YOUR VERDICT/);
+});
+
+// Issue #111: the pair that matters most - a green reached by Inspector
+// and a green the worker gave itself are both "delivered", and used to
+// be indistinguishable in this listing.
+test("fabrica status, Inspector installed: a green delivery says it was checked by Inspector", async () => {
+  const { recordHome, foreman, project } = setup(true);
+  const task = await foreman.do("small change", { project, brain: fakeBrain() });
+  const io = captureIo();
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+  const line = io.out.find((l) => l.startsWith(task.id)) ?? "";
+  assert.match(line, /checked by Inspector/);
+  assert.doesNotMatch(line, /self-tested/);
+});
+
+test("fabrica status, Inspector not installed: the same green says it was self-tested and not independently checked", async () => {
+  const { recordHome, foreman, project } = setup(false);
+  const task = await foreman.do("small change", { project, brain: fakeBrain() });
+  const io = captureIo();
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+  const line = io.out.find((l) => l.startsWith(task.id)) ?? "";
+  assert.match(line, /self-tested, not independently checked/);
+  assert.doesNotMatch(line, /checked by Inspector/);
 });
 
 // --- 7. A project with no check.sh ---

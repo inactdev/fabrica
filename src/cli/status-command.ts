@@ -32,6 +32,7 @@ import type { MeterStanding, PauseRule } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import {
+  checkModeFromEvents,
   checksSummaryFromEvents,
   describeLiveness,
   expectsWorkerProcess,
@@ -74,6 +75,15 @@ once by the round itself and shown here from the record; a task whose
 pull request has not been read says nothing about CI rather than
 implying there were none. A check that never finished within the round's
 bounded wait reads as "unknown", never as green.
+
+Every delivered task also names which mode actually checked it, since a
+green reached by Inspector's own independent run and a green the worker
+gave itself are very different claims: "checked by Inspector",
+"self-tested, not independently checked", "not checked - nothing ran"
+(no Inspector and no check ever ran - a round that went red on its own
+write-up, or whose box could not run the check at all), or "check mode
+unknown" for a record that says neither. That line is never left off -
+a missing one would read as nothing to say.
 
 A delivered task whose branch no longer contains origin's default tip
 is marked "behind origin/<branch>, a fix will rebase" - the rebase a
@@ -327,6 +337,11 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             // task's pull request, read off the record like everything else
             // on this line.
             checksSummary: checksSummaryFromEvents(events),
+            // Issue #111: which mode judged this task - Inspector's own
+            // independent run, or the worker checking itself. Read from
+            // the same events this listing already holds; only a
+            // delivered line shows it, and it always shows something.
+            checkMode: checkModeFromEvents(events),
             ...(pausedByMeter === undefined ? {} : { pausedByMeter }),
           })
         );
