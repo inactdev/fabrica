@@ -24,6 +24,7 @@ import {
   workerTokenStatus,
 } from "../index.ts";
 import { CliError } from "./errors.ts";
+import { dockerDaemonUp } from "./docker-daemon.ts";
 import {
   clonePackInstallProcedure,
   GLOBAL_PACKAGE_NAME,
@@ -80,6 +81,40 @@ export interface DoctorCheck {
   label: string;
   detail: string;
   fix?: string;
+  /** Whether a failure here makes a task impossible, and so must stop
+   * `fabrica up` from starting a session at all (Client ruling
+   * 2026-10-23). Absent means yes - a new check keeps stopping `up`
+   * until someone deliberately decides otherwise, rather than the
+   * other way round. `false` is for a finding no task needs answered
+   * (today: which copy of fabrica is on this disk and how it got
+   * there): still a `FAIL` line and still a non-zero exit from
+   * `fabrica doctor`, but only a warning printed above the session by
+   * `fabrica up`. */
+  blocking?: boolean;
+  /** Something worth telling the Client even though this check passes -
+   * printed as a warning above the session by `fabrica up` (today: being
+   * behind origin/master, which `doctor` has always reported as
+   * information inside an OK line and never failed). */
+  note?: string;
+}
+
+/** A failure `fabrica up` must refuse to start a session over, as
+ * opposed to one it prints as a warning and carries on past. The one
+ * reader of `DoctorCheck.blocking`, so the "absent means blocking"
+ * default lives in exactly one place. */
+export function stopsATask(check: DoctorCheck): boolean {
+  return !check.ok && check.blocking !== false;
+}
+
+/** The one warning line `fabrica up` prints above the session for a
+ * check that found something but stops no task - a non-blocking failure
+ * (with its fix, which is still the thing to do about it, just not
+ * now) or a passing check carrying a `note`. Null for a check with
+ * nothing to say. */
+export function advisoryLine(check: DoctorCheck): string | null {
+  if (stopsATask(check)) return null;
+  if (!check.ok) return `WARN ${check.label}: ${check.detail}${check.fix ? ` - fix: ${check.fix}` : ""}`;
+  return check.note ? `WARN ${check.label}: ${check.note}` : null;
 }
 
 /** The machine-level checks, injectable so tests never depend on this
@@ -155,21 +190,36 @@ export function short(sha: string | null): string {
  * real git or the network - `remoteMasterCommit` is `null` when that
  * lookup itself failed (no network, no git), which is reported but
  * never fails the check: an older commit still runs correctly, it is
- * only ever information here, not a fix-required state. */
+ * only ever information here, not a fix-required state.
+ *
+ * Nothing this check can find makes a task impossible - which copy of
+ * fabrica is on this disk, and whether it is the newest one, changes
+ * nothing about whether Docker, the worker image, the tokens and the
+ * project are there - so every failure here is `blocking: false` and
+ * being behind origin rides along as a `note` (Client ruling
+ * 2026-10-23). `fabrica doctor` still fails on them exactly as before;
+ * `fabrica up` prints them above the session and starts it.
+ */
 export function checkoutCheck(copy: CopyInfo, remoteMasterCommit: string | null): DoctorCheck {
   const label = "checkout";
+  const behind = remoteMasterCommit !== null && copy.commit !== remoteMasterCommit;
   const behindNote =
     remoteMasterCommit === null
       ? "can't check against origin/master (no network, or git unavailable)"
-      : copy.commit === remoteMasterCommit
-        ? "up to date with origin/master"
-        : `behind origin/master, latest is ${short(remoteMasterCommit)}`;
+      : behind
+        ? `behind origin/master, latest is ${short(remoteMasterCommit)}`
+        : "up to date with origin/master";
+  const note = behind ? `${behindNote} - bring it up to date with: fabrica update` : undefined;
 
   if (copy.kind === "installed") {
     if (copy.commit === null) {
       return {
         ok: false,
+        blocking: false,
         label,
+        // Why there is no commit comes from whatever could not produce
+        // one, rather than being guessed at here: the named failure
+        // `build-info.json` itself records, or the absence of that file.
         detail: `installed copy v${copy.version} at ${copy.root}: commit unknown - ${copy.commitUnknownReason ?? "nothing in it records one"}`,
         // The clone-pack-install procedure, never a one-step install of
         // the GitHub spec: npm fetches that spec as GitHub's tarball of
@@ -183,13 +233,19 @@ export function checkoutCheck(copy: CopyInfo, remoteMasterCommit: string | null)
         fix: `fabrica update, or by hand: ${clonePackInstallProcedure(prefixOfGlobalInstall(copy.root))}`,
       };
     }
-    return { ok: true, label, detail: `installed copy v${copy.version}, commit ${short(copy.commit)} (${behindNote})` };
+    return { ok: true, label, note, detail: `installed copy v${copy.version}, commit ${short(copy.commit)} (${behindNote})` };
   }
 
   const detail = `fabrica runs from ${copy.root} on ${copy.branch || "a detached HEAD"}, commit ${short(copy.commit)} (${behindNote})`;
   return copy.branch === "master"
-    ? { ok: true, label, detail }
-    : { ok: false, label, detail: `${detail}, not master`, fix: `git -C ${copy.root} checkout master && git -C ${copy.root} pull` };
+    ? { ok: true, label, note, detail }
+    : {
+        ok: false,
+        blocking: false,
+        label,
+        detail: `${detail}, not master`,
+        fix: `git -C ${copy.root} checkout master && git -C ${copy.root} pull`,
+      };
 }
 
 /** What `<prefix>/lib/node_modules/fabrica` turns out to be at one
@@ -237,11 +293,17 @@ export function npmLinkPrefixes(
 /** Pure wording/pass-fail, so every case is testable without a real
  * symlink anywhere. A link pointing at the dev checkout that is running
  * right now is the documented developer install (README.md's
- * "Developing Fabrica itself"), not a leftover - failing that would
- * refuse every `fabrica up` session on a linked checkout, which is not
- * what issue #171 is about. Anything else - a link to some other
+ * "Developing Fabrica itself"), not a leftover, and is reported `OK`:
+ * it is not a problem at all, which is a separate thing from the
+ * `blocking: false` below. Anything else - a link to some other
  * checkout, or one whose target is gone - stands between npm and the
- * installed copy, and gets the one command that removes it. */
+ * installed copy, and gets the one command that removes it.
+ *
+ * A leftover link is `blocking: false` for the same reason the checkout
+ * check's own failures are (Client ruling 2026-10-23): it stands in a
+ * prefix the running copy did not come from (that is what makes it
+ * leftover rather than the developer install), so it breaks the next
+ * `npm install -g` and nothing else - no task needs it answered. */
 export function npmLinkCheck(sites: NpmLinkSite[], copy: CopyInfo): DoctorCheck {
   const label = "npm link";
   const linked = sites.filter((site) => site.linkTarget !== null);
@@ -274,6 +336,7 @@ export function npmLinkCheck(sites: NpmLinkSite[], copy: CopyInfo): DoctorCheck 
     : `an npm link symlink to the checkout ${leftover.linkTarget}, not an installed copy`;
   return {
     ok: false,
+    blocking: false,
     label,
     detail: `${path} is ${what} - any npm install -g of ${GLOBAL_PACKAGE_NAME} fails with ENOTDIR while it is there`,
     fix: leftover.npmDefault ? "npm unlink -g fabrica" : `npm unlink -g --prefix ${leftover.prefix} fabrica`,
@@ -461,14 +524,10 @@ export const realProbes: DoctorProbes = {
     const sites = npmLinkPrefixes(copy, process.argv[1], npmGlobalPrefix()).map(inspectNpmLinkSite);
     return npmLinkCheck(sites, copy);
   },
-  docker() {
-    try {
-      execFileSync("docker", ["info"], { stdio: "ignore", timeout: 20_000 });
-      return { ok: true, label: "docker", detail: "reachable" };
-    } catch {
-      return { ok: false, label: "docker", detail: "not reachable", fix: "start Docker (e.g. open -a Docker), then try again" };
-    }
-  },
+  docker: () =>
+    dockerDaemonUp()
+      ? { ok: true, label: "docker", detail: "reachable" }
+      : { ok: false, label: "docker", detail: "not reachable", fix: "start Docker (e.g. open -a Docker), then try again" },
   workerImage: () => workerImageStatus(),
   workerCli: () => workerCliVersionStatus(),
   relayImage: () => relayImageStatus(),
@@ -525,18 +584,24 @@ export interface RunDoctorCommandOptions {
   stderr?: (line: string) => void;
 }
 
-/** Returns the process exit code - never throws. */
-export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOptions = {}): Promise<number> {
-  const stdout = opts.stdout ?? ((line: string) => console.log(line));
-  const stderr = opts.stderr ?? ((line: string) => console.error(line));
-  let live: boolean;
-  try {
-    ({ live } = parseDoctorArgs(argv));
-  } catch (err) {
-    stderr(err instanceof Error ? err.message : String(err));
-    return 1;
-  }
-  const recordHome = opts.recordHome ?? resolveRecordHome();
+/** The one line `fabrica doctor` prints per check - exported so anything
+ * else that shows doctor's own output (`fabrica up`, when it stops on a
+ * check) renders it identically rather than with a second copy of this
+ * format. */
+export function formatDoctorLine(check: DoctorCheck): string {
+  return check.ok
+    ? `OK   ${check.label}: ${check.detail}`
+    : `FAIL ${check.label}: ${check.detail}${check.fix ? ` - fix: ${check.fix}` : ""}`;
+}
+
+/** Every check `fabrica doctor` runs, as objects rather than lines -
+ * exported so `fabrica up` can decide per finding whether it stops a
+ * task (`stopsATask`) instead of reading doctor's exit code, which
+ * cannot tell one kind of FAIL from another. `runDoctorCommand` below
+ * is this plus the printing and the exit code, so the two commands can
+ * never disagree about which checks ran or in what order. */
+export async function collectDoctorChecks(opts: { recordHome: string; probes?: DoctorProbes; live?: boolean }): Promise<DoctorCheck[]> {
+  const { recordHome } = opts;
   const probes = opts.probes ?? realProbes;
 
   const checks: DoctorCheck[] = [
@@ -597,10 +662,29 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
     }
   }
 
-  if (live) checks.push(await probes.live(recordHome));
+  if (opts.live) checks.push(await probes.live(recordHome));
 
-  for (const check of checks) {
-    stdout(check.ok ? `OK   ${check.label}: ${check.detail}` : `FAIL ${check.label}: ${check.detail}${check.fix ? ` - fix: ${check.fix}` : ""}`);
+  return checks;
+}
+
+/** Returns the process exit code - never throws. */
+export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOptions = {}): Promise<number> {
+  const stdout = opts.stdout ?? ((line: string) => console.log(line));
+  const stderr = opts.stderr ?? ((line: string) => console.error(line));
+  let live: boolean;
+  try {
+    ({ live } = parseDoctorArgs(argv));
+  } catch (err) {
+    stderr(err instanceof Error ? err.message : String(err));
+    return 1;
   }
+  const recordHome = opts.recordHome ?? resolveRecordHome();
+
+  // Every FAIL is a FAIL here, whatever `fabrica up` makes of it: doctor
+  // is the Client asking what is wrong with this machine, and answering
+  // "nothing" because nothing happens to be blocked right now would be
+  // a different, less useful command.
+  const checks = await collectDoctorChecks({ recordHome, probes: opts.probes, live });
+  for (const check of checks) stdout(formatDoctorLine(check));
   return checks.every((c) => c.ok) ? 0 : 1;
 }
