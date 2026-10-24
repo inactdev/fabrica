@@ -11,17 +11,33 @@ about how the loop itself works.
 
 ## Installing it
 
-The Client-facing install is `npm install -g github:inactdev/fabrica`
-(README.md's "Installing the command" has the full walkthrough) - a
-frozen, standalone copy, verified against a real install: npm clones
-the repo, runs `prepare` (`scripts/write-build-info.mjs`, while `.git`
-still exists) to record the exact commit being installed into
-`build-info.json`, then packs and installs that tree with `.git`
-stripped - confirmed empirically, npm sets no `gitHead` either for a
-global git install, so `build-info.json` is the only record of which
-commit an installed copy actually is. `doctor-command.ts`'s
-`detectCopy` reads that file when no `.git` is present; it reads live
-git state instead when one is (a `npm link`'d dev checkout, below).
+The Client-facing install is three steps - clone the repository into a
+throwaway directory, `npm pack` from inside that clone, `npm install -g`
+the tarball (README.md's "Installing the command" has the full
+walkthrough, and `npm-prefix.ts`'s `clonePackInstallProcedure` is the one
+spelling of it everything prints). It lands a frozen, standalone copy
+whose `prepare` run (`scripts/write-build-info.mjs`, while the clone's
+`.git` still exists) recorded the exact commit being installed into
+`build-info.json`, before npm's packing stripped `.git` out of what
+landed - and npm sets no `gitHead` either for a git install, confirmed
+empirically, so `build-info.json` is the only record of which commit an
+installed copy actually is. `doctor-command.ts`'s `detectCopy` reads that
+file when no `.git` is present; it reads live git state instead when one
+is (a `npm link`'d dev checkout, below).
+
+**Why the clone, rather than `npm install -g github:inactdev/fabrica`.**
+npm fetches a *hosted* GitHub spec - that shorthand, and every
+`git+https`/`git+ssh` spelling of it, all of which npm resolves to the
+same codeload tarball - as GitHub's own tarball of the tree, which
+carries no `.git` at all. The `prepare` step then has nothing to read the
+commit from (verified: that tarball's `build-info.json` was
+`{"commit":null}`, on npm 11.16.0 / Node 24.18.0), and npm hands the step
+no field naming it either - `npm_package_resolved`, the one field that
+could, is the cache directory npm extracted into. So that install lands a
+copy that cannot say which commit it is, `fabrica doctor` reports `commit
+unknown`, and `fabrica up` stops on the FAIL. A real clone has `.git`, so
+packing from inside it records the commit exactly as a developer checkout
+does.
 
 For developing Fabrica itself:
 
@@ -41,10 +57,10 @@ is mid-edit or mid-merge, which the global install above exists to
 avoid for anyone who isn't actively changing this repo's code.
 
 `npm unlink -g fabrica` undoes it - and has to, before the global
-install will work at all: the symlink `npm link` leaves behind makes
-`npm install -g github:inactdev/fabrica` fail with `ENOTDIR` (issue
-#171). `fabrica doctor` reports a leftover one with that exact fix; see
-"The `npm link` check" below.
+install will work at all: the symlink `npm link` leaves behind makes any
+global install of `fabrica` fail with `ENOTDIR` (issue #171). `fabrica
+doctor` reports a leftover one with that exact fix; see "The `npm link`
+check" below.
 
 ## `fabrica register <path> --check "<command>" --image <image>`
 
@@ -392,11 +408,14 @@ behind) - either way `checkoutCheck` also reports whether that commit
 is current via one side-effect-free `git ls-remote
 https://github.com/inactdev/fabrica.git master` (no local fetch, so no
 ref anywhere is mutated), never failing the check on its own, only
-`FAIL`ing outright when an installed copy has no `build-info.json` to
-read at all (naming reinstall as the fix); **any leftover `npm link`
+`FAIL`ing outright when an installed copy cannot say which commit it is -
+`commit unknown`, carrying whatever `build-info.json` itself recorded
+about why (or that there is no such file), with the clone-then-pack
+install procedure as the fix, never the one-step GitHub-spec install that
+produces that state; **any leftover `npm link`
 symlink** standing where an installed copy belongs (issue #171 - while
-one is at `<prefix>/lib/node_modules/fabrica`, `npm install -g
-github:inactdev/fabrica` fails with `ENOTDIR`, so this check prints
+one is at `<prefix>/lib/node_modules/fabrica`, any global install of
+`fabrica` fails with `ENOTDIR`, so this check prints
 `npm unlink -g fabrica`, carrying `--prefix` when the leftover isn't at
 npm's own prefix; see "The `npm link` check" below for which prefixes
 are looked in and why a deliberately linked checkout is not a failure);
@@ -579,9 +598,11 @@ the way `fabrica doctor`'s own "checkout" check does - reusing
 copy of that logic. A developer checkout refuses, before touching
 anything, if it isn't on `master` or has uncommitted changes
 (`git status --porcelain` non-empty); otherwise it runs
-`git pull --ff-only origin master`. An installed copy is replaced in two
-npm steps (`global-reinstall.ts`): `npm pack github:inactdev/fabrica
---pack-destination <throwaway dir>`, then `npm install -g` of the
+`git pull --ff-only origin master`. An installed copy is replaced in
+three steps (`global-reinstall.ts`): `git clone --depth 1 --branch master
+https://github.com/inactdev/fabrica.git <throwaway dir>/fabrica`, then
+`npm pack --pack-destination <throwaway dir>` **run inside that clone**,
+then `npm install -g` of the
 tarball that landed there, with `--prefix` set to the prefix that copy
 is installed under - derived from its own path by `npm-prefix.ts`'s
 `prefixOfGlobalInstall`, never asked of npm, whose *default* global
@@ -593,30 +614,45 @@ into its own cache, under no prefix at all - is refused outright, naming
 the install command, instead of being reinstalled somewhere it never
 lived.
 
-**Why packing first, rather than one `npm install -g
-github:inactdev/fabrica`.** That one-step form does not install a copy
-of the package at all: npm clones the repo into its own cache, symlinks
-`<prefix>/lib/node_modules/fabrica` at the clone, and then deletes the
-clone. Reproduced on npm 11.16.0 / Node 24.18.0 on Linux - the install
-reports "added 1 package" and the installed `fabrica` is immediately
-"No such file or directory"; the Client hit the same thing from the
-other side, as a dependency's postinstall dying with `ENOENT` in a
-folder that no longer exists, and `--ignore-scripts` leaving the
-dangling symlink behind. `npm pack` of the same spec runs the package's
-own `prepare` script (so `build-info.json`, the commit `fabrica doctor`
-reads off an installed copy, is inside the tarball) and installing that
-tarball unpacks a **real directory** with a working executable.
+**Why not one `npm install -g github:inactdev/fabrica`.** That one-step
+form does not install a copy of the package at all: npm clones the repo
+into its own cache, symlinks `<prefix>/lib/node_modules/fabrica` at the
+clone, and then deletes the clone. Reproduced on npm 11.16.0 / Node
+24.18.0 on Linux - the install reports "added 1 package" and the
+installed `fabrica` is immediately "No such file or directory"; the
+Client hit the same thing from the other side, as a dependency's
+postinstall dying with `ENOENT` in a folder that no longer exists, and
+`--ignore-scripts` leaving the dangling symlink behind. Packing and then
+installing a tarball unpacks a **real directory** with a working
+executable instead.
+
+**And why the clone, rather than `npm pack github:inactdev/fabrica`**,
+which is what this did until the commit became the point. npm fetches a
+hosted GitHub spec as GitHub's own tarball of the tree, with no `.git` in
+it, so the `prepare` script runs with nothing to read the commit from and
+npm names it in no field either - the installed copy then cannot say
+which commit it is, which is a `fabrica doctor` FAIL and stops `fabrica
+up` (see "Installing it" above for the full evidence). Packing from
+inside a real clone records the commit exactly as a developer checkout
+does, and the `prepare` run is what puts `build-info.json` in the tarball
+at all - which is why no step passes `--ignore-scripts`.
+
 `--prefix` is passed to the install step only: npm forces a *non-global*
 command to run inside whatever `--prefix` names, and `pack` is one. The
-staging directory is read to find `fabrica-*.tgz` rather than handed to
-npm as a glob - npm is spawned directly, with no shell to expand one -
-and zero tarballs, or more than one, is reported rather than guessed at.
-Both commands are spelled once, in `npm-prefix.ts`
-(`packCommandArgs`/`installTarballCommandArgs`), and a failure's message
-names whichever one really failed. `npm install -g
-github:inactdev/fabrica` is still the install a *person* runs (README.md,
-and `fabrica doctor`'s "reinstall with" fix) - whether that documented
-first install should become the two-step form too is the Client's call.
+pack step runs **inside the clone**, which is what makes the clone the
+package being packed; the install step runs there too, since a global
+install started in a directory npm cannot read a `package.json` in has
+been seen to fail with an `ENOENT` about that file. The staging directory
+is read to find `fabrica-*.tgz` rather than handed to npm as a glob - npm
+is spawned directly, with no shell to expand one - and zero tarballs, or
+more than one, is reported rather than guessed at. All three commands are
+spelled once, in `npm-prefix.ts` (`cloneCommandArgs`,
+`packInCloneCommandArgs`, `installTarballCommandArgs`, plus
+`clonePackInstallProcedure` for printing them to a person), and a
+failure's message names whichever one really failed. The same three steps
+are the install a *person* runs (README.md, and `fabrica doctor`'s fix
+for a copy whose commit is unknown), so what is advised and what is run
+cannot drift.
 
 Then **Inspector comes forward too** - unconditionally, with no flag to
 skip it (Client ruling: "update means everything comes forward"). The
@@ -1178,9 +1214,9 @@ already recorded, and the response says `signaled: false`.
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). Issue #99 adds the reporting side on top of that same verification, for `status`/`watch`: `probeTaskWorker` (`alive`/`not-found`/`unknown`), `cachedProcessTable`, and `WORKER_PROBE_INTERVAL_MS`. |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
-| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); reinstalling an installed copy is `global-reinstall.ts`'s two npm steps, whose own failure message names the step that failed, printed through verbatim rather than reconstructed here; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
-| `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus every npm command those prefixes are for, each spelled exactly once: `INSTALL_SPEC`/`installCommandArgs` (the documented install a person runs, shared by every message that prints it) and `packCommandArgs`/`installTarballCommandArgs`/`isPackedTarball` (the two `fabrica update` really runs, and the tarball name it looks for between them). Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
-| `global-reinstall.ts` | Replacing an installed copy with the current code at `INSTALL_SPEC`, as `npm pack` into a throwaway staging directory followed by `npm install -g` of the tarball - because installing the git spec directly symlinks the package at a clone npm then deletes (reproduced; see the `fabrica update` section above). One injected `GlobalReinstallIo` covers every step that touches the machine, so its tests assert the exact argv npm is handed without running npm, making a directory, or reaching the network. Also home to `commandFailureMessage` (stderr if the command said anything, node's own message otherwise), which `update-command.ts`'s `git` calls share. |
+| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); reinstalling an installed copy is `global-reinstall.ts`'s clone, pack and install steps, whose own failure message names the step that failed, printed through verbatim rather than reconstructed here; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
+| `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus every command those prefixes are for, each spelled exactly once: `UPSTREAM_GIT_URL`/`UPSTREAM_BRANCH`, the three steps that install a copy which knows its own commit (`cloneCommandArgs`, `packInCloneCommandArgs`, `installTarballCommandArgs`, with `isPackedTarball` for the tarball name between them), and `clonePackInstallProcedure`, those same three built into one pasteable line for every message that prints them - so the procedure advised and the procedure run cannot drift. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
+| `global-reinstall.ts` | Replacing an installed copy with the current code on master, as a `git clone` into a throwaway staging directory, an `npm pack` run inside that clone, and an `npm install -g` of the tarball - because installing the git spec directly symlinks the package at a clone npm then deletes, and packing that spec packs a tree with no `.git`, leaving the installed copy unable to name its commit (both reproduced; see the `fabrica update` section above). One injected `GlobalReinstallIo` covers every step that touches the machine, so its tests assert the exact argv git and npm are handed, and the directory each runs in, without running either, making a directory, or reaching the network - with `installed-commit.test.ts` running the whole chain for real against a local remote. Also home to `commandFailureMessage` (stderr if the command said anything, node's own message otherwise), which `update-command.ts`'s `git` calls share. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |

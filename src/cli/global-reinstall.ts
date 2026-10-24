@@ -1,10 +1,10 @@
-// Replacing an installed copy of `fabrica` with the current code at
-// `github:inactdev/fabrica` - the installed-copy half of `fabrica
-// update`, as two npm commands rather than one.
+// Installing a copy of `fabrica` from the current code on master - the
+// installed-copy half of `fabrica update`, as three commands rather than
+// one.
 //
-// Why two. `npm install -g github:inactdev/fabrica` does not install a
-// copy of the package at all: npm clones the repo into its own cache
-// (`~/.npm/_cacache/tmp/git-clone*`), then *symlinks*
+// Why not one `npm install -g github:inactdev/fabrica`. That form does
+// not install a copy of the package at all: npm clones the repo into its
+// own cache (`~/.npm/_cacache/tmp/git-clone*`), then *symlinks*
 // `<prefix>/lib/node_modules/fabrica` at that clone and deletes it -
 // reproduced on npm 11.16.0 / Node 24.18.0 on Linux with a `git+file://`
 // spec, where the install reported "added 1 package" and the installed
@@ -14,23 +14,35 @@
 // already removing, and `--ignore-scripts` leaving the dangling symlink
 // behind.
 //
-// Packing first sidesteps all of it. `npm pack <spec>` runs the
-// package's own `prepare` script and writes the published tarball (so
-// `build-info.json`, the commit `fabrica doctor` reads off an installed
-// copy, is in it), and installing that tarball unpacks a real directory
-// with a working executable - both verified the same way, on the same
-// npm. The exact commands are spelled once, in npm-prefix.ts.
+// Why not `npm pack github:inactdev/fabrica` either, which is what this
+// did until the commit became the point. npm fetches a *hosted* GitHub
+// spec as GitHub's own tarball of the tree, which carries no `.git`, so
+// the `prepare` script runs with nothing to read the commit from and the
+// installed copy cannot say which commit it is (verified: that tarball's
+// `build-info.json` was `{"commit":null}`). Cloning first puts a real
+// `.git` where `prepare` runs, so the tarball carries the commit and
+// `fabrica doctor` can report it.
+//
+// So: clone into a throwaway directory, pack from inside the clone,
+// install that tarball. The exact commands are spelled once, in
+// npm-prefix.ts.
 //
 // Everything that touches the machine is one injected interface
-// (`GlobalReinstallIo`), so the tests here assert the exact argv npm is
-// handed without ever running npm, making a temp directory, or reaching
-// the network.
+// (`GlobalReinstallIo`), so the tests here assert the exact argv git and
+// npm are handed, and the directory each is run in, without ever running
+// either, making a temp directory, or reaching the network.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installTarballCommandArgs, isPackedTarball, packCommandArgs } from "./npm-prefix.ts";
+import {
+  GLOBAL_PACKAGE_NAME,
+  cloneCommandArgs,
+  installTarballCommandArgs,
+  isPackedTarball,
+  packInCloneCommandArgs,
+} from "./npm-prefix.ts";
 
 /** How a command that was run reports itself: whether it worked, and
  * the one string worth showing the Client either way - the same shape
@@ -49,12 +61,19 @@ export function commandFailureMessage(err: unknown): string {
   return e?.message ?? String(err);
 }
 
-/** Every step that touches the machine, injectable as one object. */
+/** Every step that touches the machine, injectable as one object. Both
+ * command runners take the directory to run in: npm's own notion of
+ * where it is matters here (the pack step must run inside the clone for
+ * that clone to be the package it packs), and a global install run from
+ * a directory npm cannot read a `package.json` in has been seen to fail
+ * with an ENOENT about that file. */
 export interface GlobalReinstallIo {
-  /** Runs `npm` with exactly these args. */
-  npm(args: string[]): CommandOutcome;
-  /** A fresh, empty directory for the tarball, which nothing else
-   * writes into - so the one file in it afterwards is npm's. */
+  /** Runs `npm` with exactly these args, in `cwd`. */
+  npm(args: string[], cwd: string): CommandOutcome;
+  /** Runs `git` with exactly these args, in `cwd`. */
+  git(args: string[], cwd: string): CommandOutcome;
+  /** A fresh, empty directory to clone and pack into, which nothing else
+   * writes into - so the one tarball in it afterwards is npm's. */
   makeStagingDir(): string;
   /** The names (not paths) of the files in it. */
   readStagingDir(dir: string): string[];
@@ -63,15 +82,18 @@ export interface GlobalReinstallIo {
   removeStagingDir(dir: string): void;
 }
 
+function run(command: string, args: string[], cwd: string): CommandOutcome {
+  try {
+    const out = execFileSync(command, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return { ok: true, message: out.trim() };
+  } catch (err) {
+    return { ok: false, message: commandFailureMessage(err) };
+  }
+}
+
 export const realGlobalReinstallIo: GlobalReinstallIo = {
-  npm: (args) => {
-    try {
-      const out = execFileSync("npm", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-      return { ok: true, message: out.trim() };
-    } catch (err) {
-      return { ok: false, message: commandFailureMessage(err) };
-    }
-  },
+  npm: (args, cwd) => run("npm", args, cwd),
+  git: (args, cwd) => run("git", args, cwd),
   makeStagingDir: () => mkdtempSync(join(tmpdir(), "fabrica-update-")),
   readStagingDir: (dir) => readdirSync(dir),
   removeStagingDir: (dir) => {
@@ -84,11 +106,16 @@ export const realGlobalReinstallIo: GlobalReinstallIo = {
   },
 };
 
-/** Packs the current code at the documented spec into a staging
- * directory, then installs that tarball into `prefix` (npm's own default
- * prefix when `null`). Reports, never throws - and a failure's message
- * names the exact npm command that produced it, so what the Client reads
- * is what he can run himself.
+/** Where inside the staging directory the clone goes. A name of our own,
+ * so the tarball npm writes beside it is never mistaken for part of it
+ * and vice versa. */
+const CLONE_DIR_NAME = GLOBAL_PACKAGE_NAME;
+
+/** Clones master into a staging directory, packs the published tarball
+ * from inside that clone, then installs the tarball into `prefix` (npm's
+ * own default prefix when `null`). Reports, never throws - and a
+ * failure's message names the exact command that produced it, so what
+ * the Client reads is what he can run himself.
  *
  * The tarball is found by reading the staging directory rather than
  * passing npm a `fabrica-*.tgz` glob: npm is run directly, with no shell
@@ -97,10 +124,15 @@ export const realGlobalReinstallIo: GlobalReinstallIo = {
  * than guessed at. */
 export function reinstallGlobalCopy(prefix: string | null, io: GlobalReinstallIo): CommandOutcome {
   const staging = io.makeStagingDir();
+  const clone = join(staging, CLONE_DIR_NAME);
   try {
-    const packArgs = packCommandArgs(staging);
-    const packed = io.npm(packArgs);
-    if (!packed.ok) return failure(packArgs, packed.message);
+    const cloneArgs = cloneCommandArgs(clone);
+    const cloned = io.git(cloneArgs, staging);
+    if (!cloned.ok) return failure("git", cloneArgs, cloned.message);
+
+    const packArgs = packInCloneCommandArgs(staging);
+    const packed = io.npm(packArgs, clone);
+    if (!packed.ok) return failure("npm", packArgs, packed.message);
 
     const tarballs = io.readStagingDir(staging).filter(isPackedTarball);
     if (tarballs.length !== 1) {
@@ -113,8 +145,8 @@ export function reinstallGlobalCopy(prefix: string | null, io: GlobalReinstallIo
     }
 
     const installArgs = installTarballCommandArgs(prefix, join(staging, tarballs[0]));
-    const installed = io.npm(installArgs);
-    return installed.ok ? installed : failure(installArgs, installed.message);
+    const installed = io.npm(installArgs, clone);
+    return installed.ok ? installed : failure("npm", installArgs, installed.message);
   } finally {
     // Unconditional: the install copies the tarball in, so keeping it
     // afterwards serves nothing, and a failed run has no more use for it
@@ -123,8 +155,8 @@ export function reinstallGlobalCopy(prefix: string | null, io: GlobalReinstallIo
   }
 }
 
-function failure(args: string[], message: string): CommandOutcome {
-  return { ok: false, message: `npm ${args.join(" ")} failed: ${message}` };
+function failure(command: string, args: string[], message: string): CommandOutcome {
+  return { ok: false, message: `${command} ${args.join(" ")} failed: ${message}` };
 }
 
 function describeWrongTarballCount(tarballs: string[]): string {

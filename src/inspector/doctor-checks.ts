@@ -180,8 +180,8 @@ export function inspectorInstallCommand(mainCommit: string): string {
 /** The args behind that one spelling, for the caller that *runs* it
  * (`goInstallInspector`) rather than printing it - so a message can
  * never name a command different from the one that really runs, the same
- * rule npm-prefix.ts's `installCommandArgs` follows for Fabrica's own
- * install. */
+ * rule npm-prefix.ts's `clonePackInstallProcedure` follows for Fabrica's
+ * own install. */
 export function inspectorInstallArgs(revision: string): string[] {
   return ["install", `${INSPECTOR_PACKAGE_PATH}@${revision}`];
 }

@@ -25,11 +25,14 @@ import {
 } from "../index.ts";
 import { CliError } from "./errors.ts";
 import {
+  clonePackInstallProcedure,
+  GLOBAL_PACKAGE_NAME,
   globalPackagePath,
-  installCommandArgs,
   normalizedPrefix,
   prefixOfGlobalBin,
   prefixOfGlobalInstall,
+  UPSTREAM_BRANCH,
+  UPSTREAM_GIT_URL,
 } from "./npm-prefix.ts";
 import { resolveRecordHome } from "./record-home.ts";
 
@@ -85,9 +88,8 @@ export interface DoctorProbes {
   node(): DoctorCheck;
   checkout(): DoctorCheck;
   /** A leftover `npm link` symlink sitting where an installed copy
-   * belongs (issue #171) - `npm install -g github:inactdev/fabrica`
-   * fails with ENOTDIR while one is there, and the fix is one
-   * command. */
+   * belongs (issue #171) - any global install of `fabrica` fails with
+   * ENOTDIR while one is there, and the fix is one command. */
   npmLink(): DoctorCheck;
   docker(): DoctorCheck;
   workerImage(): DoctorCheck;
@@ -111,21 +113,24 @@ const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 /** `fabrica` can run from two different kinds of copy (issue: installable
  * from zero): a developer's own checkout, linked in with `npm link` (has
  * a real `.git`, lives on a branch, moves every time the checkout does),
- * or a frozen copy `npm install -g github:inactdev/fabrica` extracted
- * (no `.git` at all - npm's packing strips it, and sets no `gitHead`
- * either, verified against a real global install - so its commit comes
- * from `build-info.json` instead, written at `prepare` time by
- * `scripts/write-build-info.mjs` while `.git` still existed, before that
- * strip). */
+ * or a frozen copy npm extracted (no `.git` at all - npm's packing strips
+ * it, and sets no `gitHead` either, verified against a real global
+ * install - so its commit comes from `build-info.json` instead, written
+ * at `prepare` time by `scripts/write-build-info.mjs` while `.git` still
+ * existed, before that strip). */
 export interface CopyInfo {
   kind: "dev-checkout" | "installed";
   root: string;
   branch: string | null;
   commit: string | null;
   version: string;
+  /** Installed copies with no commit to report: why, in the words of
+   * whatever could not produce one - the named failure
+   * `build-info.json` itself records when the `prepare` step had no
+   * source for the commit, or the absence of that file. Left unset
+   * whenever `commit` is a real commit. */
+  commitUnknownReason?: string;
 }
-
-const UPSTREAM_REPO = "https://github.com/inactdev/fabrica.git";
 
 /** The Node version the check box runs - .inspector.json's image tag - is
  * the one this suite is known to pass on. */
@@ -165,12 +170,17 @@ export function checkoutCheck(copy: CopyInfo, remoteMasterCommit: string | null)
       return {
         ok: false,
         label,
-        detail: `installed copy at ${copy.root} has no build-info.json, so its commit is unknown`,
-        // Into the prefix this copy actually lives under whenever its
-        // own path says which (issue #171's other half): npm's default
-        // global prefix is read-only on some hosts, so the bare command
-        // is only the right advice when nothing names a prefix.
-        fix: `reinstall with: npm ${installCommandArgs(prefixOfGlobalInstall(copy.root)).join(" ")}`,
+        detail: `installed copy v${copy.version} at ${copy.root}: commit unknown - ${copy.commitUnknownReason ?? "nothing in it records one"}`,
+        // The clone-pack-install procedure, never a one-step install of
+        // the GitHub spec: npm fetches that spec as GitHub's tarball of
+        // the tree, with no `.git` for the `prepare` step to read the
+        // commit from, so advising it here would advise the very install
+        // that produced this line. Into the prefix this copy actually
+        // lives under whenever its own path says which (issue #171's
+        // other half): npm's default global prefix is read-only on some
+        // hosts, so an unprefixed install is only the right advice when
+        // nothing names a prefix.
+        fix: `fabrica update, or by hand: ${clonePackInstallProcedure(prefixOfGlobalInstall(copy.root))}`,
       };
     }
     return { ok: true, label, detail: `installed copy v${copy.version}, commit ${short(copy.commit)} (${behindNote})` };
@@ -265,7 +275,7 @@ export function npmLinkCheck(sites: NpmLinkSite[], copy: CopyInfo): DoctorCheck 
   return {
     ok: false,
     label,
-    detail: `${path} is ${what} - npm ${installCommandArgs(null).join(" ")} fails with ENOTDIR while it is there`,
+    detail: `${path} is ${what} - any npm install -g of ${GLOBAL_PACKAGE_NAME} fails with ENOTDIR while it is there`,
     fix: leftover.npmDefault ? "npm unlink -g fabrica" : `npm unlink -g --prefix ${leftover.prefix} fabrica`,
   };
 }
@@ -328,12 +338,38 @@ function readPackageVersion(root: string): string {
   }
 }
 
-function readBuildInfoCommit(root: string): string | null {
+/** What an installed copy's `build-info.json` says about its commit: the
+ * commit itself, or - when the `prepare` step that wrote the file had no
+ * source for one, or there is no file at all - the reason to report
+ * instead. Never both, and never a bare `null` standing in for either,
+ * since "which commit is this" and "why doesn't it know" are different
+ * questions and the Client is owed the second one's answer too. */
+function readBuildInfo(root: string): { commit: string | null; reason?: string } {
+  let raw: string;
   try {
-    return (JSON.parse(readFileSync(join(root, "build-info.json"), "utf8")) as { commit?: string | null }).commit ?? null;
+    raw = readFileSync(join(root, "build-info.json"), "utf8");
   } catch {
-    return null;
+    return { commit: null, reason: "there is no build-info.json in it to record one" };
   }
+  let parsed: { commit?: string | null; error?: string | null };
+  try {
+    parsed = JSON.parse(raw) as { commit?: string | null; error?: string | null };
+  } catch {
+    return { commit: null, reason: `its build-info.json is not readable JSON` };
+  }
+  if (typeof parsed.commit === "string" && parsed.commit !== "") return { commit: parsed.commit };
+  // An empty commit is what `scripts/write-build-info.mjs` writes when
+  // neither of its sources could name one, alongside the named failure
+  // reported here verbatim. A `null` or absent commit is the same state
+  // written by a copy built before that script said why (its
+  // `{"commit":null}`), so it gets the one honest reason available.
+  return {
+    commit: null,
+    reason:
+      typeof parsed.error === "string" && parsed.error !== ""
+        ? parsed.error
+        : "its build-info.json records no commit, and does not say why",
+  };
 }
 
 /** `.git` (directory, or a worktree's gitdir-pointer file - either way
@@ -352,7 +388,15 @@ export function detectCopy(root: string, gitIn: (args: string[]) => string | nul
       version,
     };
   }
-  return { kind: "installed", root, branch: null, commit: readBuildInfoCommit(root), version };
+  const { commit, reason } = readBuildInfo(root);
+  return {
+    kind: "installed",
+    root,
+    branch: null,
+    commit,
+    version,
+    ...(reason === undefined ? {} : { commitUnknownReason: reason }),
+  };
 }
 
 /** The one value `fabrica doctor`'s own "checkout" line reports as this
@@ -381,7 +425,7 @@ export function runningCopyCommit(root: string): string | null {
  * which doctor (claims to, and should) never touch. */
 function fetchRemoteMasterCommit(): string | null {
   try {
-    const out = execFileSync("git", ["ls-remote", UPSTREAM_REPO, "master"], {
+    const out = execFileSync("git", ["ls-remote", UPSTREAM_GIT_URL, UPSTREAM_BRANCH], {
       encoding: "utf8",
       timeout: 10_000,
       stdio: ["ignore", "pipe", "ignore"],
