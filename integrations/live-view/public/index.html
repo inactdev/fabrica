@@ -19,6 +19,12 @@
     <span id="spend">Loading…</span>
     <span id="error" hidden></span>
   </div>
+  <!-- Issue #204: the skip rules' shadow counts. Hidden until the
+       server sends a line (it sends null when no project has a rules
+       file), so an opted-out record home shows no empty row. -->
+  <div class="toolbar-row toolbar-sub">
+    <span id="shadow" hidden></span>
+  </div>
 </header>
 
 <main>

@@ -25,6 +25,7 @@ import {
   modelFromEvents,
   readerFailureCount,
   refusalFor,
+  shadowCountsLine,
   SPEND_UNKNOWN_LINE,
   standingOf,
   stateOf,
@@ -150,6 +151,13 @@ opens with "${SPEND_UNKNOWN_LINE}" and the \`fabrica cost\` command
 that clears each one. That line is read from the record on every run,
 so it stays until the real cost is recorded.
 
+A third opening line appears for a record home whose projects have skip
+rules (issue #204): "skip rules (shadow, nothing closes): 12 would have
+closed, 11 you accepted, 1 you did not". Shadow mode only - no task has
+ever closed by rule, and every one of those still waited on your
+verdict. \`fabrica shadow-report\` breaks the same numbers down per
+project and kind. Absent entirely when no project has a rules file.
+
 A projects.toml that will not parse is printed on this listing's very
 first line - the file's path, the line the parser stopped on, and what it
 objected to - and the listing then runs anyway: tasks come from the
@@ -259,6 +267,15 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     // new work. A flat-rate subscription's windows cost no dollars, so
     // nothing above this line can show them.
     stdout(formatMetersLine(standingOf(latestMeterReading(allEvents), now), config.pause));
+
+    // Issue #204, shadow mode: what the skip rules would have done, as
+    // one count line - the same string the live view's header shows,
+    // from the same function, so the terminal and the phone can never
+    // disagree. Null (and so no line at all) for a record home where no
+    // project has a rules file: there is nothing to report, and "0 would
+    // have closed" would imply a file that exists and is doing nothing.
+    const shadowLine = shadowCountsLine(byTask, now);
+    if (shadowLine !== null) stdout(shadowLine);
 
     // Rule 10 (issue #11, Client ruling 2026-10-08): derived from the
     // record on every run, closed tasks included, so the block survives
