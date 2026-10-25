@@ -75,7 +75,7 @@ test("an answered round that throws appends task-failed too", async () => {
     model: "x",
     async ask() {
       asked = true;
-      return { questions: ["Which database?"] };
+      return { question: { question: "Which database?", options: ["Postgres", "SQLite"] } };
     },
     async work() {
       throw new Error("worker unreachable on resume");

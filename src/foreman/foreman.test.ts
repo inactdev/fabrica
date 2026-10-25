@@ -97,7 +97,7 @@ test("status() lists an asking task as asking, and answer() moves it on", async 
 
   const asked = await foreman.do("build me an app", {
     project,
-    brain: fakeBrain({ askQuestions: ["Which database?"] }),
+    brain: fakeBrain({ askQuestion: { question: "Which database?", options: ["Postgres", "SQLite"] } }),
   });
   assert.equal(asked.state, "asking");
 
@@ -119,7 +119,7 @@ test("answer() reuses the exact brain a same-instance do() call was given", asyn
   const recordHome = freshHome();
   const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
   const project = makeFixtureRepo("exit 0");
-  const brain = fakeBrain({ askQuestions: ["Which?"] });
+  const brain = fakeBrain({ askQuestion: { question: "Which?", options: ["This", "That"] } });
 
   const asked = await foreman.do("build me an app", { project, brain });
   await foreman.answer(asked.id, "An answer.");

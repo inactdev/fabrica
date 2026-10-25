@@ -240,6 +240,20 @@ export type FabricaEventName =
   | "inspector-called"
   | "inspection-finished"
   | "inspection-skipped"
+  /** A clarifying question did not arrive in the fixed shape and was
+   * turned away, with the machine asked again inside the same pass
+   * (issue #176). Details: `src/foreman/ask.ts`'s `AskRejectedDetails` -
+   * which call it was, why, in the same words the machine was given, and
+   * how many re-asks are left before the pass fails. One event per
+   * rejection; a rejection is never silent. Here rather than in the
+   * contract for the same reason as the names above it. */
+  | "ask-rejected"
+  /** A question came back whose id this task already had an answer for,
+   * so it was answered from the record instead of stopping the task to
+   * ask the Client the same thing twice (issue #175). Details:
+   * `src/foreman/ask.ts`'s `QuestionAutoAnsweredDetails`. `fabrica
+   * status` counts these. */
+  | "question-auto-answered"
   /** The Client stopped this task himself from the review page (issue
    * #203). Details: `src/foreman/stop.ts`'s `StoppedByOwnerDetails` -
    * who stopped it (the Tailscale login), and the worker's last

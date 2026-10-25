@@ -255,7 +255,38 @@ export { requireGitRoot } from "./foreman/index.ts";
 // the other disagrees with.
 export { formatShadowReport, shadowCountsLine, shadowReport, SKIP_RULES_PATH } from "./skiprules/index.ts";
 export type { ConditionAnswer, KindEvaluation, ShadowReport, ShadowRow, WouldCloseByRuleDetails } from "./skiprules/index.ts";
-export type { Brain, Caps, GateResult } from "../contract/surface.ts";
+export type { Caps, GateResult } from "../contract/surface.ts";
+// The brain socket and the clarifying step's fixed question shape
+// (issues #176/#175) - `Brain`/`BrainAskResult` come from src/brain,
+// which widens the ratified pair by the one field #176 added (see
+// src/brain/types.ts). Everything a surface outside src/ needs to show
+// or answer a question: the option bounds, the "other" Fabrica appends,
+// and the id pattern a `--question <id>` is checked against.
+export type { Brain, BrainAskResult, AskQuestion, RecordedQuestion } from "./brain/index.ts";
+export {
+  ASK_MAX_OPTIONS,
+  ASK_MIN_OPTIONS,
+  ASK_RESHAPE_LIMIT,
+  askShapeProblem,
+  deriveQuestionId,
+  isOtherOption,
+  OTHER_OPTION,
+  QUESTION_ID_PATTERN,
+} from "./brain/index.ts";
+export {
+  answeredQuestionsOf,
+  answerFor,
+  askedQuestionsOf,
+  renderAnswerRound,
+} from "./foreman/index.ts";
+export type {
+  AnswerDecision,
+  AnswerRecord,
+  AnswersGivenDetails,
+  AskedDetails,
+  AskRejectedDetails,
+  QuestionAutoAnsweredDetails,
+} from "./foreman/index.ts";
 export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
 
 // Config: the record home's project registry and caps (SPEC.md

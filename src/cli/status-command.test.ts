@@ -88,7 +88,7 @@ test("runStatusCommand: a project:<name> blocked-edit bucket never shows as a ta
   recordBlockedEditAttempt(recordHome, { tool: "Edit", cwd: project });
   const openTask = await createForeman({ recordHome, inspector: fixtureInspector() }).do("still open", {
     project,
-    brain: fakeBrain({ askQuestions: ["what should this do?"] }),
+    brain: fakeBrain({ askQuestion: { question: "what should this do?", options: ["This", "That"] } }),
   });
   const io = captureIo();
 
@@ -111,7 +111,7 @@ test("runStatusCommand: an unparseable projects.toml is the first line, and the 
   const project = makeFixtureRepo("exit 0");
   const openTask = await createForeman({ recordHome, inspector: fixtureInspector() }).do("still open", {
     project,
-    brain: fakeBrain({ askQuestions: ["what should this do?"] }),
+    brain: fakeBrain({ askQuestion: { question: "what should this do?", options: ["This", "That"] } }),
   });
   // Written after the task so registration itself isn't what breaks.
   writeFileSync(join(recordHome, "projects.toml"), `[caps]\nperDayUsd = 5\nthis is not [valid toml\n`);
@@ -670,7 +670,7 @@ test("runStatusCommand: an ask-failed task sorts after a task that's still genui
   );
   const openTask = await createForeman({ recordHome, inspector: fixtureInspector() }).do("still open", {
     project,
-    brain: fakeBrain({ askQuestions: ["what should this do?"] }),
+    brain: fakeBrain({ askQuestion: { question: "what should this do?", options: ["This", "That"] } }),
   });
   const io = captureIo();
 

@@ -3,8 +3,13 @@
 // times it is asked to work, and can be told to misbehave on purpose —
 // e.g. touching protected paths (rule 9) or doing nothing at all.
 
-import type { Brain, BrainAskResult, BrainWorkOptions } from "../surface.ts";
+import type { BrainWorkOptions } from "../surface.ts";
 import type { TranscriptEntry, WorkerWriteup } from "../surface.ts";
+// Issues #176/#175: the clarifying step's fixed question shape, which
+// src/brain/types.ts widens `BrainAskResult` by - imported from the
+// implementation for the same reason fake-inspector.ts and
+// fake-check-box.ts import their own seams from there.
+import type { AskQuestion, Brain, BrainAskResult } from "../../src/index.ts";
 
 /** The quiz the default write-up carries (issue #98): exactly three
  * questions with one-line answers, so an ordinary test still produces a
@@ -28,9 +33,11 @@ export function fakeBrain(
   opts: {
     onWork?: (workdir: string) => void;
     gateChanges?: string;
-    /** ask() returns these questions every time it's called. Omitted
-     * means the task always looks clear enough to proceed. */
-    askQuestions?: string[];
+    /** ask() returns this question every time it's called, in issue
+     * #176's fixed shape - one question with two to four options, no
+     * "other" of its own (Fabrica appends that). Omitted means the task
+     * always looks clear enough to proceed. */
+    askQuestion?: AskQuestion;
     /** Rule 10: each work() call reports this cost on a "usage"
      * transcript entry (contract/surface.ts's TranscriptEntry). Null
      * reports a cost the brain cannot say; omitted, no usage entry is
@@ -69,7 +76,7 @@ export function fakeBrain(
     },
     async ask(_brief: string): Promise<BrainAskResult> {
       const costUsd = opts.askCostUsd === undefined ? 0 : opts.askCostUsd;
-      return opts.askQuestions ? { questions: opts.askQuestions, costUsd } : { costUsd };
+      return opts.askQuestion ? { question: opts.askQuestion, costUsd } : { costUsd };
     },
     async work(brief: string, workdir: string, workOpts?: BrainWorkOptions) {
       calls += 1;

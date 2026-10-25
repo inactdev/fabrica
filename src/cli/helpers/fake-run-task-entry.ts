@@ -26,8 +26,8 @@ const setLogTaskId = prefixTaskLog();
 const { recordHome, projectPath, taskText, issue, model } = parseTaskEntryArgs(process.argv);
 
 try {
-  const askQuestions = taskText.includes("ASK_ME_SOMETHING")
-    ? ["What database should this use?", "Should it support multi-tenancy?"]
+  const askQuestion = taskText.includes("ASK_ME_SOMETHING")
+    ? { question: "What database should this use?", options: ["Postgres", "SQLite"] }
     : undefined;
   const askError = taskText.includes("ASK_FAILS_SOMETHING")
     ? new Error("simulated: the brain is unreachable (no credential configured)")
@@ -38,7 +38,7 @@ try {
   // `model` label, so a `--model` run through the real detached
   // mechanism records the declaration AND an actual model, the same way
   // the reference adapter's would.
-  await runTask(recordHome, projectPath, taskText, fakeBrain({ askQuestions, askError, ...(model ? { model } : {}) }), {
+  await runTask(recordHome, projectPath, taskText, fakeBrain({ askQuestion, askError, ...(model ? { model } : {}) }), {
     inspector: fixtureInspector(),
     checkBox: fixtureCheckBox().box,
     onTaskRegistered: setLogTaskId,

@@ -649,7 +649,15 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
           // out about a rejected key or an unknown model.
           throw new OpenAiCompatibleError("api-unreachable", result.error ?? `the clarifying call failed (${result.stopReason})`);
         }
-        return { questions: result.questions ?? [], costUsd: result.totalCostUsd };
+        // Issue #176: whatever the agent loop read off the model is
+        // handed straight to the Foreman - one question in the fixed
+        // shape, a wrong-shaped attempt for it to reject and re-ask, or
+        // neither when there is nothing to ask.
+        return {
+          ...(result.question !== undefined ? { question: result.question as BrainAskResult["question"] } : {}),
+          ...(result.questions !== undefined ? { questions: result.questions } : {}),
+          costUsd: result.totalCostUsd,
+        };
       } finally {
         if (ownScratchDir) rmSync(scratchDir, { recursive: true, force: true });
         rmSync(homeDir, { recursive: true, force: true });

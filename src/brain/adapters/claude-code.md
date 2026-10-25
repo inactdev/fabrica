@@ -77,8 +77,13 @@ resumes, so its home is minted and deleted per call.
 the same "materially ambiguous" line this codebase draws everywhere else -
 an ambiguity that would change what gets built, not something a reasonable
 person would fill in the same way every time - and instructs the model to
-answer with nothing but a JSON object: `{"questions": [...]}`, empty array
-meaning proceed. It also states plainly that the empty scratch dir is
+answer with nothing but a JSON object: `{"question": "...", "options":
+[...]}`, or `{"question": null}` meaning proceed. The shape rules
+themselves - one question, two to four options, no "other" of its own -
+are not restated here: the prompt carries `ASK_SHAPE_NOTICE` from
+`../ask-shape.ts`, the same wording the Foreman enforces against and
+every other adapter asks with, so two adapters can never ask for two
+different shapes (issue #176). It also states plainly that the empty scratch dir is
 deliberate - the project's files are not present at this step on purpose
 and will be there once work starts - so a worker asks only about what the
 Client wants, never "where is the code?" (that question kept coming back
@@ -88,13 +93,19 @@ must never leak into the work brief (`src/foreman/standing-question.ts`'s
 sentence would mislead. `parseAskResult` reads the terminal `result` line's `result`
 field (the same field `work()`'s error path already reads), stripping a
 fenced code block if the model wrapped its JSON in one despite the
-instruction. Entries that aren't non-blank strings are dropped from the
-list rather than voiding it, so one stray element can't lose a real
-question (`registerAndAsk` filters the same way). Anything that still
-isn't parseable, or has no usable question left, is treated as
-"nothing to ask" rather than
-failing the task - a formatting slip from the model shouldn't block work
-that was actually clear, matching this issue's own stated bias toward not
+instruction. It accepts the question flat (as the prompt asks for it) or
+nested under `"question"` - which of the instruction's two plausible
+readings the model picked is not worth a re-ask.
+
+What it deliberately does **not** do is clean up a wrong-shaped ask: a
+question with no options, too many, or the old free-form `questions`
+list is handed on exactly as it came, so `registerAndAsk` rejects it in
+the model's own hearing and has it ask again (`src/brain/README.md`'s
+`ask(brief)` section). Tidying here would make that re-ask unreachable.
+Output that is not an ask attempt at all - unparseable junk, no JSON -
+is still treated as "nothing to ask" rather than
+failing the task: a formatting slip from the model shouldn't block work
+that was actually clear, matching issue #8's own stated bias toward not
 over-asking. A genuine infrastructure failure (docker unreachable, a
 non-zero exit, no `result` line at all) still throws `ClaudeCodeError`
 exactly like `work()`'s equivalent failures - the defensive fallback

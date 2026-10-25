@@ -199,6 +199,24 @@ test("formatStatusLine: carries the model phrase on any state's line, and omits 
   assert.ok(!silent.includes("model:"), silent);
 });
 
+// Issue #175: "status shows the count" of the questions that answered
+// themselves from the record.
+test("formatStatusLine: counts questions answered from the record, and says nothing when there are none", () => {
+  const reused = formatStatusLine(
+    { id: "t1", state: "working" },
+    { project: "/proj", ageMs: 60_000, liveness: null, hasDelivery: false, autoAnswered: 2 }
+  );
+  assert.match(reused, /2 question\(s\) answered from the record/);
+
+  for (const autoAnswered of [0, undefined]) {
+    const quiet = formatStatusLine(
+      { id: "t1", state: "working" },
+      { project: "/proj", ageMs: 60_000, liveness: null, hasDelivery: false, autoAnswered }
+    );
+    assert.ok(!quiet.includes("answered from the record"), quiet);
+  }
+});
+
 test("formatStatusLine: flags a delivered task as awaiting verdict", () => {
   const line = formatStatusLine(
     { id: "t1", state: "delivered" },

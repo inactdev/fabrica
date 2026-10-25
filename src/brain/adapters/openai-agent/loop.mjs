@@ -365,27 +365,39 @@ export async function runAsk(job, emit, deps) {
     turnsCompleted: 1,
     totalCostUsd: usage.costUsd,
     session: job.sessionId,
-    questions: questionsFrom(content),
+    ...askedFrom(content),
   };
 }
 
 /**
- * The clarifying answer's questions. The model is asked for bare JSON
- * but may fence it anyway; anything that still is not the shape asked
- * for means "nothing to ask," never a failed task - over-asking and
- * crashing are both worse than proceeding (see ../../README.md's
- * `ask(brief)` section).
+ * The clarifying answer's one question, in issue #176's fixed shape.
+ * The model is asked for bare JSON but may fence it anyway; output that
+ * is not JSON at all means "nothing to ask," never a failed task -
+ * over-asking and crashing are both worse than proceeding (see
+ * ../../README.md's `ask(brief)` section).
+ *
+ * Output that IS an ask attempt and merely wrong-shaped is returned
+ * untouched, so the Foreman rejects it in the machine's own hearing and
+ * has it ask again (src/brain/ask-shape.ts) - the same reasoning as the
+ * reference adapter's own `parseAskResult`.
  * @param {string} text
- * @returns {string[]}
+ * @returns {{ question?: unknown, questions?: string[] }}
  */
-export function questionsFrom(text) {
+export function askedFrom(text) {
   const fenced = text.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   try {
-    const parsed = JSON.parse(fenced ? fenced[1] : text.trim());
-    const questions = /** @type {Record<string, unknown>} */ (parsed ?? {}).questions;
-    if (!Array.isArray(questions)) return [];
-    return questions.filter((q) => typeof q === "string" && q.trim().length > 0);
+    const parsed = /** @type {Record<string, unknown>} */ (JSON.parse(fenced ? fenced[1] : text.trim()) ?? {});
+    const question = parsed.question;
+    if (question && typeof question === "object") return { question };
+    if (typeof question === "string" && question.trim().length > 0) {
+      return { question: { question, options: Array.isArray(parsed.options) ? parsed.options : [] } };
+    }
+    if (Array.isArray(parsed.questions)) {
+      const kept = parsed.questions.filter((q) => typeof q === "string" && q.trim().length > 0);
+      if (kept.length > 0) return { questions: kept };
+    }
+    return {};
   } catch {
-    return [];
+    return {};
   }
 }

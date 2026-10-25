@@ -228,9 +228,25 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
       // view of that, not the source.
       stderr("");
       stderr("This task is materially ambiguous - answer before any work starts:");
-      outcome.questions.forEach((question, i) => stderr(`  ${i + 1}. ${question}`));
-      stderr("");
-      stderr(`  fabrica answer ${taskId} -m "<text>"`);
+      if (outcome.question) {
+        // Issue #176: one question, and a numbered menu to answer it
+        // from. The last option is always "other", which is the one that
+        // needs words of the Client's own.
+        stderr("");
+        stderr(`  ${outcome.question.question}`);
+        outcome.question.options.forEach((option, i) => stderr(`    ${i + 1}. ${option}`));
+        stderr("");
+        stderr(`  fabrica answer ${taskId} --option <1-${outcome.question.options.length}>`);
+        stderr(
+          `  fabrica answer ${taskId} --option ${outcome.question.options.length} -m "<text>"   (to answer in your own words)`
+        );
+      } else {
+        // An event recorded before #176 carries question text and no
+        // options; the record is append-only, so this stays readable.
+        outcome.questions.forEach((question, i) => stderr(`  ${i + 1}. ${question}`));
+        stderr("");
+        stderr(`  fabrica answer ${taskId} -m "<text>"`);
+      }
       return 0;
     }
 
