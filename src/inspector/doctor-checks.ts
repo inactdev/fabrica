@@ -1,11 +1,16 @@
-// `fabrica doctor`'s Inspector-side checks (Client ruling 2026-10-10): a
-// GitHub token Inspector can publish with, and an installed Inspector
-// that takes the -branch flag Fabrica calls it with and is not behind
-// origin main's tip. Never prints a token.
+// `fabrica doctor`'s Inspector-side check (Client ruling 2026-10-10): an
+// installed Inspector that takes the -branch flag Fabrica calls it with
+// and is not behind origin main's tip.
+//
+// The credential Inspector publishes with used to be checked here too,
+// as a "GitHub token" line. It is now a GitHub App token minted per
+// handoff (issue #187) and no longer Inspector-specific - every GitHub
+// call Fabrica makes goes through the same App - so that line lives in
+// `src/githubapp/doctor-checks.ts` instead.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { commitAncestry, type CommitAncestry } from "./ancestry.ts";
-import { resolveCommandPath, resolveGithubToken } from "./run.ts";
+import { resolveCommandPath } from "./run.ts";
 
 export interface InspectorCheck {
   ok: boolean;
@@ -24,21 +29,6 @@ export const INSPECTOR_REPO_URL = `https://${INSPECTOR_MODULE_PATH}.git`;
 /** Inspector's default branch is `main` (Fabrica's own is `master` - the
  * two are genuinely different, so neither side's probe is shared). */
 export const INSPECTOR_MAIN_REF = "refs/heads/main";
-
-export function githubTokenStatus(env: NodeJS.ProcessEnv = process.env): InspectorCheck {
-  const label = "GitHub token";
-  try {
-    const { source } = resolveGithubToken(env);
-    return { ok: true, label, detail: source === "GITHUB_TOKEN" ? "GITHUB_TOKEN is set" : "from gh auth token" };
-  } catch {
-    return {
-      ok: false,
-      label,
-      detail: "GITHUB_TOKEN is not set and `gh auth token` gave nothing",
-      fix: "run `gh auth login`",
-    };
-  }
-}
 
 /** What the installed Inspector binary itself records about the build it
  * came from - read back out of the executable, so it describes the

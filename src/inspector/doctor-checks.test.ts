@@ -1,6 +1,5 @@
-// `fabrica doctor`'s Inspector-side checks: a GitHub token Inspector can
-// use, and an installed Inspector that takes -branch and is not behind
-// origin main's tip.
+// `fabrica doctor`'s Inspector-side check: an installed Inspector that
+// takes -branch and is not behind origin main's tip.
 //
 // Every probe is faked here - a fake `inspector`, `go` and `git` on a
 // throwaway PATH, and an injected ancestry answer - so the default `npm
@@ -15,7 +14,6 @@ import { join } from "node:path";
 import type { CommitAncestry } from "./ancestry.ts";
 import {
   INSPECTOR_MODULE_PATH,
-  githubTokenStatus,
   inspectorBranchStatus,
   inspectorInstallArgs,
   inspectorInstallCommand,
@@ -92,27 +90,12 @@ function inspectorOn(info: string, tip: string | null): string {
   });
 }
 
-test("GitHub token: GITHUB_TOKEN set is OK, never showing it", () => {
-  const status = githubTokenStatus({ PATH: "/usr/bin:/bin", GITHUB_TOKEN: "fake-gh-1" });
-  assert.equal(status.ok, true);
-  assert.match(status.detail, /GITHUB_TOKEN/);
-  assert.ok(!JSON.stringify(status).includes("fake-gh-1"));
-});
-
-test("GitHub token: unset but gh auth token works is OK, never showing it", () => {
-  const status = githubTokenStatus({ PATH: pathWith("gh", "echo fake-gh-2") });
-  assert.equal(status.ok, true);
-  assert.match(status.detail, /gh auth token/);
-  assert.ok(!JSON.stringify(status).includes("fake-gh-2"));
-});
-
-test("GitHub token: unset and gh missing or logged out fails, with gh auth login as the fix", () => {
-  for (const PATH of ["/usr/bin:/bin", pathWith("gh", "exit 1")]) {
-    const status = githubTokenStatus({ PATH });
-    assert.equal(status.ok, false);
-    assert.match(status.fix ?? "", /gh auth login/);
-  }
-});
+// The GitHub-token line this file used to cover is gone: the credential
+// Inspector publishes with is now a GitHub App token minted per handoff
+// (issue #187), and that check lives in
+// src/githubapp/doctor-checks.test.ts because it is no longer
+// Inspector-specific - every GitHub call Fabrica makes goes through the
+// same App.
 
 test("Inspector: on PATH, -h shows -branch, built from origin main's tip is OK", () => {
   const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_AT_MAIN, MAIN_TIP) }, "inspector", ancestry());

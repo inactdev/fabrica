@@ -13,21 +13,33 @@
 // leaves the round on Inspector's own verdict - exactly what it did
 // before this existed.
 
-import { resolveGithubToken } from "../inspector/index.ts";
 import { parsePullRequestUrl } from "./pull-request.ts";
 import { pollPullRequestChecks } from "./poll.ts";
 import type { PollOptions } from "./poll.ts";
 import { summarizeChecks } from "./report.ts";
-import type { ChecksReport } from "./types.ts";
+import type { ChecksReport, PullRequestRef } from "./types.ts";
 
 export interface ReadChecksOptions extends Omit<PollOptions, "token"> {
-  /** Resolved from Fabrica's own environment when omitted - the same
-   * token, from the same resolver, Inspector publishes with (issue
-   * #103's `resolveGithubToken`). Tests pass one directly. */
+  /** The token every read in this module uses. Tests pass one directly;
+   * the production caller passes `mintToken` instead. */
   token?: string;
-  /** The environment the token is resolved from. Fabrica's own by
-   * default; never modified. */
-  env?: NodeJS.ProcessEnv;
+  /**
+   * Asked for a token once the pull request's own repository is known
+   * (issue #187): the whole read is one GitHub App token scoped to that
+   * repository, with only the four read permissions these endpoints
+   * need (`src/githubapp/scopes.ts`'s `READ_CHECKS_PERMISSIONS`).
+   *
+   * One token for the whole poll rather than one per tick, deliberately:
+   * an installation token lives an hour and the bounded wait is twenty
+   * minutes, so a mint per tick would be a hundred extra API calls and a
+   * hundred extra record entries for no narrowing at all - the scope is
+   * identical every time.
+   *
+   * Reached only when `token` is not given. With neither, the read is
+   * reported unreadable naming the setup step, never attempted
+   * anonymously.
+   */
+  mintToken?: (ref: PullRequestRef) => Promise<string>;
 }
 
 /**
@@ -46,12 +58,15 @@ export async function readPullRequestChecks(
 
   let token: string;
   try {
-    token = opts.token ?? resolveGithubToken(opts.env ?? process.env).token;
+    if (opts.token !== undefined) token = opts.token;
+    else if (opts.mintToken !== undefined) token = await opts.mintToken(ref);
+    else throw new Error("no GitHub App token source was given for reading this pull request's checks");
   } catch (err) {
-    // The token is Inspector's own, and Inspector has already published
-    // with it by the time this runs - so this is nearly unreachable in
-    // practice. Reported rather than thrown all the same: the round's
-    // work is done and must not be lost to a credential problem.
+    // Inspector has already pushed and opened the pull request through
+    // the same App by the time this runs, so a mint failing here is
+    // nearly unreachable in practice. Reported rather than thrown all
+    // the same: the round's work is done and must not be lost to a
+    // credential problem.
     return unreadableReport(prUrl, err);
   }
 

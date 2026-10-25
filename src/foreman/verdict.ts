@@ -30,6 +30,7 @@ import {
 import { checksCorrection } from "../ci/index.ts";
 import { prepareRound, skipIfUnchanged } from "./judge.ts";
 import type { ChecksReader } from "./ci-checks.ts";
+import type { TokenMinter } from "../githubapp/index.ts";
 import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
@@ -235,7 +236,7 @@ export function recordVerdictDecision(
 export async function runRecordedFix(
   recordHome: string,
   taskId: string,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; minter?: TokenMinter; caps?: Caps }
 ): Promise<void> {
   const details = latestDeliveredDetails(recordHome, taskId);
   const totalAttempts = details?.totalAttempts;
@@ -291,6 +292,7 @@ export async function runRecordedFix(
         inspector: opts.inspector,
         checkBox: opts.checkBox,
         checksReader: opts.checksReader,
+        minter: opts.minter,
         caps: opts.caps,
       })
     );
@@ -308,7 +310,7 @@ export async function recordVerdict(
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; minter?: TokenMinter; caps?: Caps }
 ): Promise<void> {
   recordVerdictDecision(recordHome, taskId, ruling, note, { caps: opts.caps });
   if (ruling !== "fix") return;
@@ -397,6 +399,9 @@ async function runFixRound(
     /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
      * the pull request's real checks from GitHub. */
     checksReader?: ChecksReader;
+    /** Issue #187's seam: where this round's GitHub App tokens are
+     * minted from. Omitted uses the real App on this machine. */
+    minter?: TokenMinter;
     caps?: Caps;
   }
 ): Promise<void> {
@@ -412,6 +417,7 @@ async function runFixRound(
     inspector,
     checkBox,
     checksReader,
+    minter,
     caps,
   } = ctx;
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
@@ -492,6 +498,7 @@ async function runFixRound(
       checkBox,
       closesIssue,
       checksReader,
+      minter,
       // Read at each handoff, not now: on the conflict path the rebase
       // is still stopped at this point and `lease` is only settled once
       // the host has finished it, inside `beforeCommit` below.

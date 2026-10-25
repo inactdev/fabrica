@@ -28,6 +28,7 @@ import { sweepTaskNetworks } from "./task-networks.ts";
 import { fetchTaskIssue, parseIssueArgOrRefuse, withIssueText } from "./task-issue.ts";
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
 import type { IssueReader } from "./task-issue.ts";
+import type { TokenMinter } from "../githubapp/index.ts";
 import type { Caps } from "../../contract/surface.ts";
 
 /** SPEC.md step 5's default: one attempt, and on red one fix pass with
@@ -88,10 +89,14 @@ export async function registerAndAsk(
      * round to re-derive. */
     issue?: number | string;
     /** Where that issue is read from. Omitted uses the real GitHub,
-     * with the token Inspector publishes with; tests supply a fake
+     * with a GitHub App token minted for the issue's own repository and
+     * only `issues: read` (issue #187); tests supply a fake
      * (src/foreman/helpers/fake-issue-reader.ts) so no suite ever needs
      * a token or a network. */
     issueReader?: IssueReader;
+    /** Only reached when `issueReader` is omitted: the App the real
+     * reader mints its `issues: read` token from (issue #187). */
+    minter?: TokenMinter;
     /** `fabrica do --model <name>` (issue #184) - the model this one
      * task asks for, outranking the project's own setting. Resolved
      * against projects.toml and persisted here, once, for every later
@@ -183,7 +188,7 @@ export async function registerAndAsk(
     const issueText =
       opts.issue === undefined
         ? undefined
-        : await fetchTaskIssue(recordHome, taskId, opts.project, opts.issue, opts.issueReader);
+        : await fetchTaskIssue(recordHome, taskId, opts.project, opts.issue, opts.issueReader, opts.minter);
 
     // The knowledge-base notes this project names, read off the disk
     // here and handed to the clarifying step along with the task's own

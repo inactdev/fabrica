@@ -103,3 +103,10 @@ export type { ModelChoice, ModelOnRecord, ModelSource } from "./model.ts";
 // fake can skip it (see ci-checks.ts's own header).
 export { concludedDetails, defaultChecksReader, finishedDetails, handToPullRequestChecks } from "./ci-checks.ts";
 export type { ChecksReader, CiCheckConcludedDetails, CiChecksFinishedDetails } from "./ci-checks.ts";
+// Issue #187: the GitHub App token every call a task makes goes
+// through, and the record entry that says so. The minting itself is
+// src/githubapp's; this is the half that knows about tasks - which
+// repository a project publishes to, and whose record the
+// `"token-minted"` event lands on.
+export { githubRepoOf, projectRepo, publishToken, readChecksScope, readIssueScope, recordingMinter, taskTokenMinter, tokenMintedDetails } from "./github-token.ts";
+export type { TokenMintedDetails } from "./github-token.ts";

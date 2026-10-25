@@ -432,16 +432,23 @@ and a FAIL carrying the exact `docker pull`: a missing one means the
 first task of the day dies inside `docker run` instead of here),
 **leftover worker networks** (see below), the
 worker token (from the environment or `brain.env`, mode 600), the
-GitHub token Inspector needs, `inspector` on PATH taking `-branch` and
+GitHub App every push, pull request, issue read and check read goes
+through (issue #187 - configured, its key usable, and installed on every
+registered project's own repository, plus a `note` while a personal
+`GITHUB_TOKEN` is still in the configuration; the registered projects it
+asks GitHub about are resolved here, by `registeredProjectRepos`, since
+`src/githubapp` knows about Apps and not about projects.toml),
+`inspector` on PATH taking `-branch` and
 not behind its own `origin main` (see "The inspector line" below, and
 `src/inspector/README.md` for which builds fail and which only report),
 every registered project (exists, git root, a check, an `origin`
 remote), the caps, and any SPEND UNKNOWN block. `--live` adds one
 minimal real call with the worker token (a few cents) and reports it
-alive or dead. No check prints a token. The adapter-, relay- and
+alive or dead. No check prints a token. The adapter-, relay-, App- and
 Inspector-specific checks live beside those modules
 (`src/brain/adapters/doctor-checks.ts`,
 `src/relay/container/doctor-check.ts`,
+`src/githubapp/doctor-checks.ts`,
 `src/inspector/doctor-checks.ts`); this command only prints them.
 
 ### The leftover-networks line

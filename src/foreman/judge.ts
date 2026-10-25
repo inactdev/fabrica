@@ -25,6 +25,8 @@ import type { ConflictReportReason, PublishLease } from "./fix-rebase.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 import type { ResolvedReviewer } from "../reviewer/index.ts";
 import type { Delivery } from "../inspector/types.ts";
+import type { ScopedToken, TokenMinter } from "../githubapp/index.ts";
+import { publishToken } from "./github-token.ts";
 import { requireCheckCommand, resolveCheckCommand } from "./resolve-check.ts";
 import { requireReviewer } from "./reviewer.ts";
 import { ForemanError } from "./errors.ts";
@@ -92,12 +94,22 @@ export function chooseCheckMode(
    * (src/reviewer/resolve.ts) - handed to the real Inspector adapter
    * as `-vendor`/`-model` plus that vendor's key on its environment. A
    * caller-supplied Inspector (a test's fake) is used as given. */
-  reviewer?: ResolvedReviewer
+  reviewer?: ResolvedReviewer,
+  /** Where the real adapter's publishing token is minted from (issue
+   * #187): this task's repository alone, `contents: write` plus
+   * `pull_requests: write`, one token per handoff. A caller-supplied
+   * Inspector (a test's fake) needs none - it publishes nothing. */
+  token?: ScopedToken
 ): CheckMode {
   if (!inspectorIsConfigured(line.workdir, baseCommit)) {
     return { mode: "self-test", reason: "no .inspector.json at the task base commit" };
   }
-  const chosen = inspector ?? defaultInspector(reviewer === undefined ? {} : { reviewer });
+  const chosen =
+    inspector ??
+    defaultInspector({
+      ...(reviewer === undefined ? {} : { reviewer }),
+      ...(token === undefined ? {} : { token }),
+    });
   if (chosen.installed && !chosen.installed()) return { mode: "self-test", reason: "Inspector is not installed" };
   return { mode: "inspector", inspector: chosen };
 }
@@ -131,7 +143,10 @@ export function inspectorJudge(
   /** Issue #267. Omitted uses the real GitHub read; a test supplies a
    * fake. Reached only after a green inspection that printed a pull
    * request URL - nothing else has a pull request to read. */
-  checksReader?: ChecksReader
+  checksReader?: ChecksReader,
+  /** Issue #187: only reached when `checksReader` is omitted, to mint
+   * the one scoped token that whole read uses. */
+  minter?: TokenMinter
 ): Judge {
   return async (_attempt, _gateChanges, finalMessage) => {
     const lease = publishLease?.();
@@ -163,7 +178,7 @@ export function inspectorJudge(
     // pull request either.
     if (inspection.verdict !== "green" || !inspection.prUrl) return { kind: "verdict", gate, inspection };
 
-    const report = await handToPullRequestChecks(recordHome, taskId, inspection.prUrl, checksReader);
+    const report = await handToPullRequestChecks(recordHome, taskId, inspection.prUrl, checksReader, minter);
     // Nothing to read (not a GitHub pull request URL), or nothing red:
     // Inspector's own verdict stands, and the read is already on the
     // record either way. An unreadable API and a check that never
@@ -245,6 +260,12 @@ export function prepareRound(
      * same way `inspector`/`checkBox` are - omitted uses the real
      * GitHub read. */
     checksReader?: ChecksReader;
+    /** Issue #187: where this round's GitHub tokens are minted from.
+     * Omitted uses the real GitHub App on this machine; a test supplies
+     * `src/githubapp/helpers/fake-minter.ts`'s fake so no suite needs a
+     * registered App or the network. Every mint is recorded on the
+     * task either way (`github-token.ts`'s `recordingMinter`). */
+    minter?: TokenMinter;
   }
 ): { judge: Judge; mode: CheckMode } {
   const check = resolveCheckCommand(recordHome, line.project);
@@ -257,7 +278,13 @@ export function prepareRound(
   const reviewer = inspectorIsConfigured(line.workdir, baseCommit)
     ? requireReviewer(recordHome, line.workdir, line.project, baseCommit)
     : undefined;
-  const mode = chooseCheckMode(line, baseCommit, opts.inspector, reviewer);
+  const mode = chooseCheckMode(
+    line,
+    baseCommit,
+    opts.inspector,
+    reviewer,
+    publishToken(recordHome, taskId, line.project, opts.minter)
+  );
   if (mode.mode === "self-test") {
     requireCheckCommand(line.workdir, check);
     appendEvent(recordHome, { taskId, name: "inspection-skipped", details: { reason: mode.reason } });
@@ -281,7 +308,8 @@ export function prepareRound(
           mode.inspector,
           opts.closesIssue,
           opts.publishLease,
-          opts.checksReader
+          opts.checksReader,
+          opts.minter
         )
       : selfTestJudge(recordHome, taskId, line, check, opts.checkBox ?? defaultCheckBox());
   return { judge, mode };

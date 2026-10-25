@@ -140,14 +140,28 @@ comfortably inside GitHub's hourly quota.
 
 ## The token
 
-The same one Inspector publishes with, from the same resolver
-(`src/inspector/run.ts`'s `resolveGithubToken`, issue #103) — never a
-second lookup that could disagree about which credential is in play. It
-is only ever placed in a request header: never logged, never on an argv,
-never in Fabrica's own process environment. A token that cannot be
-resolved is an `unreadable` report, not a thrown error: by the time this
-runs the round's work is done and Inspector has already published, so it
-must not be lost to a credential problem.
+A GitHub App installation token minted for **this pull request's own
+repository** — the repository the branch was pushed to, read off the
+pull request URL rather than from the project — with only the four
+read permissions these endpoints need (issue #187;
+`src/githubapp/scopes.ts`'s `READ_CHECKS_PERMISSIONS`: `pull_requests`,
+`checks`, `statuses`, `actions`). Nothing here can write, and the token
+cannot either.
+
+This module never resolves it: `ReadChecksOptions.mintToken` is asked
+for one once the repository is known, and `src/foreman/ci-checks.ts`'s
+`defaultChecksReader` is what supplies that — so the mint lands on the
+task's record (`"token-minted"`) where no fake can skip it. One token
+for the whole poll rather than one per tick: an installation token lives
+an hour and the bounded wait is twenty minutes, so a mint per tick would
+be a hundred extra API calls and a hundred extra record entries for a
+scope that is identical every time.
+
+It is only ever placed in a request header: never logged, never on an
+argv, never in Fabrica's own process environment. A token that cannot be
+minted at all is an `unreadable` report, not a thrown error: by the time
+this runs the round's work is done and Inspector has already published
+through the same App, so it must not be lost to a credential problem.
 
 ## Testing
 

@@ -32,7 +32,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
     relayImage: () => ok("relay image"),
     workerNetworks: async () => ok("worker networks"),
     workerToken: () => ok("worker token"),
-    githubToken: () => ok("GitHub token"),
+    githubApp: async () => ok("github app"),
     inspector: () => ok("inspector"),
     async live() {
       probes.liveCalls += 1;
@@ -90,7 +90,6 @@ for (const name of [
   "workerCli",
   "relayImage",
   "workerToken",
-  "githubToken",
   "inspector",
 ] as const) {
   test(`fabrica doctor: a failing ${name} check prints FAIL with its fix, and exits 1`, async () => {
@@ -100,6 +99,16 @@ for (const name of [
     assert.ok(lines.some((l) => l.startsWith("FAIL ") && l.includes(`the exact fix for ${name}`)), lines.join("\n"));
   });
 }
+
+// The GitHub App line is the one probe that is async (issue #187: asking
+// where the App is installed is two GitHub calls), so it is driven on
+// its own rather than through the loop above.
+test("fabrica doctor: a failing githubApp check prints FAIL with its fix, and exits 1", async () => {
+  const failing: DoctorCheck = { ok: false, label: "github app", detail: "broken", fix: "the exact fix for githubApp" };
+  const { code, lines } = await doctor(healthyHome(), okProbes({ githubApp: async () => failing }));
+  assert.equal(code, 1);
+  assert.ok(lines.some((l) => l.startsWith("FAIL ") && l.includes("the exact fix for githubApp")), lines.join("\n"));
+});
 
 test("fabrica doctor: each registered project is checked - path, git root, a check, and an origin remote", async () => {
   const missing = join(mkdtempSync(join(tmpdir(), "fabrica-doctor-gone-")), "nowhere");

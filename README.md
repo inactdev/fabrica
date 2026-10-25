@@ -142,6 +142,72 @@ a relay Fabrica runs beside it, which swaps the throwaway placeholder
 the Worker holds for the real token on its way to the provider (see
 `src/relay/README.md`).
 
+### The GitHub App
+
+Fabrica pushes branches, opens pull requests, reads the issue a task
+names, and reads the checks your repository runs on that pull request.
+All four go through a GitHub App you own, which hands out a key that
+expires an hour after it is minted and can only touch the one repository
+the task is running on. There is no personal-token fallback: without the
+App, a task refuses before it starts and tells you this.
+
+Set it up once per machine. Run `fabrica doctor` after any step to see
+where you are.
+
+**1. Register the App.** Open
+<https://github.com/settings/apps/new>. Name it anything. Leave the
+callback URL and the webhook URL empty, and untick **Active** under
+Webhook.
+
+**2. Grant exactly these repository permissions, and nothing else:**
+
+| permission | level | what it is for |
+|---|---|---|
+| Contents | Read and write | pushing the task branch |
+| Pull requests | Read and write | opening and updating the pull request |
+| Issues | Read-only | reading the issue a task names |
+| Commit statuses | Read-only | reading the checks on the pull request |
+| Checks | Read-only | the same |
+| Actions | Read-only | the log of a check that went red |
+
+**3.** Under "Where can this GitHub App be installed?" choose **Only on
+this account**, then **Create GitHub App**.
+
+**4. Generate the key.** On the App's settings page, click **Generate a
+private key**. A `.pem` file downloads. Move it somewhere only you can
+read, and lock it down:
+
+    mv ~/Downloads/*.private-key.pem ~/.fabrica/github-app.pem
+    chmod 600 ~/.fabrica/github-app.pem
+
+That mode is enforced, not advised: any other mode is refused by name.
+
+**5. Copy the Client ID** from the same page (it starts with `Iv`).
+
+**6. Tell Fabrica about both,** as two lines in
+`~/.fabrica/brain.env` — the same 600-mode file the worker token lives
+in:
+
+    FABRICA_GITHUB_APP_ID=<the Client ID from step 5>
+    FABRICA_GITHUB_APP_KEY=/Users/<you>/.fabrica/github-app.pem
+
+    chmod 600 ~/.fabrica/brain.env
+
+The second one is a *path to* the key, not the key itself.
+
+**7. Install the App.** Back on its settings page, click **Install
+App**, pick your account, and choose **Only select repositories** —
+then select the repositories you run tasks on. Fabrica's own checks
+fail if the App is not installed on a project you have registered.
+
+**8. Remove the old token.** If `GITHUB_TOKEN` is still set in your
+shell or sitting in `~/.fabrica/brain.env`, delete it and revoke it on
+github.com. Nothing reads it any more. `fabrica doctor` warns while one
+is still there.
+
+Then `fabrica doctor`'s **github app** line should read `OK` and name
+your App.
+
 ### Paying per token instead (optional)
 
 The default Worker is the coding agent above, on the flat-rate
@@ -181,9 +247,10 @@ running (a developer checkout's branch and commit, or an installed
 copy's version and commit, either way compared against the project's
 `origin/master`), Docker, the worker image, the coding agent's version
 installed inside it, the relay image every task's network goes through,
-the worker token above, the GitHub token Inspector needs, Inspector
-itself, every project you've registered, your spending caps, and any
-unmeasured spend blocking new work. `fabrica doctor --live`
+the worker token above, the GitHub App every push and pull request goes
+through, Inspector itself, every project you've registered, your
+spending caps, and any unmeasured spend blocking new work.
+`fabrica doctor --live`
 additionally spends a few cents to confirm the worker token actually
 authenticates.
 
@@ -211,6 +278,13 @@ and the line goes green. Behind means behind: a commit *ahead* of
 binary you built yourself from a checkout, one whose commit can't be
 read, and a run that can't reach GitHub at all (no network is not a
 stale binary).
+
+The **github app** line is the one above: it fails if no App is
+configured, if its key is at the wrong mode or GitHub rejects it, if the
+App is installed nowhere, or if it is not installed on a repository you
+have registered as a project — and it carries the fix for each. It
+warns, without failing, while a personal `GITHUB_TOKEN` is still in
+Fabrica's configuration.
 
 Two of those lines are about the network a Worker gets. **relay image**
 fails if the image the relay container runs from isn't on the machine -

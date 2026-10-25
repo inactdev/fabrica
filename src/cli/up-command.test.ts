@@ -46,7 +46,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     relayImage: () => ok("relay image"),
     workerNetworks: async () => ok("worker networks"),
     workerToken: () => ok("worker token"),
-    githubToken: () => ok("GitHub token"),
+    githubApp: async () => ok("github app"),
     inspector: () => ok("inspector"),
     live: async () => ok("worker token (live)"),
     ...overrides,

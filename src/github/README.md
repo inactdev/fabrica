@@ -49,16 +49,19 @@ knows about GitHub, the foreman knows about tasks.
 
 ## Two decisions worth not re-litigating
 
-**An injectable `fetch`, not `gh`.** The token is the one Inspector
-publishes with (`src/inspector/run.ts`'s `resolveGithubToken`:
-`GITHUB_TOKEN`, else `gh auth token`), but the *call* is a plain HTTPS
-request. `gh issue view --json` would have been shorter and is already
-installed wherever that token comes from; it was rejected because it
-needs the binary even when `GITHUB_TOKEN` is set, it introduces a second
-spelling of "which issue, which repository" between the Client's
-`--issue` value and the request, and a child process is the one thing
-`src/foreman` may not spawn for anything but git
-(`src/foreman/no-host-check.test.ts`).
+**An injectable `fetch`, not `gh`.** The token is a GitHub App
+installation token minted for the issue's own repository with only
+`issues: read` (issue #187 - `src/githubapp/`, wired up in
+`src/foreman/github-token.ts`); this module only ever receives it as the
+`token` option and never learns where it came from. The *call* is a
+plain HTTPS request. `gh issue view --json` would have been shorter and
+is already installed on the Client's machine; it was rejected because it
+needs the binary present at all, it introduces a second spelling of
+"which issue, which repository" between the Client's `--issue` value and
+the request, and a child process is the one thing `src/foreman` may not
+spawn for anything but git (`src/foreman/no-host-check.test.ts`). It is
+also the wrong credential now: `gh`'s own login is the Client's
+personal one, which is exactly what the App replaced.
 
 **Refuse, never shorten.** `MAX_ISSUE_BYTES` is a hard ceiling, not a
 truncation point (Client ruling: "verbatim and in full on every round -
