@@ -16,6 +16,10 @@ export type { LastWorkerActivity, StoppedByOwnerDetails } from "./stop.ts";
 export { DEFAULT_CHECK_COMMAND } from "./resolve-check.ts";
 export { finalMessageFor } from "./pr-body.ts";
 export type { ClosesIssue, FinalMessageForCommit } from "./pr-body.ts";
+// A rebase-only fix round appends its one section to the pull request's
+// existing body instead of replacing it (rebase-only.ts), so what the
+// pull request says is not always a render of the latest write-up.
+export { publishedPullRequestMessage } from "./rebase-only.ts";
 // The issue a task names, fetched once at registration and carried into
 // every brief - the record file and the brief section, so a surface
 // showing a task can show the issue it is the whole of.

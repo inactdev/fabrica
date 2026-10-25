@@ -352,6 +352,28 @@ export function skipIfUnchanged(judge: Judge, workdir: string, priorHead: string
   };
 }
 
+/**
+ * Wraps a round's judge so the pull request's title and body are not
+ * this round's own message but whatever `map` makes of it - everything
+ * else about the handoff unchanged.
+ *
+ * The one user is a rebase-only fix round (`rebase-only.ts`), whose
+ * section is appended to the pull request's existing body rather than
+ * replacing it. Written as a wrapper rather than another parameter on
+ * `inspectorJudge` deliberately: `finalMessage` is the only thing a
+ * judge does with a message, and only `inspectorJudge` looks at it at
+ * all (a self-tested round has no pull request), so a wrapper leaves
+ * both judges exactly as they were. The message `attempts.ts` commits
+ * with is untouched by this - it holds its own copy.
+ */
+export function withPullRequestMessage(
+  judge: Judge,
+  map: (message: FinalMessageForCommit) => { title: string; body: string }
+): Judge {
+  return async (attempt, gateChanges, finalMessage) =>
+    judge(attempt, gateChanges, { ...finalMessage, ...map(finalMessage) });
+}
+
 /** A round's delivery outcome from how its last attempt was judged.
  * Inspector red is inspection-red (the Client's verdict); a red self-test
  * is a failure report; a box that could not run the check is not-verified,

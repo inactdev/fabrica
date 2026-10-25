@@ -28,7 +28,7 @@ import {
   refusedWithNoDelivery,
 } from "./queries.ts";
 import { checksCorrection } from "../ci/index.ts";
-import { prepareRound, skipIfUnchanged } from "./judge.ts";
+import { prepareRound, skipIfUnchanged, withPullRequestMessage } from "./judge.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
 import type { DiffReader } from "./reader-round.ts";
@@ -45,6 +45,17 @@ import type { AttemptLoopResult } from "./attempts.ts";
 import { recordRoundResult } from "./round.ts";
 import { readAndFlag } from "./reader-round.ts";
 import { alreadyReadFor } from "./queries.ts";
+// A rebase-only round's whole policy (the Client's note "master moved"):
+// what its brief says, what its one section is, and how the pull
+// request's body is appended to rather than rewritten.
+import {
+  appendRebaseRound,
+  isRebaseOnlyNote,
+  pullRequestOnRecord,
+  rebaseOnlyMessage,
+  today,
+} from "./rebase-only.ts";
+import type { PullRequestMessage } from "./rebase-only.ts";
 import {
   continueStoppedRebase,
   publishLeaseAfterRebase,
@@ -59,7 +70,7 @@ import { pauseRuleFor, requireMeterRoomToStart } from "./meters.ts";
 import { readModelChoice } from "./model.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { Inspector, Receipt } from "../inspector/types.ts";
-import type { CheckBox } from "../brain/index.ts";
+import type { CheckBox, WorkerWriteup } from "../brain/index.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
 
@@ -259,6 +270,12 @@ export async function runRecordedFix(
   // same way, and handed to the worker alongside the Client's note - his
   // note says what he wants changed, this says what GitHub found.
   const redChecks = redPublishedChecksOf(events);
+  // A note beginning "master moved" makes this a rebase-only round
+  // (rebase-only.ts). The one thing such a round needs that it cannot
+  // derive for itself is the pull request this task already has, which
+  // its own section is appended to - rebuilt here, off the record, like
+  // everything else this function re-derives.
+  const priorPullRequest = isRebaseOnlyNote(note) ? pullRequestOnRecord(events) : undefined;
 
   // Every receipt the task has, not just the ones the latest *delivery*
   // carried: a round Inspector refused delivers nothing, so its attempts
@@ -287,6 +304,7 @@ export async function runRecordedFix(
         priorReceipts,
         refusalReport: refusal?.report,
         redChecksOutput: redChecks?.output,
+        ...(priorPullRequest ? { priorPullRequest } : {}),
         // Every earlier round's own declaration, not the previous delivery's
         // already-merged text (issue #68): keeping them separate is what lets
         // each one be keyed by the gate it names, so the newest declaration
@@ -396,6 +414,15 @@ async function runFixRound(
      * hand anybody, and re-reading the same commit's checks would only
      * find the same red. */
     redChecksOutput?: string;
+    /** The pull request this task already has, as its own record
+     * describes it (`rebase-only.ts`'s `pullRequestOnRecord`) - set
+     * only on a rebase-only round, and only when there is an earlier
+     * write-up to append to. With it, this round's one section is
+     * appended to that body under "## Rebase rounds" and the title is
+     * left alone; without it (an ordinary round, or a task with no
+     * earlier write-up at all) the round's own message is handed over
+     * exactly as it always was. */
+    priorPullRequest?: PullRequestMessage;
     /** Every gate declaration this task's earlier rounds made, oldest
      * first (`queries.ts`'s `gateDeclarationsOf`). */
     priorGateDeclarations: string[];
@@ -421,6 +448,7 @@ async function runFixRound(
     priorReceipts,
     refusalReport,
     redChecksOutput,
+    priorPullRequest,
     priorGateDeclarations,
     inspector,
     checkBox,
@@ -429,6 +457,15 @@ async function runFixRound(
     readDiff,
     caps,
   } = ctx;
+  // The Client's note decides this round's whole shape, here and nowhere
+  // else: a rebase-only round's brief, its one-section write-up and its
+  // appended pull request body all hang off this one answer
+  // (rebase-only.ts). Any other note gets the round it always got.
+  const rebaseOnly = isRebaseOnlyNote(note);
+  // One date for the whole round, however many passes it makes: a
+  // reader of the pull request's rebase history wants one entry per
+  // round, not one per stopped rebase.
+  const roundDate = today();
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
   const originalBrief = readTaskFile(recordHome, taskId, "brief.md") ?? "";
   const taskText = readTaskFile(recordHome, taskId, "request.md") ?? originalBrief;
@@ -487,6 +524,11 @@ async function runFixRound(
     // branch, so its lease is knowable here; a stopped one's is not
     // (below, once the host has finished it).
     if (rebase.status === "rebased") lease = publishLeaseAfterRebase(line, rebase.tips);
+    // origin's default branch by name, for a rebase-only round's own
+    // entry in the pull request's rebase history. Undefined only where
+    // there was nothing to rebase onto in the first place.
+    const rebaseBase =
+      rebase.status === "rebased" ? rebase.base : rebase.status === "handed-to-worker" ? rebase.stopped.base : undefined;
 
     // After a rebase, origin's tip IS the branch's fork point, and the
     // delivery's `files` diff must be pinned to it - against the old
@@ -501,6 +543,17 @@ async function runFixRound(
         : rebase.status === "rebased"
           ? rebase.baseCommit
           : rebase.stopped.baseCommit;
+
+    // Every file this round's worker has been handed a conflict in,
+    // earlier passes of the same rebase included: a rebase-only round's
+    // brief names the tests the project's own map maps THESE to, and an
+    // earlier pass's resolution is still in the branch, so the tests
+    // covering it are still this round's to run. Empty when the rebase
+    // never stopped at all, which that brief reports as "nothing
+    // conflicted, so run nothing here". Filled by the pass loop below,
+    // and read by `briefFor` on each pass - declared here, above both,
+    // because that is now the first of the two to be written.
+    const conflictedFiles: string[] = [];
 
     /**
      * This round's brief for one pass of it. `extra` is whatever that
@@ -547,13 +600,41 @@ async function runFixRound(
         ),
         {
           testMap,
+          // A rebase-only round is told to run exactly what the map maps
+          // the CONFLICTED files to and nothing else, so it never asks
+          // what the task as a whole touched; every other round does.
           // Unlike a first round, a fix round's branch already carries
           // this task's own diff - so its worker is handed the concrete
           // tests its touched files map to, and the concrete files that
-          // map to nothing, instead of only the lookup rule.
-          touched: diffFiles(line.project, line.branch, roundBaseCommit),
+          // map to nothing, instead of only the lookup rule. Read per
+          // pass from the round's own base commit, which a rebase may
+          // have moved.
+          ...(rebaseOnly
+            ? { rebaseOnly: { conflicted: conflictedFiles } }
+            : { touched: diffFiles(line.project, line.branch, roundBaseCommit) }),
         }
       );
+
+    /**
+     * A rebase-only round's write-up is one section - which files were
+     * resolved and how - instead of the four-section template a round of
+     * real work renders, and that section is this round's whole commit
+     * message (rebase-only.ts). Empty on every other round, which
+     * renders exactly what it always did.
+     *
+     * Spread onto every `runAttempts` call this round makes - the rebase
+     * passes and the code reader's own fix pass alike - so no pass of one
+     * round can commit in a different shape from its siblings.
+     */
+    const rebaseOnlyRendering = rebaseOnly
+      ? {
+          renderMessage: (writeup: WorkerWriteup | undefined, fallbackTitle: string) =>
+            rebaseOnlyMessage(writeup, fallbackTitle, {
+              date: roundDate,
+              ...(rebaseBase === undefined ? {} : { base: rebaseBase }),
+            }),
+        }
+      : {};
 
     const { judge: roundJudge, mode, reader } = prepareRound(recordHome, taskId, line, roundBaseCommit, {
       inspector,
@@ -566,6 +647,19 @@ async function runFixRound(
       // the host has finished it, inside `beforeCommit` below.
       publishLease: () => lease,
     });
+    // A rebase-only round reports one section, and that section is
+    // APPENDED to the pull request's existing body rather than replacing
+    // it - so what Inspector is handed is the body this task already had
+    // plus this round's dated entry, under the same title as before. The
+    // message this round commits with is untouched by this (see
+    // `renderMessage` below); only the pull request's own text is.
+    // Without a prior pull request on the record there is nothing to
+    // append to, and the round's own message stands exactly as it would
+    // have.
+    const judgeThisRound =
+      rebaseOnly && priorPullRequest !== undefined
+        ? withPullRequestMessage(roundJudge, (message) => appendRebaseRound(priorPullRequest, message.body))
+        : roundJudge;
     // Captured before this round's worker ever runs: the branch's HEAD at
     // the exact commit the task's last round left it at (and so, in
     // Inspector mode, the exact commit Inspector last reviewed). Compared
@@ -592,10 +686,21 @@ async function runFixRound(
     // it is told to do just that) would deliver "nothing-changed"
     // without Inspector ever being called again: the same dead end, one
     // step further along.
+    //
+    // And a rebase-only round whose rebase genuinely moved the branch is
+    // the third: every commit on it has just been rewritten, so none of
+    // them is one Inspector has seen, and the whole point of the round
+    // is to get that rebased branch checked and published. Left wrapped,
+    // the ordinary case - master moved, the rebase went through cleanly,
+    // the worker has nothing to resolve - would deliver
+    // "nothing-changed" with Inspector never called, and the rebase
+    // would never reach anybody. An `already-current` branch still takes
+    // the wrapper: nothing was rewritten there, so re-handing the
+    // identical commit really would only draw a refusal.
     const judge =
-      stopped || refusalReport !== undefined
-        ? roundJudge
-        : skipIfUnchanged(roundJudge, line.workdir, baseCommitOf(line.workdir));
+      stopped || refusalReport !== undefined || (rebaseOnly && rebase.status !== "already-current")
+        ? judgeThisRound
+        : skipIfUnchanged(judgeThisRound, line.workdir, baseCommitOf(line.workdir));
 
     // `...modelChoice` for the same reason do.ts's own work-started
     // carries it (issue #184): this round's declared model has to be on
@@ -635,6 +740,11 @@ async function runFixRound(
       const runRebasePasses = async (): Promise<AttemptLoopResult> => {
         for (;;) {
           const handed = stopped;
+          if (handed) {
+            for (const file of handed.conflict.files) {
+              if (!conflictedFiles.includes(file)) conflictedFiles.push(file);
+            }
+          }
           // Set from inside `beforeCommit`, the only place that learns how
           // this pass's rebase ended.
           let step: FixRebaseStep | undefined;
@@ -714,6 +824,7 @@ async function runFixRound(
             ...(session ? { initialSession: session } : {}),
             startAttempt: priorReceipts.length + earlierReceipts.length + 1,
             commitLabel: "(fix)",
+            ...rebaseOnlyRendering,
             ...(beforeCommit ? { beforeCommit } : {}),
             onHeartbeat: (attempt) => {
               appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
@@ -750,9 +861,13 @@ async function runFixRound(
       // the delivery is written (inspector issue #34). Inside this same
       // network policy, because it is one more worker call of this round.
       //
-      // `roundJudge`, deliberately, not `judge`: `readAndFlag` does its
-      // own `skipIfUnchanged` wrapping, and double-wrapping would be
-      // harmless but misleading about which comparison matters.
+      // `judgeThisRound`, deliberately, not `judge`: `readAndFlag` does
+      // its own `skipIfUnchanged` wrapping, and double-wrapping would be
+      // harmless but misleading about which comparison matters - this is
+      // `roundJudge` with that wrapper left off, and with a rebase-only
+      // round's pull-request-message wrapper still on, so the pass that
+      // actually publishes appends this round's section to the existing
+      // body rather than rewriting it (see `judgeThisRound` above).
       return readAndFlag(
         recordHome,
         taskId,
@@ -762,7 +877,7 @@ async function runFixRound(
           mode,
           reader,
           alreadyRead,
-          judge: roundJudge,
+          judge: judgeThisRound,
           ...(readDiff ? { read: readDiff } : {}),
           startAttempt: priorReceipts.length + earlierReceipts.length + attemptsResult.receipts.length + 1,
           fixPass: ({ correction, judge: passJudge, startAttempt, beforeCommit }) =>
@@ -781,6 +896,7 @@ async function runFixRound(
               startAttempt,
               beforeCommit,
               commitLabel: "(reader)",
+              ...rebaseOnlyRendering,
               // The same machine the ruling asks for: the worker that
               // just did this work, resumed, so it reads the findings
               // against what it did rather than rediscovering it.

@@ -20,8 +20,14 @@
 // test-map.ts) turns that ruling from advice into a lookup, and its
 // notice REPLACES the one above rather than joining it - see
 // `withStandingQuestion` for why a brief must never carry both.
+//
+// A rebase-only fix round (`rebase-only.ts`, the Client's note beginning
+// "master moved") narrows the same lookup to the files the rebase
+// conflicted in, and its notice replaces both. Exactly one of the three
+// reaches a brief, decided here.
 
 import { registeredProject } from "./registered-project.ts";
+import { rebaseOnlyBriefNotice } from "./rebase-only.ts";
 import { withStandingQuestion } from "./standing-question.ts";
 import { reportForRound } from "./test-map.ts";
 import { testMapBriefNotice } from "../testmap/index.ts";
@@ -79,17 +85,32 @@ export function onlyTouchedTestsFor(recordHome: string, projectPath: string, bri
  * first round has touched nothing yet, and naming a list derived from a
  * diff that does not exist would be the silent guess CONTRACT rule 4
  * forbids.
+ *
+ * `rebaseOnly` is set by a fix round the Client asked for with "master
+ * moved" and nothing else (`rebase-only.ts`): its `conflicted` files
+ * take `touched`'s place for the lookup, and the notice it gets says to
+ * run exactly those tests and NOT the whole suite. It wins over both
+ * notices above - see `withStandingQuestion` for why a brief may only
+ * ever carry one of the three.
  */
 export function workerBrief(
   recordHome: string,
   projectPath: string,
   briefText: string,
-  opts: { testMap?: TestMapEntry[] | null; touched?: string[] } = {}
+  opts: { testMap?: TestMapEntry[] | null; touched?: string[]; rebaseOnly?: { conflicted: string[] } } = {}
 ): string {
+  const map = opts.testMap === null ? undefined : opts.testMap;
   return withStandingQuestion(briefText, {
     onlyTouchedTests: onlyTouchedTestsFor(recordHome, projectPath, briefText),
-    ...(opts.testMap === null || opts.testMap === undefined
-      ? {}
-      : { testMap: testMapBriefNotice(reportForRound(opts.testMap, projectPath, opts.touched ?? [])) }),
+    ...(opts.rebaseOnly === undefined
+      ? map === undefined
+        ? {}
+        : { testMap: testMapBriefNotice(reportForRound(map, projectPath, opts.touched ?? [])) }
+      : {
+          rebaseOnly: rebaseOnlyBriefNotice(
+            opts.rebaseOnly.conflicted,
+            reportForRound(map, projectPath, opts.rebaseOnly.conflicted)
+          ),
+        }),
   });
 }

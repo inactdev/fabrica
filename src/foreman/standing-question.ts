@@ -137,6 +137,13 @@ const STANDING_PREFIX = [
  * green. A brief carrying both would be one a worker could satisfy
  * either way, which is worse than either alone.
  *
+ * `rebaseOnly` - a rebase-only fix round's own notice, worded by
+ * `rebase-only.ts`'s `rebaseOnlyBriefNotice` - replaces both for the
+ * same reason, and wins over both: that round runs only what the map
+ * maps the CONFLICTED files to and nothing else, so a brief that also
+ * carried either of the two above would be telling the worker two
+ * different things about what to run.
+ *
  * The doubling guard deliberately keys on STANDING_PREFIX alone, which
  * the conditional notices sit *after*: a brief an outer builder already
  * prefixed comes back untouched whatever this call asks for, so a
@@ -145,10 +152,16 @@ const STANDING_PREFIX = [
  * src/foreman/touched-tests.ts's job, in one place per round. */
 export function withStandingQuestion(
   brief: string,
-  opts: { onlyTouchedTests?: boolean; testMap?: string } = {}
+  opts: { onlyTouchedTests?: boolean; testMap?: string; rebaseOnly?: string } = {}
 ): string {
   if (brief.startsWith(STANDING_PREFIX)) return brief;
   const notice =
-    opts.testMap !== undefined ? opts.testMap : opts.onlyTouchedTests ? ONLY_TOUCHED_TESTS_NOTICE : undefined;
+    opts.rebaseOnly !== undefined
+      ? opts.rebaseOnly
+      : opts.testMap !== undefined
+        ? opts.testMap
+        : opts.onlyTouchedTests
+          ? ONLY_TOUCHED_TESTS_NOTICE
+          : undefined;
   return [STANDING_PREFIX, ...(notice === undefined ? [] : [notice]), brief].join("\n\n");
 }

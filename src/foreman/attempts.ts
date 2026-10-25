@@ -182,6 +182,15 @@ export async function runAttempts(opts: {
    * fix round) - so even the fallback distinguishes an ordinary round
    * from a fix round, the way the old static commit messages did. */
   commitLabel?: string;
+  /** How this round turns a worker's write-up into the message it
+   * commits with and hands over. Omitted - every ordinary round -
+   * renders the Client's four-section template (`pr-body.ts`'s
+   * `finalMessageFor`). A rebase-only fix round supplies its own
+   * one-section renderer (`rebase-only.ts`), which also decides for
+   * itself what makes such a write-up invalid: this loop only ever asks
+   * whether what came back was usable (`ok`), never which fields were
+   * required to make it so. */
+  renderMessage?: (writeup: WorkerWriteup | undefined, fallbackTitle: string) => FinalMessageForCommit;
 }): Promise<AttemptLoopResult> {
   const {
     brain,
@@ -204,6 +213,7 @@ export async function runAttempts(opts: {
     onReceipt,
     beforeCommit,
     commitLabel,
+    renderMessage = finalMessageFor,
   } = opts;
 
   const fallbackTitle = commitLabel ? `fabrica: ${taskId} ${commitLabel}` : `fabrica: ${taskId}`;
@@ -552,7 +562,7 @@ export async function runAttempts(opts: {
     // write-up - instead of an empty commit or re-handing the same one.
     // An attempt whose write-up is missing or invalid is red on that
     // alone, never judged, and its reason is what the next brief quotes.
-    const finalMessage = finalMessageFor(work.writeup, fallbackTitle);
+    const finalMessage = renderMessage(work.writeup, fallbackTitle);
     lastFinalMessage = finalMessage;
     lastWriteup = finalMessage.ok ? work.writeup : undefined;
     // Issue #235: a host-side git step that has to happen between the

@@ -13,6 +13,13 @@ export { DEFAULT_ATTEMPTS } from "./foreman/index.ts";
 export { DEFAULT_CHECK_COMMAND } from "./foreman/index.ts";
 export { finalMessageFor } from "./foreman/index.ts";
 export type { FinalMessageForCommit } from "./foreman/index.ts";
+// The pull request's own text as the record describes it, which is not
+// always the four-section render of the latest write-up: a rebase-only
+// fix round (the Client's note "master moved") appends one section to
+// the body it already had rather than replacing it. The review page
+// shows what was published, so it asks this rather than rendering the
+// write-up itself.
+export { publishedPullRequestMessage } from "./foreman/index.ts";
 export { fixRoundOf } from "./foreman/index.ts";
 // Issue #123: the CLI's seam for detaching `fabrica answer`/`fabrica
 // verdict fix` - see those two modules' own comments for why the round
