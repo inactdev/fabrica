@@ -7,6 +7,7 @@ import type {
   Receipt as ContractReceipt,
 } from "../../contract/surface.ts";
 import type { MeterReading } from "../brain/meters.ts";
+import type { TestMapReport } from "../testmap/types.ts";
 
 /** Inspector's independent verdict after Fabrica's own checks are green.
  * `refused` is deliberately separate from `red`: no verdict was reached. */
@@ -112,6 +113,17 @@ export type Delivery = Omit<ContractDelivery, "outcome"> & {
     | "paused-by-meter";
   /** Present only when this branch was handed to Inspector. */
   inspection?: Inspection;
+  /** What the project's committed `tests.map` said about the files this
+   * round touched: the tests they mapped to, the worker's own report of
+   * which of those it ran, the touched files nothing covers, and any
+   * mapping naming a test file the project no longer has. Absent for a
+   * project that commits no map at all - an empty report would read as
+   * "nothing was mapped" when the truth is "nothing here maps
+   * anything". Widened here for the same reason `outcome` above is: the
+   * contract is a path `rule9-gate.yml` protects, and a project's own
+   * bookkeeping about its own test suite is not a new promise about a
+   * seam. See src/testmap/README.md. */
+  tests?: TestMapReport;
 };
 
 export type FabricaTask = Omit<ContractFabricaTask, "state"> & {

@@ -34,6 +34,7 @@ import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
+import { testMapFor } from "./test-map.ts";
 import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { runAttempts } from "./attempts.ts";
@@ -46,7 +47,7 @@ import {
   recordStop,
 } from "./fix-rebase.ts";
 import type { FixRebaseStep, PublishLease, StoppedRebase } from "./fix-rebase.ts";
-import { baseCommitOf } from "../delivery/index.ts";
+import { baseCommitOf, diffFiles } from "../delivery/index.ts";
 import { recordReceipt, requireRoomToStart, spendLimitsFor } from "./caps.ts";
 import { pauseRuleFor, requireMeterRoomToStart } from "./meters.ts";
 import { readModelChoice } from "./model.ts";
@@ -421,6 +422,11 @@ async function runFixRound(
   // note that has gone missing fails the round with the same message,
   // and in the same place, as it would on a task's first one.
   const knowledgeNotes = knowledgeNotesFor(recordHome, project);
+  // And the project's committed test map, read now and for the same
+  // reason: a fix round is held to the map as it stands today, and a
+  // `tests.map` that has become unreadable fails the round before the
+  // line is reopened rather than halfway through it (test-map.ts).
+  const testMap = testMapFor(project);
 
   // Reopens the same line directly rather than going through
   // runProductionRound, so this round appends "work-started" below but
@@ -623,7 +629,17 @@ async function runFixRound(
               ]
                 .filter((part): part is string => part !== undefined)
                 .join("\n\n---\n\n") || undefined
-            )
+            ),
+            {
+              testMap,
+              // Unlike a first round, a fix round's branch already
+              // carries this task's own diff - so its worker is handed
+              // the concrete tests its touched files map to, and the
+              // concrete files that map to nothing, instead of only the
+              // lookup rule. Read per pass from the round's own base
+              // commit, which a rebase may have moved.
+              touched: diffFiles(line.project, line.branch, roundBaseCommit),
+            }
           ),
           workdir: line.workdir,
           taskId,
@@ -699,6 +715,7 @@ async function runFixRound(
         roundReceipts: earlierReceipts,
         priorGateDeclarations,
         roundGateDeclarations: earlierGateDeclarations,
+        testMap,
       },
       attemptsResult
     );

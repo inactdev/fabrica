@@ -19,6 +19,7 @@ import { recordRoundResult } from "./round.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
+import { testMapFor } from "./test-map.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
 import { readModelChoice } from "./model.ts";
@@ -181,6 +182,12 @@ async function productionRound(
   // that cannot be read fails the task with no ProductionLine behind it,
   // naming which - the Client's own condition on this.
   const knowledgeNotes = knowledgeNotesFor(recordHome, project);
+  // The project's committed test map, read here for the same reason and
+  // with the same timing: a `tests.map` whose own text cannot be read
+  // fails the task before any ProductionLine exists, naming the line to
+  // fix (test-map.ts). Null for a project that commits none, which
+  // leaves the brief and the delivery exactly as they were.
+  const testMap = testMapFor(project);
   // `isRetry` is an explicit signal the caller derives from the RECORD -
   // answer.ts sets it true only when this exact taskId, in this exact
   // record home, already has a "line-cut" event: proof that
@@ -284,7 +291,15 @@ async function productionRound(
         // The task's own words, the issue it names, then the project's
         // knowledge notes - all inside what `workerBrief` puts the
         // standing prefix in front of.
-        brief: workerBrief(recordHome, line.project, withKnowledge(withIssueText(brief, issueText), knowledgeNotes)),
+        // No `touched` here, deliberately: a first round has changed
+        // nothing yet, and a round resumed from questions cannot have
+        // either (answer.ts refuses a second answer once a round
+        // completed), so there is no diff to resolve the map against.
+        // Its worker gets the lookup rule; a fix round, whose branch
+        // does carry a diff, gets the concrete tests (verdict.ts).
+        brief: workerBrief(recordHome, line.project, withKnowledge(withIssueText(brief, issueText), knowledgeNotes), {
+          testMap,
+        }),
         workdir: line.workdir,
         taskId,
         judge,
@@ -322,7 +337,7 @@ async function productionRound(
       recordHome,
       taskId,
       line,
-      { baseCommit, taskText, totalAttempts, mode, caps },
+      { baseCommit, taskText, totalAttempts, mode, caps, testMap },
       attemptsResult
     );
 

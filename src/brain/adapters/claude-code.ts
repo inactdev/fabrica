@@ -347,6 +347,11 @@ export const WRITEUP_JSON_SCHEMA = {
       },
     },
     couldNotVerify: { type: "string" },
+    // Declared and not required, exactly like couldNotVerify above: only
+    // a project committing a tests.map asks for it, and
+    // additionalProperties: false means a field the worker may send has
+    // to be declared whether it is required or not.
+    testsRun: { type: "string" },
   },
 };
 

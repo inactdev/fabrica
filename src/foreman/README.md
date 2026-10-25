@@ -314,6 +314,51 @@ missing a spelling is small: the notice is advice to a Worker, not a
 restriction on it, so a task that misses still gets what it asked for by
 the Worker simply running the tests it wants.
 
+### And a project that commits a `tests.map` turns it into a lookup
+
+`fabrica tests-map` writes a project a committed test map: per source
+folder or file pattern, the test files or commands that cover it. When
+the project has one, a Worker no longer has to *guess* which tests cover
+what it touched — the project says so.
+
+`test-map.ts` is this module's half (`src/testmap/` is the format, the
+matcher and the wordings; its README owns the reasoning). Two functions,
+and the split matters:
+
+- `testMapFor` reads the file. Every caller runs it **before** its
+  ProductionLine is cut or reopened, the same timing and for the same
+  reason as `knowledgeNotesFor`: a `tests.map` nobody can read refuses
+  the round (`ForemanError("test-map-unreadable")`) while there is still
+  nothing to tear down, naming the line to edit. Read fresh every round
+  — a map corrected between rounds is one the next round should read
+  corrected.
+- `reportForRound` resolves this round's touched files against it, and
+  is what `round.ts`'s `withTests` attaches to whatever delivery the
+  round built.
+
+The notice **replaces** `ONLY_TOUCHED_TESTS_NOTICE` rather than joining
+it. That one tells a Worker not to run the project's whole suite; the
+test map's own ruling is mapped tests first, stop and fix a failure
+there, *then* the whole suite as the check runs it. A brief carrying
+both would be one a Worker could satisfy either way, which is worse than
+either alone.
+
+A first round's notice names no tests, only the rule: it has touched
+nothing yet, and a list derived from a diff that does not exist is the
+silent guess rule 4 forbids. A fix round's branch already carries a
+diff, so its Worker is handed the concrete tests and the concrete
+unmapped files.
+
+What lands on the delivery is `Delivery.tests` — the mapped tests, the
+touched files the map covers with nothing, any mapping naming a test
+file the project no longer has, and, marked as such, the Worker's own
+report of which mapped tests it ran (`WorkerWriteup.testsRun`). Nothing
+compares that last one against the mapped list: the Client ruled that
+the record is the Worker's own report and that the full suite's own run
+is the independent check. An unmapped file never fails the pass — it is
+named on the delivery and on the `fabrica status` row, which is the
+loudness required, and the whole suite still ran.
+
 ## The issue a task names is fetched once and carried in full
 
 `fabrica do "<task text>" --project <p> --issue <N>` used to mean one

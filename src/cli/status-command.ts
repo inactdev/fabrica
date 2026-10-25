@@ -40,6 +40,7 @@ import {
   isDeadEnd,
   projectFromEvents,
   prUrlFromEvents,
+  testMapNoteFromEvents,
 } from "./render.ts";
 import { cachedProcessTable, probeTaskWorker } from "./task-process.ts";
 
@@ -337,6 +338,13 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             // task's pull request, read off the record like everything else
             // on this line.
             checksSummary: checksSummaryFromEvents(events),
+            // What this task's touched files mapped to nothing in the
+            // project's committed tests.map, and any mapping that names
+            // a test file the project no longer has. Read off the
+            // delivery the same way, and said out loud here rather than
+            // left to `fabrica log` - a gap nobody is told about is a
+            // gap nobody closes.
+            testMapNote: testMapNoteFromEvents(events),
             // Issue #111: which mode judged this task - Inspector's own
             // independent run, or the worker checking itself. Read from
             // the same events this listing already holds; only a

@@ -75,7 +75,14 @@ const HOOK_ONLY_COMMANDS = ["deny-and-log-edit"];
 // same reason - it pulls new code and runs a real git/npm command
 // against this machine's own checkout or global install, which is the
 // Client's call to make, not an AI driver's.
-const NEVER_FROM_CHAT_COMMANDS = ["up", "update"];
+// "tests-map" is denied on the same ground, and with the same deny
+// coverage: it writes a file into the Client's own checkout
+// (`<project>/tests.map`), which is precisely the off-the-books edit
+// these templates exist to prevent - a chat agent that could run it
+// could put a file in the repository without a task, a branch or a
+// pull request behind it. It records no judgment, so it is not a
+// DECIDING_COMMAND.
+const NEVER_FROM_CHAT_COMMANDS = ["up", "update", "tests-map"];
 
 function commandsInMainDispatch(): string[] {
   const mainSource = readFileSync(join(repoRoot, "src", "cli", "main.ts"), "utf8");

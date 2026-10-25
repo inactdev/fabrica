@@ -76,7 +76,32 @@ export {
 export type { ModelChoice, ModelOnRecord, ModelSource } from "./foreman/index.ts";
 export { UNKNOWN_MODEL } from "./brain/index.ts";
 export type { TaskFollower, TaskProgress } from "./foreman/index.ts";
-export type { TranscriptEntry, WorkerWriteup, WriteupQuizEntry } from "../contract/surface.ts";
+export type { TranscriptEntry, WriteupQuizEntry } from "../contract/surface.ts";
+// The write-up as every reader in src/ and every integration sees it:
+// the ratified shape plus the one optional field a project's committed
+// test map asks for (see src/brain/types.ts for why the widening lives
+// there, not in the contract).
+export type { WorkerWriteup } from "./brain/index.ts";
+// A project's committed test map (src/testmap/): which tests cover which
+// files, the report a delivery records about it, and the one phrase a
+// `fabrica status` row shows. `fabrica tests-map` generates the file;
+// src/cli/ reaches all of it through here, never into src/testmap
+// directly.
+export {
+  describeTestMapNote,
+  describeTestMapReport,
+  generatedHeader,
+  generateTestMap,
+  readTestMap,
+  TEST_MAP_FILENAME,
+  testMapPath,
+  writeTestMap,
+} from "./testmap/index.ts";
+// `TestMapError` deliberately stays inside src/: a malformed map reaches
+// the CLI as the `ForemanError("test-map-unreadable")` a round refuses
+// with, carrying src/testmap's own message, so nothing out here has to
+// know this module has an error class of its own.
+export type { TestMapReport } from "./testmap/index.ts";
 // Issue #98: the write-up's quiz, as the live view reads it - one reader
 // for "is there a showable quiz here", so every surface skips a
 // quiz-less task the same way.

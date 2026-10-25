@@ -56,6 +56,15 @@ export const WRITEUP_STRING_FIELDS = [
  * `additionalProperties: false`. */
 export const WRITEUP_OPTIONAL_STRING_FIELDS = [
   "couldNotVerify",
+  /** Which of the tests the project's committed `tests.map` mapped this
+   * task's touched files to the worker says it ran. Optional because
+   * most projects commit no map, and because a worker that ran none has
+   * nothing to claim - the delivery then says exactly that rather than
+   * the write-up being refused over it. Unlike `couldNotVerify` this one
+   * is NOT rendered into the pull request body (`pr-body.ts`'s
+   * `ADDITIONAL_BULLETS`): its reader is the Client on the delivery, the
+   * same way `quiz`'s reader is the Client on the review page. */
+  "testsRun",
 ] as const satisfies readonly (keyof WorkerWriteup)[];
 
 /** What is wrong with a write-up's `quiz`, as one clause - or undefined

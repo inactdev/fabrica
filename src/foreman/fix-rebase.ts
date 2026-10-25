@@ -43,7 +43,9 @@ import { abortRebase, branchTip, finishRebase, rebaseOntoOriginDefault } from ".
 import type { BranchTips, RebaseConflict } from "../line/index.ts";
 import type { ProductionLine } from "../../contract/surface.ts";
 import type { Receipt } from "../inspector/types.ts";
-import { buildRebaseConflictDelivery, renderDeliveryMarkdown } from "./delivery.ts";
+import { buildRebaseConflictDelivery, renderDeliveryMarkdown, withTestMapReport } from "./delivery.ts";
+import { reportForRound } from "./test-map.ts";
+import type { TestMapEntry } from "../testmap/index.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf } from "./caps.ts";
 
@@ -295,17 +297,30 @@ export function deliverRebaseConflict(
     declaredGateChanges: string | undefined;
     reason: ConflictReportReason;
     stops: number;
+    /** The project's committed test map, and the worker's own report of
+     * which mapped tests it ran - carried here so a conflict report
+     * names its unmapped touched files and broken mappings like every
+     * other delivery. Nothing was handed to a check this round, which
+     * the report's own wording already says by having no worker list to
+     * show; omitting the block entirely would instead read as "this
+     * project has no test map". */
+    testMap?: TestMapEntry[] | null;
+    workerTestsRun?: string;
   }
 ): void {
-  const delivery = buildRebaseConflictDelivery({
-    branch: line.branch,
-    files: diffFiles(line.project, line.branch, ctx.baseCommit),
-    declaredGateChanges: ctx.declaredGateChanges,
-    base: ctx.base,
-    conflict: ctx.conflict,
-    reason: ctx.reason,
-    stops: ctx.stops,
-  });
+  const files = diffFiles(line.project, line.branch, ctx.baseCommit);
+  const delivery = withTestMapReport(
+    buildRebaseConflictDelivery({
+      branch: line.branch,
+      files,
+      declaredGateChanges: ctx.declaredGateChanges,
+      base: ctx.base,
+      conflict: ctx.conflict,
+      reason: ctx.reason,
+      stops: ctx.stops,
+    }),
+    reportForRound(ctx.testMap, line.project, files, ctx.workerTestsRun)
+  );
   validateDelivery(delivery);
   writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
   appendEvent(recordHome, {

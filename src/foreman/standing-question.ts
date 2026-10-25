@@ -106,6 +106,16 @@ export const ONLY_TOUCHED_TESTS_NOTICE =
   "nothing that check will not. If your change could break something the tests you ran do not cover, say so " +
   "in your write-up.";
 
+/** A project's committed test map (`tests.map`) turns the "only the
+ * tests you touched" ruling above from advice into a lookup: the project
+ * itself says which tests cover which files, so a worker no longer has
+ * to guess which ones those are. The wording lives in
+ * src/testmap/describe.ts beside the delivery's and the status row's, so
+ * the three cannot drift apart about what "unmapped" means; it is
+ * re-exported here only so every notice a brief can carry is nameable
+ * from one place. */
+export { testMapBriefNotice } from "../testmap/index.ts";
+
 const STANDING_PREFIX = [
   STANDING_QUESTION,
   FINAL_MESSAGE_FORMAT_NOTICE,
@@ -118,15 +128,27 @@ const STANDING_PREFIX = [
  * applied by every brief builder and again where the brief is handed
  * over, so a builder nested inside another never doubles it.
  *
- * `onlyTouchedTests` adds ONLY_TOUCHED_TESTS_NOTICE after those four.
+ * `onlyTouchedTests` adds ONLY_TOUCHED_TESTS_NOTICE after those four,
+ * and `testMap` - the project's own test-map notice, already worded by
+ * `testMapBriefNotice` - takes its place when the project commits one.
+ * It **replaces** rather than joins it, deliberately: that notice tells
+ * a worker not to run the project's whole suite, and the test map's own
+ * ruling tells it to run the whole suite once the mapped tests are
+ * green. A brief carrying both would be one a worker could satisfy
+ * either way, which is worse than either alone.
+ *
  * The doubling guard deliberately keys on STANDING_PREFIX alone, which
- * the conditional notice sits *after*: a brief an outer builder already
+ * the conditional notices sit *after*: a brief an outer builder already
  * prefixed comes back untouched whatever this call asks for, so a
  * nested re-application can neither double the prefix nor quietly drop
- * a notice the outer builder resolved. Resolving it is
+ * a notice the outer builder resolved. Resolving both is
  * src/foreman/touched-tests.ts's job, in one place per round. */
-export function withStandingQuestion(brief: string, opts: { onlyTouchedTests?: boolean } = {}): string {
+export function withStandingQuestion(
+  brief: string,
+  opts: { onlyTouchedTests?: boolean; testMap?: string } = {}
+): string {
   if (brief.startsWith(STANDING_PREFIX)) return brief;
-  const prefix = opts.onlyTouchedTests ? `${STANDING_PREFIX}\n\n${ONLY_TOUCHED_TESTS_NOTICE}` : STANDING_PREFIX;
-  return `${prefix}\n\n${brief}`;
+  const notice =
+    opts.testMap !== undefined ? opts.testMap : opts.onlyTouchedTests ? ONLY_TOUCHED_TESTS_NOTICE : undefined;
+  return [STANDING_PREFIX, ...(notice === undefined ? [] : [notice]), brief].join("\n\n");
 }

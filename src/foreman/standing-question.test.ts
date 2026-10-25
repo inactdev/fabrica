@@ -13,6 +13,7 @@ import {
   DURABLE_NOTES_NOTICE,
   ONLY_TOUCHED_TESTS_NOTICE,
   SAME_SHAPE_NOTICE,
+  testMapBriefNotice,
   withStandingQuestion,
 } from "./standing-question.ts";
 
@@ -60,4 +61,22 @@ test("withStandingQuestion: a brief an outer builder already prefixed comes back
 
   const plain = withStandingQuestion("do the thing");
   assert.equal(withStandingQuestion(plain, { onlyTouchedTests: true }), plain, "a re-application added one");
+});
+
+test("a project's test-map notice replaces the only-touched-tests one, never joins it", () => {
+  // The two say opposite things about the whole suite: one tells a
+  // worker not to run it, the other tells it to once the mapped tests
+  // are green. A brief carrying both is one a worker could satisfy
+  // either way.
+  const notice = testMapBriefNotice();
+
+  const withMap = withStandingQuestion("do the thing", { onlyTouchedTests: true, testMap: notice });
+  assert.ok(withMap.includes(notice));
+  assert.equal(withMap.split(notice).length - 1, 1, "the test-map notice landed more than once");
+  assert.ok(!withMap.includes(ONLY_TOUCHED_TESTS_NOTICE), "the brief told the worker both things at once");
+  assert.ok(withMap.endsWith("do the thing"));
+
+  // And an already-prefixed brief is still returned untouched, so a
+  // nested re-application can neither double nor drop it.
+  assert.equal(withStandingQuestion(withMap, { onlyTouchedTests: true }), withMap);
 });

@@ -6,6 +6,7 @@
       "Bash(fabrica cost *)",
       "Bash(fabrica up *)",
       "Bash(fabrica update *)",
+      "Bash(fabrica tests-map *)",
       "Bash(rm *)",
       "Bash(mv *)",
       "Bash(cp *)",
