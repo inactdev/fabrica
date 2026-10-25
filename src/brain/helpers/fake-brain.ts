@@ -6,6 +6,7 @@
 // session id continues that session's history rather than restarting it.
 
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
+import type { AskQuestion } from "../ask-shape.ts";
 import type { MeterReading } from "../meters.ts";
 import { MODEL_TRANSCRIPT_KIND } from "../model.ts";
 
@@ -43,15 +44,19 @@ export function fakeBrain(
      * way `costUsd` below does - which is what a test about declarations
      * across several rounds needs. */
     gateChanges?: string | ((call: number) => string | undefined);
-    /** ask() returns these questions every time it's called. Omitted
-     * (the default) means the task always looks clear enough to
-     * proceed - matching a brain that has nothing to ask. */
-    askQuestions?: string[];
+    /** ask() returns this question every time it's called, in issue
+     * #176's fixed shape - one question, two to four options, "other"
+     * left out because Fabrica appends it. Omitted (the default) means
+     * the task always looks clear enough to proceed - matching a brain
+     * that has nothing to ask. A function picks per call (1-based),
+     * which is what a test about the re-ask loop needs: return a
+     * badly-shaped question first and a good one second. */
+    askQuestion?: AskQuestion | BrainAskResult | ((call: number) => AskQuestion | BrainAskResult | undefined);
     /** ask() throws this instead of returning, every time it's called -
      * stands in for a brain that is genuinely unreachable (the reference
      * adapter's documented credential gap is today's live example),
-     * distinct from askQuestions (a brain that answered, just with
-     * questions). Ignored if askQuestions is also set. */
+     * distinct from askQuestion (a brain that answered, just with a
+     * question). Ignored if askQuestion is also set. */
     askError?: Error;
     /** Issue #199: work() throws this instead of returning, standing in
      * for a model call that was dropped in transit (or refused). A
@@ -129,7 +134,13 @@ export function fakeBrain(
       askCalls.push(brief);
       if (opts.askError) throw opts.askError;
       const costUsd = opts.askCostUsd === undefined ? 0 : opts.askCostUsd;
-      return opts.askQuestions ? { questions: opts.askQuestions, costUsd } : { costUsd };
+      const asked = typeof opts.askQuestion === "function" ? opts.askQuestion(askCalls.length) : opts.askQuestion;
+      if (asked === undefined) return { costUsd };
+      // A whole BrainAskResult passes straight through - that is how a
+      // test hands Fabrica a deliberately badly-shaped ask (free-form
+      // `questions`, an unasked question) instead of a valid one. A bare
+      // question is the common case and is wrapped.
+      return isQuestion(asked) ? { question: asked, costUsd } : { ...asked, costUsd };
     },
     async work(brief, workdir, workOpts) {
       calls += 1;
@@ -201,4 +212,10 @@ export function fakeBrain(
       return result;
     },
   };
+}
+
+/** Whether the fixture was given a bare question or a whole ask result -
+ * `options` is the one key only a question has. */
+function isQuestion(asked: AskQuestion | BrainAskResult): asked is AskQuestion {
+  return "options" in asked;
 }

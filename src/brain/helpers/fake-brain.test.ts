@@ -108,11 +108,24 @@ test("fakeBrain: ask() has nothing to ask by default - proceed straight to work"
   assert.deepEqual(result, { costUsd: 0 });
 });
 
-test("fakeBrain: ask() returns the configured questions every time it's called", async () => {
-  const brain = fakeBrain({ askQuestions: ["What database?", "Multi-tenant?"] });
+test("fakeBrain: ask() returns the configured question every time it's called, in the fixed shape", async () => {
+  const question = { question: "What database?", options: ["Postgres", "SQLite"] };
+  const brain = fakeBrain({ askQuestion: question });
 
-  assert.deepEqual(await brain.ask("first brief"), { questions: ["What database?", "Multi-tenant?"], costUsd: 0 });
-  assert.deepEqual(await brain.ask("second brief"), { questions: ["What database?", "Multi-tenant?"], costUsd: 0 });
+  assert.deepEqual(await brain.ask("first brief"), { question, costUsd: 0 });
+  assert.deepEqual(await brain.ask("second brief"), { question, costUsd: 0 });
+});
+
+// What a test about issue #176's re-ask loop needs: a machine that
+// answers differently on each call, including with a whole ask result
+// that is deliberately out of shape.
+test("fakeBrain: ask() can answer per call, and can hand back a badly-shaped ask as-is", async () => {
+  const brain = fakeBrain({
+    askQuestion: (call) => (call === 1 ? { questions: ["free-form?"] } : { question: "which?", options: ["a", "b"] }),
+  });
+
+  assert.deepEqual(await brain.ask("first"), { questions: ["free-form?"], costUsd: 0 });
+  assert.deepEqual(await brain.ask("second"), { question: { question: "which?", options: ["a", "b"] }, costUsd: 0 });
 });
 
 test("fakeBrain: ask() calls are tracked separately from work() calls", async () => {

@@ -50,8 +50,13 @@ The whole tool in one command.
    task text saved verbatim, event logged.
 2. **Clarify-or-proceed (ask-first dial, v1 position: ask).** The agent's
    first pass produces either QUESTIONS or a short PLAN:
-   - If the task is materially ambiguous → print numbered questions and
-     stop. The Client answers with `fabrica answer <id> -m "<text>"`, which
+   - If the task is materially ambiguous → print ONE question with two
+     to four options plus "other" (issues #176/#175: a machine asks in a
+     fixed shape, Fabrica appends "other" and derives a stable id from
+     the question and its options, and the first answer to that id wins
+     for the rest of the task) and
+     stop. The Client answers with `fabrica answer <id> --option <n>`,
+     or in his own words with `-m "<text>"`, which
      appends a round to `answers.md` and re-derives `brief.md`, then
      resumes at this step. The brief is the Client's original request
      plus every answer given so far, assembled into the one document a
@@ -93,10 +98,15 @@ The whole tool in one command.
 7. **Nags for a verdict** on later `fabrica` invocations until one is recorded
    (Contract 6).
 
-### `fabrica answer <id> -m "<text>"`
+### `fabrica answer <id> [--option <n>] [--question <id>] [-m "<text>"]`
 Appends a clarification round to `answers.md` and re-derives `brief.md`
 from `request.md` plus every answer so far, then resumes the task. Never
 writes into `request.md` — the Client's original words stay verbatim.
+`--option` picks one of the question's options by number, and that
+option's own text is the answer; `-m` answers in the Client's own words,
+which is what picking "other" means. `--question` names which question
+is being answered — how an answer already given is corrected: the record
+keeps both, the newer one applies to later rounds, nothing is rewritten.
 
 ### `fabrica verdict <id> <accept|fix|wrong> [-m "<note>"]`
 Records the Client's ruling (Contract 6). `fix` = right direction,

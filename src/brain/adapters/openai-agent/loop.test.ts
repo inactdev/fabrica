@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runAsk, runWork, writeupProblem, questionsFrom, IDLE_NUDGE, WORK_SYSTEM_PROMPT } from "./loop.mjs";
+import { runAsk, runWork, writeupProblem, askedFrom, IDLE_NUDGE, WORK_SYSTEM_PROMPT } from "./loop.mjs";
 import { WRITEUP_TOOL_NAME } from "./tools.mjs";
 import { writeupToolSchema } from "../openai-compatible.ts";
 import { WRITEUP_OPTIONAL_STRING_FIELDS, WRITEUP_QUIZ_LENGTH, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../../writeup.ts";
@@ -342,21 +342,28 @@ test("with no persisted home there is nothing to resume, and that is not an erro
 });
 
 test("the clarifying call is one tool-free call, and unreadable answers mean nothing to ask", async () => {
-  const { chat, sent } = scriptedChat([answer({ content: '{"questions": ["which one?", "  ", 7]}' })]);
+  const asked = '{"question": "which one?", "options": ["this", "that"]}';
+  const { chat, sent } = scriptedChat([answer({ content: asked })]);
   const { emit, lines } = collect();
 
   const result = await runAsk(makeJob({ mode: "ask", brief: "is this clear?", askMaxTokens: 64 }), emit, { chat });
 
-  assert.deepEqual(result.questions, ["which one?"]);
+  // Issue #176's fixed shape, handed on as the model sent it - the
+  // Foreman is what judges and, if need be, rejects it.
+  assert.deepEqual(result.question, { question: "which one?", options: ["this", "that"] });
   assert.equal(result.stopReason, "answered");
   assert.equal(result.totalCostUsd, 0.25);
   assert.equal("tools" in sent[0], false, "the clarifying call must offer no tools");
   assert.equal(sent[0].max_tokens, 64);
   assert.ok(lines.some((line) => line.t === "usage"));
 
-  assert.deepEqual(questionsFrom("not json at all"), []);
-  assert.deepEqual(questionsFrom('```json\n{"questions": ["fenced anyway"]}\n```'), ["fenced anyway"]);
-  assert.deepEqual(questionsFrom('{"questions": []}'), []);
+  assert.deepEqual(askedFrom("not json at all"), {});
+  assert.deepEqual(askedFrom('{"question": null}'), {});
+  assert.deepEqual(askedFrom('```json\n' + asked + '\n```'), { question: { question: "which one?", options: ["this", "that"] } });
+  // A free-form list is passed through, not swallowed: the Foreman
+  // rejects it by name and has the machine ask again.
+  assert.deepEqual(askedFrom('{"questions": ["which one?", "  ", 7]}'), { questions: ["which one?"] });
+  assert.deepEqual(askedFrom('{"questions": []}'), {});
 });
 
 test("writeupProblem names the one thing wrong, and accepts a usable write-up", () => {

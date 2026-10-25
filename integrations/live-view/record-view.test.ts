@@ -16,6 +16,7 @@ import {
   taskTitle,
 } from "./record-view.ts";
 import type { FabricaEvent } from "../../src/index.ts";
+import { OTHER_OPTION } from "../../src/index.ts";
 
 function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-live-view-test-"));
@@ -518,13 +519,21 @@ test("createRecordView: getQuiz lists every accepted task's questions, newest fi
   assert.equal(newest[0].intervalLabel, "never asked");
 });
 
-test("questionsFromEvents: the latest questions-asked wins, and a details shape that isn't a list of questions reads as none", () => {
+test("questionsFromEvents: the latest questions-asked wins, with its options, and a malformed one reads as none", () => {
   const event = (name: string, details: unknown): FabricaEvent =>
     ({ taskId: "t", name, occurredAt: "2026-10-17T00:00:00.000Z", details } as unknown as FabricaEvent);
 
-  assert.deepEqual(questionsFromEvents([]), []);
-  assert.deepEqual(questionsFromEvents([event("work-started", { project: "/p" })]), []);
-  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: ["one?", "two?"] })]), ["one?", "two?"]);
+  assert.deepEqual(questionsFromEvents([]), { questions: [] });
+  assert.deepEqual(questionsFromEvents([event("work-started", { project: "/p" })]), { questions: [] });
+
+  // Issue #176's fixed shape: the question, its options with "other"
+  // last, and Fabrica's own id for it - what the page renders as choices.
+  const question = { id: "q-0123456789ab", question: "which?", options: ["this", "that", OTHER_OPTION] };
+  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: ["which?"], question })]), {
+    questions: ["which?"],
+    question,
+  });
+
   // A second round of questions (a resumed task that asked again) - the
   // latest is the one waiting on an answer.
   assert.deepEqual(
@@ -533,13 +542,18 @@ test("questionsFromEvents: the latest questions-asked wins, and a details shape 
       event("answers-given", { answer: "yes" }),
       event("questions-asked", { questions: ["new?"] }),
     ]),
-    ["new?"]
+    { questions: ["new?"] }
   );
   // Defensive: this is a viewer, so a malformed event reads as no
-  // questions rather than taking the page down.
-  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: "one?" })]), []);
-  assert.deepEqual(questionsFromEvents([event("questions-asked", undefined)]), []);
-  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: ["ok?", 7] })]), ["ok?"]);
+  // question rather than taking the page down. A question with no
+  // options is not the fixed shape and is dropped to plain text.
+  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: "one?" })]), { questions: [] });
+  assert.deepEqual(questionsFromEvents([event("questions-asked", undefined)]), { questions: [] });
+  assert.deepEqual(questionsFromEvents([event("questions-asked", { questions: ["ok?", 7] })]), { questions: ["ok?"] });
+  assert.deepEqual(
+    questionsFromEvents([event("questions-asked", { questions: ["ok?"], question: { id: "q-1", question: "ok?" } })]),
+    { questions: ["ok?"] }
+  );
 });
 
 test("createRecordView: getReviewRows shows a task waiting on an answer, with its questions, and drops it once answered", () => {

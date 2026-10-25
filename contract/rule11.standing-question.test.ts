@@ -82,7 +82,7 @@ test("rule 11: every brief begins with the standing question - first attempt, re
 });
 
 test("rule 11: an answered round's brief begins with the standing question", async () => {
-  const brain = fakeBrain({ askQuestions: ["Which database?"] });
+  const brain = fakeBrain({ askQuestion: { question: "Which database?", options: ["Postgres", "SQLite"] } });
   const foreman = createForeman({
     recordHome: mkdtempSync(join(tmpdir(), "fabrica-home-")),
     inspector: fakeInspector("green"),

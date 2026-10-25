@@ -23,7 +23,7 @@ function freshHome(): string {
 test("answerTask resumes an asking task, extends the brief, and delivers", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const askBrain = fakeBrain({ askQuestions: ["What database should this use?"] });
+  const askBrain = fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } });
 
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
   assert.equal(asked.state, "asking");
@@ -87,7 +87,7 @@ test("answerTask resumes an asking task, extends the brief, and delivers", async
 test("answerTask's delivery summary stays the original one-line request, not the extended brief", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const askBrain = fakeBrain({ askQuestions: ["What database should this use?"] });
+  const askBrain = fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
 
   await answerTask(recordHome, asked.id, "Use Postgres.", { brain: fakeBrain(), inspector: fixtureInspector() });
@@ -103,10 +103,10 @@ test("answerTask's delivery summary stays the original one-line request, not the
 test("answerTask never calls ask() again - one clarification round by default", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const askBrain = fakeBrain({ askQuestions: ["Which?"] });
+  const askBrain = fakeBrain({ askQuestion: { question: "Which?", options: ["This", "That"] } });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
 
-  const workBrain = fakeBrain({ askQuestions: ["Still ambiguous?"] });
+  const workBrain = fakeBrain({ askQuestion: { question: "Still ambiguous?", options: ["Yes", "No"] } });
   const task = await answerTask(recordHome, asked.id, "Whatever works.", { brain: workBrain, inspector: fixtureInspector() });
 
   assert.equal(task.state, "delivered", "resuming must proceed to work, never ask again");
@@ -116,7 +116,7 @@ test("answerTask never calls ask() again - one clarification round by default", 
 test("answerTask honors the original attempts budget from the do() call", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const askBrain = fakeBrain({ askQuestions: ["Which?"] });
+  const askBrain = fakeBrain({ askQuestion: { question: "Which?", options: ["This", "That"] } });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain, attempts: 3 });
 
   const workBrain = fakeBrain();
@@ -148,7 +148,7 @@ test("answerTask rejects a task that never asked a clarifying question", async (
 test("answerTask rejects a second answer for the same task - the dial is fixed at one round", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const askBrain = fakeBrain({ askQuestions: ["Which?"] });
+  const askBrain = fakeBrain({ askQuestion: { question: "Which?", options: ["This", "That"] } });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
   await answerTask(recordHome, asked.id, "First answer.", { brain: fakeBrain(), inspector: fixtureInspector() });
 
@@ -170,7 +170,7 @@ test("answerTask rejects a second answer for the same task - the dial is fixed a
 test("answerTask allows a retry when the previous resume attempt threw before ever completing", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const askBrain = fakeBrain({ askQuestions: ["Which?"] });
+  const askBrain = fakeBrain({ askQuestion: { question: "Which?", options: ["This", "That"] } });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
   assert.equal(asked.state, "asking");
 
@@ -199,11 +199,10 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
   assert.equal(task.state, "delivered");
   assert.equal(workBrain.calls, 1);
 
-  // Each `fabrica answer` call appends its own "answers-given" - the
-  // retry is a second, real call, not a hidden replay, so the record
-  // shows both attempts honestly (rule 5: nothing happens off the
-  // books). The first attempt's own "work-started" is on the record too
-  // - it genuinely started, it just never finished.
+  // The retry resumes the round, and records no second "answers-given"
+  // for it: that question already had an answer, and the first answer
+  // wins (issue #175). Before question ids, this retry appended a second
+  // round and handed the worker the Client's words twice.
   const events = readEventsForTask(recordHome, asked.id).map((e) => e.name);
   assert.deepEqual(events, [
     "task-received",
@@ -218,7 +217,6 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     // records the failure itself, so the task never reads as working.
     "receipt-recorded",
     "task-failed",
-    "answers-given",
     "line-cut",
     "work-started",
     "inspector-called",
@@ -229,9 +227,14 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     "delivered",
   ]);
 
-  const answers = readTaskFile(recordHome, asked.id, "answers.md");
-  assert.match(answers ?? "", /First attempt\./);
-  assert.match(answers ?? "", /Second attempt\./);
+  // One round in answers.md, holding the answer that stood - not the
+  // same question answered twice.
+  const answers = readTaskFile(recordHome, asked.id, "answers.md") ?? "";
+  assert.match(answers, /First attempt\./);
+  assert.doesNotMatch(answers, /Second attempt\./);
+  assert.equal(answers.split("## Clarification").length - 1, 1);
+  // What the worker was handed on the retry is the answer that stood.
+  assert.match(workBrain.historyBySession.values().next().value![0], /First attempt\./);
 });
 
 // The narrower version of the same permanently-stuck-task bug: a resume
@@ -246,7 +249,7 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
 test("answerTask retries as a first round when the previous resume died before the line was ever cut", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const askBrain = fakeBrain({ askQuestions: ["Which?"] });
+  const askBrain = fakeBrain({ askQuestion: { question: "Which?", options: ["This", "That"] } });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
   assert.equal(asked.state, "asking");
 
@@ -290,7 +293,7 @@ test("answerTask retries as a first round when the previous resume died before t
 test("answerTask rejects a blank answer", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome();
-  const askBrain = fakeBrain({ askQuestions: ["Which?"] });
+  const askBrain = fakeBrain({ askQuestion: { question: "Which?", options: ["This", "That"] } });
   const asked = await doTask(recordHome, "build me an app", { project, brain: askBrain });
 
   await assert.rejects(

@@ -671,6 +671,27 @@ body.review-page main {
   word-break: break-word;
 }
 
+/* Issue #176: one question, and its two to four options plus "other" as
+   tappable buttons. The options stack rather than sharing a row the way
+   a verdict card's three buttons do: an option is a sentence, not a
+   word, and a thumb picking the wrong one here costs a whole round.
+   They wear .review-btn, so each is already 44px tall. */
+.review-question {
+  margin: 0 0 0.6rem 0;
+  word-break: break-word;
+}
+
+.review-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.review-option {
+  text-align: left;
+}
+
 .review-answer,
 .review-note-box {
   display: block;

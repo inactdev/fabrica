@@ -101,11 +101,14 @@ async function postVerdict(taskId, ruling, note) {
   return body;
 }
 
-async function postAnswer(taskId, answer) {
+async function postAnswer(taskId, answer, option) {
   const res = await fetch(`/api/review/tasks/${encodeURIComponent(taskId)}/answer`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ answer }),
+    // `option` is the number of the choice tapped, 1-based as the record
+    // lists them (issue #176); left out, the answer is the Client's own
+    // words, which is what picking "other" means.
+    body: JSON.stringify(option === undefined ? { answer } : { answer, option }),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -251,18 +254,22 @@ function buildRow(row) {
   return buildDeliveredRow(row);
 }
 
-// A task waiting on the Client's own words, not on a ruling: its
-// questions as the worker asked them, numbered the same way `fabrica
-// answer` numbers them in answers.md, and one box to answer all of them
-// at once - which is exactly what `fabrica answer <id> -m "<text>"`
-// takes too (one answer per round, not one per question).
+// A task waiting on the Client's own words, not on a ruling. The
+// question arrives as one question with two to four options plus "other"
+// (issue #176), so this is a card of tappable choices: tapping one sends
+// that option as the whole answer, and tapping the last one ("other")
+// opens the box, which is what `fabrica answer <id> -m "<text>"` has
+// always taken. A task that asked before #176 has question text and no
+// options, and still gets the plain box.
 function buildAskingRow(row) {
   const title = el("div", { className: "review-title" }, [row.title]);
-  const questions = el(
-    "ol",
-    { className: "review-questions" },
-    row.questions.map((question) => el("li", {}, [question]))
-  );
+  const asked = row.question
+    ? el("div", { className: "review-question" }, [row.question.question])
+    : el(
+        "ol",
+        { className: "review-questions" },
+        row.questions.map((question) => el("li", {}, [question]))
+      );
 
   const box = el("textarea", {
     className: "review-answer",
@@ -273,29 +280,58 @@ function buildAskingRow(row) {
   const statusEl = el("div", { className: "review-status" }, [""]);
   const sendBtn = el("button", { className: "review-btn btn-accept" }, ["Send answer"]);
 
+  const options = row.question ? row.question.options : [];
+  // "Other" is always the last option Fabrica appended, and is the one
+  // that needs words rather than a tap.
+  const otherIndex = options.length;
+  const optionButtons = options.slice(0, -1).map((option) => el("button", { className: "review-btn review-option" }, [option]));
+  const otherBtn = options.length > 0 ? el("button", { className: "review-btn review-option" }, [options[options.length - 1]]) : null;
+
+  // Until "other" is tapped, the box is out of the way: the whole point
+  // of a menu is that the common case is one tap.
+  if (otherBtn) box.hidden = true;
+
+  async function send(answer, option) {
+    for (const btn of [...optionButtons, otherBtn, sendBtn]) if (btn) btn.disabled = true;
+    box.disabled = true;
+    statusEl.textContent = "";
+    try {
+      await postAnswer(row.id, answer, option);
+      // Optimistic, same as a recorded verdict below: this task is now
+      // running again, not waiting on anyone.
+      cardEl.remove();
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      for (const btn of [...optionButtons, otherBtn, sendBtn]) if (btn) btn.disabled = false;
+      box.disabled = false;
+    }
+  }
+
+  optionButtons.forEach((btn, i) => {
+    // An option is the answer on its own - no text is sent with it, the
+    // same rule `fabrica answer --option <n>` follows.
+    btn.addEventListener("click", () => send("", i + 1));
+  });
+  if (otherBtn) {
+    otherBtn.addEventListener("click", () => {
+      box.hidden = false;
+      box.focus();
+    });
+  }
+
   sendBtn.addEventListener("click", async () => {
     const answer = box.value.trim();
     if (answer.length === 0) {
       statusEl.textContent = "an answer needs actual text - it becomes part of the brief the worker receives";
       return;
     }
-    sendBtn.disabled = true;
-    box.disabled = true;
-    statusEl.textContent = "";
-    try {
-      await postAnswer(row.id, answer);
-      // Optimistic, same as a recorded verdict below: this task is now
-      // running again, not waiting on anyone.
-      cardEl.remove();
-    } catch (err) {
-      statusEl.textContent = err instanceof Error ? err.message : String(err);
-      sendBtn.disabled = false;
-      box.disabled = false;
-    }
+    await send(answer, options.length > 0 ? otherIndex : undefined);
   });
 
+  const choices =
+    optionButtons.length > 0 ? [el("div", { className: "review-options" }, [...optionButtons, otherBtn].filter(Boolean))] : [];
   const actions = el("div", { className: "review-actions" }, [sendBtn]);
-  const cardEl = el("div", { className: "review-card" }, [title, questions, box, actions, statusEl]);
+  const cardEl = el("div", { className: "review-card" }, [title, asked, ...choices, box, actions, statusEl]);
   return cardEl;
 }
 

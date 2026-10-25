@@ -68,7 +68,7 @@ async function askedTask(installed: boolean) {
   const ctx = setup(installed);
   const asked = await ctx.foreman.do("build me an app", {
     project: ctx.project,
-    brain: fakeBrain({ askQuestions: ["Which database?"] }),
+    brain: fakeBrain({ askQuestion: { question: "Which database?", options: ["Postgres", "SQLite"] } }),
   });
   assert.equal(asked.state, "asking");
   return { ...ctx, taskId: asked.id };

@@ -15,12 +15,19 @@
 // process ending with nothing recorded, which is a failure, not a wait.
 
 import { createForeman } from "../index.ts";
-import type { FabricaEvent } from "../index.ts";
+import type { AskedDetails, FabricaEvent, RecordedQuestion } from "../index.ts";
 
 export interface AskOutcome {
   status: "asking" | "proceeding" | "failed" | "cap-refused";
-  /** Populated only when status is "asking". */
+  /** Populated only when status is "asking": the question's own text, as
+   * a one-element list. Kept as a list because that is the shape the
+   * `"questions-asked"` event has always carried (issue #176 added one
+   * question's options beside it, in `question` below). */
   questions: string[];
+  /** The question with its options and id (issue #176), when the event
+   * carries one - everything `fabrica do` needs to print a menu and tell
+   * the Client how to pick from it. */
+  question?: RecordedQuestion;
   /** Populated only when status is "failed" - brain.ask()'s own error
    * message, verbatim (src/foreman/ask.ts's "ask-failed" event) - or
    * "cap-refused" - the refusal's own message, numbers and unmeasured
@@ -85,8 +92,12 @@ function outcomeFrom(events: FabricaEvent[]): AskOutcome | undefined {
   }
   const asked = events.filter((e) => e.name === "questions-asked").at(-1);
   if (asked) {
-    const details = asked.details as { questions?: string[] } | undefined;
-    return { status: "asking", questions: details?.questions ?? [] };
+    const details = asked.details as AskedDetails | undefined;
+    return {
+      status: "asking",
+      questions: details?.questions ?? [],
+      ...(details?.question ? { question: details.question } : {}),
+    };
   }
   const askFailed = events.filter((e) => e.name === "ask-failed").at(-1);
   if (askFailed) {

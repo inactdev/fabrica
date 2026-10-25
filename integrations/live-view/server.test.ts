@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, registerTask } from "../../src/record/index.ts";
-import { createForeman } from "../../src/index.ts";
+import { createForeman, OTHER_OPTION, QUESTION_ID_PATTERN } from "../../src/index.ts";
 import { fakeBrain } from "../../src/brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
@@ -60,7 +60,7 @@ async function deliveredTask(recordHome: string) {
 async function askingTask(recordHome: string) {
   const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
     project: makeFixtureRepo("exit 0"),
-    brain: fakeBrain({ askQuestions: ["What database should this use?", "Behind a flag?"] }),
+    brain: fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } }),
   });
   assert.equal(task.state, "asking");
   return task;
@@ -1121,7 +1121,7 @@ test("startLiveView: a verdict POST for \"fix\" hands the round to the detached 
   }
 });
 
-test("startLiveView: /api/review lists a task waiting on an answer, with the worker's own questions", async () => {
+test("startLiveView: /api/review lists a task waiting on an answer, with the question and its options", async () => {
   const recordHome = tempRecordHome();
   const task = await askingTask(recordHome);
   const view = await startLiveView({ recordHome, port: 0 });
@@ -1132,7 +1132,12 @@ test("startLiveView: /api/review lists a task waiting on an answer, with the wor
     assert.equal(body.rows.length, 1);
     assert.equal(body.rows[0].id, task.id);
     assert.equal(body.rows[0].kind, "asking");
-    assert.deepEqual(body.rows[0].questions, ["What database should this use?", "Behind a flag?"]);
+    assert.deepEqual(body.rows[0].questions, ["What database should this use?"]);
+    // Issue #176's fixed shape, which is what the page renders as
+    // tappable choices - "other" appended last by Fabrica.
+    assert.equal(body.rows[0].question.question, "What database should this use?");
+    assert.deepEqual(body.rows[0].question.options, ["Postgres", "SQLite", OTHER_OPTION]);
+    assert.match(body.rows[0].question.id, QUESTION_ID_PATTERN);
     // Nothing to rule on yet - an asking row carries no delivery fields.
     assert.equal(body.rows[0].writeupBody, undefined);
   } finally {
@@ -1186,7 +1191,7 @@ test("startLiveView: an answer POST with the identity header records the answer 
       body: JSON.stringify({ answer: "Use Postgres, no flag." }),
     });
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { ok: true });
+    assert.deepEqual(await res.json(), { ok: true, resumed: true, duplicate: false });
 
     // Recorded synchronously, in the foreground - exactly what `fabrica
     // answer` itself records before handing off (issue #123).

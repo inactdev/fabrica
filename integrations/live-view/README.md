@@ -410,11 +410,16 @@ any more (follow-up to issue #202, "show every task waiting on me"):
 - **Asked a clarifying question** - a task that stopped on SPEC.md step
   2 and is waiting on the Client's own words rather than on a ruling.
   Its card has no write-up, no stamp and no verdict buttons at all: the
-  worker's questions, numbered the way `fabrica answer` numbers them in
-  `answers.md`, one box to answer all of them at once (which is what
-  `fabrica answer <id> -m "<text>"` takes too - one answer per round,
-  not one per question), and one button, send. This is what lets a
-  phone - and, later, Amy - unblock a worker without a terminal.
+  one question (issue #176), its two to four options as tappable
+  buttons with Fabrica's own "other" last, and the answer box, hidden
+  until "other" is tapped - the whole point of a menu being that the
+  common case is one tap. Tapping an option sends that option as the
+  whole answer, exactly as `fabrica answer <id> --option <n>` does;
+  "other" sends the Client's own words, which is what `-m "<text>"`
+  has always meant. A task that asked before #176 has question text and
+  no options, and still gets the plain numbered list and the box. This
+  is what lets a phone - and, later, Amy - unblock a worker without a
+  terminal.
 
 Above the list, in the toolbar, sit the two **subscription meters**
 (issue #189): how much of the model provider's 5-hour and 7-day windows
@@ -760,6 +765,16 @@ The answer route added nothing to that list: `recordAnswerDecision` has
 been on `src/index.ts` since issue #123 split the CLI's answer command
 into "record now, run detached," and `spawnDetachedResume` - already
 imported here for a "fix" - takes `kind: "answer"` for this round. The
-questions it shows come off the task's own `"questions-asked"` event,
+question it shows comes off the task's own `"questions-asked"` event,
 read through the same follower cache every other row already uses, so
 there is no new reader either.
+
+Issue #176 added one field to the request this route accepts - `option`,
+the number of the choice tapped, which it passes straight to
+`recordAnswerDecision` - and nothing else: whether that option exists,
+and whether it may be paired with text, is the Foreman's call, so a bad
+tap comes back in the identical words `fabrica answer` would print.
+The response now says whether the round was actually `resumed`, because
+one case does not resume anything: a correction to a question whose round
+has already finished (issue #175) is recorded and applies to later
+rounds, with nothing left here to restart.

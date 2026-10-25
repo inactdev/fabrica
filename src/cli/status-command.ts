@@ -169,6 +169,11 @@ record is also counted at the bottom, "code reads that failed, on
 record: N" - a reader that cannot run is usually one fact about this
 machine, not N facts about N tasks.
 
+A question this task asked that it had already been answered once is
+never put to the Client twice (issue #175, "the first answer wins"): it
+is answered from the record, and the task's line says how many times
+that happened - "N question(s) answered from the record".
+
 A blocked file-edit attempt (issue #13's off-the-books net) is not a
 task and never appears as one here - the record's own
 "project:<name>"/"project:unregistered" buckets for it are counted and
@@ -399,6 +404,11 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             // holds - the Client is being asked for a verdict on this
             // line, and this is what was already looked at.
             read: readFromEvents(events),
+            // Issue #175: how many of this task's questions answered
+            // themselves from the record rather than being put to the
+            // Client twice - counted off the same events this listing
+            // already holds.
+            autoAnswered: events.filter((e) => e.name === "question-auto-answered").length,
             ...(pausedByMeter === undefined ? {} : { pausedByMeter }),
           })
         );

@@ -340,7 +340,7 @@ test("an answered Inspector refusal completes the clarification round without re
   const foreman = createForeman({ recordHome, inspector });
   const task = await foreman.do("build me an app", {
     project: inspectedProject(),
-    brain: fakeBrain({ askQuestions: ["Which database?"] }),
+    brain: fakeBrain({ askQuestion: { question: "Which database?", options: ["Postgres", "SQLite"] } }),
   });
 
   // Exercises answerTask directly - same reasoning as the fix-round test

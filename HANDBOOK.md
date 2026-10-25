@@ -166,18 +166,21 @@ exactly like any delivery. Nothing restarts by itself.
 ### 3. A worker asks a question
 
 A task that's materially ambiguous stops before any work starts and
-prints numbered questions.
+prints one question with its numbered options — two to four of them,
+plus "other" last.
 
-**Relay them to the Client verbatim.** Do not answer them yourself, do
-not guess, do not pick the obvious-looking option — that is exactly the
-ambiguity the worker is asking him, specifically, to resolve.
+**Relay the question and every option verbatim.** Do not answer it
+yourself, do not guess, do not pick the obvious-looking option — that is
+exactly the ambiguity the worker is asking him, specifically, to
+resolve.
 
-His answer goes back with:
+His answer goes back with whichever of these he means:
 
-    fabrica answer <taskId> -m "<his answer, verbatim>"
+    fabrica answer <taskId> --option <n>
+    fabrica answer <taskId> --option <other's number> -m "<his words, verbatim>"
 
-Tell him this exact command, with his own words dropped into `-m`, so he
-can run it himself. **Do not run `fabrica answer` on his behalf**, even
+Tell him the exact command, with the option he picked or his own words
+dropped into `-m`, so he can run it himself. **Do not run `fabrica answer` on his behalf**, even
 quoting him exactly — `fabrica answer` records the Client's own judgment
 the same way `fabrica verdict` does (see case 5), and a tool without the
 per-tool deny rulebook installed has nothing else standing between a

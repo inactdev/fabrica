@@ -20,6 +20,7 @@ import { createProductionLine, destroyProductionLine } from "../../line/index.ts
 import { makeFixtureHome, makeFixtureProject } from "../../line/helpers/fixture.ts";
 import { LineError } from "../../line/index.ts";
 import { registerLiveTranscriptListener } from "../live-transcript.ts";
+import { ASK_SHAPE_NOTICE } from "../ask-shape.ts";
 import type { TranscriptEntry } from "../types.ts";
 import { withStandingQuestion } from "../../foreman/standing-question.ts";
 import { credentialEnvFrom } from "./index.ts";
@@ -120,17 +121,22 @@ test("claudeCodeAdapter.ask() sends the task text and no --resume/--permission-m
 // work() actually sends, after the foreman's withStandingQuestion()) must
 // never carry it: there, the project really is present, and the sentence
 // would be actively misleading.
-test("buildAskPrompt's clarify brief explains the empty folder; the work brief never does", () => {
+test("buildAskPrompt's clarify brief explains the empty folder and the fixed shape; the work brief never does", () => {
   const askPrompt = buildAskPrompt("build me an app");
   assert.match(askPrompt, /project's files are not present at this step on purpose/);
   assert.match(askPrompt, /ask only about what the Client wants, never about where the code is/);
+  // Issue #176: the shape is asked for in the one wording every adapter
+  // uses (src/brain/ask-shape.ts), so no two adapters can ask for
+  // different shapes while the Foreman rejects one of them.
+  assert.ok(askPrompt.includes(ASK_SHAPE_NOTICE));
+  assert.match(askPrompt, /"question": "which database should this use\?", "options"/);
 
   const workBrief = withStandingQuestion("build me an app");
   assert.doesNotMatch(workBrief, /project's files are not present at this step on purpose/);
   assert.doesNotMatch(workBrief, /never about where the code is/);
 });
 
-test("claudeCodeAdapter.ask() returns the questions a materially ambiguous task gets back", async (t) => {
+test("claudeCodeAdapter.ask() returns the one question, with its options, a materially ambiguous task gets back", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const brain = claudeCodeAdapter({
     binPath: FAKE_CLI_IN_CONTAINER,
@@ -138,8 +144,10 @@ test("claudeCodeAdapter.ask() returns the questions a materially ambiguous task 
     askScratchDir: makeFakeCliScratchDir(),
   });
 
-  const result = await brain.ask("ASK_SCENARIO_QUESTIONS");
-  assert.deepEqual(result.questions, ["What database?", "Multi-tenant?"]);
+  const result = await brain.ask("ASK_SCENARIO_QUESTION");
+  // Issue #176's fixed shape, handed on exactly as the model sent it -
+  // the Foreman derives the id and appends "other".
+  assert.deepEqual(result.question, { question: "What database?", options: ["Postgres", "SQLite"] });
 });
 
 test("claudeCodeAdapter.ask() reports the call's cost from the result line", async (t) => {
@@ -176,10 +184,10 @@ test("claudeCodeAdapter.ask() strips a fenced code block around the JSON", async
   });
 
   const result = await brain.ask("ASK_SCENARIO_FENCED");
-  assert.deepEqual(result.questions, ["Fenced question?"]);
+  assert.deepEqual(result.question, { question: "Fenced question?", options: ["Yes", "No"] });
 });
 
-test("claudeCodeAdapter.ask() keeps the usable questions when the list also has junk in it", async (t) => {
+test("claudeCodeAdapter.ask() hands back a free-form list as-is, for the Foreman to reject and re-ask", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
   const brain = claudeCodeAdapter({
     binPath: FAKE_CLI_IN_CONTAINER,
@@ -187,8 +195,13 @@ test("claudeCodeAdapter.ask() keeps the usable questions when the list also has 
     askScratchDir: makeFakeCliScratchDir(),
   });
 
-  const result = await brain.ask("ASK_SCENARIO_MIXED");
+  const result = await brain.ask("ASK_SCENARIO_FREE_FORM");
+  // Not swallowed as "nothing to ask" (issue #176): the Foreman is what
+  // rejects the shape, in the machine's own hearing, and has it ask
+  // again. Blank and non-string entries are still dropped - one stray
+  // element must not change what the rejection says.
   assert.deepEqual(result.questions, ["Real question?"]);
+  assert.equal(result.question, undefined);
 });
 
 test("claudeCodeAdapter.ask() treats an unparseable response as nothing to ask, not a crash", async (t) => {

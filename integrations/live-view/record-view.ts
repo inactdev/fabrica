@@ -45,6 +45,7 @@ import type {
   PauseRule,
   QuizQuestion,
   Receipt,
+  RecordedQuestion,
   TaskFollower,
   TranscriptEntry,
   WorkerWriteup,
@@ -308,19 +309,25 @@ export interface EarlyStopReviewRow {
   lastActivityMs: number;
 }
 
-/** A task that stopped on its clarifying questions (SPEC.md step 2,
+/** A task that stopped on its clarifying question (SPEC.md step 2,
  * issue #8) and is waiting on the Client's words, not on a verdict - so
  * this row carries no write-up, no stamp and no verdict buttons at all,
- * just the questions as asked and somewhere to answer them. `questions`
- * is the worker's own list, verbatim and in order, off the same
- * `"questions-asked"` event `fabrica answer` itself reads to build
- * `answers.md` - this page numbers them for display only, never
- * rewrites them. */
+ * just the question as asked and somewhere to answer it. Everything here
+ * comes off the same `"questions-asked"` event `fabrica answer` itself
+ * reads to build `answers.md`, so the page can never show a question the
+ * recorded answer won't be filed against.
+ *
+ * `question` is issue #176's fixed shape - one question, its options with
+ * "other" last, and Fabrica's own id for it - which is what the page
+ * renders as tappable choices. `questions` is the same question's text as
+ * a one-element list, and all a task that asked before #176 has; the
+ * record is append-only, so the page still renders those. */
 export interface AskingReviewRow {
   id: string;
   title: string;
   kind: "asking";
   questions: string[];
+  question?: RecordedQuestion;
   lastActivityMs: number;
 }
 
@@ -461,23 +468,36 @@ function writeupFromEvents(events: FabricaEvent[]): WorkerWriteup | null {
   return null;
 }
 
-/** The questions a task stopped on - the latest `"questions-asked"`
- * event's own `details.questions` (src/foreman/ask.ts's `AskedDetails`),
- * which is the same event `recordAnswerDecision` reads to build the
- * clarification round in `answers.md`, so the page can never show a
- * question the recorded answer won't be filed against. Latest wins, the
- * same way `prUrlFromEvents`/`writeupFromEvents` above take the last of
- * their own event. Anything but an array of strings reads as no
- * questions rather than throwing - this page is a viewer, and
- * `stateOf` already decided the task is asking. */
-export function questionsFromEvents(events: FabricaEvent[]): string[] {
+/** The question a task stopped on - the latest `"questions-asked"`
+ * event's own details (src/foreman/ask.ts's `AskedDetails`), which is
+ * the same event `recordAnswerDecision` reads to build the clarification
+ * round in `answers.md`, so the page can never show a question the
+ * recorded answer won't be filed against. Latest wins, the same way
+ * `prUrlFromEvents`/`writeupFromEvents` above take the last of their own
+ * event.
+ *
+ * Both halves are returned: `question`, issue #176's fixed shape, when
+ * the event carries one, and `questions`, the text as a list, which is
+ * all an event recorded before #176 has. Anything else reads as no
+ * question rather than throwing - this page is a viewer, and `stateOf`
+ * already decided the task is asking. */
+export function questionsFromEvents(events: FabricaEvent[]): {
+  questions: string[];
+  question?: RecordedQuestion;
+} {
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].name !== "questions-asked") continue;
-    const questions = (events[i].details as { questions?: unknown } | undefined)?.questions;
-    if (Array.isArray(questions)) return questions.filter((q): q is string => typeof q === "string");
-    return [];
+    const details = events[i].details as { questions?: unknown; question?: RecordedQuestion } | undefined;
+    const questions = Array.isArray(details?.questions)
+      ? details!.questions.filter((q): q is string => typeof q === "string")
+      : [];
+    const question = details?.question;
+    // A question with no options is not the fixed shape and is rendered
+    // as plain text instead, with no choices to tap.
+    const usable = question?.question && Array.isArray(question.options) && question.options.length > 0;
+    return { questions, ...(usable ? { question } : {}) };
   }
-  return [];
+  return { questions: [] };
 }
 
 /** The short label a list row shows: the worker's own write-up title once
@@ -899,7 +919,15 @@ export function createRecordView(recordHome: string, opts: { baseStanding?: Base
       // Waiting on the Client's words rather than on a ruling - the one
       // row kind here that isn't a verdict at all.
       if (task.state === "asked a question") {
-        return [{ id, title: task.title, kind: "asking", questions: questionsFromEvents(events), lastActivityMs: task.lastActivityMs }];
+        return [
+          {
+            id,
+            title: task.title,
+            kind: "asking",
+            ...questionsFromEvents(events),
+            lastActivityMs: task.lastActivityMs,
+          },
+        ];
       }
 
       if (task.state === "delivered") {

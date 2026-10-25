@@ -35,10 +35,14 @@ Commands:
       stdout, and writes nothing.
   do "<task text>" --project <path-or-name>
       Run a task against a project. If it's materially ambiguous, prints
-      numbered questions and stops - answer with \`fabrica answer\`.
-      Otherwise runs detached: prints the task id and returns immediately.
-  answer <taskId> -m "<text>"
-      Answer a task's clarifying questions and resume it.
+      one question with its options and stops - answer with
+      \`fabrica answer\`. Otherwise runs detached: prints the task id and
+      returns immediately.
+  answer <taskId> [--option <n>] [--question <id>] [-m "<text>"]
+      Answer a task's clarifying question and resume it: pick an option
+      by number, or answer in your own words with -m (which is what the
+      last option, "other", means). --question names which question you
+      are answering, which is how you correct an answer you already gave.
   verdict <taskId> <accept|fix|wrong> [-m "<note>"]
       Record your ruling on a delivered task - closes it (accept/wrong)
       or sends a correction back to the same worker (fix).

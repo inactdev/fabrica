@@ -28,7 +28,12 @@
 
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile, writeTaskFile } from "../record/index.ts";
 import type { Brain } from "../brain/index.ts";
+import { isOtherOption, OTHER_OPTION } from "../brain/index.ts";
+import type { RecordedQuestion } from "../brain/index.ts";
 import { ForemanError } from "./errors.ts";
+import { answeredQuestionsOf, askedQuestionsOf, deriveBrief, renderAnswerRound } from "./questions.ts";
+import { stateOf } from "./queries.ts";
+import type { AnswersGivenDetails } from "./questions.ts";
 import { runProductionRound } from "./do.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
@@ -40,25 +45,71 @@ import type { Caps } from "../../contract/surface.ts";
 import type { CheckBox } from "../brain/index.ts";
 import type { FabricaTask, Inspector } from "../inspector/types.ts";
 
+export interface AnswerDecisionOptions {
+  caps?: Caps;
+  /** Which question is being answered (issue #175). Omitted answers the
+   * one this task is currently stopped on. Naming an id the task has
+   * already answered is a **correction**: the record keeps both answers
+   * and the latest applies to later rounds (Client ruling 2026-10-25,
+   * "nothing is rewritten"). */
+  questionId?: string;
+  /** Which of the question's options the Client picked, 1-based, as the
+   * record lists them - `OTHER_OPTION` last. Omitted means "other": the
+   * Client's own words, which is what `-m` alone has always meant. */
+  option?: number;
+}
+
+export interface AnswerDecision {
+  /** The question this answered, or null for a round recorded against a
+   * task that asked before questions had ids. */
+  questionId: string | null;
+  /** What the worker receives: the picked option's own text, or the
+   * Client's own words when he picked "other". */
+  answer: string;
+  /** The option that was picked, verbatim - `OTHER_OPTION` whenever the
+   * answer is the Client's own words. */
+  option: string;
+  /** True when this answered a question that already had an answer - a
+   * correction rather than this task's first word on it. */
+  correction: boolean;
+  /** True when the question already had an answer and this call did not
+   * name it, so the first answer stood and this one was not applied
+   * (issue #175). Nothing was appended; `answer` is the answer that
+   * stands. */
+  duplicate: boolean;
+  /** Whether there is a round to resume. False for a correction to a
+   * question whose round already completed: the latest answer applies to
+   * later rounds, and there is nothing here to restart (which is what
+   * `already-answered` has always protected). */
+  resume: boolean;
+}
+
 /**
  * The fast, synchronous half of answering: validates that this task is
- * actually waiting on an answer, writes the round to `answers.md`, and
- * re-derives `brief.md` - everything `runRecordedAnswer` below needs to
- * actually run the round is then derivable straight from the record, so
- * this returns nothing. Split out so the CLI (issue #123) can run this
- * part in the foreground - a bad answer fails immediately, before
- * anything is handed to a detached process - while only the round's
- * worker call, the slow part, is deferred. `answerTask` (below) composes
- * this with actually running that round, which is what every library
- * caller (the contract tests included) still gets: an answer call that
- * doesn't resolve until the resumed round is done.
+ * actually waiting on an answer, resolves which option the Client picked
+ * (issue #176), writes the round to `answers.md`, and re-derives
+ * `brief.md` - everything `runRecordedAnswer` below needs to actually run
+ * the round is then derivable straight from the record, so what comes
+ * back is only what the caller has to *say* about the decision. Split out
+ * so the CLI (issue #123) can run this part in the foreground - a bad
+ * answer fails immediately, before anything is handed to a detached
+ * process - while only the round's worker call, the slow part, is
+ * deferred. `answerTask` (below) composes this with actually running that
+ * round, which is what every library caller (the contract tests
+ * included) still gets: an answer call that doesn't resolve until the
+ * resumed round is done.
+ *
+ * Two things the returned decision tells a caller that it used to have no
+ * way to know (issue #175): whether the question already had an answer,
+ * in which case the first one stands and this one was not applied, and
+ * whether there is actually a round to resume.
  */
 export function recordAnswerDecision(
   recordHome: string,
   taskId: string,
   answerText: string,
-  opts: { caps?: Caps }
-): void {
+  opts: AnswerDecisionOptions
+): AnswerDecision {
   const events = readEventsForTask(recordHome, taskId);
   if (events.length === 0) {
     throw new ForemanError(
@@ -95,13 +146,70 @@ export function recordAnswerDecision(
       (event.name === "inspection-finished" &&
         (event.details as { verdict?: string } | undefined)?.verdict === "refused")
   );
-  if (answeredIndex !== -1 && roundCompleted) {
+  // Which question is being answered (issue #175). Named explicitly, it
+  // may be any question this task has ever asked - that is how a
+  // correction reaches an answer already given. Unnamed, it is the one
+  // the task is currently stopped on.
+  const asked = askedQuestionsOf(events);
+  const pendingQuestion = (events[askedIndex].details as AskedDetails | undefined)?.question;
+  let question: RecordedQuestion | undefined = pendingQuestion;
+  if (opts.questionId !== undefined) {
+    const named = asked.get(opts.questionId);
+    if (!named) {
+      throw new ForemanError(
+        "unknown-question",
+        `fabrica answer: task "${taskId}" never asked a question with id "${opts.questionId}". ` +
+          `The ids it did ask are: ${[...asked.keys()].join(", ") || "none"}.`
+      );
+    }
+    question = named;
+  }
+
+  const answered = answeredQuestionsOf(events);
+  const standing = question === undefined ? undefined : answered.get(question.id);
+  // A correction is deliberately only ever an answer that NAMES its
+  // question: changing a decision is a thing the Client does on purpose,
+  // and a plain second `fabrica answer` must keep meaning exactly what it
+  // meant before - either the documented retry of a round that threw, or
+  // the `already-answered` refusal below.
+  const correction = standing !== undefined && opts.questionId !== undefined;
+
+  // v1's one-clarification-round default, enforced here rather than left
+  // to silently re-ask. A CORRECTION is the one thing that gets past it
+  // (Client ruling 2026-10-25): the Client may change his mind about a
+  // question he already answered, and the record keeps both. It changes
+  // what later rounds are told, never what already ran - which is why
+  // nothing is resumed for it below.
+  if (answeredIndex !== -1 && roundCompleted && !correction) {
     throw new ForemanError(
       "already-answered",
       `fabrica answer: task "${taskId}" already got its one clarification round (SPEC.md's ask-first ` +
-        `dial is fixed at "ask" for v1) and has moved on. Check \`fabrica status\`.`
+        `dial is fixed at "ask" for v1) and has moved on. Check \`fabrica status\`. ` +
+        `To correct an answer it already has, name the question: ` +
+        `fabrica answer ${taskId} --question <id> -m "<text>"`
     );
   }
+  const resume = !(correction && roundCompleted);
+
+  // "The first answer wins" (issue #175), on the live side: this exact
+  // question already has an answer and this call did not name it, so the
+  // answer on record stands and this one is not applied. Nothing is
+  // appended and nothing is rewritten; the round is still resumed, which
+  // is what the documented retry of a round that threw mid-flight needs
+  // (see this file's header). Before #175 that retry appended a second,
+  // duplicate round to `answers.md` and handed the worker the Client's
+  // words twice.
+  if (standing !== undefined && !correction) {
+    return {
+      questionId: standing.questionId,
+      answer: standing.answer,
+      option: standing.option,
+      correction: false,
+      resume,
+      duplicate: true,
+    };
+  }
+
   // Proof, from THIS taskId's own record in THIS record home, that a
   // ProductionLine was genuinely cut for it once - "line-cut", which
   // runProductionRound appends the moment createProductionLine returns.
@@ -118,13 +226,10 @@ export function recordAnswerDecision(
   // `no-such-branch` on every later attempt, stuck for good.
   const isRetry = events.some((e) => e.name === "line-cut");
 
-  if (!answerText || answerText.trim().length === 0) {
-    throw new ForemanError(
-      "missing-answer",
-      `fabrica answer: an answer needs actual text - it becomes part of the brief the worker receives. ` +
-        `Usage: fabrica answer ${taskId} -m "<text>"`
-    );
-  }
+  // What the worker actually receives (issue #176): the option the
+  // Client picked, or - for "other", and for a question that has no
+  // options because it was asked before #176 - his own words.
+  const { option, answer } = resolveAnswer(taskId, question, answerText, opts.option);
 
   const details = events[askedIndex].details as AskedDetails;
 
@@ -141,14 +246,84 @@ export function recordAnswerDecision(
   // file before "verdict-recorded": a failure between the two must never
   // leave a task looking un-answered when the Client's words are already
   // sitting on disk.
-  appendTaskFile(recordHome, taskId, "answers.md", renderAnswerRound(details.questions, answerText));
+  appendTaskFile(recordHome, taskId, "answers.md", renderAnswerRound(question, answer, { option }));
 
   const requestText = readTaskFile(recordHome, taskId, "request.md") ?? "";
   const answersText = readTaskFile(recordHome, taskId, "answers.md") ?? "";
   const brief = deriveBrief(requestText, answersText);
   writeTaskFile(recordHome, taskId, "brief.md", brief);
 
-  appendEvent(recordHome, { taskId, name: "answers-given", details: { answer: answerText } });
+  const givenDetails: AnswersGivenDetails = {
+    answer,
+    ...(question ? { questionId: question.id, option } : {}),
+  };
+  appendEvent(recordHome, { taskId, name: "answers-given", details: givenDetails });
+
+  return { questionId: question?.id ?? null, answer, option, correction, resume, duplicate: false };
+}
+
+/**
+ * Which option the Client picked and what the worker therefore receives.
+ *
+ * `option` is 1-based over the question's options exactly as the record
+ * lists them, `OTHER_OPTION` last. Picking a listed option makes that
+ * option's own text the answer and needs no words of the Client's at
+ * all; picking "other" requires them, and they *are* the answer (Client
+ * ruling 2026-10-25). Passing no option at all is "other" with text,
+ * which is what `fabrica answer -m "<text>"` has always meant - so every
+ * existing way of answering keeps working untouched.
+ */
+function resolveAnswer(
+  taskId: string,
+  question: RecordedQuestion | undefined,
+  answerText: string,
+  option: number | undefined
+): { option: string; answer: string } {
+  const options = question?.options ?? [];
+  const hasText = typeof answerText === "string" && answerText.trim().length > 0;
+
+  if (option !== undefined) {
+    if (!Number.isInteger(option) || option < 1 || option > options.length) {
+      throw new ForemanError(
+        "invalid-option",
+        `fabrica answer: there is no option ${option} on this question. ` +
+          (options.length > 0
+            ? `Pick one of:\n${options.map((text, i) => `  ${i + 1}. ${text}`).join("\n")}`
+            : `This question has no options to pick from - answer it with -m "<text>".`)
+      );
+    }
+    const picked = options[option - 1];
+    if (isOtherOption(picked)) {
+      if (!hasText) {
+        throw new ForemanError(
+          "missing-answer",
+          `fabrica answer: "${OTHER_OPTION}" needs your own words - they are the answer the worker receives. ` +
+            `Usage: fabrica answer ${taskId} --option ${option} -m "<text>"`
+        );
+      }
+      return { option: picked, answer: answerText };
+    }
+    if (hasText) {
+      // One answer per question, not an option plus a second opinion:
+      // whichever one the worker then used would be a coin toss.
+      throw new ForemanError(
+        "invalid-option",
+        `fabrica answer: option ${option} ("${picked}") is the answer on its own - drop -m, ` +
+          `or pick "${OTHER_OPTION}" (option ${options.length}) to answer in your own words instead.`
+      );
+    }
+    return { option: picked, answer: picked };
+  }
+
+  if (!hasText) {
+    throw new ForemanError(
+      "missing-answer",
+      `fabrica answer: an answer needs actual text - it becomes part of the brief the worker receives. ` +
+        `Usage: fabrica answer ${taskId} -m "<text>"` +
+        (options.length > 0 ? `, or pick an option with --option <1-${options.length}>.` : "")
+    );
+  }
+  return { option: options.length > 0 ? options[options.length - 1] : OTHER_OPTION, answer: answerText };
 }
 
 /**
@@ -220,21 +395,18 @@ export async function answerTask(
     minter?: TokenMinter;
     readDiff?: DiffReader;
     caps?: Caps;
+    questionId?: string;
+    option?: number;
   }
 ): Promise<FabricaTask> {
-  recordAnswerDecision(recordHome, taskId, answerText, { caps: opts.caps });
+  const decision = recordAnswerDecision(recordHome, taskId, answerText, {
+    caps: opts.caps,
+    questionId: opts.questionId,
+    option: opts.option,
+  });
+  // A correction to a question whose round already finished changes what
+  // a later round is told and nothing else - there is no round here to
+  // run, so the task is reported as it stands rather than restarted.
+  if (!decision.resume) return { id: taskId, state: stateOf(readEventsForTask(recordHome, taskId)) };
   return runRecordedAnswer(recordHome, taskId, opts);
-}
-
-function renderAnswerRound(questions: string[], answer: string): string {
-  const numbered = questions.map((question, i) => `${i + 1}. ${question}`).join("\n");
-  return `## Clarification\n\nQ:\n${numbered}\n\nA: ${answer}\n\n`;
-}
-
-/** SPEC.md "The record": brief.md is "assembled from request.md plus
- * every answer so far" - the two files concatenated, with a header
- * marking where the Client's original words end and the clarifications
- * begin. */
-function deriveBrief(requestText: string, answersText: string): string {
-  return `${requestText}\n\n---\n\nClarifications:\n\n${answersText}`;
 }

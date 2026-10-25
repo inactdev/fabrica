@@ -4,9 +4,10 @@
 // dependency on contract/. This is the ONLY interface a Worker's model
 // plugs into; nothing past this file may know which brain is behind it.
 
+import type { Brain as ContractBrain, BrainAskResult as ContractBrainAskResult } from "../../contract/surface.ts";
+import type { AskQuestion } from "./ask-shape.ts";
+
 export type {
-  Brain,
-  BrainAskResult,
   BrainWorkOptions,
   BrainWorkResult,
   TranscriptEntry,
@@ -39,3 +40,26 @@ export type WorkerWriteup = RatifiedWriteup & {
    * for the Client, who reads it on the delivery. */
   testsRun?: string;
 };
+
+/** The clarifying step's result, widened by the one field issue #176
+ * added: the fixed shape a question now arrives in. Widened here rather
+ * than in `contract/surface.ts` for the same reason
+ * `src/inspector/types.ts` widens `Receipt`/`Delivery`/
+ * `FabricaEventName` - the contract is a path `rule9-gate.yml` protects,
+ * and what #176 asks for is that free-form questions be *rejected at
+ * dispatch*, which is a rule Fabrica enforces at runtime
+ * (`./ask-shape.ts`'s `askShapeProblem`), not a new promise about the
+ * seam's own type. The ratified `questions` field is untouched and still
+ * declared exactly once; sending it is simply a rejection now. Every
+ * reader in `src/` imports `BrainAskResult` from here. */
+export type BrainAskResult = ContractBrainAskResult & {
+  /** The one question this pass asks, with the two to four options the
+   * machine considers likely. Omitted means nothing needs asking. */
+  question?: AskQuestion | null;
+};
+
+/** The brain socket, with `ask()` returning the widened result above.
+ * `work()` and every other member are the contract's own, unchanged. */
+export interface Brain extends Omit<ContractBrain, "ask"> {
+  ask(brief: string): Promise<BrainAskResult>;
+}

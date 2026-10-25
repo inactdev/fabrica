@@ -69,13 +69,22 @@ if (brief?.includes("PRINT_ENV")) {
   writeFileSync(join(process.cwd(), "env-dump.json"), JSON.stringify(process.env));
   line({ type: "assistant", message: { content: [{ type: "text", text: JSON.stringify(process.env) }] } });
   line(resultLine({}));
-} else if (brief?.includes("ASK_SCENARIO_QUESTIONS")) {
-  line(resultLine({ result: JSON.stringify({ questions: ["What database?", "Multi-tenant?"] }) }));
+  // Issue #176's fixed shape: one question with two to four options,
+  // which is what buildAskPrompt now asks a real model for.
+} else if (brief?.includes("ASK_SCENARIO_QUESTION")) {
+  line(resultLine({ result: JSON.stringify({ question: "What database?", options: ["Postgres", "SQLite"] }) }));
 } else if (brief?.includes("ASK_SCENARIO_NONE")) {
-  line(resultLine({ result: JSON.stringify({ questions: [] }) }));
+  line(resultLine({ result: JSON.stringify({ question: null }) }));
 } else if (brief?.includes("ASK_SCENARIO_FENCED")) {
-  line(resultLine({ result: "```json\n" + JSON.stringify({ questions: ["Fenced question?"] }) + "\n```" }));
-} else if (brief?.includes("ASK_SCENARIO_MIXED")) {
+  line(
+    resultLine({
+      result: "```json\n" + JSON.stringify({ question: "Fenced question?", options: ["Yes", "No"] }) + "\n```",
+    })
+  );
+  // A machine still sending the old free-form list: handed back as-is so
+  // the Foreman rejects it by name and has it ask again, rather than the
+  // adapter quietly reading it as "nothing to ask".
+} else if (brief?.includes("ASK_SCENARIO_FREE_FORM")) {
   line(resultLine({ result: JSON.stringify({ questions: ["Real question?", "  ", 7] }) }));
 } else if (brief?.includes("ASK_SCENARIO_GARBLED")) {
   line(resultLine({ result: "sure, sounds good, proceeding now" }));
