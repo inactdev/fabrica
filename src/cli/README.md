@@ -107,8 +107,8 @@ The one command this issue builds. What it does, in order:
    alternative to `<task text>` itself starting with "Issue #N:", so the
    opened pull request's body closes the issue
    (`src/foreman/pr-body.ts`'s `closesIssueFor`; see `foreman/README.md`)
-   **and** that issue's own title and body are fetched at registration
-   and carried into every round's brief, in full
+   **and** that issue's own title, body and comments are fetched at
+   registration and carried into every round's brief, in full
    (`src/foreman/task-issue.ts`). `--issue` accepts three spellings - a
    positive integer, `owner/repo#N`, or a pasted
    `https://github.com/owner/repo/issues/N` - checked here against the

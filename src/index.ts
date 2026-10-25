@@ -135,7 +135,15 @@ export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
 // shares one parser for `--issue`'s three spellings, so the flag and
 // registration can never disagree about which values are legal.
 export { ISSUE_ARG_FORMS, parseIssueArg, GitHubError } from "./github/index.ts";
-export type { FetchedIssue, GitHubErrorCode, IssueRef, IssueRequest, IssueSource } from "./github/index.ts";
+export type {
+  FetchedIssue,
+  GitHubErrorCode,
+  IssueComment,
+  IssueRef,
+  IssueRequest,
+  IssueSource,
+  OmittedComment,
+} from "./github/index.ts";
 export type { IssueReader } from "./foreman/index.ts";
 // Who judges a project's test changes, and the three grounds on which
 // that cannot be settled - `fabrica do` refuses up front on all three.

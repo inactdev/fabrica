@@ -8,12 +8,23 @@
 
 import { GitHubError } from "../../github/index.ts";
 import { formatIssueRef } from "../../github/index.ts";
-import type { FetchedIssue, IssueRef } from "../../github/index.ts";
+import type { FetchedIssue, IssueComment, IssueRef, OmittedComment } from "../../github/index.ts";
 import type { IssueReader } from "../task-issue.ts";
+
+/** The moment every fake issue was fetched at. Fixed, so the "no
+ * comments as of ..." line is the same text on every run. */
+export const FAKE_FETCHED_AT = "2026-10-25T09:00:00Z";
 
 export interface FakeIssueReaderOptions {
   title?: string;
   body?: string;
+  /** The issue's human-authored comments, oldest first. Defaults to
+   * none - an issue nobody has amended. */
+  comments?: IssueComment[];
+  /** Comments the real reader would leave out as automation: named by
+   * author and date, never quoted. */
+  omittedComments?: OmittedComment[];
+  fetchedAt?: string;
   /** What `projectRepo` answers for every project - the repository a
    * fixture's pull requests are pretended to be opened in. `null` stands
    * in for a project whose origin is no GitHub remote at all. */
@@ -46,6 +57,9 @@ export function fakeIssueReader(opts: FakeIssueReaderOptions = {}): FakeIssueRea
           title: opts.title ?? `Fixture issue ${formatIssueRef(ref)}`,
           body: opts.body ?? `The fixture body of ${formatIssueRef(ref)}.`,
           url: `https://github.com/${ref.owner}/${ref.repo}/issues/${ref.number}`,
+          comments: opts.comments ?? [],
+          omittedComments: opts.omittedComments ?? [],
+          fetchedAt: opts.fetchedAt ?? FAKE_FETCHED_AT,
         };
       },
     },

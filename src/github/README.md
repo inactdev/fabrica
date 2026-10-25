@@ -2,18 +2,42 @@
 
 Everything Fabrica reads from GitHub's HTTP API on its own behalf. Today
 that is exactly one thing: the issue a task names with `fabrica do
---issue <N>`, fetched once at registration so a task worded "do issue #N
-as written" never has to ask what #N says.
+--issue <N>` — its title, its body **and its comments** — fetched once at
+registration so a task worded "do issue #N as written" never has to ask
+what #N says, or what was later ruled on it.
 
 ## What lives here, and what deliberately doesn't
 
 - `issue-ref.ts` — parsing only: `N`, `#N`, `owner/repo#N`, and a pasted
   `https://github.com/owner/repo/issues/N`. No git, no network, no
   record, so it is testable with no repository at all.
+- `api.ts` — what both calls share: the API root, the pinned
+  `X-GitHub-Api-Version`, the headers GitHub's reference names, how an
+  error body's own one-line explanation is read back, and one ISO-8601
+  UTC timestamp spelling. Here rather than in `fetch-issue.ts` only
+  because the two call files would otherwise be an import cycle; the
+  point of it is that the two calls can never drift apart on which
+  version they ask for.
 - `fetch-issue.ts` — one documented `GET
-  /repos/{owner}/{repo}/issues/{N}`, with the headers GitHub's reference
-  names, every status it documents answered with its own refusal, and
-  the Client's 64 KB ceiling enforced here rather than by a caller.
+  /repos/{owner}/{repo}/issues/{N}`, every status it documents answered
+  with its own refusal, and the Client's 64 KB ceiling enforced here
+  rather than by a caller. Also the one place the two calls are joined:
+  `fetchIssue` returns the comments with the issue, so no caller can
+  forget to ask for them — and it asks only after the issue's own text
+  has passed every refusal, so an oversized issue or a pull request
+  costs no second request.
+- `fetch-comments.ts` — one documented `GET
+  /repos/{owner}/{repo}/issues/{N}/comments`, walked a page at a time at
+  the documented maximum `per_page=100` until a page comes back short,
+  keeping GitHub's own order (that reference: "issue comments are
+  ordered by ascending ID", i.e. oldest first, which is the order the
+  brief needs). Automation's comments are separated out here — by
+  GitHub's own `user.type` and the `[bot]` login suffix, the only two
+  facts it publishes — and a single comment is cut at
+  `MAX_COMMENT_CHARS`. How any of that is *worded* is not here: the
+  rendering is `src/foreman/task-issue.ts`, which already owned the
+  issue's own rendering, so the record's `issue.md` and the Worker's
+  brief can never be two different documents.
 Resolving a bare `--issue N` against the project's `origin` remote, and
 anything that touches the task record, is **not** here: that is
 `src/foreman/task-issue.ts`, which also owns the record file, the brief
@@ -41,3 +65,21 @@ truncation point (Client ruling: "verbatim and in full on every round -
 never truncated or summarized. Only above a hard cap (64 KB) refuse at
 registration naming the size"). A worker that silently got half an issue
 would answer half a request, and nothing downstream would know.
+
+The comments' own limit is deliberately a different shape, because the
+Client ruled on it separately: no cap on the count, the oldest never
+dropped, and a cut only within a single comment past
+`MAX_COMMENT_CHARS` — and then loudly, naming the comment, its author
+and how much was left out. So comments are not counted toward
+`MAX_ISSUE_BYTES` (that ceiling is about title plus body, and counting
+them in would be a count cap by the back door), and the page walk's
+`MAX_COMMENT_PAGES` is a runaway guard rather than a limit anyone should
+reach: the walk stops on the first short page, so an API that ignored
+`page` would otherwise loop forever. Reaching it refuses rather than
+carrying whatever had been read so far.
+
+**Pages are walked, not followed.** GitHub's pagination guide
+recommends the `Link` header, and `HttpFetch` deliberately exposes only
+`status` and `text()` — widening that seam would ripple into every fake
+for no gain here, since asking for the next page until one comes back
+short needs nothing but the page itself.

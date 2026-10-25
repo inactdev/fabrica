@@ -32,7 +32,21 @@ export type GitHubErrorCode =
   /** Past `MAX_ISSUE_BYTES`: the Client's own ruling is that an issue is
    * carried verbatim and in full or not at all, so an oversized one is
    * refused rather than truncated (see fetch-issue.ts). */
-  | "issue-too-large";
+  | "issue-too-large"
+  /** The issue's own text was readable, but its comments could not be
+   * fetched. Its own code rather than `issue-fetch-failed`, because the
+   * two say different things to the Client: the number is right and the
+   * amendments are what is missing. */
+  | "issue-comments-fetch-failed"
+  /** GitHub answered the comments call with something that is not a
+   * list of comments, or with a comment carrying no readable posted
+   * date - where it belongs in the order would be a guess. */
+  | "issue-comments-unreadable"
+  /** The page walk over an issue's comments passed
+   * `MAX_COMMENT_PAGES` without reaching the end (see
+   * fetch-comments.ts). A runaway guard, not a cap on comments: the
+   * Client's ruling is that the count is never capped. */
+  | "issue-comments-unbounded";
 
 export class GitHubError extends Error {
   readonly code: GitHubErrorCode;

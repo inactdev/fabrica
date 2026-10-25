@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
 import {
+  COMMENTS_SECTION_HEADING,
   ISSUE_BRIEF_HEADER,
   renderIssueFile,
   resolveIssueRef,
@@ -23,7 +24,14 @@ import {
   taskIssueText,
   withIssueText,
 } from "./task-issue.ts";
-import { FAKE_PROJECT_REPO, fakeIssueReader, refusingIssueReader } from "./helpers/fake-issue-reader.ts";
+import {
+  FAKE_FETCHED_AT,
+  FAKE_PROJECT_REPO,
+  fakeIssueReader,
+  refusingIssueReader,
+} from "./helpers/fake-issue-reader.ts";
+import { MAX_COMMENT_CHARS } from "../github/index.ts";
+import type { IssueComment } from "../github/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import type { Inspection, Inspector } from "../inspector/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
@@ -65,6 +73,33 @@ const ISSUE = {
   body: "The worker must get the issue's own words,\nincluding this second line.",
 };
 
+/** One comment, with only what a test varies spelled out. */
+function comment(over: Partial<IssueComment> = {}): IssueComment {
+  return {
+    author: "ari",
+    postedAt: "2026-10-20T09:12:33Z",
+    editedAt: null,
+    url: "https://github.com/inactdev/fabrica/issues/142#issuecomment-1",
+    body: "The ruling: do the first half only.",
+    fullLength: null,
+    ...over,
+  };
+}
+
+/** An issue with nothing varied but its comments. */
+function issueWith(over: Partial<Parameters<typeof renderIssueFile>[0]>) {
+  return renderIssueFile({
+    ref: { owner: "inactdev", repo: "fabrica", number: 142 },
+    title: ISSUE.title,
+    body: ISSUE.body,
+    url: "https://github.com/inactdev/fabrica/issues/142",
+    comments: [],
+    omittedComments: [],
+    fetchedAt: FAKE_FETCHED_AT,
+    ...over,
+  });
+}
+
 /** Every brief this fake worker was handed, in order. */
 function briefsOf(brain: { historyBySession: ReadonlyMap<string, string[]> }): string[] {
   return [...brain.historyBySession.values()].flat();
@@ -73,12 +108,7 @@ function briefsOf(brain: { historyBySession: ReadonlyMap<string, string[]> }): s
 // ----------------------------------------------------------------- units
 
 test("renderIssueFile names the issue, links it, and keeps its body verbatim", () => {
-  const text = renderIssueFile({
-    ref: { owner: "inactdev", repo: "fabrica", number: 142 },
-    title: ISSUE.title,
-    body: ISSUE.body,
-    url: "https://github.com/inactdev/fabrica/issues/142",
-  });
+  const text = issueWith({});
 
   assert.match(text, /^# inactdev\/fabrica#142: Carry the issue into the brief\n/);
   assert.ok(text.includes("https://github.com/inactdev/fabrica/issues/142"));
@@ -86,13 +116,90 @@ test("renderIssueFile names the issue, links it, and keeps its body verbatim", (
 });
 
 test("renderIssueFile says so, rather than nothing, when an issue has no description", () => {
-  const text = renderIssueFile({
+  const text = issueWith({
     ref: { owner: "o", repo: "r", number: 1 },
     title: "A title and nothing else",
     body: "",
     url: "u",
   });
   assert.match(text, /no description/);
+});
+
+// ------------------------------------------------- amendments and rulings
+
+// Decision 5: the heading is always there, so a reader can tell "this
+// issue has no comments" from "nobody fetched them".
+test("an issue with no comments still carries the heading, and says as of when", () => {
+  const text = issueWith({});
+  assert.ok(text.includes(COMMENTS_SECTION_HEADING), "the heading is missing for an issue with no comments");
+  assert.ok(text.includes(`No comments on this issue as of ${FAKE_FETCHED_AT}.`));
+});
+
+test("every comment is carried in order, each opening with its author and posted date", () => {
+  const text = issueWith({
+    comments: [
+      comment({ author: "ari", postedAt: "2026-10-20T09:12:33Z", body: "first: only the Fabrica half" }),
+      comment({ author: "someone-else", postedAt: "2026-10-21T10:00:00Z", body: "second: and keep the flag" }),
+    ],
+  });
+
+  const section = text.slice(text.indexOf(COMMENTS_SECTION_HEADING));
+  assert.ok(section.includes("### ari | posted 2026-10-20T09:12:33Z\n"));
+  assert.ok(section.includes("### someone-else | posted 2026-10-21T10:00:00Z\n"));
+  assert.ok(section.includes("first: only the Fabrica half"), "a comment's own words were changed");
+  assert.ok(
+    section.indexOf("first: only the Fabrica half") < section.indexOf("second: and keep the flag"),
+    "the comments are out of order - the ordering is the point"
+  );
+  assert.ok(!section.includes("No comments on this issue"), "an issue with comments claimed to have none");
+});
+
+test("an edited comment shows both dates, posted and edited", () => {
+  const text = issueWith({
+    comments: [comment({ postedAt: "2026-10-20T09:12:33Z", editedAt: "2026-10-21T14:00:00Z" })],
+  });
+  assert.ok(text.includes("### ari | posted 2026-10-20T09:12:33Z | edited 2026-10-21T14:00:00Z\n"));
+});
+
+test("automation's comments are named by author and date on one line, never quoted", () => {
+  const text = issueWith({
+    comments: [comment({ body: "the ruling" })],
+    omittedComments: [
+      { author: "github-actions[bot]", postedAt: "2026-10-20T10:00:00Z" },
+      { author: "dependabot[bot]", postedAt: "2026-10-20T11:00:00Z" },
+    ],
+  });
+
+  const line = text.split("\n").find((row) => row.startsWith("Left out as automation")) ?? "";
+  assert.ok(line.includes("github-actions[bot] (posted 2026-10-20T10:00:00Z)"));
+  assert.ok(line.includes("dependabot[bot] (posted 2026-10-20T11:00:00Z)"));
+  assert.ok(line.includes("2 comments"), "the count of what was left out is not stated");
+});
+
+// Only automation commented: there are comments, just no amendments -
+// said differently from an issue nobody has commented on at all.
+test("an issue whose only comments are automation's says exactly that", () => {
+  const text = issueWith({ omittedComments: [{ author: "ci[bot]", postedAt: "2026-10-20T10:00:00Z" }] });
+  assert.ok(text.includes(`No human-authored comments on this issue as of ${FAKE_FETCHED_AT}.`));
+  assert.ok(text.includes("ci[bot] (posted 2026-10-20T10:00:00Z)"));
+  assert.ok(text.includes("1 comment)"), "one left-out comment was counted as plural");
+});
+
+test("a cut comment is marked loudly, naming it, its author and how much was left out", () => {
+  const text = issueWith({
+    comments: [comment({ body: "x".repeat(MAX_COMMENT_CHARS), fullLength: MAX_COMMENT_CHARS + 500 })],
+  });
+
+  const marker = text.split("\n").find((row) => row.startsWith("[truncated:")) ?? "";
+  assert.ok(marker.includes("by ari"), "the cut marker does not name the author");
+  assert.ok(marker.includes("posted 2026-10-20T09:12:33Z"));
+  assert.ok(marker.includes(String(MAX_COMMENT_CHARS + 500)), "the real length is not stated");
+  assert.ok(marker.includes("500 characters past"), "how much was left out is not stated");
+  assert.ok(marker.includes("issuecomment-1"), "the cut marker does not say where to read the rest");
+});
+
+test("a comment that was carried whole has no cut marker", () => {
+  assert.ok(!issueWith({ comments: [comment()] }).includes("[truncated:"));
 });
 
 test("withIssueText appends the issue once, and leaves a brief with no issue alone", () => {
@@ -186,6 +293,34 @@ test("the issue's own words reach the clarifying step and the worker's brief, in
   const stored = taskIssueText(recordHome, task.id) ?? "";
   assert.ok(stored.includes(ISSUE.title) && stored.includes(ISSUE.body));
   assert.equal(readTaskFile(recordHome, task.id, "issue"), "142");
+});
+
+// The point of the whole section: a machine must read the issue as it
+// stands, which means the comment that amended it, under a heading that
+// says it is a ruling.
+test("the issue's comments reach the clarifying step and every brief, as amendments", async () => {
+  const recordHome = freshHome();
+  const issues = fakeIssueReader({
+    ...ISSUE,
+    comments: [comment({ body: "RULING: do the first half only." })],
+    omittedComments: [{ author: "ci[bot]", postedAt: "2026-10-20T10:00:00Z" }],
+  });
+  const brain = fakeBrain();
+  const foreman = createForeman({ recordHome, inspector: greenInspector(), issueReader: issues.reader });
+
+  const task = await foreman.do("do issue #142 as written", { project: inspectedProject(), brain, issue: 142 });
+
+  for (const words of [brain.askCalls[0], ...briefsOf(brain)]) {
+    assert.ok(words.includes(COMMENTS_SECTION_HEADING), "a brief carried the issue without its amendments");
+    assert.ok(words.includes("RULING: do the first half only."), "a brief lost the comment's own words");
+    assert.ok(words.includes("### ari | posted 2026-10-20T09:12:33Z"));
+    assert.ok(words.includes("ci[bot] (posted 2026-10-20T10:00:00Z)"), "automation's comment was silently dropped");
+  }
+
+  // Frozen on the record with the rest of the issue: one fetch for the
+  // whole task, comments included.
+  assert.equal(issues.calls.length, 1);
+  assert.ok((taskIssueText(recordHome, task.id) ?? "").includes("RULING: do the first half only."));
 });
 
 test("a fix round carries the same issue, and never asks GitHub again", async () => {
