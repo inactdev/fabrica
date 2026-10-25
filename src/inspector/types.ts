@@ -61,6 +61,56 @@ export interface Inspector {
  * two declarations of one union. */
 export type ModelSource = "flag" | "project" | "default";
 
+/**
+ * What a task's change hashes to, independent of where it sits in
+ * history: `git patch-id --stable` over the branch's diff against its
+ * merge-base with origin's default branch. `src/foreman/fingerprint.ts`
+ * is where it is taken and worded; declared here, beside the `Receipt`
+ * and `Delivery` fields that carry it, for the same reason
+ * `ModelSource` above is - the record's own shapes are this file's
+ * business.
+ *
+ * `patchId` is null exactly when no id could be taken, and `reason`
+ * then says why in one line, shown to the Client verbatim.
+ */
+export interface ChangeFingerprint {
+  patchId: string | null;
+  /** The commit the diff was taken against - `merge-base(HEAD,
+   * origin/<default>)` - or null when that could not be resolved. */
+  base: string | null;
+  /** origin's default branch the base came from, e.g. "main". Never
+   * assumed to be "master"; null when it could not be read. */
+  baseBranch: string | null;
+  /** Present exactly when `patchId` is null. */
+  reason?: string;
+}
+
+/**
+ * How one pass's stamp compares with the stamps the task already has.
+ * Compared against the immediately preceding stamped pass (Client
+ * ruling); a pass whose change comes back to an id an earlier pass
+ * carried reads as matched against that earlier pass, and `matchedPass`
+ * says which.
+ */
+export interface FingerprintMatch {
+  /** True when this pass's patch id is one this task already stamped. */
+  matched: boolean;
+  /** The patch id the immediately preceding stamped pass carried. */
+  previous: string;
+  /** Which pass that was - 1-based, counting the task's own passes. */
+  previousPass: number;
+  /** Which pass's stamp this one matched - absent when none did. */
+  matchedPass?: number;
+  /** True exactly when `matched` is false: every Inspector stamp, check
+   * result and CI conclusion already on this task's record was made
+   * about a different change and says nothing about this one. Written
+   * down and shown; it blocks nothing, since the Client keeps the last
+   * word under rule 6 (Client ruling). Verdicts, quiz results and the
+   * clarify step's questions and answers are not observations of the
+   * change and are never voided. */
+  voidsEarlierObservations: boolean;
+}
+
 /** One attempt's receipt, extended with what issue #189 asks every
  * receipt to record: the two subscription meters as they stood when the
  * attempt ran. Widened here rather than in `contract/surface.ts` for
@@ -93,6 +143,22 @@ export type Receipt = Omit<ContractReceipt, "outcome"> & {
    * outcome and never "failed" (Client's clarification) - the work was
    * going fine, the week's quota was not. */
   outcome: ContractReceipt["outcome"] | "paused-by-meter";
+  /** What this attempt's change hashes to, independent of where it sits
+   * in history (`src/foreman/fingerprint.ts`) - `git patch-id --stable`
+   * over the branch's diff against its merge-base with origin's default
+   * branch, so a rebase onto newer upstream leaves it untouched.
+   *
+   * Optional, and absent means unstamped - a receipt written before
+   * fingerprints existed simply has none, and nothing is ever computed
+   * retroactively for it (Client ruling). An attempt that ran but could
+   * not be hashed carries the stamp with `patchId: null` and a reason,
+   * never nothing at all.
+   *
+   * Widened here rather than in `contract/surface.ts` for the same
+   * reason `meters` and `declaredModel` above are: this is Fabrica's own
+   * bookkeeping about its own record, not a new promise about a seam,
+   * and the contract is a path `rule9-gate.yml` protects. */
+  fingerprint?: ChangeFingerprint;
 };
 
 export type Delivery = Omit<ContractDelivery, "outcome"> & {
@@ -124,6 +190,19 @@ export type Delivery = Omit<ContractDelivery, "outcome"> & {
    * bookkeeping about its own test suite is not a new promise about a
    * seam. See src/testmap/README.md. */
   tests?: TestMapReport;
+  /** What the change this pass hands over hashes to - the same stamp
+   * the pass's own attempts carry (`Receipt.fingerprint` above), taken
+   * once more after everything that could still move the branch this
+   * round has finished moving it. Absent on a delivery written before
+   * fingerprints existed, which reads as unstamped. */
+  fingerprint?: ChangeFingerprint;
+  /** How this pass's stamp compares with the one the task's previous
+   * pass carried, and whether a changed one voids the Inspector stamps,
+   * check results and CI conclusions already on the record
+   * (`src/foreman/fingerprint.ts`). Absent on a task's first pass, on a
+   * pass that could not be stamped, and on a delivery written before
+   * fingerprints existed - in all three there is nothing to compare. */
+  fingerprintMatch?: FingerprintMatch;
 };
 
 export type FabricaTask = Omit<ContractFabricaTask, "state"> & {

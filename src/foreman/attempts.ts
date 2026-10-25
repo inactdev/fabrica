@@ -22,6 +22,8 @@ import type { AttemptCost } from "./spend.ts";
 import { describeInvalidWriteup, finalMessageFor, renderCommitMessage } from "./pr-body.ts";
 import type { FinalMessageForCommit } from "./pr-body.ts";
 import { commitWorktreeChanges } from "./commit.ts";
+import { changeFingerprintOf, NOT_COMMITTED, unstamped } from "./fingerprint.ts";
+import type { ChangeFingerprint } from "./fingerprint.ts";
 import { withTransportRetry } from "./transport-retry.ts";
 import type { TransportRetryDetails } from "./transport-retry.ts";
 import { ForemanError } from "./errors.ts";
@@ -327,6 +329,13 @@ export async function runAttempts(opts: {
       cost: AttemptCost;
       checks: GateResult | null;
       outcome: Receipt["outcome"];
+      /** What this attempt's change hashes to, independent of where it
+       * sits in history (`fingerprint.ts`). Taken from the branch once
+       * this attempt's own commit has landed, so it describes THIS
+       * attempt; an attempt whose changes never reached the branch
+       * carries `unstamped(NOT_COMMITTED)` rather than the previous
+       * attempt's change wearing this attempt's number. */
+      fingerprint: ChangeFingerprint;
     }): Receipt => ({
       task: taskId,
       attempt,
@@ -352,6 +361,7 @@ export async function runAttempts(opts: {
       reasoningEffort: null,
       checks: args.checks,
       outcome: args.outcome,
+      fingerprint: args.fingerprint,
     });
 
     let workResult: BrainWorkResult | undefined;
@@ -440,6 +450,11 @@ export async function runAttempts(opts: {
             cost: UNMEASURED,
             checks: null,
             outcome: "failed",
+            // Nothing of this attempt reached the branch: the call never
+            // came back, so there was no write-up to commit with and no
+            // commit. Stamping the branch here would put the PREVIOUS
+            // attempt's change on this attempt's receipt.
+            fingerprint: unstamped(NOT_COMMITTED),
           })
         );
         throw err;
@@ -485,8 +500,10 @@ export async function runAttempts(opts: {
       lastFinalMessage = finalMessage;
       lastWriteup = undefined;
       lastJudgement = { kind: "paused-by-meter" };
+      let pausedCommit = false;
       try {
         commitWorktreeChanges(workdir, renderCommitMessage(finalMessage), { amend: unpublishedFallbackCommit });
+        pausedCommit = true;
       } catch (err) {
         // A commit that cannot happen must not turn a pause into an
         // exception: the pause is still the fact, and round.ts's report
@@ -496,7 +513,19 @@ export async function runAttempts(opts: {
       }
       const cost = costFromTranscript(transcript);
       if (cost.costUsd !== null && cost.costBasis === "metered") spentUsd += cost.costUsd;
-      const receipt = receiptFor({ transcript, durationMs, cost, checks: null, outcome: "paused-by-meter" });
+      const receipt = receiptFor({
+        transcript,
+        durationMs,
+        cost,
+        checks: null,
+        outcome: "paused-by-meter",
+        // Half a worker's work is still this attempt's change, and it is
+        // on the branch - which is exactly the state a later `fix` round
+        // compares itself against. Unstamped only when the commit above
+        // could not happen, in which case nothing of it reached the
+        // branch at all.
+        fingerprint: pausedCommit ? changeFingerprintOf(workdir) : unstamped(NOT_COMMITTED),
+      });
       receipts.push(receipt);
       onReceipt?.(receipt);
       break;
@@ -544,6 +573,18 @@ export async function runAttempts(opts: {
         commitError = err.message;
       }
     }
+    // Taken here, the moment this attempt's own commit has landed and
+    // before anything is judged: the stamp is a fact about the change,
+    // not about what a check or Inspector then made of it. An attempt
+    // whose changes never reached the branch - a host-side git step
+    // preempted the commit, or the commit itself failed - is unstamped
+    // rather than wearing the branch's previous change as its own. An
+    // attempt that committed nothing BECAUSE it changed nothing is a
+    // different thing and is stamped normally: the branch genuinely
+    // still holds the change it held, which is what a later pass's
+    // "unchanged" match is supposed to say.
+    const fingerprint =
+      preempted !== undefined || commitError !== undefined ? unstamped(NOT_COMMITTED) : changeFingerprintOf(workdir);
     const judgement: Judgement =
       preempted !== undefined
         ? preempted
@@ -571,6 +612,7 @@ export async function runAttempts(opts: {
       cost,
       checks: gate ? gateForRecord(gate) : null,
       outcome: gate?.green ? "delivered" : "failed",
+      fingerprint,
     });
     receipts.push(receipt);
 

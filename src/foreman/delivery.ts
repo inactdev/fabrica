@@ -14,6 +14,7 @@ import type { CapStop } from "./attempts.ts";
 import { formatUsd, SPEND_UNKNOWN_LINE } from "./spend.ts";
 import { formatPercent } from "./meters.ts";
 import { SELF_TESTED } from "./judge.ts";
+import { describeFingerprint } from "./fingerprint.ts";
 import { describeInvalidWriteup } from "./pr-body.ts";
 import { describeTestMapReport } from "../testmap/index.ts";
 import type { TestMapReport } from "../testmap/index.ts";
@@ -484,9 +485,10 @@ export function withTestMapReport(delivery: Delivery, report: TestMapReport | un
  * `delivery.md` — a convenience view; the "delivered" event's `details`
  * carries the structured object deliveryOf() actually reads.
  *
- * The test-map block goes last, after `gateChanges`: it is the one part
- * of a delivery that runs to several lines of its own, and the fields
- * above it are the ones every reader scans for first. */
+ * The test-map block goes last, after `gateChanges` and the one-line
+ * `fingerprint`: it is the one part of a delivery that runs to several
+ * lines of its own, and the fields above it are the ones every reader
+ * scans for first. */
 export function renderDeliveryMarkdown(delivery: Delivery, cost?: string): string {
   const tests = describeTestMapReport(delivery.tests);
   return (
@@ -501,6 +503,12 @@ export function renderDeliveryMarkdown(delivery: Delivery, cost?: string): strin
       `branch:     ${delivery.branch}`,
       `files:      ${delivery.files.join(", ")}`,
       `gateChanges: ${delivery.gateChanges}`,
+      // The one wording every surface shows, from the one function
+      // (`fingerprint.ts`'s `describeFingerprint`) - `fabrica status`
+      // and `fabrica log` render the identical string.
+      `fingerprint: ${describeFingerprint(delivery.fingerprint, delivery.fingerprintMatch)}`,
+      // Last, because it is the only multi-line block here - the
+      // one-line facts above it stay scannable as a column.
       ...(tests.length === 0 ? [] : [`tests:\n${tests}`]),
     ].join("\n") + "\n"
   );

@@ -8,6 +8,8 @@ import { readEvents, readEventsForTask } from "../record/index.ts";
 import type { FabricaEvent, FabricaEventName } from "../record/index.ts";
 import type { Delivery, FabricaTask, Receipt } from "../inspector/types.ts";
 import { deliveredState } from "./delivery.ts";
+import { UNSTAMPED_OLD_RECORD } from "./fingerprint.ts";
+import type { DeliveryStamp, PassFingerprint } from "./fingerprint.ts";
 
 export function eventsOf(recordHome: string, taskId: string): FabricaEvent[] {
   return readEventsForTask(recordHome, taskId);
@@ -247,6 +249,76 @@ export function gateDeclarationsOf(events: FabricaEvent[]): string[] {
     if (typeof merged === "string" && merged.trim().length > 0) declarations.push(merged);
   }
   return declarations;
+}
+
+/** Every pass of a task that stamped a change fingerprint, oldest
+ * first, with how many passes the task has had in all. */
+export interface PassFingerprints {
+  passes: PassFingerprint[];
+  /** The pass currently running is included: a caller comparing against
+   * "every EARLIER pass" filters on `pass < count`. */
+  count: number;
+}
+
+/**
+ * The change fingerprint each of a task's passes ended up carrying
+ * (`src/foreman/fingerprint.ts`), read back off the record.
+ *
+ * A pass opens at its own `"work-started"` event - one per round,
+ * whether that round is the task's first, a resume after `fabrica
+ * answer`, or a fix - and its stamp is the last one its attempts
+ * recorded, taken from the `"receipt-recorded"` events inside it. Read
+ * from receipts rather than from deliveries on purpose: a pass
+ * Inspector refused delivers nothing at all, and its change is still on
+ * the branch for the next pass to be compared against. A pass whose
+ * attempts were all unstamped simply does not appear.
+ */
+export function passFingerprintsOf(events: FabricaEvent[]): PassFingerprints {
+  const passes: PassFingerprint[] = [];
+  let count = 0;
+  let current: string | null = null;
+  const closePass = (): void => {
+    if (count > 0 && current !== null) passes.push({ pass: count, patchId: current });
+  };
+  for (const event of events) {
+    if (event.name === "work-started") {
+      closePass();
+      count += 1;
+      current = null;
+      continue;
+    }
+    if (event.name !== "receipt-recorded") continue;
+    const receipt = (event.details as { receipt?: Receipt } | undefined)?.receipt;
+    const patchId = receipt?.fingerprint?.patchId;
+    if (typeof patchId === "string" && patchId.length > 0) current = patchId;
+  }
+  closePass();
+  return { passes, count };
+}
+
+/** Just the passes BEFORE the one currently running - what a round
+ * compares its own stamp against. */
+export function priorPassFingerprints(events: FabricaEvent[]): PassFingerprint[] {
+  const { passes, count } = passFingerprintsOf(events);
+  return passes.filter((entry) => entry.pass < count);
+}
+
+/** The change fingerprint a task's current delivery carries, and how it
+ * compared with the pass before it - what `fabrica status` marks a
+ * delivered line with. Null when the task has no delivery on the record
+ * (the same "latest delivered event wins" rule `deliveredBranchOf`
+ * applies, minus the refusal clearing: a refusal says nothing about
+ * what the branch holds). Undefined fields mean the delivery predates
+ * fingerprints, which reads as unstamped. */
+export function deliveredFingerprintOf(events: FabricaEvent[]): DeliveryStamp | null {
+  const delivered = events.filter((event) => event.name === "delivered").at(-1);
+  if (delivered === undefined) return null;
+  const delivery = (delivered.details as DeliveredDetails | undefined)?.delivery;
+  if (delivery === undefined) return null;
+  return {
+    fingerprint: delivery.fingerprint ?? { patchId: null, base: null, baseBranch: null, reason: UNSTAMPED_OLD_RECORD },
+    ...(delivery.fingerprintMatch === undefined ? {} : { fingerprintMatch: delivery.fingerprintMatch }),
+  };
 }
 
 /** The most recent "delivered" event's details — a fix round appends a
