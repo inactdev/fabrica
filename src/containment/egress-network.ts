@@ -12,22 +12,31 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ContainmentError } from "./errors.ts";
+import { networkCreateFailureMessage } from "./network-pools.ts";
+import { dockerSaid, networkLabelArgs } from "./task-networks.ts";
 
 const execFileAsync = promisify(execFile);
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 /** Creates a fresh bridge network with the ordinary default route out -
  * nothing special about it except that it exists to be the far side of
- * exactly one relay container's second network interface. Throws
- * `ContainmentError("network-create-failed")` on any docker failure. */
-export async function createEgressNetwork(name: string): Promise<{ name: string }> {
+ * exactly one relay container's second network interface. Labelled with
+ * its task for the same reason the isolated network is: it holds an
+ * address pool until something removes it, and the end-of-round sweep
+ * finds it by that label (task-networks.ts). Throws
+ * `ContainmentError("network-create-failed")` on any docker failure,
+ * with exhausted address pools named as the cause (network-pools.ts). */
+export async function createEgressNetwork(name: string, opts: { taskId?: string } = {}): Promise<{ name: string }> {
   try {
-    await execFileAsync("docker", ["network", "create", "--driver", "bridge", name]);
+    await execFileAsync("docker", [
+      "network",
+      "create",
+      "--driver",
+      "bridge",
+      ...networkLabelArgs("relay-egress", opts.taskId),
+      name,
+    ]);
   } catch (err) {
-    throw new ContainmentError("network-create-failed", `could not create egress network "${name}": ${errorMessage(err)}`);
+    throw new ContainmentError("network-create-failed", networkCreateFailureMessage("egress", name, dockerSaid(err)));
   }
   return { name };
 }
@@ -40,6 +49,6 @@ export async function removeEgressNetwork(name: string): Promise<void> {
   try {
     await execFileAsync("docker", ["network", "rm", name]);
   } catch (err) {
-    throw new ContainmentError("network-remove-failed", `could not remove egress network "${name}": ${errorMessage(err)}`);
+    throw new ContainmentError("network-remove-failed", `could not remove egress network "${name}": ${dockerSaid(err)}`);
   }
 }

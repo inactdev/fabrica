@@ -25,6 +25,7 @@ import { readModelChoice } from "./model.ts";
 import { networkPolicyFor } from "./network-policy.ts";
 import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
+import { sweepTaskNetworks } from "./task-networks.ts";
 import { recordReceipt, spendLimitsFor } from "./caps.ts";
 import { pauseRuleFor } from "./meters.ts";
 import type { Caps } from "../../contract/surface.ts";
@@ -125,7 +126,17 @@ export async function runProductionRound(
   }
 ): Promise<FabricaTask> {
   // #73: whatever throws from here on lands on the record as task-failed.
-  return recordingFailure(recordHome, taskId, () => productionRound(recordHome, taskId, brief, ctx));
+  try {
+    return await recordingFailure(recordHome, taskId, () => productionRound(recordHome, taskId, brief, ctx));
+  } finally {
+    // The round is over - delivered, refused or thrown - so nothing of
+    // this task's is still running and any Docker network still open
+    // for it is a leftover holding an address pool. Outside
+    // productionRound's own `finally` (which only covers a line that
+    // was actually cut) so a round that died on the cut itself is swept
+    // too. See task-networks.ts.
+    await sweepTaskNetworks(taskId);
+  }
 }
 
 async function productionRound(

@@ -120,6 +120,12 @@ export { defaultBrainAdapter } from "./brain/index.ts";
 // `fabrica doctor`'s machine checks (src/cli/doctor-command.ts).
 export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerTokenStatus } from "./brain/index.ts";
 export { relayImageStatus } from "./relay/index.ts";
+// The Docker networks tasks run on: what is still open
+// (`fabrica doctor`'s leftover count) and the one command that clears
+// the unused ones, named identically wherever the Client is told about
+// them (src/containment/task-networks.ts, network-pools.ts).
+export { listWorkerNetworks, NETWORK_PRUNE_COMMAND, WORKER_NETWORK_PREFIX } from "./containment/index.ts";
+export type { WorkerNetwork } from "./containment/index.ts";
 // Issue #267: what the repository's own checks said about the pull
 // request. Only the label and the two event-detail shapes are exported -
 // `fabrica status`/`watch` and the live view read the summary straight

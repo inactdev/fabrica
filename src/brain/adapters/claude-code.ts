@@ -195,8 +195,15 @@ async function connectThroughRelay(realToken: string): Promise<RelayedNetwork> {
     policy === undefined ? mkdtempSync(join(realpathSync(tmpdir()), "fabrica-relay-record-")) : undefined;
   const limits = relayLimitsFor(policy);
 
-  const isolatedNetwork = await createIsolatedNetwork(isolatedNetworkName);
-  const egressNetwork = await createEgressNetwork(egressNetworkName);
+  // Both networks carry this task's id as a Docker label, so the
+  // Foreman's end-of-round sweep (../../containment/task-networks.ts)
+  // can remove them by that label even when the teardown below never
+  // ran - this process killed mid-round, or a relay container Docker
+  // had not finished reaping yet making the removal fail. Absent a task
+  // (a library-level caller), they carry none, and no sweep can ever
+  // name them.
+  const isolatedNetwork = await createIsolatedNetwork(isolatedNetworkName, { taskId: policy?.taskId });
+  const egressNetwork = await createEgressNetwork(egressNetworkName, { taskId: policy?.taskId });
 
   let relay: Awaited<ReturnType<typeof startContainerizedRelay>>;
   try {

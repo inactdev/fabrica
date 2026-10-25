@@ -55,6 +55,7 @@ import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgr
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
 import { registerRelayHealthProbe } from "../relay-health.ts";
+import { currentTaskNetwork } from "../task-network.ts";
 import { GITHUB_HOSTS, RelayError, startContainerizedRelay } from "../../relay/index.ts";
 import type { GatewayTarget } from "../../relay/index.ts";
 // The reference adapter's own proven recipe for making git work inside a
@@ -248,8 +249,16 @@ async function connectThroughRelay(opts: { baseUrl: string; apiKey?: string }): 
   // home rather than the Client's real task record.
   const scratchRecordHome = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-relay-record-"));
 
-  const isolatedNetwork = await createIsolatedNetwork(isolatedNetworkName);
-  const egressNetwork = await createEgressNetwork(egressNetworkName);
+  // Both networks are labelled with the task in flight, when there is
+  // one, so the Foreman's end-of-round sweep can find and remove them
+  // even if the teardown below never ran (this process was killed, or a
+  // still-attached relay container made the removal fail) - see
+  // src/containment/task-networks.ts. This reads the same per-call
+  // policy the reference adapter reads, for the label alone: the
+  // refusal record home above stays the stated gap it always was.
+  const taskId = currentTaskNetwork()?.taskId;
+  const isolatedNetwork = await createIsolatedNetwork(isolatedNetworkName, { taskId });
+  const egressNetwork = await createEgressNetwork(egressNetworkName, { taskId });
 
   let relay: Awaited<ReturnType<typeof startContainerizedRelay>>;
   try {
