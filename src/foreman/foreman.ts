@@ -16,6 +16,7 @@ import type { Caps } from "../../contract/surface.ts";
 import { recordCost } from "./caps.ts";
 import { readModelChoice } from "./model.ts";
 import type { ChecksReader } from "./ci-checks.ts";
+import type { TokenMinter } from "../githubapp/index.ts";
 import {
   deliveryOf as lookupDelivery,
   eventsOf as lookupEvents,
@@ -52,9 +53,20 @@ export interface ForemanOptions {
    * ever reached by a round whose green inspection printed a pull
    * request URL. */
   checksReader?: ChecksReader;
+  /** Issue #187: where every GitHub token a task uses is minted from -
+   * the push and pull request, the issue it names, the checks on its
+   * pull request. Omitted uses the real GitHub App configured on this
+   * machine (`src/githubapp`), which is also what refuses a task when
+   * no App is configured; tests supply
+   * `src/githubapp/helpers/fake-minter.ts`'s fake so no suite needs a
+   * registered App or the network. Every mint lands on the task's
+   * record as `"token-minted"` either way - that half is Fabrica's own
+   * (`src/foreman/github-token.ts`), never the minter's. */
+  minter?: TokenMinter;
   /** Where `do(..., { issue })` reads that issue's title and body from
-   * (src/foreman/task-issue.ts). Omitted uses the real GitHub, with the
-   * token Inspector publishes with; tests supply a fake
+   * (src/foreman/task-issue.ts). Omitted uses the real GitHub, with a
+   * GitHub App token minted for the issue's own repository and only
+   * `issues: read` (issue #187); tests supply a fake
    * (src/foreman/helpers/fake-issue-reader.ts) so no suite ever needs a
    * token or a network. */
   issueReader?: IssueReader;
@@ -86,7 +98,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
 
   return {
     async do(taskText, callOpts) {
-      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, issueReader: opts.issueReader, caps, onTaskRegistered: opts.onTaskRegistered });
+      const task = await doTask(recordHome, taskText, { ...callOpts, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, minter: opts.minter, issueReader: opts.issueReader, caps, onTaskRegistered: opts.onTaskRegistered });
       if (callOpts.brain) brainByTask.set(task.id, callOpts.brain);
       return task;
     },
@@ -97,7 +109,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       // of `fabrica do` then `fabrica answer` by hand) falls back the
       // same way verdict() does.
       const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome, modelFor(recordHome, taskId));
-      return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, caps });
+      return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, minter: opts.minter, caps });
     },
     async deliveryOf(taskId) {
       return lookupDelivery(recordHome, taskId);
@@ -107,7 +119,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
     },
     async verdict(taskId, ruling, note) {
       const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome, modelFor(recordHome, taskId));
-      return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, caps });
+      return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, minter: opts.minter, caps });
     },
     async status() {
       return lookupStatus(recordHome);

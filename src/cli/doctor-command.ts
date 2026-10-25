@@ -12,7 +12,8 @@ import {
   capsActive,
   describeUnmeasured,
   eventsByTask,
-  githubTokenStatus,
+  githubAppStatus,
+  githubRepoOf,
   inspectorBranchStatus,
   listWorkerNetworks,
   loadConfigOrProblem,
@@ -28,7 +29,7 @@ import {
   workerTokenStatus,
   WORKER_NETWORK_PREFIX,
 } from "../index.ts";
-import type { WorkerNetwork } from "../index.ts";
+import type { ProjectRepo, WorkerNetwork } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { dockerDaemonUp } from "./docker-daemon.ts";
 import {
@@ -56,13 +57,19 @@ ENOTDIR), Docker, the worker image, the worker CLI version
 installed in it, the relay image every task's network goes through, any
 Docker network left behind by a task that is no longer running (each
 one holds an address pool, so they are counted and the command that
-clears them is named), the
-worker token, the GitHub token Inspector needs, Inspector itself - on
+clears them is named), the worker token, the GitHub App every push,
+pull request, issue read and check read goes through - configured, its
+key usable, and installed on every registered project's repository -
+Inspector itself - on
 PATH, taking -branch, and built from the commit its own origin main is
 at, a stale binary being a FAIL carrying the exact \`go install\` that
 replaces it - every registered project, the caps, and any SPEND UNKNOWN
 block. One line per check - OK, or FAIL with the exact fix. Exits
 non-zero if anything fails.
+
+The github app line also warns, without failing, while a personal
+GITHUB_TOKEN is still set in the environment or sitting in brain.env:
+nothing reads it any more, which is exactly why it should be revoked.
 
 The inspector line reports that commit against the tip of its own main
 inline, and FAILs - printing the exact \`go install\` command \`fabrica
@@ -150,7 +157,15 @@ export interface DoctorProbes {
    * the recordHome. */
   workerNetworks(recordHome: string): Promise<DoctorCheck>;
   workerToken(recordHome: string): DoctorCheck;
-  githubToken(): DoctorCheck;
+  /** The GitHub App every push, pull request, issue read and check read
+   * now goes through (issue #187): configured, its key usable, and
+   * installed on every registered project's repository - plus a warning
+   * while a personal GITHUB_TOKEN is still in the configuration, which
+   * nothing reads any more. Async because answering "installed where"
+   * is two documented GitHub calls; the registered projects it asks
+   * about are resolved here rather than in src/githubapp, which knows
+   * about Apps and not about projects.toml. */
+  githubApp(recordHome: string): Promise<DoctorCheck>;
   /** Inspector on PATH, taking -branch, and not behind its own main -
    * which is a real FAIL, so `fabrica up` stops on a stale Inspector
    * (src/inspector/doctor-checks.ts). */
@@ -615,10 +630,24 @@ export const realProbes: DoctorProbes = {
     return workerNetworksCheck(networks, networks === null ? [] : leftoverWorkerNetworks(networks, liveTaskIds(recordHome)));
   },
   workerToken: (recordHome) => workerTokenStatus(process.env, recordHome),
-  githubToken: () => githubTokenStatus(process.env),
+  githubApp: (recordHome) => githubAppStatus(process.env, recordHome, registeredProjectRepos(recordHome)),
   inspector: () => inspectorBranchStatus(process.env),
   live: (recordHome) => probeWorkerToken(process.env, recordHome),
 };
+
+/** Every registered project that has a github.com repository behind it,
+ * for the one check that asks GitHub where the App is installed. A
+ * projects.toml that will not parse answers "none" rather than throwing:
+ * its own FAIL line is `collectDoctorChecks`'s to print, and the App
+ * line still has three of its four questions to answer. */
+function registeredProjectRepos(recordHome: string): ProjectRepo[] {
+  const { config, problem } = loadConfigOrProblem(recordHome);
+  if (problem) return [];
+  return Object.entries(config.projects).flatMap(([name, project]) => {
+    const repo = githubRepoOf(project.path);
+    return repo === null ? [] : [{ name, ...repo }];
+  });
+}
 
 function projectCheck(name: string, path: string): DoctorCheck {
   const label = `project ${name}`;
@@ -697,7 +726,7 @@ export async function collectDoctorChecks(opts: { recordHome: string; probes?: D
     probes.relayImage(),
     await probes.workerNetworks(recordHome),
     probes.workerToken(recordHome),
-    probes.githubToken(),
+    await probes.githubApp(recordHome),
     probes.inspector(),
   ];
 

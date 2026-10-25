@@ -13,9 +13,27 @@ import {
   MAX_INSPECTION_REPORT_BYTES,
 } from "./run.ts";
 
-/** A fake token, so no test here ever asks the machine's real `gh`. */
+/** A stand-in for the GitHub App (issue #187), so no test here needs a
+ * registered App, a private key, or the network. `check()` passes and
+ * `mint()` hands back a fixed fake token. */
+function fakeToken(token = "fake-test-token") {
+  return { check() {}, async mint() { return mintedFake(token); } };
+}
+
+function mintedFake(token: string) {
+  return {
+    token,
+    expiresAt: "2026-01-01T01:00:00Z",
+    owner: "o",
+    repo: "r",
+    permissions: { contents: "write", pull_requests: "write" },
+    installationId: 1,
+    repositorySelection: "selected",
+  };
+}
+
 function testAdapter(command: string) {
-  return inspectorAdapter(command, { env: { ...process.env, GITHUB_TOKEN: "fake-test-token" } });
+  return inspectorAdapter(command, { env: { ...process.env }, token: fakeToken() });
 }
 
 /** The ratified consumer contract (issue #109): the one copy of the call's
@@ -252,7 +270,8 @@ test("inspectorAdapter names the reviewer with -vendor and -model when one is co
   const path = argsEcho(workdir, "inspector-reviewer-args.sh");
 
   const inspection = await inspectorAdapter(path, {
-    env: { GITHUB_TOKEN: "fake-test-token" },
+    env: {},
+    token: fakeToken(),
     reviewer: REVIEWER,
   }).inspect({ branch: "fabrica/task-1", workdir });
 
@@ -287,7 +306,8 @@ test("inspectorAdapter hands the reviewer's key to the child's environment and n
   chmodSync(path, 0o755);
 
   const inspection = await inspectorAdapter(path, {
-    env: { GITHUB_TOKEN: "fake-test-token" },
+    env: {},
+    token: fakeToken(),
     reviewer: { ...REVIEWER, baseUrl: "https://review.test/v1" },
   }).inspect({ branch: "fabrica/task-1", workdir });
 

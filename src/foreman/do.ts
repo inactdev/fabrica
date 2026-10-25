@@ -13,6 +13,7 @@ import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { prepareRound } from "./judge.ts";
 import type { ChecksReader } from "./ci-checks.ts";
+import type { TokenMinter } from "../githubapp/index.ts";
 import { runAttempts } from "./attempts.ts";
 import { deliveredState } from "./delivery.ts";
 import { recordRoundResult } from "./round.ts";
@@ -61,6 +62,9 @@ export async function doTask(
     /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
      * the pull request's real checks from GitHub. */
     checksReader?: ChecksReader;
+    /** Issue #187's seam: where this round's GitHub App tokens are
+     * minted from. Omitted uses the real App on this machine. */
+    minter?: TokenMinter;
     caps?: Caps;
     onTaskRegistered?: (taskId: string) => void;
   }
@@ -94,6 +98,7 @@ export async function doTask(
     inspector: opts.inspector,
     checkBox: opts.checkBox,
     checksReader: opts.checksReader,
+    minter: opts.minter,
     caps: opts.caps,
   });
 }
@@ -123,6 +128,9 @@ export async function runProductionRound(
     /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
      * the pull request's real checks from GitHub. */
     checksReader?: ChecksReader;
+    /** Issue #187's seam: where this round's GitHub App tokens are
+     * minted from. Omitted uses the real App on this machine. */
+    minter?: TokenMinter;
     caps?: Caps;
   }
 ): Promise<FabricaTask> {
@@ -155,10 +163,13 @@ async function productionRound(
     /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
      * the pull request's real checks from GitHub. */
     checksReader?: ChecksReader;
+    /** Issue #187's seam: where this round's GitHub App tokens are
+     * minted from. Omitted uses the real App on this machine. */
+    minter?: TokenMinter;
     caps?: Caps;
   }
 ): Promise<FabricaTask> {
-  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, checkBox, checksReader, caps } = ctx;
+  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, checkBox, checksReader, minter, caps } = ctx;
   // The delivery's summary/evidence want the Client's original one-line
   // ask, not the full brief a resumed round's worker receives - `brief`
   // for an answer.ts retry is request.md plus the whole "## Clarification"
@@ -271,6 +282,7 @@ async function productionRound(
       checkBox,
       closesIssue,
       checksReader,
+      minter,
     });
 
     // `project` rides on work-started's details, not a dedicated event -

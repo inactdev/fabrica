@@ -159,7 +159,27 @@ export type { WorkerNetwork } from "./containment/index.ts";
 export { CHECKS_LABEL } from "./ci/index.ts";
 export type { ChecksVerdict } from "./ci/index.ts";
 export type { CiCheckConcludedDetails, CiChecksFinishedDetails } from "./foreman/index.ts";
-export { githubTokenStatus, inspectorBranchStatus } from "./inspector/index.ts";
+export { inspectorBranchStatus } from "./inspector/index.ts";
+// Issue #187: every GitHub call Fabrica makes - Inspector's push and
+// pull request, the issue a task names, the checks on its pull request -
+// uses a GitHub App token minted for one repository, with only that
+// call's own permissions, and discarded afterwards. The Client's
+// personal token is gone; `fabrica doctor`'s own line is what tells him
+// whether the App is configured and installed, and warns while a
+// personal token is still lying around.
+export { githubAppStatus, GithubAppError } from "./githubapp/index.ts";
+export type {
+  GithubAppCheck,
+  GithubAppErrorCode,
+  MintPurpose,
+  ProjectRepo,
+  TokenMinter,
+} from "./githubapp/index.ts";
+// Which GitHub repository a registered project's pull requests go to,
+// for the one caller that reports on every project at once
+// (`fabrica doctor`) rather than minting for one.
+export { githubRepoOf } from "./foreman/index.ts";
+export type { TokenMintedDetails } from "./foreman/index.ts";
 // Where `fabrica do --issue <N>` reads that issue from: the real GitHub
 // by default, a fake in tests (src/foreman/helpers/fake-issue-reader.ts).
 // src/cli/ only ever names the type - it never picks a source - and

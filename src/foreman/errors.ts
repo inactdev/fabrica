@@ -28,6 +28,12 @@ export type ForemanErrorCode =
    * see src/foreman/test-map.ts. */
   | "test-map-unreadable"
   | "missing-check"
+  /** A project has no github.com repository to mint a scoped token for
+   * (issue #187): no `origin` remote, an origin on another host, or one
+   * whose URL names no owner/repo. Nothing can be pushed or published
+   * from such a project, so it is refused rather than started - see
+   * src/foreman/github-token.ts. */
+  | "no-github-repo"
   | "inspector-not-ready"
   /** No reviewer could be settled for a project whose test changes need
    * one judged - see src/reviewer/resolve.ts for the three grounds. */

@@ -17,13 +17,15 @@
 // is how a pull request is told apart - a number that turns out to name
 // one is refused rather than quietly used as if it were an issue.
 //
-// Why a plain HTTPS call rather than `gh issue view --json`, which is
-// already installed wherever Inspector's token comes from: `gh` would
+// Why a plain HTTPS call rather than `gh issue view --json`: `gh` would
 // put a second spelling of "which issue, which repository" between the
-// Client's `--issue` value and the request, needs the binary present
-// even when GITHUB_TOKEN is set in the environment, and a child process
-// is the one thing src/foreman may not spawn for anything but git. One
-// documented endpoint, one injectable `fetch`, no process.
+// Client's `--issue` value and the request, needs the binary present at
+// all, and a child process is the one thing src/foreman may not spawn
+// for anything but git. It is also the wrong credential now - `gh`
+// authenticates as the Client himself, and since issue #187 every
+// GitHub call Fabrica makes uses a GitHub App token scoped to one
+// repository. One documented endpoint, one injectable `fetch`, no
+// process.
 
 import { GitHubError } from "./errors.ts";
 import { formatIssueRef } from "./issue-ref.ts";
@@ -82,8 +84,10 @@ export interface FetchedIssue {
 export type IssueSource = (ref: IssueRef) => Promise<FetchedIssue>;
 
 export interface GithubIssueSourceOptions {
-  /** The token Inspector publishes with (src/inspector/run.ts's
-   * `resolveGithubToken`) - never logged, never put in a message. */
+  /** A GitHub App installation token minted for this issue's own
+   * repository with only `issues: read` (issue #187 - src/githubapp,
+   * wired up in src/foreman/github-token.ts). Never logged, never put
+   * in a message. */
   token: string;
   fetchImpl?: HttpFetch;
   /** Overridden only by tests pointing at a stub server. */
@@ -127,7 +131,7 @@ export async function fetchIssue(
     throw new GitHubError(
       "issue-not-found",
       `GitHub has no issue ${named} this token can read (HTTP ${status}). Check the number and the ` +
-        `repository, and that the token Inspector publishes with may read it.`
+        `repository, and that Fabrica's GitHub App is installed on it - run \`fabrica doctor\`.`
     );
   }
   if (status === 301) {

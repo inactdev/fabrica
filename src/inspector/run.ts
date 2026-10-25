@@ -11,6 +11,10 @@ import type { Inspection, Inspector } from "./types.ts";
 // Worker's own vendor, which this module has no business knowing about
 // (src/reviewer/resolve.ts's header).
 import type { ResolvedReviewer } from "../reviewer/index.ts";
+// Type only, for the same reason: minting a publishing token needs the
+// task's repository and the two permissions that call needs, neither of
+// which is this adapter's business (src/githubapp/minter.ts).
+import type { ScopedToken } from "../githubapp/index.ts";
 
 export const INSPECTOR_CONFIG = ".inspector.json";
 export const MAX_INSPECTION_REPORT_BYTES = 16 * 1024;
@@ -92,29 +96,53 @@ export interface InspectorAdapterOptions {
    * Omitted, Inspector is called exactly as it was before: no
    * `-vendor`/`-model`, no reviewer credential in its environment. */
   reviewer?: ResolvedReviewer;
+  /** Where the `GITHUB_TOKEN` Inspector publishes with comes from
+   * (issue #187): a GitHub App token minted for this task's repository
+   * alone, with only `contents: write` and `pull_requests: write`, for
+   * this one handoff. Already bound to that repository and those
+   * permissions by the caller (`src/githubapp`'s `scopedToken`), so
+   * this adapter never learns either.
+   *
+   * Omitted, every handoff refuses. There is deliberately no fallback:
+   * the Client's personal token is gone from the configuration, and a
+   * handoff that silently published with some other credential would be
+   * exactly the breadth the App exists to remove. */
+  token?: ScopedToken;
 }
+
+/** The message a handoff refuses with when it was built with no token
+ * source at all - a wiring mistake rather than a machine the Client has
+ * to fix, so it says which seam is missing. */
+const NO_TOKEN_SOURCE =
+  "Inspector was handed no GitHub App to mint a publishing token from, so it cannot push or open a pull " +
+  "request. This is a wiring fault in Fabrica, not a setting on this machine: every Inspector handoff is " +
+  "built with a scoped token source (src/foreman/judge.ts).";
 
 export function inspectorAdapter(command: string = "inspector", opts: InspectorAdapterOptions = {}): Inspector {
   const baseEnv = opts.env ?? process.env;
   const reviewer = opts.reviewer;
-  // Resolved once per adapter, then reused for every inspection: the
-  // child's environment only, never Fabrica's own. The reviewer's key
-  // rides here for the same reason GITHUB_TOKEN does - an argv entry is
-  // visible to every process on the machine, an environment entry on a
-  // child Fabrica spawned is not.
-  let childEnv: NodeJS.ProcessEnv | undefined;
-  const ensureEnv = (): NodeJS.ProcessEnv =>
-    (childEnv ??= {
-      ...baseEnv,
-      GITHUB_TOKEN: githubToken(baseEnv),
-      ...(reviewer === undefined ? {} : { [reviewer.apiKeyVar]: reviewer.apiKey }),
-      ...(reviewer?.baseUrl === undefined ? {} : { [reviewer.baseUrlVar]: reviewer.baseUrl }),
-    });
+  const token = opts.token;
+  // The reviewer's key rides on the child's environment for the same
+  // reason the GitHub token does - an argv entry is visible to every
+  // process on the machine, an environment entry on a child Fabrica
+  // spawned is not. Fabrica's own environment is never modified.
+  //
+  // Unlike the reviewer's, the GitHub token is minted per inspection
+  // rather than once per adapter: it lives an hour, and a fix round
+  // reached days after the first pass must not try to publish with a
+  // token minted for the first one.
+  const childEnv = (githubToken: string): NodeJS.ProcessEnv => ({
+    ...baseEnv,
+    GITHUB_TOKEN: githubToken,
+    ...(reviewer === undefined ? {} : { [reviewer.apiKeyVar]: reviewer.apiKey }),
+    ...(reviewer?.baseUrl === undefined ? {} : { [reviewer.baseUrlVar]: reviewer.baseUrl }),
+  });
   return {
     async inspect({ branch, workdir, prTitle, prBody, expectedTip }) {
+      if (token === undefined) return { verdict: "refused", report: NO_TOKEN_SOURCE };
       let env: NodeJS.ProcessEnv;
       try {
-        env = ensureEnv();
+        env = childEnv((await token.mint()).token);
       } catch (err) {
         return { verdict: "refused", report: err instanceof Error ? err.message : String(err) };
       }
@@ -124,40 +152,15 @@ export function inspectorAdapter(command: string = "inspector", opts: InspectorA
       return commandIsInstalled(command, baseEnv);
     },
     prepare() {
-      ensureEnv();
+      // Synchronous and offline on purpose: this is what refuses a task
+      // before any worker starts, and the whole of "could this handoff
+      // ever work" that can be answered without a network call - both
+      // App settings present, the key file at mode 600, and parsable.
+      // The mint itself happens in `inspect`, which is already async.
+      if (token === undefined) throw new Error(NO_TOKEN_SOURCE);
+      token.check();
     },
   };
-}
-
-/** Inspector needs GITHUB_TOKEN to publish a green result (issue #103).
- * Fabrica's own environment wins; otherwise `gh auth token` is asked
- * once. The value is only ever returned - never printed, logged, or put
- * in Fabrica's own process environment. */
-function githubToken(env: NodeJS.ProcessEnv): string {
-  return resolveGithubToken(env).token;
-}
-
-/** The token Inspector will get, and where it came from - never printed. */
-export function resolveGithubToken(env: NodeJS.ProcessEnv): { token: string; source: "GITHUB_TOKEN" | "gh auth token" } {
-  if (env.GITHUB_TOKEN && env.GITHUB_TOKEN.trim().length > 0) return { token: env.GITHUB_TOKEN, source: "GITHUB_TOKEN" };
-  let token = "";
-  try {
-    token = execFileSync("gh", ["auth", "token"], {
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    // gh missing, or not logged in - both answered by the same message.
-  }
-  if (token.length === 0) {
-    throw new Error(
-      "Inspector needs a GitHub token to publish a green result, and none was found: GITHUB_TOKEN is not " +
-        "set and `gh auth token` gave nothing (gh is missing or not logged in). Run `gh auth login`, then " +
-        "start the task again. Nothing was started."
-    );
-  }
-  return { token, source: "gh auth token" };
 }
 
 /** Where `command` resolves to as an executable - a path as given, a bare

@@ -225,7 +225,20 @@ export type FabricaEventName =
    * - the head commit read, the verdict drawn from it, the one-phrase
    * summary every task line shows, and the checks that never concluded,
    * recorded as unknown and never as green. */
-  | "ci-checks-finished";
+  | "ci-checks-finished"
+  /** Fabrica minted a short-lived, one-repository GitHub App token for
+   * one call this task made - a push and pull request, the issue it
+   * names, or the checks on its pull request (issue #187). Details:
+   * `src/foreman/github-token.ts`'s `TokenMintedDetails` - the
+   * repository, the installation, the permissions GitHub granted, the
+   * expiry, and what the token was for. Never the token itself, which
+   * exists only in memory for the length of that one call.
+   *
+   * Here rather than in the contract for the same reason as the names
+   * above it: which credential Fabrica reached GitHub with is its own
+   * bookkeeping, not a new promise to the Client about a seam, and
+   * `contract/surface.ts` is a path `rule9-gate.yml` protects. */
+  | "token-minted";
 
 export interface FabricaEvent extends Omit<ContractFabricaEvent, "name"> {
   name: FabricaEventName;

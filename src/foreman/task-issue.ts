@@ -42,7 +42,8 @@ import { GitHubError, githubIssueSource } from "../github/index.ts";
 import { MAX_COMMENT_CHARS } from "../github/index.ts";
 import type { FetchedIssue, IssueComment, IssueRef, IssueRequest, OmittedComment } from "../github/index.ts";
 import { hostFromOriginUrl, originUrl, ownerRepoFromOriginUrl } from "../register/index.ts";
-import { resolveGithubToken } from "../inspector/index.ts";
+import type { TokenMinter } from "../githubapp/index.ts";
+import { readIssueScope, taskTokenMinter } from "./github-token.ts";
 import { ForemanError } from "./errors.ts";
 import type { ClosesIssue } from "./pr-body.ts";
 
@@ -124,11 +125,24 @@ function describeOrigin(project: string): string {
 }
 
 /** The real pair: origin's own `owner/repo` when that remote is on
- * github.com, and one documented GET with the GitHub token Inspector
- * publishes with (`GITHUB_TOKEN`, else `gh auth token` - resolved in
- * src/inspector so the two sides can never disagree about which token
- * Fabrica has). The token is never logged, printed, or recorded. */
-export function defaultIssueReader(env: NodeJS.ProcessEnv = process.env): IssueReader {
+ * github.com, and one documented GET with a GitHub App token minted for
+ * the issue's own repository and only `issues: read` (issue #187).
+ *
+ * The scope is the issue's repository, not the project's: `owner/repo#N`
+ * and a pasted URL can name an issue somewhere else entirely, and a
+ * token minted for the project would then be a token for the wrong
+ * repository. An App not installed where the issue lives refuses by
+ * name, which is the honest answer.
+ *
+ * The token is never logged, printed, or recorded - only the fact that
+ * one was minted (`github-token.ts`). */
+export function defaultIssueReader(
+  recordHome: string,
+  taskId: string,
+  minter?: TokenMinter,
+  env: NodeJS.ProcessEnv = process.env
+): IssueReader {
+  const bound = taskTokenMinter(recordHome, taskId, minter, env);
   return {
     projectRepo(project) {
       const url = originUrl(project);
@@ -138,11 +152,12 @@ export function defaultIssueReader(env: NodeJS.ProcessEnv = process.env): IssueR
     async issue(ref) {
       let token: string;
       try {
-        token = resolveGithubToken(env).token;
+        token = (await bound.mint("read-issue", readIssueScope(ref.owner, ref.repo))).token;
       } catch (err) {
         throw new GitHubError(
           "issue-fetch-failed",
-          `Reading issue ${formatIssueRef(ref)} needs the GitHub token Inspector publishes with. ${messageOf(err)}`
+          `Reading issue ${formatIssueRef(ref)} needs a GitHub App token for ${ref.owner}/${ref.repo}. ` +
+            `${messageOf(err)}`
         );
       }
       return githubIssueSource({ token })(ref);
@@ -166,13 +181,19 @@ export async function fetchTaskIssue(
   taskId: string,
   project: string,
   issueArg: number | string,
-  reader: IssueReader = defaultIssueReader()
+  /** Omitted reads the real GitHub, minting this task's own `issues:
+   * read` token for the issue's repository; tests supply a fake. */
+  reader?: IssueReader,
+  /** Only reached when `reader` is omitted - the App the real reader
+   * mints from. */
+  minter?: TokenMinter
 ): Promise<string> {
-  const ref = resolveIssueRef(project, issueArg, reader);
+  const read = reader ?? defaultIssueReader(recordHome, taskId, minter);
+  const ref = resolveIssueRef(project, issueArg, read);
 
   let issue: FetchedIssue;
   try {
-    issue = await reader.issue(ref);
+    issue = await read.issue(ref);
   } catch (err) {
     // Every message from src/github is already one complete, actionable
     // sentence naming the cause - prefixed with the command, never
@@ -189,7 +210,7 @@ export async function fetchTaskIssue(
   // determined at all is not qualified: nothing is known to differ, and
   // `Closes owner/repo#N` would then be a guess rather than a
   // correction.
-  const own = reader.projectRepo(project);
+  const own = read.projectRepo(project);
   writeTaskFile(
     recordHome,
     taskId,

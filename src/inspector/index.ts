@@ -6,12 +6,6 @@ export {
   inspectorConfigMatches,
   inspectorIsConfigured,
   resolveCommandPath,
-  // Issue #267: src/ci/ reads the pull request Inspector published with
-  // the same token, from the same resolver - never a second lookup that
-  // could disagree about which credential is in play. The same resolver
-  // also supplies `do(..., { issue })`'s issue fetch (src/foreman/
-  // task-issue.ts), for the same one-credential reason.
-  resolveGithubToken,
   INSPECTOR_CONFIG,
   MAX_INSPECTION_REPORT_BYTES,
   reportForRecord,
@@ -23,7 +17,6 @@ export type { Inspection, Inspector } from "./types.ts";
 // line that reports a stale binary and the command that replaces it can
 // never disagree about what "behind" means.
 export {
-  githubTokenStatus,
   inspectorBranchStatus,
   inspectorInstallArgs,
   inspectorInstallCommand,

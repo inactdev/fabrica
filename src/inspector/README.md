@@ -28,9 +28,19 @@ one: settling a reviewer needs to know which vendor the Worker is, and
 this module has no business depending on brains. It takes only the
 `ResolvedReviewer` type from there, erased at compile time.
 
-## The GitHub token (issue #103)
+## The GitHub token (issue #103, replaced by issue #187)
 
-Inspector needs `GITHUB_TOKEN` to publish a green result. If Fabrica's own environment has it, it passes through. If not, the adapter runs `gh auth token` once and sets `GITHUB_TOKEN` in the inspector child's environment only. It never touches Fabrica's own process environment or the worker's box, and never prints or logs the token. If `gh` is missing or not logged in, `prepare()` throws, and the Foreman refuses the task (`inspector-not-ready`) before any worker starts, naming `gh auth login`. A new machine needs only "install, log in to GitHub, go" - no hand-added profile line.
+Inspector still needs `GITHUB_TOKEN` to publish a green result, and still receives it on its own child environment only - never in Fabrica's process environment, never in the worker's box, never printed or logged. `consumer-contract.json` is unchanged: the variable, the flags and the exit codes are exactly what they were.
+
+What changed is where that token comes from. It used to be the Client's personal token - `GITHUB_TOKEN` passed through from Fabrica's environment, else `gh auth token` once - which lasts until revoked and can touch every repository he owns. It is now a GitHub App installation token minted for **this task's repository alone**, with **only `contents: write` and `pull_requests: write`**, **per handoff**, and discarded when the inspector child exits (issue #187). The adapter is handed an already-bound `ScopedToken` (`src/githubapp`'s `scopedToken`), so it never learns which repository it publishes to or which permissions that needs.
+
+Three consequences worth knowing:
+
+- **`prepare()` is still synchronous and still refuses up front.** It checks what can be checked offline - both App settings present, the private key at mode 600, and parsable - so a handoff that could not possibly work still throws, and the Foreman still refuses the task with `inspector-not-ready` before any worker starts. It mints nothing: the mint happens inside `inspect()`, which is already async.
+- **There is no fallback.** An adapter built with no token source refuses every handoff rather than publishing with some other credential, and a mint GitHub refuses becomes a `refused` inspection carrying GitHub's own cause - never a `red` one, since nothing was judged.
+- **One token per handoff, never cached across rounds.** An installation token lives an hour; a fix round reached days later mints its own.
+
+See `src/githubapp/README.md` for the App itself, and `README.md`'s "The GitHub App" for the one-time setup the Client does by hand.
 
 ## Which build of Inspector is installed
 
