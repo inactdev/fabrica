@@ -32,6 +32,7 @@ import {
   quizQuestionsForTask,
   readTaskFile,
   refusalFor,
+  shadowCountsLine,
   standingOf,
   stateOf,
   taskSpend,
@@ -232,6 +233,13 @@ export interface SpendView {
 export interface LiveViewState {
   now: number;
   spend: SpendView;
+  /** Issue #204's amendment, which asks for these counts "on the live
+   * view header, not just `fabrica status`": the one line both surfaces
+   * show, built by the same `shadowCountsLine` the CLI calls, so the
+   * phone and the terminal can never disagree about them. Null when no
+   * project has a skip-rules file - the header then shows nothing at
+   * all rather than a zero that implies a file doing nothing. */
+  shadow: string | null;
   tasks: TaskView[];
 }
 
@@ -801,6 +809,11 @@ export function createRecordView(recordHome: string, opts: { baseStanding?: Base
 
     return {
       now,
+      // Issue #204: built from the events this read already holds (via
+      // `followTask`, like everything else here - never `eventsByTask`,
+      // whose one-shot read throws on a corrupt line and would take this
+      // page down), and from the same function `fabrica status` calls.
+      shadow: shadowCountsLine(new Map(perTask.map(({ id, events }) => [id, events])), now),
       spend: {
         dailyUsd,
         dailyLabel: formatUsd(dailyUsd),

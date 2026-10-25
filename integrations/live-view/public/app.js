@@ -140,6 +140,20 @@ function renderSpend(spend) {
   if (spendEl.textContent !== text) spendEl.textContent = text;
 }
 
+// Issue #204's amendment asks for the skip-rule counts "on the live view
+// header". One string, built server-side by the same `shadowCountsLine`
+// `fabrica status` calls, so there is nothing here to keep in step with
+// the terminal's wording. Hidden outright when the server sends null - no
+// project has a rules file, so there is nothing to say, and a zero would
+// imply a file that exists and is doing nothing.
+function renderShadow(line) {
+  const el = document.getElementById("shadow");
+  if (!el) return; // history.html has no header line of its own
+  const text = line === null || line === undefined ? "" : line;
+  if (el.textContent !== text) el.textContent = text;
+  if (el.hidden !== (text === "")) el.hidden = text === "";
+}
+
 // One entry per task currently rendered as a row - kept across polls so an
 // unchanged task's DOM node is reused rather than recreated, and so each
 // displayed field can be compared against what's already on screen before
@@ -341,6 +355,7 @@ function updateRow(refs, task) {
 
 function renderTasks(state) {
   renderSpend(state.spend);
+  renderShadow(state.shadow);
 
   const countEl = document.getElementById("count");
   const countText = String(state.tasks.length);

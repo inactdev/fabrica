@@ -11,6 +11,7 @@ import { STATUS_HELP, runStatusCommand } from "./status-command.ts";
 import { LOG_HELP, runLogCommand } from "./log-command.ts";
 import { WATCH_HELP, runWatchCommand } from "./watch-command.ts";
 import { AWAIT_HELP, runAwaitCommand } from "./await-command.ts";
+import { SHADOW_REPORT_HELP, runShadowReportCommand } from "./shadow-report-command.ts";
 import { DENY_AND_LOG_EDIT_HELP, runDenyAndLogEditCommand } from "./deny-and-log-edit-command.ts";
 import { VERIFY_HOOK_HELP, runVerifyHookCommand } from "./verify-hook-command.ts";
 import { COST_HELP, runCostCommand } from "./cost-command.ts";
@@ -109,6 +110,14 @@ export async function main(
       return 0;
     }
     return runWatchCommand(rest, io);
+  }
+
+  if (command === "shadow-report") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(SHADOW_REPORT_HELP);
+      return 0;
+    }
+    return runShadowReportCommand(rest, io);
   }
 
   if (command === "await") {

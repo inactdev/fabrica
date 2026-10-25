@@ -636,6 +636,7 @@ yourself:
     fabrica status         # every open task: id, project, state, age
     fabrica log <id>       # one task's event history (--transcript for the raw output)
     fabrica watch <id>     # follow that task while it runs
+    fabrica shadow-report  # what your skip rules would have done (shadow only)
 
 Every `status` row also names the model that did the work - the real one
 the worker reported running, read off that attempt's own receipt, not a
@@ -671,6 +672,52 @@ has the exact rules).
 
 Set `FABRICA_HOME` to use a record home other than `~/.fabrica`. Run
 `fabrica --help` or `fabrica <command> --help` for the rest.
+
+## Skip rules — recording only, for now
+
+You cannot be the verdict on every task forever. But a task must never
+skip you because the last ten went well, and you should never have to
+write the rule that lets one through. So a project can commit a file,
+`.fabrica/skip-rules.toml`, naming kinds of change and the yes-or-no
+questions a program answers about each finished task:
+
+    version = 1
+
+    [kinds.docs-only]
+    description = "A documentation-only change under docs/"
+    mode = "shadow"
+    allowedFolders = ["docs"]
+    maxFiles = 5
+    maxLines = 80
+    noTestFiles = true
+    noDependencyManifest = true
+    inspectorGreen = true
+    requiredGreenChecks = ["inspector-tests"]
+    noQuestionsAsked = true
+    noCouldNotVerify = true
+
+The vocabulary of questions is fixed in Fabrica's own code - a line can
+only combine them, never invent one or redefine what one means. Every
+answer comes from the record and from the change's own diff; **no model
+is consulted anywhere in this decision.** A model's finding reaches it
+only as "did a check go red", so a model can send a task to you and can
+never let one skip you.
+
+**Nothing closes by rule today.** `mode = "live"` is refused, naming
+CONTRACT rule 6, which is yours to amend before live mode is built at
+all. What runs now is shadow mode: after every delivery, each line is
+evaluated and the answer is written to the record - which kind would
+have closed the task, every condition, every answer, the rule file's own
+version and the change's fingerprint - and then the task comes to you
+exactly as it always did.
+
+    fabrica shadow-report
+
+shows the case for (or against) each line: how many tasks it would have
+closed, how many of those you then accepted, how many you ruled `fix` or
+`wrong`, and how long it has been recording. `fabrica status` and the
+live view's header carry the same counts in one line. A project with no
+rules file is simply never evaluated and records nothing.
 
 ## Money limits
 

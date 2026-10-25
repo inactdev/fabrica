@@ -1163,6 +1163,40 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       return `stopped${who}${from}${last}`;
     }
 
+    case "would-close-by-rule": {
+      // `src/skiprules/types.ts`'s WouldCloseByRuleDetails (issue #204).
+      // By far the largest `details` any event carries - every kind, every
+      // condition, every answer - so the JSON fallback would bury a
+      // task's own history under one event. Rendered as the one sentence
+      // a reader wants plus, for each kind, the conditions that were NOT
+      // safe: a kind that passed needs no list, and a kind that failed is
+      // only interesting for what it failed on. The whole structure is
+      // still on the record for `fabrica shadow-report` and the noticer.
+      const d = details as {
+        wouldClose?: boolean;
+        closedByKind?: string | null;
+        rulesVersion?: string | null;
+        problem?: string;
+        kinds?: { kind?: string; safe?: boolean; answers?: { condition?: string; answer?: string; detail?: string }[] }[];
+      };
+      if (typeof d.problem === "string" && d.problem.length > 0) {
+        return `skip rules could not be evaluated: ${d.problem}`;
+      }
+      const version = d.rulesVersion ? ` (rules ${d.rulesVersion})` : "";
+      const head = d.wouldClose
+        ? `shadow: "${d.closedByKind}" would have closed this task - nothing closed, it still waits on your verdict${version}`
+        : `shadow: no skip rule would have closed this task${version}`;
+      const misses = (d.kinds ?? [])
+        .filter((kind) => kind.safe !== true)
+        .map((kind) => {
+          const unsafe = (kind.answers ?? [])
+            .filter((answer) => answer.answer !== "safe")
+            .map((answer) => `${answer.condition} ${answer.answer}: ${answer.detail}`);
+          return `  ${kind.kind}: ${unsafe.length === 0 ? "no condition answered unsafe" : unsafe.join("; ")}`;
+        });
+      return misses.length === 0 ? head : `${head}\n${misses.join("\n")}`;
+    }
+
     default:
       return fallbackDetail(details);
   }
