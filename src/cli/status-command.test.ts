@@ -256,6 +256,77 @@ test("runStatusCommand: a delivered task whose project has been moved away says 
   assert.match(row, /AWAITING YOUR VERDICT/, "an unreadable base never hides the verdict the task is waiting for");
 });
 
+// The change's own fingerprint, read off the record rather than from
+// git - see src/foreman/fingerprint.test.ts for how it is taken, and
+// src/foreman/fingerprint-round.test.ts for what a pass records.
+test("runStatusCommand: a delivered task names the change's fingerprint on its own line", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project,
+    brain: fakeBrain({ onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), "v1\n") }),
+  });
+  const io = captureIo();
+
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+  const row = taskRows(io.out).find((line) => line.startsWith(`${task.id}  `))!;
+  assert.match(row, /AWAITING YOUR VERDICT/);
+  assert.match(row, /fingerprint [0-9a-f]{7}/);
+  assert.doesNotMatch(row, /changed from pass|void/, "a first pass has nothing to have changed from");
+});
+
+test("runStatusCommand: a fix round that changed the work says so, and that earlier observations are void", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  let version = 0;
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  const task = await foreman.do("small change", {
+    project,
+    brain: fakeBrain({
+      onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), `v${++version}\n`),
+    }),
+  });
+  await foreman.verdict(task.id, "fix", "do it differently");
+
+  const io = captureIo();
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+  const row = taskRows(io.out).find((line) => line.startsWith(`${task.id}  `))!;
+  assert.match(row, /fingerprint [0-9a-f]{7}, changed from pass 1 \([0-9a-f]{7}\)/);
+  assert.match(row, /every earlier Inspector stamp, check result and CI conclusion on this task is void/);
+});
+
+test("runStatusCommand: a delivery from before fingerprints existed reads as unstamped, never as nothing", async () => {
+  const recordHome = tempRecordHome();
+  const task = registerTask(recordHome, "an older task");
+  appendEvent(recordHome, { taskId: task.id, name: "work-started", details: { project: "/somewhere" } });
+  appendEvent(recordHome, {
+    taskId: task.id,
+    name: "delivered",
+    details: {
+      outcome: "done",
+      // Exactly the shape a pre-fingerprint record holds: no
+      // `fingerprint` field at all, and nothing is computed for it now.
+      delivery: {
+        outcome: "done",
+        confidence: 100,
+        summary: "done",
+        evidence: "",
+        assumptions: "",
+        gaps: "",
+        branch: `fabrica/${task.id}`,
+        files: [],
+        gateChanges: "",
+      },
+      project: "/somewhere",
+    },
+  });
+  const io = captureIo();
+
+  assert.equal(await runStatusCommand([], { recordHome, ...io }), 0);
+  const row = taskRows(io.out).find((line) => line.startsWith(`${task.id}  `))!;
+  assert.match(row, /fingerprint unstamped: recorded before fingerprints existed/);
+});
+
 test("runStatusCommand: a working task is never marked with a base standing - only a delivery can be fixed", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");

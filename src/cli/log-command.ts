@@ -20,6 +20,14 @@ the terminal's width and indented under its own event, never cut off
 part-way through. Only a genuinely huge payload is shortened, and that
 line says so, with how much of it you are seeing.
 
+Every attempt's receipt line and every delivery line carries the
+change's own fingerprint - a \`git patch-id\` of the branch's diff
+against where it forks from origin's default branch, so a rebase
+leaves it alone and only a real change moves it. A delivery after the
+first also says how it compares with the pass before it, and names
+plainly when a change makes every earlier Inspector stamp, check
+result and CI conclusion on the task void.
+
 A task with no Inspector reads the mode it will be judged in, right
 where that was decided (before any work started): "check mode:
 self-tested, not independently checked - no .inspector.json at the task

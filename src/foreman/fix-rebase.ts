@@ -46,6 +46,7 @@ import type { Receipt } from "../inspector/types.ts";
 import { buildRebaseConflictDelivery, renderDeliveryMarkdown, withTestMapReport } from "./delivery.ts";
 import { reportForRound } from "./test-map.ts";
 import type { TestMapEntry } from "../testmap/index.ts";
+import type { DeliveryStamp } from "./fingerprint.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf } from "./caps.ts";
 
@@ -306,19 +307,29 @@ export function deliverRebaseConflict(
      * project has no test map". */
     testMap?: TestMapEntry[] | null;
     workerTestsRun?: string;
+    /** This pass's change fingerprint and how it compares with the
+     * task's earlier passes (`fingerprint.ts`), taken by the caller
+     * after the abort so it describes the branch as the Client will
+     * find it. Passed in rather than taken here for the same reason
+     * `files` is built from a base the caller pins: one place decides
+     * what this round's branch state IS. */
+    stamp: DeliveryStamp;
   }
 ): void {
   const files = diffFiles(line.project, line.branch, ctx.baseCommit);
   const delivery = withTestMapReport(
-    buildRebaseConflictDelivery({
-      branch: line.branch,
-      files,
-      declaredGateChanges: ctx.declaredGateChanges,
-      base: ctx.base,
-      conflict: ctx.conflict,
-      reason: ctx.reason,
-      stops: ctx.stops,
-    }),
+    {
+      ...buildRebaseConflictDelivery({
+        branch: line.branch,
+        files,
+        declaredGateChanges: ctx.declaredGateChanges,
+        base: ctx.base,
+        conflict: ctx.conflict,
+        reason: ctx.reason,
+        stops: ctx.stops,
+      }),
+      ...ctx.stamp,
+    },
     reportForRound(ctx.testMap, line.project, files, ctx.workerTestsRun)
   );
   validateDelivery(delivery);

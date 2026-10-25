@@ -728,9 +728,30 @@ test("formatEventLine: a receipt line names the model that actually ran, beside 
       occurredAt: "t0",
       taskId: "x",
       name: "receipt-recorded",
+      details: {
+        receipt: {
+          attempt: 2,
+          costUsd: 0.5,
+          model: "big-9",
+          declaredModel: null,
+          modelSource: "default",
+          fingerprint: { patchId: "0123456789abcdef0123456789abcdef01234567", base: "b", baseBranch: "main" },
+        },
+      },
+    }),
+    "t0  receipt-recorded  attempt 2 on model big-9, cost $0.50, fingerprint 0123456"
+  );
+  // A receipt written before fingerprints existed reads as unstamped
+  // rather than silently saying nothing - nothing is ever computed for
+  // it after the fact.
+  assert.match(
+    formatEventLine({
+      occurredAt: "t0",
+      taskId: "x",
+      name: "receipt-recorded",
       details: { receipt: { attempt: 2, costUsd: 0.5, model: "big-9", declaredModel: null, modelSource: "default" } },
     }),
-    "t0  receipt-recorded  attempt 2 on model big-9, cost $0.50"
+    /cost \$0\.50, fingerprint unstamped: recorded before fingerprints existed/
   );
   // A worker that ran something other than what was asked for says both,
   // which is the whole point of recording the two separately.
@@ -803,6 +824,13 @@ test("formatEventLine: delivered summarizes without carrying the check's raw out
         branch: "fabrica/x",
         files: ["a.ts", "b.ts"],
         gateChanges: "",
+        fingerprint: { patchId: "0123456789abcdef0123456789abcdef01234567", base: "b", baseBranch: "main" },
+        fingerprintMatch: {
+          matched: false,
+          previous: "f".repeat(40),
+          previousPass: 1,
+          voidsEarlierObservations: true,
+        },
       },
       receipts: [
         { checks: { output: "y".repeat(10_000) } },
@@ -814,7 +842,9 @@ test("formatEventLine: delivered summarizes without carrying the check's raw out
 
   assert.equal(
     line,
-    "t0  delivered  delivered: done - Completed: add a demo line (confidence 100%, attempt 2, branch fabrica/x, 2 file(s))"
+    "t0  delivered  delivered: done - Completed: add a demo line (confidence 100%, attempt 2, branch fabrica/x, " +
+      "2 file(s), fingerprint 0123456, changed from pass 1 (fffffff) - every earlier Inspector stamp, check " +
+      "result and CI conclusion on this task is void)"
   );
   assert.ok(line.length < 300, `expected a bounded line, got ${line.length} chars`);
   assert.doesNotMatch(line, /x{100}/);

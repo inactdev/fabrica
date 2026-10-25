@@ -33,7 +33,22 @@ export type { BaseStanding } from "./base-standing.ts";
 export { readTranscript } from "./transcript.ts";
 export { followTask } from "./follow.ts";
 export type { TaskFollower, TaskProgress } from "./follow.ts";
-export { fixRoundOf, eventsByTask, stateOf, deliveryOf, deliveredBranchOf, earlyStopKindOf } from "./queries.ts";
+export {
+  fixRoundOf,
+  eventsByTask,
+  stateOf,
+  deliveryOf,
+  deliveredBranchOf,
+  deliveredFingerprintOf,
+  earlyStopKindOf,
+  passFingerprintsOf,
+  priorPassFingerprints,
+} from "./queries.ts";
+// The change fingerprint (`git patch-id` of a pass's own diff against
+// its merge-base with origin's default branch) and the one wording
+// `fabrica status`, `fabrica log` and `delivery.md` all show for it.
+export { describeFingerprint, shortPatchId } from "./fingerprint.ts";
+export type { ChangeFingerprint, DeliveryStamp, FingerprintMatch, PassFingerprint } from "./fingerprint.ts";
 export { capsActive } from "./caps.ts";
 // What a worker box is allowed to reach for one task (issue #186) - read
 // here by anything that calls a brain outside a production round, e.g.

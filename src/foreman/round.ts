@@ -28,6 +28,8 @@ import { reportForRound } from "./test-map.ts";
 import type { TestMapEntry } from "../testmap/index.ts";
 import { recordMeterPause } from "./meters.ts";
 import { deliverRebaseConflict } from "./fix-rebase.ts";
+import { stampFor } from "./fingerprint.ts";
+import { eventsOf, priorPassFingerprints } from "./queries.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf, recordCapStop, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps, ProductionLine } from "../../contract/surface.ts";
@@ -133,6 +135,18 @@ export function recordRoundResult(
     gateDeclarations: roundGateDeclarations,
   };
 
+  // The change fingerprint every delivery below carries, and how it
+  // stands against the task's earlier passes. `stamp()` reads the
+  // branch, so each path calls it at the point ITS branch has finished
+  // moving - after the commit on the ordinary path, after the abort on
+  // the rebase-conflict path. The passes to compare against are read
+  // once, here, before any of that: this round's own receipts are
+  // already on the record by now (`onReceipt` appended them while the
+  // attempts ran), and `priorPassFingerprints` drops the running pass
+  // so a round is never compared with itself.
+  const priorPasses = priorPassFingerprints(eventsOf(recordHome, taskId));
+  const stamp = (): ReturnType<typeof stampFor> => stampFor(line.workdir, priorPasses);
+
   // Which attempt's receipt holds this round's check output in full
   // (issue #68): the last one that was actually judged. The delivery's
   // `evidence` names it and shows an excerpt instead of storing the same
@@ -172,15 +186,16 @@ export function recordRoundResult(
   // double-reported, so it is deliberately not: the attempt that was
   // cut short is the one the pause explains.
   if (meterStop !== undefined) {
-    const delivery = withTests(
-      buildPausedByMeterDelivery({
+    const delivery = withTests({
+      ...buildPausedByMeterDelivery({
         attempts: allReceipts.length,
         branch: line.branch,
         files: diffFiles(line.project, line.branch, ctx.baseCommit),
         declaredGateChanges,
         pause: meterStop,
-      })
-    );
+      }),
+      ...stamp(),
+    });
     validateDelivery(delivery);
     recordMeterPause(recordHome, taskId, meterStop);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
@@ -225,6 +240,10 @@ export function recordRoundResult(
       stops: lastJudgement.stops,
       testMap: ctx.testMap,
       ...(writeup?.testsRun === undefined ? {} : { workerTestsRun: writeup.testsRun }),
+      // Taken after the abort, which has already put the branch back at
+      // its own last commit - so this is the change the Client is being
+      // asked to rule on, not the half-replayed state the rebase was in.
+      stamp: stamp(),
     });
     if (capStop) recordCapStop(recordHome, taskId, capStop, "a rebase conflict stopped this round");
     return { kind: "recorded", outcome: "inspection-red" };
@@ -237,14 +256,19 @@ export function recordRoundResult(
   // wrapped with `skipIfUnchanged`, so `lastJudgement.kind` is never
   // `"unchanged"` there.
   if (lastJudgement.kind === "unchanged" && !capStop) {
-    const delivery = withTests(
-      buildNothingChangedDelivery({
+    const delivery = withTests({
+      ...buildNothingChangedDelivery({
         attempts: allReceipts.length,
         branch: line.branch,
         files: diffFiles(line.project, line.branch, ctx.baseCommit),
         declaredGateChanges,
-      })
-    );
+      }),
+      // Stamped like every other outcome, and expected to match: a
+      // round whose worker left the branch where it was carries the
+      // same change it already carried, which is exactly what the mark
+      // should say rather than being left off.
+      ...stamp(),
+    });
     validateDelivery(delivery);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
     appendEvent(recordHome, {
@@ -293,16 +317,20 @@ export function recordRoundResult(
     // #54 follow-up) - caught and turned into a delivery of its own
     // instead, scoped minimally, no retry machinery.
     newReceipts[newReceipts.length - 1].outcome = "failed";
-    const delivery = withTests(
-      buildCommitFailureDelivery({
+    const delivery = withTests({
+      ...buildCommitFailureDelivery({
         attempts: allReceipts.length,
         lastGate,
         evidenceAttempt,
         branch: line.branch,
         declaredGateChanges,
         error: commitError,
-      })
-    );
+      }),
+      // The commit failed, so the branch holds whatever it held before
+      // this round - which is the honest thing to stamp: the delivery's
+      // own `files` is `[]` for the same reason.
+      ...stamp(),
+    });
     validateDelivery(delivery);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
     appendEvent(recordHome, {
@@ -325,8 +353,8 @@ export function recordRoundResult(
   // src/foreman/README.md's "Rule 9: blocked by CI, not by Fabrica's own
   // mark" for the full reasoning. Enforcement lives entirely outside
   // Fabrica, in `.github/workflows/rule9-gate.yml`.
-  const delivery = withTests(
-    buildDelivery(outcome, {
+  const delivery = withTests({
+    ...buildDelivery(outcome, {
       taskText: ctx.taskText,
       attempts: allReceipts.length,
       lastGate,
@@ -345,8 +373,11 @@ export function recordRoundResult(
       capStop,
       taskId,
       spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, ctx.caps),
-    })
-  );
+    }),
+    // Taken after the commit above, which is the last thing this round
+    // does to the branch.
+    ...stamp(),
+  });
 
   // Never present a malformed delivery as done (rule 4) — prove the
   // Foreman's own output before anyone else has to.

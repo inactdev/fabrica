@@ -26,6 +26,13 @@ export { recordStopDecision } from "./foreman/index.ts";
 export type { LastWorkerActivity, StoppedByOwnerDetails } from "./foreman/index.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
 export { readTranscript, eventsByTask, stateOf, deliveryOf, deliveredBranchOf, earlyStopKindOf } from "./foreman/index.ts";
+// The change fingerprint a pass's delivery carries (`git patch-id` of
+// its own diff against its merge-base with origin's default branch),
+// how it compared with the pass before it, and the one wording every
+// surface shows for both - `fabrica status`, `fabrica log` and
+// `delivery.md` all render the same string from `describeFingerprint`.
+export { deliveredFingerprintOf, describeFingerprint, shortPatchId } from "./foreman/index.ts";
+export type { ChangeFingerprint, DeliveryStamp, FingerprintMatch, PassFingerprint } from "./foreman/index.ts";
 // The "behind origin/<branch>, a fix will rebase" marker both
 // `fabrica status` and the live view show on a delivered task, plus the
 // read-only git check behind it and the age formatter its label uses.

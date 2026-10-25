@@ -7,12 +7,21 @@ import {
   CHECKS_LABEL,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   describeDeclaration,
+  describeFingerprint,
   describeModel,
   describeTestMapNote,
   formatAge,
   formatUsd,
 } from "../index.ts";
-import type { FabricaEvent, FabricaTask, ModelSource, TestMapReport, TranscriptEntry } from "../index.ts";
+import type {
+  ChangeFingerprint,
+  FabricaEvent,
+  FabricaTask,
+  FingerprintMatch,
+  ModelSource,
+  TestMapReport,
+  TranscriptEntry,
+} from "../index.ts";
 import type { WorkerPresence } from "./task-process.ts";
 
 /** Longer than this since the last recorded event on a still-working task,
@@ -423,6 +432,17 @@ export function formatStatusLine(
      * supplied reads "check mode unknown" (Client ruling, issue #111
      * clarification - a missing line looks like nothing to say). */
     checkMode?: TaskCheckMode;
+    /** `describeFingerprint`'s own string for this task's current
+     * delivery - "fingerprint 1f84653, unchanged since pass 1", or
+     * "fingerprint 9ab20c4, changed from pass 1 (1f84653) - every
+     * earlier Inspector stamp, check result and CI conclusion on this
+     * task is void", or "fingerprint unstamped: <reason>". Shown
+     * verbatim, never re-worded here, since `fabrica log` and
+     * `delivery.md` show the identical string from the identical
+     * function. Only ever set for a delivered task: a fingerprint is a
+     * fact about a change being handed over, and that is the one state
+     * where there is one. Omitted (or null) says nothing. */
+    fingerprint?: string | null;
   }
 ): string {
   const project = opts.project ?? "unknown project";
@@ -443,13 +463,18 @@ export function formatStatusLine(
     // the end of the line is where the eye stops, and this is a fact
     // about the verdict being asked for, so it belongs with it.
     const standing = opts.baseStanding ? `  ${opts.baseStanding}` : "";
+    // Beside the base standing, and for the same reason: both are facts
+    // about the change being offered for a verdict, and a changed
+    // fingerprint is the one that says the Inspector stamp and check
+    // results further up this line were made about something else.
+    const stamp = opts.fingerprint ? `  ${opts.fingerprint}` : "";
     if (opts.pausedByMeter !== undefined) {
       return (
         `${base}${mode}  <- PAUSED BY THE SUBSCRIPTION METER: ${opts.pausedByMeter} - nothing restarts by itself: ` +
-        `\`fabrica verdict ${task.id} fix\` continues it${standing}${pr}`
+        `\`fabrica verdict ${task.id} fix\` continues it${standing}${stamp}${pr}`
       );
     }
-    return `${base}${mode}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${standing}${pr}`;
+    return `${base}${mode}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${standing}${stamp}${pr}`;
   }
   if (isDeadEnd(task.state, opts.hasDelivery)) {
     if (task.state === "failed") {
@@ -877,7 +902,14 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
 
     case "receipt-recorded": {
       const d = details as {
-        receipt?: { attempt?: number; costUsd?: number | null; model?: string; declaredModel?: string | null; modelSource?: ModelSource };
+        receipt?: {
+          attempt?: number;
+          costUsd?: number | null;
+          model?: string;
+          declaredModel?: string | null;
+          modelSource?: ModelSource;
+          fingerprint?: ChangeFingerprint;
+        };
       };
       const cost = d.receipt?.costUsd;
       // Issue #184: which model actually ran this attempt, in the same
@@ -887,7 +919,15 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
         declaredModel: d.receipt?.declaredModel ?? null,
         modelSource: d.receipt?.modelSource ?? "default",
       });
-      return `attempt ${d.receipt?.attempt} on model ${model}, cost ${typeof cost === "number" ? formatUsd(cost) : "unknown"}`;
+      // What this attempt's change hashes to, so a reader scanning a
+      // task's history can see the change stay put (or move) attempt by
+      // attempt, not only pass by pass. No comparison here: that is a
+      // pass-level fact and belongs on the "delivered" line below.
+      const stamp = describeFingerprint(d.receipt?.fingerprint);
+      return (
+        `attempt ${d.receipt?.attempt} on model ${model}, ` +
+        `cost ${typeof cost === "number" ? formatUsd(cost) : "unknown"}, ${stamp}`
+      );
     }
 
     case "cost-recorded": {
@@ -936,7 +976,15 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       // rendering exists to fix. "What happened," not the whole output.
       const d = details as {
         outcome?: string;
-        delivery?: { confidence?: number; summary?: string; branch?: string; files?: string[]; gateChanges?: string };
+        delivery?: {
+          confidence?: number;
+          summary?: string;
+          branch?: string;
+          files?: string[];
+          gateChanges?: string;
+          fingerprint?: ChangeFingerprint;
+          fingerprintMatch?: FingerprintMatch;
+        };
         receipts?: unknown[];
         attemptsSoFar?: number;
       };
@@ -960,6 +1008,12 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       if (delivery.branch) bits.push(`branch ${delivery.branch}`);
       if (delivery.files) bits.push(`${delivery.files.length} file(s)`);
       if (delivery.gateChanges) bits.push("gate changes declared");
+      // Always said, never conditional: "unstamped" is information the
+      // same way a stamp is, and a changed one is the line that tells a
+      // reader the Inspector stamp and check results above it were made
+      // about a different change. Same string `fabrica status` and
+      // `delivery.md` show, from the same function.
+      bits.push(describeFingerprint(delivery.fingerprint, delivery.fingerprintMatch));
 
       const summary = delivery.summary ? ` - ${delivery.summary}` : "";
       return `delivered: ${d.outcome ?? "?"}${summary} (${bits.join(", ")})`;

@@ -914,6 +914,26 @@ them can reach a running worker.
   the project gone - the line says "base unknown: &lt;reason&gt;" rather
   than quietly reading as current. Only a delivered task is marked, and
   the live view shows the identical string from the identical function.
+- **`status`** also names the **change's own fingerprint** on a
+  `delivered` line, beside the base standing and for the same reason -
+  both are facts about the change being offered for a verdict.
+  `src/foreman/fingerprint.ts` takes it: `git patch-id --stable` over
+  the branch's diff against `merge-base(HEAD, origin/<default>)`, so
+  the id survives the rebase a `fix` round starts with and moves only
+  when the change itself does. A later pass says how it compares -
+  "fingerprint 1f84653, unchanged since pass 1", or "fingerprint
+  9ab20c4, changed from pass 1 (1f84653) - every earlier Inspector
+  stamp, check result and CI conclusion on this task is void". Void
+  means exactly that: those observations were made about a different
+  change. Nothing is blocked by it, and verdicts, quiz results and the
+  clarify step's answers are never voided (Client ruling) - they are
+  not observations of the change. A task already on the record before
+  fingerprints existed reads "fingerprint unstamped" and is never
+  stamped after the fact. `fabrica log` shows the same string on every
+  `receipt-recorded` line (per attempt, no comparison - that is a
+  pass-level fact) and every `delivered` line, and `delivery.md`
+  carries it too; all three render `describeFingerprint`, never their
+  own wording. Not yet shown on the live view's review page.
 - **`log <id>`** prints one task's event history in order, each event
   rendered as prose judged per event name rather than its stored
   `details` dumped raw, and a consecutive run of heartbeats collapsed

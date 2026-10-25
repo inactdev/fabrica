@@ -8,7 +8,9 @@ import {
   capsActive,
   daySpend,
   deliveredBranchOf,
+  deliveredFingerprintOf,
   describeBaseStandingOf,
+  describeFingerprint,
   describeMeters,
   describeModel,
   describeTaskCost,
@@ -95,6 +97,21 @@ line and before every fix round); the mark says how long ago that was.
 When it cannot be read at all - no "origin" remote, origin/HEAD unset,
 the branch or the project gone - the line says "base unknown: <reason>"
 rather than quietly implying the branch is current.
+
+Every delivered task also carries a fingerprint of the change itself -
+a \`git patch-id\` of the branch's own diff against where it forks from
+origin's default branch, which stays the same when the branch is
+rebased and changes only when the change does. A later round says how
+it compares: "fingerprint 1f84653, unchanged since pass 1", or
+"fingerprint 9ab20c4, changed from pass 1 (1f84653) - every earlier
+Inspector stamp, check result and CI conclusion on this task is void".
+Void means exactly that and nothing more: those observations were made
+about a different change, so they say nothing about this one. Your own
+verdict is never blocked by it, and verdicts, quiz results and the
+clarify step's answers are never voided - they are not observations of
+the change. A task that was already on the record before fingerprints
+existed reads "fingerprint unstamped", and is never stamped after the
+fact.
 
 For a task whose round should have a process running it, that process
 is really looked for - its own pid file, verified against what is
@@ -319,6 +336,19 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
         // view shows, from the same function.
         const baseStanding =
           task.state === "delivered" ? describeBaseStandingOf(project, deliveredBranchOf(events), now) : null;
+        // What the change being offered for a verdict hashes to, and
+        // whether it is the one the task's previous pass was checked
+        // at - read straight off the record, in the same wording
+        // `fabrica log` and `delivery.md` use. Shown only for a
+        // delivered task, the one state where a change is actually
+        // being handed over; a changed fingerprint says the Inspector
+        // stamp and CI result on this same line were made about
+        // something else.
+        const deliveredStamp = task.state === "delivered" ? deliveredFingerprintOf(events) : null;
+        const fingerprint =
+          deliveredStamp === null
+            ? null
+            : describeFingerprint(deliveredStamp.fingerprint, deliveredStamp.fingerprintMatch);
         stdout(
           formatStatusLine(task, {
             project,
@@ -334,6 +364,7 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             refusalReason,
             prUrl: prUrlFromEvents(events),
             baseStanding,
+            fingerprint,
             // Issue #267: what the repository's own checks said about this
             // task's pull request, read off the record like everything else
             // on this line.
