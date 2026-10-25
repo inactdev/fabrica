@@ -20,6 +20,15 @@
 //      instead, naming the size.
 //   4. A fetch that fails refuses the task before any ProductionLine is
 //      cut, naming the cause.
+//   5. The issue's own comments are part of it, under their own heading
+//      saying what they are - amendments and rulings, in order - so a
+//      machine reads the issue as it stands rather than as it was first
+//      written. The Client's ruling on that: human-authored comments
+//      only, with automation's named but not quoted; no cap on the
+//      count and the oldest never dropped, since the ordering is the
+//      point; the current text of an edited comment, with both dates;
+//      and the heading always emitted, so "no comments" is never
+//      confusable with "not fetched".
 //
 // Nothing here spawns a process: the GitHub call is a plain HTTPS
 // request (src/github/fetch-issue.ts) and the only git this needs is
@@ -30,7 +39,8 @@
 import { readTaskFile, writeTaskFile } from "../record/index.ts";
 import { formatIssueRef, parseIssueArg, parseStoredIssue, sameRepo } from "../github/index.ts";
 import { GitHubError, githubIssueSource } from "../github/index.ts";
-import type { FetchedIssue, IssueRef, IssueRequest } from "../github/index.ts";
+import { MAX_COMMENT_CHARS } from "../github/index.ts";
+import type { FetchedIssue, IssueComment, IssueRef, IssueRequest, OmittedComment } from "../github/index.ts";
 import { hostFromOriginUrl, originUrl, ownerRepoFromOriginUrl } from "../register/index.ts";
 import { resolveGithubToken } from "../inspector/index.ts";
 import { ForemanError } from "./errors.ts";
@@ -191,6 +201,11 @@ export async function fetchTaskIssue(
   return text;
 }
 
+/** The heading an issue's comments are carried under. The Client's own
+ * words, verbatim: a machine must read them as amendments and rulings
+ * rather than as chatter, and in the order they were made. */
+export const COMMENTS_SECTION_HEADING = "## Amendments and rulings on this issue, in order";
+
 /** `issue.md`: the fetched issue as the record keeps it, and as every
  * brief carries it. One rendering, used for both, so what a worker reads
  * and what the Client can open in the record are the same text. */
@@ -198,7 +213,79 @@ export function renderIssueFile(issue: FetchedIssue): string {
   const body = issue.body.trim();
   return (
     `# ${formatIssueRef(issue.ref)}: ${issue.title.trim()}\n\n${issue.url}\n\n` +
-    `${body.length > 0 ? body : "(This issue has no description.)"}\n`
+    `${body.length > 0 ? body : "(This issue has no description.)"}\n\n` +
+    `${renderCommentsSection(issue)}`
+  );
+}
+
+/**
+ * The comments section of `issue.md`. Always rendered, heading and all,
+ * even for an issue with none: "none" has to be distinguishable from
+ * "not fetched", which a missing section would not be.
+ */
+function renderCommentsSection(issue: FetchedIssue): string {
+  const parts = [COMMENTS_SECTION_HEADING];
+
+  if (issue.comments.length === 0) {
+    // Two different facts, said differently on purpose: an issue nobody
+    // has commented on, and one where every comment was automation's.
+    parts.push(
+      issue.omittedComments.length === 0
+        ? `No comments on this issue as of ${issue.fetchedAt}.`
+        : `No human-authored comments on this issue as of ${issue.fetchedAt}.`
+    );
+  } else {
+    for (const comment of issue.comments) parts.push(renderComment(comment));
+  }
+
+  if (issue.omittedComments.length > 0) parts.push(renderOmittedLine(issue.omittedComments));
+  return `${parts.join("\n\n")}\n`;
+}
+
+/** One comment: the fixed line it opens with - author handle, posted
+ * date, and the edited date when it has one - then its own words,
+ * verbatim, and a loud marker when they were cut. */
+function renderComment(comment: IssueComment): string {
+  const line = [
+    `### ${comment.author}`,
+    `posted ${comment.postedAt}`,
+    ...(comment.editedAt === null ? [] : [`edited ${comment.editedAt}`]),
+  ].join(" | ");
+
+  const body = comment.body.trim();
+  const parts = [line, body.length > 0 ? comment.body.trimEnd() : "(This comment has no text.)"];
+  if (comment.fullLength !== null) parts.push(renderCutMarker(comment));
+  return parts.join("\n\n");
+}
+
+/** What a cut says: which comment, whose, how long it really is, and how
+ * much was left out - plus where to read the rest. Loud on purpose; a
+ * silently shortened ruling is the one thing this section must never
+ * hand a worker.
+ *
+ * Opens with the same `[truncated` word as every other marker Fabrica
+ * leaves where it shortened something (`src/ci/logs.ts`'s `tailOf`,
+ * `src/inspector/run.ts`'s report tail), so one grep finds them all -
+ * and says the opposite thing about which end was kept, since a log's
+ * last lines are the useful ones and a ruling's first lines are. */
+function renderCutMarker(comment: IssueComment): string {
+  const left = comment.fullLength! - MAX_COMMENT_CHARS;
+  const where = comment.url.length > 0 ? ` Read it in full at ${comment.url}.` : "";
+  return (
+    `[truncated: this comment by ${comment.author}, posted ${comment.postedAt}, is ${comment.fullLength} ` +
+    `characters - the first ${MAX_COMMENT_CHARS} are above, and ${left} characters past the ` +
+    `${MAX_COMMENT_CHARS}-character limit for one comment were left out.${where}]`
+  );
+}
+
+/** The one line that names every comment left out as automation. Named
+ * rather than quoted, and never omitted: a comment nobody can see is
+ * indistinguishable from a comment nobody made. */
+function renderOmittedLine(omitted: OmittedComment[]): string {
+  const named = omitted.map((comment) => `${comment.author} (posted ${comment.postedAt})`).join(", ");
+  return (
+    `Left out as automation rather than amendments, listed so nothing is silently dropped ` +
+    `(${omitted.length} ${omitted.length === 1 ? "comment" : "comments"}): ${named}.`
   );
 }
 

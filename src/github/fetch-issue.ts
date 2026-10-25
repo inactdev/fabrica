@@ -1,6 +1,8 @@
 // Reading one issue from GitHub's REST API, so a task worded "do issue
 // #N as written" is handed #N's own words instead of having to ask what
-// they say.
+// they say - the issue as it stands, which means its comments too (the
+// second call, fetch-comments.ts: a comment is where an amendment or a
+// ruling lands).
 //
 // Written against GitHub's current REST reference for "Get an issue"
 // (docs.github.com/en/rest/issues/issues), read before this call was
@@ -26,13 +28,15 @@
 import { GitHubError } from "./errors.ts";
 import { formatIssueRef } from "./issue-ref.ts";
 import type { IssueRef } from "./issue-ref.ts";
+import { GITHUB_API_ROOT, GITHUB_API_VERSION, apiMessage, githubHeaders, isoUtcSecond } from "./api.ts";
+import type { HttpFetch } from "./api.ts";
+import { fetchIssueComments } from "./fetch-comments.ts";
+import type { IssueComment, OmittedComment } from "./fetch-comments.ts";
 
-export const GITHUB_API_ROOT = "https://api.github.com";
-
-/** The API version this call is pinned to - GitHub's documented way of
- * saying which version's behavior a request expects, and the current one
- * as of the reference read while writing this. */
-export const GITHUB_API_VERSION = "2026-03-10";
+// Re-exported, not redeclared: both calls share them (api.ts), and every
+// caller and test that already imported them from here keeps working.
+export { GITHUB_API_ROOT, GITHUB_API_VERSION };
+export type { HttpFetch };
 
 /**
  * The hard ceiling the Client set on an issue carried into a brief (64
@@ -52,6 +56,22 @@ export interface FetchedIssue {
   body: string;
   /** `html_url`: the page a human would open. */
   url: string;
+  /** Every human-authored comment, oldest first - the issue's
+   * amendments and rulings. Empty for an issue with none.
+   *
+   * Required, not optional, on purpose: a reader that forgot to fetch
+   * them would otherwise render as an issue that genuinely has none, and
+   * "none" has to stay distinguishable from "not fetched" (the Client's
+   * own ruling on this task). An IssueReader that omits it fails to
+   * compile. */
+  comments: IssueComment[];
+  /** Every comment left out as automation rather than an amendment -
+   * author and date only, so nothing is silently dropped. */
+  omittedComments: OmittedComment[];
+  /** When this was read, ISO-8601 UTC to the second. What the "no
+   * comments as of ..." line reports, so that line states a fact about
+   * a moment rather than a timeless claim. */
+  fetchedAt: string;
 }
 
 /** Where a task's issue text comes from. One function, so the whole
@@ -61,13 +81,6 @@ export interface FetchedIssue {
  * the real API. */
 export type IssueSource = (ref: IssueRef) => Promise<FetchedIssue>;
 
-/** Just enough of `fetch` for this call: the global one satisfies it,
- * and a fake needs only a status and a body. */
-export type HttpFetch = (
-  url: string,
-  init: { headers: Record<string, string> }
-) => Promise<{ status: number; text(): Promise<string> }>;
-
 export interface GithubIssueSourceOptions {
   /** The token Inspector publishes with (src/inspector/run.ts's
    * `resolveGithubToken`) - never logged, never put in a message. */
@@ -75,9 +88,13 @@ export interface GithubIssueSourceOptions {
   fetchImpl?: HttpFetch;
   /** Overridden only by tests pointing at a stub server. */
   apiRoot?: string;
+  /** The clock `fetchedAt` is stamped from. Overridden only by tests,
+   * which need that line to be the same text on every run. */
+  now?: () => Date;
 }
 
-/** The real reader: one documented GET per issue. */
+/** The real reader: two documented GETs per issue - its own text, then
+ * its comments. */
 export function githubIssueSource(opts: GithubIssueSourceOptions): IssueSource {
   const fetchImpl = opts.fetchImpl ?? (fetch as HttpFetch);
   const apiRoot = opts.apiRoot ?? GITHUB_API_ROOT;
@@ -86,7 +103,7 @@ export function githubIssueSource(opts: GithubIssueSourceOptions): IssueSource {
 
 export async function fetchIssue(
   ref: IssueRef,
-  opts: { token: string; fetchImpl: HttpFetch; apiRoot?: string }
+  opts: { token: string; fetchImpl: HttpFetch; apiRoot?: string; now?: () => Date }
 ): Promise<FetchedIssue> {
   const named = formatIssueRef(ref);
   const url = `${opts.apiRoot ?? GITHUB_API_ROOT}/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(
@@ -96,14 +113,7 @@ export async function fetchIssue(
   let status: number;
   let text: string;
   try {
-    const response = await opts.fetchImpl(url, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${opts.token}`,
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-        "User-Agent": "fabrica",
-      },
-    });
+    const response = await opts.fetchImpl(url, { headers: githubHeaders(opts.token) });
     status = response.status;
     text = await response.text();
   } catch (err) {
@@ -167,26 +177,30 @@ export async function fetchIssue(
     );
   }
 
+  // Only now, past every refusal the issue's own text can earn: an
+  // oversized issue or a pull request is refused without a second
+  // request being made at all. The comments are a second documented GET
+  // (possibly paginated) and are never optional - a failure there
+  // refuses the task too, since an issue read without its amendments is
+  // a superseded request and nothing downstream would know.
+  const { comments, omittedComments } = await fetchIssueComments(ref, {
+    token: opts.token,
+    fetchImpl: opts.fetchImpl,
+    apiRoot: opts.apiRoot,
+  });
+
+  const stamp = (opts.now ?? (() => new Date()))();
+  const readAt = Number.isNaN(stamp.getTime()) ? null : isoUtcSecond(stamp.toISOString());
+
   return {
     ref,
     title,
     body,
     url: typeof fields.html_url === "string" ? fields.html_url : `https://github.com/${ref.owner}/${ref.repo}/issues/${ref.number}`,
+    comments,
+    omittedComments,
+    // A clock this machine cannot read is not a reason to refuse a
+    // readable issue - the line says so instead of inventing a moment.
+    fetchedAt: readAt ?? "an unknown time",
   };
-}
-
-/** GitHub's own one-line explanation from an error body, when it sent
- * one - a bare status code tells the Client nothing about a bad token or
- * a rate limit. Never the whole body: that can be long, and this is read
- * in a terminal. */
-function apiMessage(text: string): string {
-  try {
-    const parsed = JSON.parse(text) as { message?: unknown };
-    if (typeof parsed.message === "string" && parsed.message.trim().length > 0) {
-      return `: ${parsed.message.trim()}`;
-    }
-  } catch {
-    // Not JSON - the status code is all there is to report.
-  }
-  return "";
 }

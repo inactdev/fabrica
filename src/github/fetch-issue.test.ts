@@ -1,6 +1,7 @@
-// Every branch of the one GitHub call Fabrica makes for a task's issue,
-// driven through an injected `fetch` - no token, no network, no real
-// issue anywhere in this file.
+// Every branch of the two GitHub calls Fabrica makes for a task's issue
+// - its own text here, its comments in fetch-comments.test.ts - driven
+// through an injected `fetch`: no token, no network, no real issue
+// anywhere in this file.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -10,7 +11,18 @@ import { GitHubError } from "./errors.ts";
 
 const REF = { owner: "inactdev", repo: "fabrica", number: 142 };
 
-function answering(status: number, body: unknown): { impl: HttpFetch; urls: string[]; headers: Record<string, string>[] } {
+/** A fixed clock, so `fetchedAt` is the same text on every run. */
+const NOW = () => new Date("2026-10-25T09:00:00.000Z");
+
+/** Answers the issue request with `body` and `status`, and the comments
+ * request that follows it with `comments` - the second call is part of
+ * reading an issue now, so a fake that answered only the first would
+ * fail every test here for the wrong reason. */
+function answering(
+  status: number,
+  body: unknown,
+  comments: unknown[] = []
+): { impl: HttpFetch; urls: string[]; headers: Record<string, string>[] } {
   const urls: string[] = [];
   const headers: Record<string, string>[] = [];
   return {
@@ -19,9 +31,16 @@ function answering(status: number, body: unknown): { impl: HttpFetch; urls: stri
     impl: async (url, init) => {
       urls.push(url);
       headers.push(init.headers);
+      if (url.includes("/comments")) return { status: 200, text: async () => JSON.stringify(comments) };
       return { status, text: async () => (typeof body === "string" ? body : JSON.stringify(body)) };
     },
   };
+}
+
+/** Every URL asked for that was not the comments page - what the tests
+ * about the issue call itself assert on. */
+function issueUrls(urls: string[]): string[] {
+  return urls.filter((url) => !url.includes("/comments"));
 }
 
 test("the documented endpoint, headers and fields", async () => {
@@ -32,9 +51,9 @@ test("the documented endpoint, headers and fields", async () => {
     html_url: "https://github.com/inactdev/fabrica/issues/142",
   });
 
-  const issue = await fetchIssue(REF, { token: "fake-token", fetchImpl: fake.impl });
+  const issue = await fetchIssue(REF, { token: "fake-token", fetchImpl: fake.impl, now: NOW });
 
-  assert.deepEqual(fake.urls, ["https://api.github.com/repos/inactdev/fabrica/issues/142"]);
+  assert.deepEqual(issueUrls(fake.urls), ["https://api.github.com/repos/inactdev/fabrica/issues/142"]);
   assert.equal(fake.headers[0].Accept, "application/vnd.github+json");
   assert.equal(fake.headers[0].Authorization, "Bearer fake-token");
   assert.equal(fake.headers[0]["X-GitHub-Api-Version"], GITHUB_API_VERSION);
@@ -43,7 +62,73 @@ test("the documented endpoint, headers and fields", async () => {
     title: "Carry the issue into the brief",
     body: "Fetch it once, at registration.",
     url: "https://github.com/inactdev/fabrica/issues/142",
+    comments: [],
+    omittedComments: [],
+    fetchedAt: "2026-10-25T09:00:00Z",
   });
+});
+
+// The issue as it stands, not as it was first written: the comments come
+// back on the same read, so no caller can forget to ask for them.
+test("an issue's comments come back with it, in order", async () => {
+  const fake = answering(
+    200,
+    { number: 142, title: "t", body: "b", html_url: "u" },
+    [
+      {
+        user: { login: "ari", type: "User" },
+        created_at: "2026-10-21T08:00:00Z",
+        updated_at: "2026-10-21T08:00:00Z",
+        body: "the first amendment",
+        html_url: "c1",
+      },
+      {
+        user: { login: "ci[bot]", type: "Bot" },
+        created_at: "2026-10-21T09:00:00Z",
+        updated_at: "2026-10-21T09:00:00Z",
+        body: "green",
+        html_url: "c2",
+      },
+    ]
+  );
+
+  const issue = await fetchIssue(REF, { token: "t", fetchImpl: fake.impl, now: NOW });
+
+  assert.deepEqual(
+    issue.comments.map((comment) => comment.body),
+    ["the first amendment"]
+  );
+  assert.deepEqual(issue.omittedComments, [{ author: "ci[bot]", postedAt: "2026-10-21T09:00:00Z" }]);
+  assert.ok(
+    fake.urls.some((url) => url.includes("/issues/142/comments?")),
+    "the comments were never asked for"
+  );
+});
+
+// An issue refused on its own text is refused before a second request is
+// made at all - there is nothing to read the comments for.
+test("a refused issue costs no comments request", async () => {
+  const fake = answering(200, { number: 142, title: "big", body: "x".repeat(MAX_ISSUE_BYTES + 1), html_url: "u" });
+  await assert.rejects(() => fetchIssue(REF, { token: "t", fetchImpl: fake.impl }));
+  assert.deepEqual(
+    fake.urls.filter((url) => url.includes("/comments")),
+    []
+  );
+});
+
+// A comments call that fails refuses the whole read: an issue handed over
+// without its amendments is a superseded request, and nothing
+// downstream would know.
+test("unreadable comments refuse the issue rather than quietly dropping them", async () => {
+  const impl: HttpFetch = async (url) =>
+    url.includes("/comments")
+      ? { status: 403, text: async () => JSON.stringify({ message: "API rate limit exceeded" }) }
+      : { status: 200, text: async () => JSON.stringify({ number: 142, title: "t", body: "b", html_url: "u" }) };
+
+  await assert.rejects(
+    () => fetchIssue(REF, { token: "t", fetchImpl: impl }),
+    (err: unknown) => err instanceof GitHubError && err.code === "issue-comments-fetch-failed"
+  );
 });
 
 test("an issue with no description reads as an empty body, never the word null", async () => {
@@ -57,7 +142,11 @@ test("githubIssueSource reads the same issue through the IssueSource seam", asyn
   const source = githubIssueSource({ token: "t", fetchImpl: fake.impl, apiRoot: "https://example.test" });
   const issue = await source(REF);
   assert.equal(issue.title, "t");
-  assert.deepEqual(fake.urls, ["https://example.test/repos/inactdev/fabrica/issues/142"]);
+  assert.deepEqual(issueUrls(fake.urls), ["https://example.test/repos/inactdev/fabrica/issues/142"]);
+  assert.ok(
+    fake.urls.some((url) => url.startsWith("https://example.test/repos/inactdev/fabrica/issues/142/comments?")),
+    "the comments call ignored the api root"
+  );
 });
 
 for (const status of [404, 410]) {

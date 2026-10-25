@@ -16,3 +16,10 @@ export {
   MAX_ISSUE_BYTES,
 } from "./fetch-issue.ts";
 export type { FetchedIssue, GithubIssueSourceOptions, HttpFetch, IssueSource } from "./fetch-issue.ts";
+export {
+  fetchIssueComments,
+  COMMENTS_PER_PAGE,
+  MAX_COMMENT_CHARS,
+  MAX_COMMENT_PAGES,
+} from "./fetch-comments.ts";
+export type { IssueComment, IssueComments, OmittedComment } from "./fetch-comments.ts";

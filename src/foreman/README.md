@@ -318,13 +318,13 @@ the Worker simply running the tests it wants.
 
 `fabrica do "<task text>" --project <p> --issue <N>` used to mean one
 thing only: put `Closes #N` on the pull request. It now also means "read
-#N" — `task-issue.ts` fetches that issue's title and body from GitHub at
-registration and every round's brief carries them verbatim, so a task
-worded "do issue #142 as written" never has to ask what #142 says, and
-nobody has to paste an issue's text into a task to get it to the Worker.
-HANDBOOK.md's case 1 tells the chat session exactly that.
+#N" — `task-issue.ts` fetches that issue's title, body and comments from
+GitHub at registration and every round's brief carries them verbatim, so
+a task worded "do issue #142 as written" never has to ask what #142
+says, and nobody has to paste an issue's text into a task to get it to
+the Worker. HANDBOOK.md's case 1 tells the chat session exactly that.
 
-Four decisions, all the Client's:
+Five decisions, all the Client's:
 
 - **Which repository.** A bare `--issue N` resolves against the
   project's `origin` remote — the same remote every task branch is cut
@@ -351,7 +351,35 @@ Four decisions, all the Client's:
   `recordingFailure` wrapper, so an unreadable issue cuts no
   ProductionLine, spends nothing, lands on the record as `task-failed`
   with the cause, and makes `fabrica do` exit non-zero with GitHub's own
-  explanation.
+  explanation. Comments that cannot be read refuse the same way, and on
+  purpose: an issue carried without its amendments is a superseded
+  request, which is worse than a refusal because nothing downstream
+  would know.
+- **The comments are part of the issue**, under the heading
+  `## Amendments and rulings on this issue, in order`
+  (`COMMENTS_SECTION_HEADING`), oldest first, in GitHub's own order.
+  The Client's four rulings on them, each visible in `renderIssueFile`:
+  human-authored comments only, with automation's named by author and
+  date on one "left out" line rather than quoted, since a bot's words
+  would read to a machine as a ruling and a dropped comment nobody can
+  see is indistinguishable from a comment nobody made; no cap on the
+  count and the oldest never dropped, because the ordering is the point;
+  the *current* text of an edited comment, with both its posted and
+  edited dates; and the heading emitted even for an issue with no
+  comments, followed by an explicit "No comments on this issue as of
+  `<fetch time>`." — which is why `FetchedIssue`'s `comments`,
+  `omittedComments` and `fetchedAt` are required fields rather than
+  optional ones: "none" has to stay distinguishable from "not fetched",
+  and an `IssueReader` that forgets them fails to compile. A single
+  comment past `MAX_COMMENT_CHARS` (4000 code points — not bytes, and
+  not UTF-16 units, so a cut never splits a character in half) is cut
+  with a `[truncated: ...]` marker naming the comment, its author, its
+  real length and how much was left out — the same opening word as every
+  other marker Fabrica leaves where it shortened something
+  (`src/ci/logs.ts`'s `tailOf`, `src/inspector/run.ts`'s report tail),
+  so one grep finds them all. It keeps the *first* 4000 characters where
+  those two keep the last: a log's useful end is its tail, a ruling's is
+  its opening.
 
 The token is the one Inspector publishes with — `GITHUB_TOKEN`, else `gh
 auth token`, resolved in `src/inspector/run.ts` so the two sides can

@@ -108,8 +108,13 @@ all mean the same thing as an "Issue #N:" prefix would:
     fabrica do "<task text>" --project <path-or-name> --issue <N>
 
 `--issue` also does the reading for you. Fabrica fetches that issue's
-title and body from GitHub before the task starts and puts them, in
-full, into every brief its worker gets - the clarifying step included.
+title, body **and comments** from GitHub before the task starts and puts
+them, in full, into every brief its worker gets - the clarifying step
+included. The comments go in under their own heading saying what they
+are ("Amendments and rulings on this issue, in order"), oldest first, so
+a worker reads the issue as it stands rather than as it was first
+written. Automation's comments are named but not quoted; a single
+comment over 4000 characters is cut with a loud marker saying so.
 So **never paste an issue's text into `<task text>`, and never summarize
 it.** Pass the Client's own sentence as he said it, however short, plus
 `--issue <N>`: "do issue #142 as written" with `--issue 142` is complete,
