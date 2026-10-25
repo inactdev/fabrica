@@ -36,6 +36,7 @@ import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
 import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
+import { sweepTaskNetworks } from "./task-networks.ts";
 import { runAttempts } from "./attempts.ts";
 import { recordRoundResult } from "./round.ts";
 import {
@@ -266,25 +267,35 @@ export async function runRecordedFix(
   const priorReceipts = receiptsOf(recordHome, taskId);
 
   // #73: whatever throws in the fix round lands on the record as task-failed.
-  await recordingFailure(recordHome, taskId, () => runFixRound(recordHome, taskId, note, {
-    brain: opts.brain,
-    project: project!,
-    totalAttempts,
-    baseCommit: baseCommit!,
-    priorReceipts,
-    refusalReport: refusal?.report,
-    redChecksOutput: redChecks?.output,
-    // Every earlier round's own declaration, not the previous delivery's
-    // already-merged text (issue #68): keeping them separate is what lets
-    // each one be keyed by the gate it names, so the newest declaration
-    // per gate is the one this round's delivery reports instead of every
-    // round's being appended forever.
-    priorGateDeclarations: gateDeclarationsOf(events),
-    inspector: opts.inspector,
-    checkBox: opts.checkBox,
-    checksReader: opts.checksReader,
-    caps: opts.caps,
-  }));
+  // The `finally` below is the same end-of-round sweep do.ts's first
+  // round gets: a fix round opens its own worker box, on its own
+  // throwaway Docker networks, and they go when it does
+  // (./task-networks.ts).
+  try {
+    await recordingFailure(recordHome, taskId, () =>
+      runFixRound(recordHome, taskId, note, {
+        brain: opts.brain,
+        project: project!,
+        totalAttempts,
+        baseCommit: baseCommit!,
+        priorReceipts,
+        refusalReport: refusal?.report,
+        redChecksOutput: redChecks?.output,
+        // Every earlier round's own declaration, not the previous delivery's
+        // already-merged text (issue #68): keeping them separate is what lets
+        // each one be keyed by the gate it names, so the newest declaration
+        // per gate is the one this round's delivery reports instead of every
+        // round's being appended forever.
+        priorGateDeclarations: gateDeclarationsOf(events),
+        inspector: opts.inspector,
+        checkBox: opts.checkBox,
+        checksReader: opts.checksReader,
+        caps: opts.caps,
+      })
+    );
+  } finally {
+    await sweepTaskNetworks(taskId);
+  }
 }
 
 /** Every library caller's shape (contract tests included): a verdict

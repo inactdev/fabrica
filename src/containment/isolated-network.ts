@@ -37,6 +37,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ContainmentError } from "./errors.ts";
+import { networkCreateFailureMessage } from "./network-pools.ts";
+import { dockerSaid, networkLabelArgs } from "./task-networks.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,17 +46,30 @@ export interface IsolatedNetwork {
   name: string;
 }
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-/** Creates a fresh, internet-less bridge network, named `name`. Throws
- * `ContainmentError("network-create-failed")` on any docker failure. */
-export async function createIsolatedNetwork(name: string): Promise<IsolatedNetwork> {
+/** Creates a fresh, internet-less bridge network, named `name` and
+ * labelled with the task it belongs to, so the Foreman's end-of-round
+ * sweep and `fabrica doctor` can both tell whose it is long after this
+ * process is gone (see task-networks.ts). `taskId` is omitted only by a
+ * caller with no task in flight - a library-level caller or a test
+ * driving an adapter directly.
+ *
+ * Throws `ContainmentError("network-create-failed")` on any docker
+ * failure, with the address pools being used up reported as that cause
+ * plus the command that clears it, not as Docker's sentence alone
+ * (network-pools.ts). */
+export async function createIsolatedNetwork(name: string, opts: { taskId?: string } = {}): Promise<IsolatedNetwork> {
   try {
-    await execFileAsync("docker", ["network", "create", "--internal", "--driver", "bridge", name]);
+    await execFileAsync("docker", [
+      "network",
+      "create",
+      "--internal",
+      "--driver",
+      "bridge",
+      ...networkLabelArgs("worker", opts.taskId),
+      name,
+    ]);
   } catch (err) {
-    throw new ContainmentError("network-create-failed", `could not create isolated network "${name}": ${errorMessage(err)}`);
+    throw new ContainmentError("network-create-failed", networkCreateFailureMessage("isolated", name, dockerSaid(err)));
   }
   return { name };
 }
@@ -67,6 +82,6 @@ export async function removeIsolatedNetwork(name: string): Promise<void> {
   try {
     await execFileAsync("docker", ["network", "rm", name]);
   } catch (err) {
-    throw new ContainmentError("network-remove-failed", `could not remove isolated network "${name}": ${errorMessage(err)}`);
+    throw new ContainmentError("network-remove-failed", `could not remove isolated network "${name}": ${dockerSaid(err)}`);
   }
 }

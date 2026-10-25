@@ -133,6 +133,58 @@ moment the command exits. Nothing is shared or reused across calls or
 across concurrently-running tasks, so two Workers running at once
 cannot collide with each other through this mechanism.
 
+### A task's networks never outlive its round
+
+A task's worker box runs on a throwaway `--internal` network, with its
+relay container's egress network behind it (`isolated-network.ts`,
+`egress-network.ts`). Both are created per round and removed by the
+adapter's own `finally` - except when that `finally` never runs (the
+process was killed mid-round) or fails outright (Docker had not
+finished reaping the relay container, and it refuses to remove a
+network anything is still attached to). What is left behind is not
+cosmetic: Docker hands every network a subnet out of a fixed set of
+predefined address pools, so leaked networks eventually make *every*
+`docker network create` fail.
+
+Two things close that, both keyed on Docker labels the create calls
+set - `fabrica.role` (`worker` / `relay-egress`) and `fabrica.task`
+(the task id, absent when there is no task in flight):
+
+- **`removeTaskNetworks(taskId)`** (`task-networks.ts`) removes every
+  network labelled with that task. The Foreman calls it at the end of
+  every round, whatever the outcome
+  (`../foreman/task-networks.ts`). A network something is still
+  attached to has the attached containers forced off
+  (`docker network disconnect -f`) and the removal retried - they are
+  this task's own throwaway box and relay, and the round is over. The
+  label is what makes this safe for concurrent tasks: a sweep can only
+  ever name networks opened for its own task.
+- **`listWorkerNetworks()`** answers `fabrica doctor`'s leftover count:
+  every `fabrica-worker-*` network, with its task and how many
+  containers Docker has on it. `null`, not `[]`, when Docker could not
+  be asked - "nobody could say" is not "the machine is clean".
+
+Neither is a substitute for the other: the sweep stops leftovers
+accumulating, the count tells the Client about the ones that got away
+(from a `kill -9`, from a copy of Fabrica older than the labels, or
+from a network that genuinely would not go). Both name the same one
+command - `docker network prune -f` (`network-pools.ts`'s
+`NETWORK_PRUNE_COMMAND`), so does the create failure below, and nothing
+anywhere offers a second spelling of it.
+
+### When the address pools are gone
+
+`docker network create` failing because there is no pool left is
+reported as that cause plus the prune command, never as Docker's
+sentence alone (`network-pools.ts`). Two daemon messages are matched,
+both taken from moby's own source rather than guessed: `all predefined
+address pools have been fully subnetted` (current moby's
+`ipamapi.ErrNoMoreSubnets`) and `could not find an available,
+non-overlapping IPv4 address pool among the defaults to assign to the
+network` (the same condition up to moby v24). Anything unrecognised is
+passed through in Docker's own words, with nothing added - a guessed
+fix is worse than none.
+
 ## `runContained(command, args, opts)`
 
 ```ts

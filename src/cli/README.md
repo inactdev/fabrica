@@ -429,7 +429,8 @@ be asked is reported but never failed twice, the worker image line
 above already owning that), the relay image every task's network goes
 through (issue #186 - `docker image inspect` only, which never pulls,
 and a FAIL carrying the exact `docker pull`: a missing one means the
-first task of the day dies inside `docker run` instead of here), the
+first task of the day dies inside `docker run` instead of here),
+**leftover worker networks** (see below), the
 worker token (from the environment or `brain.env`, mode 600), the
 GitHub token Inspector needs, `inspector` on PATH taking `-branch` and
 not behind its own `origin main` (see "The inspector line" below, and
@@ -442,6 +443,30 @@ Inspector-specific checks live beside those modules
 (`src/brain/adapters/doctor-checks.ts`,
 `src/relay/container/doctor-check.ts`,
 `src/inspector/doctor-checks.ts`); this command only prints them.
+
+### The leftover-networks line
+
+Every task runs on its own throwaway Docker networks, and every one of
+them holds a subnet out of Docker's fixed set of predefined address
+pools until it is removed. The Foreman now removes a task's networks at
+the end of each round (`src/foreman/task-networks.ts`), so this line
+should normally read `no leftover fabrica-worker-* networks` - but a
+process killed outright, or a network nothing could force a container
+off, still leaves one, and enough of them means no task can start at
+all.
+
+So doctor counts them: every `fabrica-worker-*` network with **no
+container on it and no running task of its own**. Both halves matter
+(Client ruling 2026-10-25) - a network whose task is still running is
+never a leftover even with nothing attached yet (its box may not have
+joined), and a network Docker says has a container on it is never a
+leftover even when no task in this record home claims it. The fix line
+is plain `docker network prune -f`, the same command the
+network-create failure names when the pools do run out. It is a
+warning, not a blocker: it stops no task today, so `fabrica up` prints
+it above the session and carries on (`fabrica doctor` itself still
+exits 1, like any other FAIL). Docker that cannot be asked at all is
+reported as not checked, never as a clean machine.
 
 ### Which findings stop a session, and which are only warnings
 

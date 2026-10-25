@@ -11,18 +11,24 @@ import { fileURLToPath } from "node:url";
 import {
   capsActive,
   describeUnmeasured,
+  eventsByTask,
   githubTokenStatus,
   inspectorBranchStatus,
+  listWorkerNetworks,
   loadConfigOrProblem,
+  NETWORK_PRUNE_COMMAND,
   probeWorkerToken,
   readEvents,
   requireGitRoot,
+  stateOf,
   unmeasuredSpend,
   relayImageStatus,
   workerCliVersionStatus,
   workerImageStatus,
   workerTokenStatus,
+  WORKER_NETWORK_PREFIX,
 } from "../index.ts";
+import type { WorkerNetwork } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { dockerDaemonUp } from "./docker-daemon.ts";
 import {
@@ -47,7 +53,10 @@ commit) or an installed copy (version, commit), either way compared
 against origin/master - any leftover \`npm link\` symlink standing where
 an installed copy belongs (which makes the global install fail with
 ENOTDIR), Docker, the worker image, the worker CLI version
-installed in it, the relay image every task's network goes through, the
+installed in it, the relay image every task's network goes through, any
+Docker network left behind by a task that is no longer running (each
+one holds an address pool, so they are counted and the command that
+clears them is named), the
 worker token, the GitHub token Inspector needs, Inspector itself - on
 PATH, taking -branch, and built from the commit its own origin main is
 at, a stale binary being a FAIL carrying the exact \`go install\` that
@@ -134,6 +143,12 @@ export interface DoctorProbes {
   /** The image every task's relay container runs from (issue #186) -
    * missing, no task can start its relay at all. */
   relayImage(): DoctorCheck;
+  /** Docker networks left behind by tasks that are no longer running.
+   * Each one holds an address pool Docker cannot hand out again, so
+   * enough of them and no task can open a network at all. Needs the
+   * record to tell a leftover from a running task's own network, hence
+   * the recordHome. */
+  workerNetworks(recordHome: string): Promise<DoctorCheck>;
   workerToken(recordHome: string): DoctorCheck;
   githubToken(): DoctorCheck;
   /** Inspector on PATH, taking -branch, and not behind its own main -
@@ -516,6 +531,70 @@ function npmGlobalPrefix(): string | null {
   }
 }
 
+/** The task states a worker box can legitimately be open for: one
+ * running right now. Every other state - asking, delivered, failed,
+ * closed, stopped, refused - means no round is in flight, so a network
+ * still carrying that task's label is something a round left behind.
+ * `stateOf` reports a task as `working` from the moment it is received
+ * (the clarifying step included), so the in-flight window is covered
+ * from its first event, not from `work-started`. */
+const LIVE_TASK_STATES = new Set(["working", "checking"]);
+
+/** Which task ids this record home currently has a round running for. */
+export function liveTaskIds(recordHome: string): Set<string> {
+  const live = new Set<string>();
+  for (const [taskId, events] of eventsByTask(recordHome)) {
+    if (LIVE_TASK_STATES.has(stateOf(events))) live.add(taskId);
+  }
+  return live;
+}
+
+/** Which of Docker's `fabrica-worker-*` networks nobody is using any
+ * more (Client ruling: a running task's network is never a leftover,
+ * judged both from the record and from Docker's own list of containers
+ * on it). Either signal alone would be wrong: a network whose box has
+ * not attached yet belongs to a live task, and a network whose task
+ * ended in another record home - or before the labels existed - has no
+ * record here to vouch for it. */
+export function leftoverWorkerNetworks(networks: WorkerNetwork[], live: Set<string>): WorkerNetwork[] {
+  return networks.filter(
+    (network) => network.attachedContainers === 0 && !(network.taskId !== null && live.has(network.taskId))
+  );
+}
+
+/** Pure wording/pass-fail, so every case is testable with no Docker
+ * anywhere. A leftover is `blocking: false`: a task can still start
+ * while a few sit there (the ruling's word is "warn"), right up until
+ * they have eaten every address pool - at which point it is the
+ * network-create failure itself that says so, naming the same command
+ * (src/containment/network-pools.ts). */
+export function workerNetworksCheck(networks: WorkerNetwork[] | null, leftovers: WorkerNetwork[]): DoctorCheck {
+  const label = "worker networks";
+  if (networks === null) return { ok: true, label, detail: "not checked - Docker could not be asked" };
+  if (leftovers.length === 0) {
+    return {
+      ok: true,
+      label,
+      detail:
+        networks.length === 0
+          ? `no leftover ${WORKER_NETWORK_PREFIX}* networks`
+          : `no leftover ${WORKER_NETWORK_PREFIX}* networks (${networks.length} in use by running tasks)`,
+    };
+  }
+  const named = leftovers.slice(0, 3).map((network) => network.name);
+  const rest = leftovers.length - named.length;
+  return {
+    ok: false,
+    blocking: false,
+    label,
+    detail:
+      `${leftovers.length} leftover ${WORKER_NETWORK_PREFIX}* network${leftovers.length === 1 ? "" : "s"} ` +
+      `(${named.join(", ")}${rest > 0 ? `, and ${rest} more` : ""}) - no task is using them, and each one holds a ` +
+      `Docker address pool until it is removed`,
+    fix: NETWORK_PRUNE_COMMAND,
+  };
+}
+
 export const realProbes: DoctorProbes = {
   node: () => nodeCheck(process.version, pinnedNodeVersion()),
   checkout: () => checkoutCheck(detectCopy(CHECKOUT, (args) => git(CHECKOUT, args)), fetchRemoteMasterCommit()),
@@ -531,6 +610,10 @@ export const realProbes: DoctorProbes = {
   workerImage: () => workerImageStatus(),
   workerCli: () => workerCliVersionStatus(),
   relayImage: () => relayImageStatus(),
+  async workerNetworks(recordHome) {
+    const networks = await listWorkerNetworks();
+    return workerNetworksCheck(networks, networks === null ? [] : leftoverWorkerNetworks(networks, liveTaskIds(recordHome)));
+  },
   workerToken: (recordHome) => workerTokenStatus(process.env, recordHome),
   githubToken: () => githubTokenStatus(process.env),
   inspector: () => inspectorBranchStatus(process.env),
@@ -612,6 +695,7 @@ export async function collectDoctorChecks(opts: { recordHome: string; probes?: D
     probes.workerImage(),
     probes.workerCli(),
     probes.relayImage(),
+    await probes.workerNetworks(recordHome),
     probes.workerToken(recordHome),
     probes.githubToken(),
     probes.inspector(),

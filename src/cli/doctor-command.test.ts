@@ -30,6 +30,7 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
     workerImage: () => ok("worker image"),
     workerCli: () => ok("worker CLI"),
     relayImage: () => ok("relay image"),
+    workerNetworks: async () => ok("worker networks"),
     workerToken: () => ok("worker token"),
     githubToken: () => ok("GitHub token"),
     inspector: () => ok("inspector"),
@@ -74,8 +75,8 @@ test("fabrica doctor: everything healthy - every line OK, exit 0, and nothing is
   const probes = okProbes();
   const { code, lines } = await doctor(healthyHome(), probes);
   assert.equal(code, 0, lines.join("\n"));
-  // 10 machine checks, 1 project, caps, spend.
-  assert.equal(lines.length, 13, lines.join("\n"));
+  // 11 machine checks, 1 project, caps, spend.
+  assert.equal(lines.length, 14, lines.join("\n"));
   assert.ok(lines.every((l) => l.startsWith("OK ")), lines.join("\n"));
   assert.equal(probes.liveCalls, 0, "the live call ran without --live - doctor must spend nothing by default");
 });
@@ -143,8 +144,8 @@ test("fabrica doctor: an unparseable projects.toml is one FAIL line naming the f
   assert.match(fail, /:3:/, `the line the parser stopped on is missing: ${fail}`);
   assert.match(fail, /not valid TOML/);
   assert.match(fail, /fix: fix the TOML in .*projects\.toml at line 3/);
-  // The 10 machine checks all ran and all printed; this is the only FAIL.
-  assert.equal(lines.length, 11, lines.join("\n"));
+  // The 11 machine checks all ran and all printed; this is the only FAIL.
+  assert.equal(lines.length, 12, lines.join("\n"));
   assert.equal(lines.filter((l) => l.startsWith("FAIL")).length, 1, lines.join("\n"));
 });
 
@@ -634,4 +635,85 @@ test("runningCopyCommit: null for an installed copy with no build-info.json, sam
   const dir = mkdtempSync(join(tmpdir(), "fabrica-doctor-running-commit-bare-"));
   writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
   assert.equal(runningCopyCommit(dir), null);
+});
+
+// Leftover Docker networks (Client ruling 2026-10-25): every task runs
+// on its own throwaway networks, each holding one of Docker's finite
+// address pools until it is removed, so doctor counts the ones no task
+// is using and names the one command that clears them. The wording and
+// the pass/fail are pure functions, testable with no Docker anywhere.
+
+test("fabrica doctor: leftover worker networks are a warning, counted, with the prune command as the fix", async () => {
+  const { leftoverWorkerNetworks, workerNetworksCheck } = await import("./doctor-command.ts");
+  const networks = [
+    { name: "fabrica-worker-aaa", taskId: "gone-1", attachedContainers: 0 },
+    { name: "fabrica-worker-bbb", taskId: null, attachedContainers: 0 },
+  ];
+
+  const check = workerNetworksCheck(networks, leftoverWorkerNetworks(networks, new Set<string>()));
+
+  assert.equal(check.ok, false);
+  assert.equal(check.blocking, false, "a few leftovers warn - they stop no task until the pools run out");
+  assert.match(check.detail, /2 leftover fabrica-worker-\* networks/);
+  assert.match(check.detail, /fabrica-worker-aaa, fabrica-worker-bbb/);
+  assert.equal(check.fix, "docker network prune -f");
+});
+
+test("fabrica doctor: a running task's network is never a leftover - by the record, or by a container on it", async () => {
+  const { leftoverWorkerNetworks, workerNetworksCheck } = await import("./doctor-command.ts");
+  const networks = [
+    // Its task is still running: the box may not have attached yet.
+    { name: "fabrica-worker-running", taskId: "live-1", attachedContainers: 0 },
+    // Nothing in this record home knows it, but Docker says a container
+    // is on it right now.
+    { name: "fabrica-worker-busy", taskId: null, attachedContainers: 1 },
+  ];
+
+  const leftovers = leftoverWorkerNetworks(networks, new Set(["live-1"]));
+
+  assert.deepEqual(leftovers, []);
+  const check = workerNetworksCheck(networks, leftovers);
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /2 in use by running tasks/);
+});
+
+test("fabrica doctor: Docker that cannot be asked is reported as that, not as a clean machine", async () => {
+  const { workerNetworksCheck } = await import("./doctor-command.ts");
+
+  const check = workerNetworksCheck(null, []);
+
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /not checked/);
+});
+
+test("fabrica doctor: the leftover-network warning is printed and exits 1, without stopping anything else", async () => {
+  const failing: DoctorCheck = {
+    ok: false,
+    blocking: false,
+    label: "worker networks",
+    detail: "3 leftover fabrica-worker-* networks",
+    fix: "docker network prune -f",
+  };
+  const { code, lines } = await doctor(healthyHome(), okProbes({ workerNetworks: async () => failing }));
+
+  assert.equal(code, 1);
+  assert.ok(
+    lines.some((l) => l.startsWith("FAIL worker networks:") && l.includes("docker network prune -f")),
+    lines.join("\n")
+  );
+});
+
+test("fabrica doctor: liveTaskIds counts a task that is working, and not one that has delivered", async () => {
+  const { liveTaskIds } = await import("./doctor-command.ts");
+  const home = mkdtempSync(join(tmpdir(), "fabrica-doctor-live-tasks-"));
+  const { appendEvent } = await import("../record/index.ts");
+  appendEvent(home, { taskId: "running-1", name: "task-received", details: {} });
+  appendEvent(home, { taskId: "running-1", name: "work-started", details: {} });
+  appendEvent(home, { taskId: "done-1", name: "task-received", details: {} });
+  appendEvent(home, { taskId: "done-1", name: "delivered", details: {} });
+
+  const live = liveTaskIds(home);
+
+  assert.ok(live.has("running-1"));
+  assert.ok(!live.has("done-1"));
 });

@@ -24,6 +24,7 @@ import { receiptModel, resolveModelChoice, writeModelChoice } from "./model.ts";
 import { withTransportRetry } from "./transport-retry.ts";
 import { requireMeterRoomToStart } from "./meters.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
+import { sweepTaskNetworks } from "./task-networks.ts";
 import { fetchTaskIssue, parseIssueArgOrRefuse, withIssueText } from "./task-issue.ts";
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
 import type { IssueReader } from "./task-issue.ts";
@@ -241,6 +242,14 @@ export async function registerAndAsk(
       const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };
       appendEvent(recordHome, { taskId, name: "ask-failed", details });
       throw markRecorded(err);
+    } finally {
+      // The clarifying step is a real model call, so it opens this
+      // task's worker networks too (`withTaskNetwork` above is what
+      // puts this task's id on them) - and it runs before any
+      // ProductionLine exists, so there is no line teardown to sweep
+      // after it. A task that stops here to ask leaves none behind
+      // either way. See ./task-networks.ts.
+      await sweepTaskNetworks(taskId);
     }
     // Rule 10: the clarifying step spends too. A cost the brain did not
     // report (null or absent) is recorded as unknown - never as zero.
