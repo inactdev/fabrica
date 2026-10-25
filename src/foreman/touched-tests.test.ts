@@ -17,6 +17,37 @@ import { asksForFullSuite, onlyTouchedTestsFor } from "./touched-tests.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { fakeInspector, fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
+import { execFileSync } from "node:child_process";
+import { readEventsForTask } from "../record/index.ts";
+import { ForemanError } from "./errors.ts";
+import { TEST_MAP_FILENAME } from "../testmap/index.ts";
+import type { WorkerWriteup } from "../brain/index.ts";
+
+function branchExists(project: string, branch: string): boolean {
+  const out = execFileSync("git", ["branch", "--list", branch], { cwd: project, encoding: "utf8" });
+  return out.trim().length > 0;
+}
+
+/** A valid write-up that also reports which mapped tests ran. */
+function writeupReporting(testsRun: string): WorkerWriteup {
+  return {
+    title: "Fake brain update",
+    why: "Testing.",
+    what: "Did the thing.",
+    how: "Directly.",
+    outsideChanges: "None.",
+    confidence: 90,
+    assumptions: "None.",
+    expectedOutcomes: "The fake's work lands as described.",
+    deviations: "None.",
+    quiz: [
+      { question: "What changed?", answer: "The fake brain's own stand-in change." },
+      { question: "Why?", answer: "So a test has a valid write-up to work with." },
+      { question: "What should the owner watch?", answer: "Nothing - this is a test fixture." },
+    ],
+    testsRun,
+  };
+}
 
 function freshHome(projectsToml?: string): string {
   const recordHome = mkdtempSync(join(tmpdir(), "fabrica-touched-tests-home-"));
@@ -171,4 +202,113 @@ test("a fix round answering an Inspector refusal carries both the refusal's reas
   assert.match(last, /Inspector refused the previous round: Inspector could not start: no container runtime/);
   assert.ok(last.includes(ONLY_TOUCHED_TESTS_NOTICE), "the refusal-answering round's brief lost the ruling");
   assert.equal(last.split(ONLY_TOUCHED_TESTS_NOTICE).length - 1, 1, "it doubled the ruling");
+});
+
+// ---------------------------------------------------------------------
+// A project's committed test map (tests.map). The resolution's own unit
+// tests are src/testmap/; these prove it reaches the three places that
+// matter - the brief, the delivery, and a task that fails before any
+// ProductionLine exists.
+// ---------------------------------------------------------------------
+
+test("a project committing a test map gets its notice INSTEAD of the only-touched-tests one", async () => {
+  // Never both: that notice tells a worker not to run the project's
+  // whole suite, and the map's own ruling tells it to run the whole
+  // suite once the mapped tests are green.
+  const project = makeFixtureRepo("exit 0");
+  writeFileSync(join(project, TEST_MAP_FILENAME), "app.txt: check.sh\n");
+  const recordHome = freshHome(`[projects.demo]\npath = "${project}"\ncheck = "./check.sh"\n`);
+  const { brain, briefs } = recordingBrain();
+
+  await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", { project, brain });
+
+  assert.equal(briefs.length, 1);
+  assert.ok(!briefs[0].includes(ONLY_TOUCHED_TESTS_NOTICE), "the brief told the worker both things at once");
+  assert.match(briefs[0], /tests\.map/);
+  assert.match(briefs[0], /whole suite/);
+  // A first round has touched nothing yet, so no list is invented for it.
+  assert.ok(!briefs[0].includes("run these first"));
+});
+
+test("the delivery records the mapped tests, the worker's own list, and every unmapped touched file", async () => {
+  const project = makeFixtureRepo("exit 0");
+  writeFileSync(join(project, TEST_MAP_FILENAME), "mapped.txt: check.sh\n");
+  const recordHome = freshHome(`[projects.demo]\npath = "${project}"\ncheck = "./check.sh"\n`);
+  const brain = fakeBrain({
+    writeup: writeupReporting("check.sh - green"),
+    onWork: (_brief, workdir) => {
+      writeFileSync(join(workdir, "mapped.txt"), "covered\n");
+      writeFileSync(join(workdir, "stray.txt"), "covered by nothing\n");
+    },
+  });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+
+  const task = await foreman.do("touch two files", { project, brain });
+  const delivery = await foreman.deliveryOf(task.id);
+
+  assert.deepEqual(delivery?.tests?.tests, ["check.sh"]);
+  assert.deepEqual(delivery?.tests?.unmapped, ["stray.txt"]);
+  // The worker's own words, carried verbatim and never compared against
+  // the mapped list (Client ruling: the record is the worker's own
+  // report; the full suite's own run is the independent check).
+  assert.equal(delivery?.tests?.reportedByWorker, "check.sh - green");
+  assert.deepEqual(delivery?.tests?.broken, []);
+});
+
+test("a fix round's brief names the concrete tests its branch has already touched", async () => {
+  const project = makeFixtureRepo("exit 0");
+  writeFileSync(join(project, TEST_MAP_FILENAME), "mapped.txt: check.sh\n");
+  const recordHome = freshHome(`[projects.demo]\npath = "${project}"\ncheck = "./check.sh"\n`);
+  const briefs: string[] = [];
+  let version = 0;
+  const brain = fakeBrain({
+    onWork: (brief, workdir) => {
+      briefs.push(brief);
+      writeFileSync(join(workdir, "mapped.txt"), `v${++version}\n`);
+      writeFileSync(join(workdir, "stray.txt"), `v${version}\n`);
+    },
+  });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+
+  const task = await foreman.do("touch two files", { project, brain });
+  await foreman.verdict(task.id, "fix", "one more pass");
+
+  assert.equal(briefs.length, 2);
+  // The first round had nothing to resolve; the fix round's branch
+  // carries a real diff, so its worker is handed the list itself.
+  assert.ok(!briefs[0].includes("run these first"));
+  assert.match(briefs[1], /run these first:\n {2}- check\.sh/);
+  assert.match(briefs[1], /mapped to nothing[^]*- stray\.txt/);
+});
+
+test("a project whose tests.map cannot be read fails the task before any line is cut", async () => {
+  const project = makeFixtureRepo("exit 0");
+  writeFileSync(join(project, TEST_MAP_FILENAME), "app.txt: check.sh\nnonsense\n");
+  const recordHome = freshHome(`[projects.demo]\npath = "${project}"\ncheck = "./check.sh"\n`);
+  const { brain, briefs } = recordingBrain();
+  let taskId: string | undefined;
+  const foreman = createForeman({
+    recordHome,
+    inspector: fixtureInspector(),
+    onTaskRegistered: (id) => {
+      taskId = id;
+    },
+  });
+
+  await assert.rejects(
+    () => foreman.do("small change", { project, brain }),
+    (err: unknown) => {
+      assert.ok(err instanceof ForemanError, `not a ForemanError: ${err}`);
+      assert.equal(err.code, "test-map-unreadable");
+      return true;
+    }
+  );
+
+  assert.equal(briefs.length, 0, "a worker ran against a map nobody could read");
+  const names = readEventsForTask(recordHome, taskId!).map((event) => event.name);
+  assert.ok(!names.includes("line-cut"), `a ProductionLine was cut anyway: ${names.join(", ")}`);
+  // The record always says what happened, even for a task that never
+  // got a brief.
+  assert.ok(names.includes("task-failed"), "the record does not say the task failed");
+  assert.ok(!branchExists(project, `fabrica/${taskId}`), "a branch was left behind");
 });

@@ -15,9 +15,17 @@
 // `fabrica do --project <path>`) still gets the ruling: it is a
 // standing one, not a per-project preference, and the loader applies
 // the same default to every registered entry that predates it.
+//
+// A project that commits a `tests.map` (src/testmap/, read per round by
+// test-map.ts) turns that ruling from advice into a lookup, and its
+// notice REPLACES the one above rather than joining it - see
+// `withStandingQuestion` for why a brief must never carry both.
 
 import { registeredProject } from "./registered-project.ts";
 import { withStandingQuestion } from "./standing-question.ts";
+import { reportForRound } from "./test-map.ts";
+import { testMapBriefNotice } from "../testmap/index.ts";
+import type { TestMapEntry } from "../testmap/index.ts";
 
 /**
  * A task asking, in its own text, for the whole suite to be run.
@@ -52,16 +60,36 @@ export function onlyTouchedTestsFor(recordHome: string, projectPath: string, bri
 
 /**
  * The brief a worker is actually handed: the task's own words behind
- * the standing prefix (CONTRACT rule 11), plus the only-touched-tests
- * notice when this project and this task both leave it on.
+ * the standing prefix (CONTRACT rule 11), plus one conditional notice -
+ * the project's committed test map where it has one, and otherwise the
+ * only-touched-tests ruling when this project and this task both leave
+ * it on. Why one and not both is `withStandingQuestion`'s own comment.
  *
  * Every round goes through here - a first attempt, a round resumed
  * after `fabrica answer`, and a fix round - so the resolution happens
  * once per round in one place rather than at each brief builder, where
  * the three would be free to drift apart.
+ *
+ * `testMap` is the project's parsed map (`testMapFor`), read by the
+ * caller before its ProductionLine was cut so a malformed one fails the
+ * task with nothing yet to tear down. `touched` is what the task has
+ * already changed, where that is knowable - a fix round's branch
+ * already carries a diff, so its worker is handed the concrete tests
+ * and the concrete unmapped files rather than only the lookup rule. A
+ * first round has touched nothing yet, and naming a list derived from a
+ * diff that does not exist would be the silent guess CONTRACT rule 4
+ * forbids.
  */
-export function workerBrief(recordHome: string, projectPath: string, briefText: string): string {
+export function workerBrief(
+  recordHome: string,
+  projectPath: string,
+  briefText: string,
+  opts: { testMap?: TestMapEntry[] | null; touched?: string[] } = {}
+): string {
   return withStandingQuestion(briefText, {
     onlyTouchedTests: onlyTouchedTestsFor(recordHome, projectPath, briefText),
+    ...(opts.testMap === null || opts.testMap === undefined
+      ? {}
+      : { testMap: testMapBriefNotice(reportForRound(opts.testMap, projectPath, opts.touched ?? [])) }),
   });
 }

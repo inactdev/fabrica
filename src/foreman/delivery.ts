@@ -15,6 +15,8 @@ import { formatUsd, SPEND_UNKNOWN_LINE } from "./spend.ts";
 import { formatPercent } from "./meters.ts";
 import { SELF_TESTED } from "./judge.ts";
 import { describeInvalidWriteup } from "./pr-body.ts";
+import { describeTestMapReport } from "../testmap/index.ts";
+import type { TestMapReport } from "../testmap/index.ts";
 
 /**
  * How many lines of a check's output a delivery's `evidence` shows. The
@@ -463,10 +465,30 @@ export function buildRebaseConflictDelivery(ctx: {
   };
 }
 
+/**
+ * `delivery` carrying this round's test-map report, or `delivery`
+ * untouched when the project commits no `tests.map`.
+ *
+ * A decoration applied beside each build site rather than a parameter
+ * every builder takes: there are seven builders in this file and one
+ * more in `fix-rebase.ts`, every one of them already reports the same
+ * `files` diff, and the report is derived from exactly that - so one
+ * function keeps all of them in step without eight signatures growing a
+ * field none of their own wording uses.
+ */
+export function withTestMapReport(delivery: Delivery, report: TestMapReport | undefined): Delivery {
+  return report === undefined ? delivery : { ...delivery, tests: report };
+}
+
 /** Human-readable rendering of a Delivery (SPEC.md's field order), for
  * `delivery.md` — a convenience view; the "delivered" event's `details`
- * carries the structured object deliveryOf() actually reads. */
+ * carries the structured object deliveryOf() actually reads.
+ *
+ * The test-map block goes last, after `gateChanges`: it is the one part
+ * of a delivery that runs to several lines of its own, and the fields
+ * above it are the ones every reader scans for first. */
 export function renderDeliveryMarkdown(delivery: Delivery, cost?: string): string {
+  const tests = describeTestMapReport(delivery.tests);
   return (
     [
       ...(cost === undefined ? [] : [`cost:       ${cost}`]),
@@ -479,6 +501,7 @@ export function renderDeliveryMarkdown(delivery: Delivery, cost?: string): strin
       `branch:     ${delivery.branch}`,
       `files:      ${delivery.files.join(", ")}`,
       `gateChanges: ${delivery.gateChanges}`,
+      ...(tests.length === 0 ? [] : [`tests:\n${tests}`]),
     ].join("\n") + "\n"
   );
 }

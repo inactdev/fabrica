@@ -21,8 +21,11 @@ import {
   buildNothingChangedDelivery,
   buildPausedByMeterDelivery,
   renderDeliveryMarkdown,
+  withTestMapReport,
 } from "./delivery.ts";
 import { mergeGateDeclarations } from "./gate-declarations.ts";
+import { reportForRound } from "./test-map.ts";
+import type { TestMapEntry } from "../testmap/index.ts";
 import { recordMeterPause } from "./meters.ts";
 import { deliverRebaseConflict } from "./fix-rebase.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
@@ -79,6 +82,13 @@ export function recordRoundResult(
      * (issue #235) calls the worker more than once, and each pass's
      * declaration is this round's as much as the last pass's is. */
     roundGateDeclarations?: string[];
+    /** The project's committed test map, read by the caller before its
+     * ProductionLine was cut (`test-map.ts`'s `testMapFor`). Null or
+     * omitted for a project that commits none, and then no delivery
+     * this round builds carries a `tests` field at all - an empty
+     * report would read as "nothing was mapped" when the truth is
+     * "nothing here maps anything". */
+    testMap?: TestMapEntry[] | null;
   },
   attempts: AttemptLoopResult
 ): RoundRecordResult {
@@ -130,6 +140,27 @@ export function recordRoundResult(
   // when nothing was judged, which the builders report as such.
   const evidenceAttempt = [...roundReceipts].reverse().find((receipt) => receipt.checks !== null)?.attempt;
 
+  /**
+   * This round's test-map report, resolved against the very `files` diff
+   * the delivery itself reports, with the worker's own account of which
+   * mapped tests it ran (`writeup.testsRun`) attached verbatim.
+   *
+   * Taking `files` off the built delivery rather than recomputing the
+   * diff is the point: the report and the file list a reader sees beside
+   * it can then never describe different sets of files, whichever
+   * builder below produced it - including the commit-failure one, whose
+   * `files` is deliberately `[]` and whose report therefore maps
+   * nothing while still naming any mapping that points at a test file
+   * the project no longer has.
+   *
+   * Nothing here compares the worker's list against the mapped one
+   * (Client ruling: the record is the worker's own report and is marked
+   * as such; Inspector's full-suite run is the independent check and is
+   * not asked to verify the list).
+   */
+  const withTests = (delivery: Delivery): Delivery =>
+    withTestMapReport(delivery, reportForRound(ctx.testMap, line.project, delivery.files, writeup?.testsRun));
+
   // Issue #189: the pause rule stopped an attempt mid-flight. Handled
   // before every branch below, for the same reason the rebase conflict
   // is: this is THE fact about the round, and nothing else here can
@@ -141,13 +172,15 @@ export function recordRoundResult(
   // double-reported, so it is deliberately not: the attempt that was
   // cut short is the one the pause explains.
   if (meterStop !== undefined) {
-    const delivery = buildPausedByMeterDelivery({
-      attempts: allReceipts.length,
-      branch: line.branch,
-      files: diffFiles(line.project, line.branch, ctx.baseCommit),
-      declaredGateChanges,
-      pause: meterStop,
-    });
+    const delivery = withTests(
+      buildPausedByMeterDelivery({
+        attempts: allReceipts.length,
+        branch: line.branch,
+        files: diffFiles(line.project, line.branch, ctx.baseCommit),
+        declaredGateChanges,
+        pause: meterStop,
+      })
+    );
     validateDelivery(delivery);
     recordMeterPause(recordHome, taskId, meterStop);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
@@ -190,6 +223,8 @@ export function recordRoundResult(
       declaredGateChanges,
       reason: lastJudgement.reason,
       stops: lastJudgement.stops,
+      testMap: ctx.testMap,
+      ...(writeup?.testsRun === undefined ? {} : { workerTestsRun: writeup.testsRun }),
     });
     if (capStop) recordCapStop(recordHome, taskId, capStop, "a rebase conflict stopped this round");
     return { kind: "recorded", outcome: "inspection-red" };
@@ -202,12 +237,14 @@ export function recordRoundResult(
   // wrapped with `skipIfUnchanged`, so `lastJudgement.kind` is never
   // `"unchanged"` there.
   if (lastJudgement.kind === "unchanged" && !capStop) {
-    const delivery = buildNothingChangedDelivery({
-      attempts: allReceipts.length,
-      branch: line.branch,
-      files: diffFiles(line.project, line.branch, ctx.baseCommit),
-      declaredGateChanges,
-    });
+    const delivery = withTests(
+      buildNothingChangedDelivery({
+        attempts: allReceipts.length,
+        branch: line.branch,
+        files: diffFiles(line.project, line.branch, ctx.baseCommit),
+        declaredGateChanges,
+      })
+    );
     validateDelivery(delivery);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
     appendEvent(recordHome, {
@@ -256,14 +293,16 @@ export function recordRoundResult(
     // #54 follow-up) - caught and turned into a delivery of its own
     // instead, scoped minimally, no retry machinery.
     newReceipts[newReceipts.length - 1].outcome = "failed";
-    const delivery = buildCommitFailureDelivery({
-      attempts: allReceipts.length,
-      lastGate,
-      evidenceAttempt,
-      branch: line.branch,
-      declaredGateChanges,
-      error: commitError,
-    });
+    const delivery = withTests(
+      buildCommitFailureDelivery({
+        attempts: allReceipts.length,
+        lastGate,
+        evidenceAttempt,
+        branch: line.branch,
+        declaredGateChanges,
+        error: commitError,
+      })
+    );
     validateDelivery(delivery);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
     appendEvent(recordHome, {
@@ -286,26 +325,28 @@ export function recordRoundResult(
   // src/foreman/README.md's "Rule 9: blocked by CI, not by Fabrica's own
   // mark" for the full reasoning. Enforcement lives entirely outside
   // Fabrica, in `.github/workflows/rule9-gate.yml`.
-  const delivery = buildDelivery(outcome, {
-    taskText: ctx.taskText,
-    attempts: allReceipts.length,
-    lastGate,
-    evidenceAttempt,
-    branch: line.branch,
-    files: diffFiles(line.project, line.branch, ctx.baseCommit),
-    declaredGateChanges,
-    inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
-    selfTested: ctx.mode.mode === "self-test",
-    notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
-    writeupInvalid: lastJudgement.kind === "verdict" ? lastJudgement.writeupInvalid : undefined,
-    // Issue #267, read off the judgement exactly the way writeupInvalid
-    // above is: the round is red, and this says whether it was the pull
-    // request's own checks rather than Inspector that said so.
-    ciRed: lastJudgement.kind === "verdict" ? lastJudgement.ciRed : undefined,
-    capStop,
-    taskId,
-    spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, ctx.caps),
-  });
+  const delivery = withTests(
+    buildDelivery(outcome, {
+      taskText: ctx.taskText,
+      attempts: allReceipts.length,
+      lastGate,
+      evidenceAttempt,
+      branch: line.branch,
+      files: diffFiles(line.project, line.branch, ctx.baseCommit),
+      declaredGateChanges,
+      inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
+      selfTested: ctx.mode.mode === "self-test",
+      notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
+      writeupInvalid: lastJudgement.kind === "verdict" ? lastJudgement.writeupInvalid : undefined,
+      // Issue #267, read off the judgement exactly the way writeupInvalid
+      // above is: the round is red, and this says whether it was the pull
+      // request's own checks rather than Inspector that said so.
+      ciRed: lastJudgement.kind === "verdict" ? lastJudgement.ciRed : undefined,
+      capStop,
+      taskId,
+      spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, ctx.caps),
+    })
+  );
 
   // Never present a malformed delivery as done (rule 4) — prove the
   // Foreman's own output before anyone else has to.

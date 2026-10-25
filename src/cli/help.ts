@@ -18,6 +18,7 @@ export const COMMANDS = [
   "verify-hook",
   "up",
   "update",
+  "tests-map",
 ] as const;
 
 export const TOP_LEVEL_HELP = `fabrica - hand in a task; get it done in isolation, verified, honestly.
@@ -80,6 +81,13 @@ Commands:
       installed copy), restarts the live view only if it's now stale,
       and prints one summary line. Denied to the chat agent itself -
       only you can run it.
+  tests-map [<path>] [--force]
+      Write a project's tests.map - which tests cover which files -
+      from its colocated foo.ts / foo.test.ts convention. Every later
+      task's brief names the tests its touched files map to, and every
+      delivery reports which of them ran and which touched files the
+      map covers with nothing. Hand-edit it afterwards. Denied to the
+      chat agent itself - only you can run it.
 
 Run "fabrica <command> --help" for a command's own usage.
 `;

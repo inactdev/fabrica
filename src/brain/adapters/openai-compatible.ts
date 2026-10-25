@@ -361,6 +361,11 @@ export function writeupToolSchema(): Record<string, unknown> {
           },
         },
       },
+      testsRun: {
+        type: "string",
+        description:
+          "Optional: when the project commits a tests.map, the mapped tests you actually ran, one per line. Leave it out entirely if the project has no test map.",
+      },
       couldNotVerify: {
         type: "string",
         description:

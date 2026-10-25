@@ -19,6 +19,14 @@ export type ForemanErrorCode =
    * the brief would be past its size ceiling with them in. Raised before
    * any ProductionLine is cut - see src/foreman/task-knowledge.ts. */
   | "knowledge-unavailable"
+  /** The project commits a `tests.map` whose own text cannot be read - a
+   * line that is not `pattern: tests`. Refused rather than skipped: a
+   * half-read map would name fewer tests in the brief and report more
+   * touched files as unmapped, both without anyone being told. Raised
+   * before any ProductionLine is cut, like `knowledge-unavailable`, and
+   * carries src/testmap's own message, which names the line to edit -
+   * see src/foreman/test-map.ts. */
+  | "test-map-unreadable"
   | "missing-check"
   | "inspector-not-ready"
   /** No reviewer could be settled for a project whose test changes need

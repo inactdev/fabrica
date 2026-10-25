@@ -18,6 +18,7 @@ import { DOCTOR_HELP, runDoctorCommand } from "./doctor-command.ts";
 import { REGISTER_HELP, runRegisterCommand } from "./register-command.ts";
 import { UP_HELP, runUpCommand } from "./up-command.ts";
 import { UPDATE_HELP, runUpdateCommand } from "./update-command.ts";
+import { TESTS_MAP_HELP, runTestsMapCommand } from "./tests-map-command.ts";
 import { TOP_LEVEL_HELP } from "./help.ts";
 
 export async function main(
@@ -132,6 +133,14 @@ export async function main(
       return 0;
     }
     return runUpdateCommand(rest, io);
+  }
+
+  if (command === "tests-map") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      io.stdout(TESTS_MAP_HELP);
+      return 0;
+    }
+    return runTestsMapCommand(rest, io);
   }
 
   if (command === "deny-and-log-edit") {

@@ -8,10 +8,11 @@ import {
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   describeDeclaration,
   describeModel,
+  describeTestMapNote,
   formatAge,
   formatUsd,
 } from "../index.ts";
-import type { FabricaEvent, FabricaTask, ModelSource, TranscriptEntry } from "../index.ts";
+import type { FabricaEvent, FabricaTask, ModelSource, TestMapReport, TranscriptEntry } from "../index.ts";
 import type { WorkerPresence } from "./task-process.ts";
 
 /** Longer than this since the last recorded event on a still-working task,
@@ -98,6 +99,29 @@ export function prUrlFromEvents(events: FabricaEvent[]): string | null {
  * summary is taken verbatim off the event rather than rebuilt here, so
  * `fabrica status`, `fabrica watch` and the live view cannot word the
  * same read three ways. */
+/**
+ * The one phrase a status row carries about the project's committed test
+ * map: how many of this task's touched files the map covers with
+ * nothing, and how many of its mappings name a test file the project no
+ * longer has. Null when there is nothing wrong - a project with no map
+ * at all, or a round whose touched files were all covered.
+ *
+ * Latest-wins over `"delivered"` events, like `prUrlFromEvents` and
+ * `checksSummaryFromEvents` above and for the same reason: a fix round
+ * records its own delivery, and only the newest is still true. The
+ * wording itself is src/testmap's (`describeTestMapNote`), shared with
+ * the delivery's own block so the row and the report cannot disagree
+ * about what "unmapped" means.
+ */
+export function testMapNoteFromEvents(events: FabricaEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].name !== "delivered") continue;
+    const details = events[i].details as { delivery?: { tests?: TestMapReport } } | undefined;
+    return describeTestMapNote(details?.delivery?.tests);
+  }
+  return null;
+}
+
 export function checksSummaryFromEvents(events: FabricaEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].name !== "ci-checks-finished") continue;
@@ -377,6 +401,19 @@ export function formatStatusLine(
      * this exists to replace. Omitted (or null) when no read has
      * finished, which is most tasks most of the time. */
     checksSummary?: string | null;
+    /** `testMapNoteFromEvents`' own phrase for what the project's
+     * committed `tests.map` did NOT cover about this task - its touched
+     * files the map maps to nothing, and its mappings naming a test file
+     * the project no longer has. In the fact columns rather than beside
+     * the call to action, and on every state's line rather than only a
+     * delivered one, for the same reason `checksSummary` above is: it is
+     * a fact about the work, not part of the ruling being asked for.
+     * Omitted (or null) when there is nothing missing - a project with
+     * no map at all, or a round the map covered. Which tests actually
+     * ran is deliberately NOT here: that is the worker's own report, and
+     * it belongs on the delivery where there is room to mark it as such
+     * (src/testmap/describe.ts). */
+    testMapNote?: string | null;
     /** Issue #111: which way this task's work was actually judged
      * (`checkModeFromEvents`). Shown on a delivered task's own line and
      * nowhere else - that is the line where the Client is being asked to
@@ -391,8 +428,9 @@ export function formatStatusLine(
   const project = opts.project ?? "unknown project";
   const age = formatAge(opts.ageMs);
   const checks = opts.checksSummary ? `  ${CHECKS_LABEL}: ${opts.checksSummary}` : "";
+  const tests = opts.testMapNote ? `  ${opts.testMapNote}` : "";
   const model = opts.model === undefined ? "" : `  model: ${opts.model}`;
-  const base = `${task.id}  ${project}  ${task.state}  ${age} old${model}${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}${checks}`;
+  const base = `${task.id}  ${project}  ${task.state}  ${age} old${model}${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}${checks}${tests}`;
 
   if (task.state === "delivered") {
     // Issue #111: in the fact columns, before the call-to-action - it is

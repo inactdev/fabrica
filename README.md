@@ -283,6 +283,41 @@ for every project, including ones registered before this existed; set
 it to `false` here to turn it off for good, or say "run the full suite"
 in a task's own text to turn it off for that one task.
 
+### Telling Fabrica which tests cover what
+
+`onlyTouchedTests` leaves a Worker to work out for itself which tests
+cover what it touched. A project can say so instead:
+
+    fabrica tests-map
+
+in the project's own folder writes a `tests.map` in its root - one
+entry per line, a glob pattern, a colon, then comma-separated test
+files or commands:
+
+    src/foreman/do.ts: src/foreman/do.test.ts
+    src/cli/*.ts: npm test -- src/cli
+
+It is generated from the colocated `foo.ts` / `foo.test.ts` convention,
+and **meant to be edited by hand afterwards** - a source file with no
+colocated test of its own is left out, so add a line for it when you
+know what covers it. Re-running the command needs `--force` and throws
+your edits away. Commit the file.
+
+Once it is there, every task on that project tells its Worker to run
+exactly the tests its touched files map to - the union of every pattern
+each file matches - stop and fix a failure there, and only then run the
+whole suite the way your check runs it. Each delivery records which of
+those mapped tests the Worker says it ran (its own report, marked as
+such - the full-suite run is what actually checks the work), every
+touched file the map covers with nothing, and any mapping naming a test
+file the project no longer has. `fabrica status` names the gaps on the
+task's own line: nothing is skipped quietly, and nothing fails over a
+missing mapping either.
+
+Like `fabrica up` and `fabrica update`, this one is denied to the AI you
+chat with - it writes a file into your checkout, which only you should
+be doing.
+
 Everything that can refuse refuses before anything is created: a path
 that isn't a repository, a missing `origin`, a `gh` that isn't logged
 in, a stopped Docker daemon, a `fabrica/register` branch that already

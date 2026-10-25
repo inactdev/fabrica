@@ -21,6 +21,7 @@ import {
   isQuietTooLong,
   lastActivityAt,
   projectFromEvents,
+  testMapNoteFromEvents,
   wrapDetail,
 } from "./render.ts";
 import type { FabricaEvent } from "../index.ts";
@@ -1155,4 +1156,50 @@ test("formatEventLine: a check the worker's box could not run reads as not run, 
   });
   assert.match(line, /check could not run \(attempt 1\): the box has no command the check needs/);
   assert.doesNotMatch(line, /red/);
+});
+
+// A project's committed tests.map, as the Client reads it on a task
+// line: what the map did NOT cover, and nothing at all when it covered
+// everything. The wordings themselves are src/testmap/describe.test.ts;
+// these prove the reader finds them on the right event and that the line
+// carries them.
+
+test("testMapNoteFromEvents reads the latest delivery's report, and says nothing when there is none", () => {
+  const delivered = (tests: unknown): FabricaEvent => ({
+    occurredAt: "2026-10-25T00:00:00.000Z",
+    taskId: "t",
+    name: "delivered",
+    details: { delivery: { tests } },
+  });
+
+  assert.equal(testMapNoteFromEvents([]), null);
+  assert.equal(testMapNoteFromEvents([delivered(undefined)]), null, "a project with no test map said something");
+  assert.equal(
+    testMapNoteFromEvents([delivered({ mapped: [], tests: [], unmapped: ["src/a.ts"], broken: [] })]),
+    "tests.map: 1 touched file unmapped (src/a.ts)"
+  );
+
+  // Latest-wins: a fix round records its own delivery, and only the
+  // newest one is still true of the branch.
+  assert.equal(
+    testMapNoteFromEvents([
+      delivered({ mapped: [], tests: [], unmapped: ["src/a.ts"], broken: [] }),
+      delivered({ mapped: [], tests: [], unmapped: [], broken: [] }),
+    ]),
+    null
+  );
+});
+
+test("formatStatusLine carries the test-map note in the fact columns, and omits it when there is none", () => {
+  const line = formatStatusLine(
+    { id: "task-1", state: "working" },
+    { project: "demo", ageMs: 1000, liveness: null, hasDelivery: false, testMapNote: "tests.map: 1 touched file unmapped (src/a.ts)" }
+  );
+  assert.match(line, /tests\.map: 1 touched file unmapped \(src\/a\.ts\)/);
+
+  const quiet = formatStatusLine(
+    { id: "task-1", state: "working" },
+    { project: "demo", ageMs: 1000, liveness: null, hasDelivery: false, testMapNote: null }
+  );
+  assert.ok(!quiet.includes("tests.map"));
 });
