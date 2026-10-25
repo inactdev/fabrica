@@ -231,6 +231,8 @@ src/foreman/pr-body.test.ts: src/foreman/pr-body.test.ts
 src/foreman/pr-body.ts: src/foreman/pr-body.test.ts
 src/foreman/queries.test.ts: src/foreman/queries.test.ts
 src/foreman/queries.ts: src/foreman/queries.test.ts
+src/foreman/rebase-only.test.ts: src/foreman/rebase-only.test.ts
+src/foreman/rebase-only.ts: src/foreman/rebase-only.test.ts
 src/foreman/reviewer.test.ts: src/foreman/reviewer.test.ts
 src/foreman/reviewer.ts: src/foreman/reviewer.test.ts
 src/foreman/round.test.ts: src/foreman/round.test.ts

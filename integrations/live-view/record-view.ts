@@ -21,13 +21,13 @@ import {
   describeInterval,
   describeModel,
   earlyStopKindOf,
-  finalMessageFor,
   followTask,
   formatUsd,
   hasAttempts,
   latestMeterReading,
   loadConfigOrProblem,
   modelFromEvents,
+  publishedPullRequestMessage,
   quizEntriesOf,
   quizQuestionsForTask,
   readTaskFile,
@@ -264,10 +264,13 @@ export interface DeliveredReviewRow {
   id: string;
   title: string;
   kind: "delivered";
-  /** The pull request's own body, rendered through the exact same
-   * `finalMessageFor` that built it (src/foreman/pr-body.ts) - never a
-   * second hand-written copy of the Client's own template, so this page
-   * can never show text that disagrees with the real pull request. */
+  /** The pull request's own body, built by the exact same code that
+   * built the real one (`publishedPullRequestMessage`, which renders the
+   * Client's template through `finalMessageFor` and, for a rebase-only
+   * round, appends that round's one section the same way the round
+   * itself did) - never a second hand-written copy of either, so this
+   * page can never show text that disagrees with the real pull
+   * request. */
   writeupBody: string;
   /** False when the write-up was invalid and `writeupBody` is Fabrica's
    * own fallback wording naming what was wrong, not the worker's words. */
@@ -904,7 +907,13 @@ export function createRecordView(recordHome: string, opts: { baseStanding?: Base
 
       if (task.state === "delivered") {
         const delivery = deliveryOf(recordHome, id);
-        const message = finalMessageFor(task.writeup ?? undefined, task.title);
+        // What the pull request actually says, not a render of the
+        // latest write-up: a rebase-only fix round (the Client's note
+        // "master moved") appends one section to the body it already
+        // had, so its four other fields were never published and showing
+        // them here as Context/Description would be showing the Client
+        // something no reviewer can see.
+        const message = publishedPullRequestMessage(events, task.writeup ?? undefined, task.title);
         return [
           {
             id,

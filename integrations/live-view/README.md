@@ -369,8 +369,12 @@ every task actually waiting on the Client, which is not only "delivered"
 any more (follow-up to issue #202, "show every task waiting on me"):
 
 - **Delivered** - the full card: its title, the pull request's own
-  write-up (rendered through the exact same `finalMessageFor` that built
-  the real pull request body, never a second hand-written copy of it),
+  write-up (built by the exact same code that built the real pull request
+  body - `publishedPullRequestMessage`, which renders the Client's
+  template through `finalMessageFor` and, for a rebase-only round whose
+  note began "master moved", appends that round's one section under
+  "## Rebase rounds" the way the round itself did - never a second
+  hand-written copy of either),
   Inspector's stamp, the gate's declared state, and - when there is
   something to say about it - where the branch stands against origin's
   default tip ("behind origin/&lt;branch&gt;, a fix will rebase", or
@@ -700,8 +704,10 @@ integration adds them there rather than reaching into
 `src/foreman/`/`src/record/`/`contract/` directly, the same rule
 `src/cli/` already follows. Issue #202's review page added two more:
 `deliveryOf` (the real `Delivery`, for Inspector's stamp and the gate's
-declared state) and `finalMessageFor` (the pull request's own write-up
-text, rendered once and reused rather than reimplemented). Recording a verdict itself needs two more things only `src/cli/` had
+declared state) and `publishedPullRequestMessage` (the pull request's own
+write-up text, rendered once by the code that published it and reused
+rather than reimplemented - it wraps `finalMessageFor` and knows about a
+rebase-only round's appended section). Recording a verdict itself needs two more things only `src/cli/` had
 before: `loadConfigOrDefault` (the record's caps) and
 `spawnDetachedResume` (handing a "fix" round to the same detached
 background process `fabrica verdict fix` uses) - reached the same way
