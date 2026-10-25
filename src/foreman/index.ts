@@ -43,6 +43,7 @@ export {
   earlyStopKindOf,
   passFingerprintsOf,
   priorPassFingerprints,
+  readerFailureCount,
 } from "./queries.ts";
 // The change fingerprint (`git patch-id` of a pass's own diff against
 // its merge-base with origin's default branch) and the one wording

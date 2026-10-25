@@ -31,6 +31,7 @@ import { checksCorrection } from "../ci/index.ts";
 import { prepareRound, skipIfUnchanged } from "./judge.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
+import type { DiffReader } from "./reader-round.ts";
 import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
@@ -40,7 +41,10 @@ import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
 import { sweepTaskNetworks } from "./task-networks.ts";
 import { runAttempts } from "./attempts.ts";
+import type { AttemptLoopResult } from "./attempts.ts";
 import { recordRoundResult } from "./round.ts";
+import { readAndFlag } from "./reader-round.ts";
+import { alreadyReadFor } from "./queries.ts";
 import {
   continueStoppedRebase,
   publishLeaseAfterRebase,
@@ -236,7 +240,7 @@ export function recordVerdictDecision(
 export async function runRecordedFix(
   recordHome: string,
   taskId: string,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; minter?: TokenMinter; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; minter?: TokenMinter; readDiff?: DiffReader; caps?: Caps }
 ): Promise<void> {
   const details = latestDeliveredDetails(recordHome, taskId);
   const totalAttempts = details?.totalAttempts;
@@ -293,6 +297,7 @@ export async function runRecordedFix(
         checkBox: opts.checkBox,
         checksReader: opts.checksReader,
         minter: opts.minter,
+        readDiff: opts.readDiff,
         caps: opts.caps,
       })
     );
@@ -310,7 +315,7 @@ export async function recordVerdict(
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; minter?: TokenMinter; caps?: Caps }
+  opts: { brain: Brain; inspector?: Inspector; checkBox?: CheckBox; checksReader?: ChecksReader; minter?: TokenMinter; readDiff?: DiffReader; caps?: Caps }
 ): Promise<void> {
   recordVerdictDecision(recordHome, taskId, ruling, note, { caps: opts.caps });
   if (ruling !== "fix") return;
@@ -402,6 +407,9 @@ async function runFixRound(
     /** Issue #187's seam: where this round's GitHub App tokens are
      * minted from. Omitted uses the real App on this machine. */
     minter?: TokenMinter;
+    /** Inspector issue #34's seam (reader-round.ts's `DiffReader`) -
+     * omitted makes the real call to the project's configured reader. */
+    readDiff?: DiffReader;
     caps?: Caps;
   }
 ): Promise<void> {
@@ -418,6 +426,7 @@ async function runFixRound(
     checkBox,
     checksReader,
     minter,
+    readDiff,
     caps,
   } = ctx;
   const lastSession = priorReceipts.at(-1)?.session ?? undefined;
@@ -493,7 +502,60 @@ async function runFixRound(
           ? rebase.baseCommit
           : rebase.stopped.baseCommit;
 
-    const { judge: roundJudge, mode } = prepareRound(recordHome, taskId, line, roundBaseCommit, {
+    /**
+     * This round's brief for one pass of it. `extra` is whatever that
+     * pass needs to know about the state it is being handed - a stopped
+     * rebase's conflicted files (issue #235), or the code reader's own
+     * findings (inspector issue #34) - appended after the Client's note.
+     *
+     * Factored out because this round now starts passes from two places:
+     * the rebase loop below, and the reader's fix pass after it. Two
+     * copies of this would be two places for the issue text, the
+     * knowledge notes, the refusal correction or the red-checks
+     * correction to go missing from one of them.
+     *
+     * Both standing extras (a refusal being answered, a pull request's own
+     * red checks) apply to every pass of this round, so they are built in
+     * here rather than passed: each describes a different part of the
+     * state this worker is in, and they are joined rather than one
+     * winning.
+     *
+     * Declared here rather than beside the round's other derived values
+     * above because the test map's `touched` list is read off
+     * `roundBaseCommit`, which is only known once the rebase has been
+     * attempted - and is re-read on every call, since a rebase that
+     * stops and is continued moves it mid-round (issue #142).
+     */
+    const briefFor = (extra?: string): string =>
+      workerBrief(
+        recordHome,
+        line.project,
+        buildFixBrief(
+          // The issue this task names, and the project's knowledge notes,
+          // ride along on a fix round too: the Client's note corrects the
+          // work, it does not replace the request the issue spells out or
+          // the notes the project stands on.
+          withKnowledge(withIssueText(originalBrief, issueText), knowledgeNotes),
+          note,
+          [
+            refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,
+            redChecksOutput !== undefined ? checksCorrection(redChecksOutput) : undefined,
+            extra,
+          ]
+            .filter((part): part is string => part !== undefined)
+            .join("\n\n---\n\n") || undefined
+        ),
+        {
+          testMap,
+          // Unlike a first round, a fix round's branch already carries
+          // this task's own diff - so its worker is handed the concrete
+          // tests its touched files map to, and the concrete files that
+          // map to nothing, instead of only the lookup rule.
+          touched: diffFiles(line.project, line.branch, roundBaseCommit),
+        }
+      );
+
+    const { judge: roundJudge, mode, reader } = prepareRound(recordHome, taskId, line, roundBaseCommit, {
       inspector,
       checkBox,
       closesIssue,
@@ -552,11 +614,17 @@ async function runFixRound(
     const earlierGateDeclarations: string[] = [];
     let session = lastSession;
 
+    // Once per task (inspector issue #34), read off the record: a task
+    // whose earlier rounds never went green reaches its one and only
+    // read here, in the fix round that finally does.
+    const alreadyRead = alreadyReadFor(readEventsForTask(recordHome, taskId));
+
     // Issue #186: a fix round's worker box reaches the network under the
     // same per-project policy an ordinary round's does (do.ts's own call
     // site says why this wraps the whole loop), and every pass below is
-    // one round's work, so one policy covers all of them.
-    const attemptsResult = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), async () => {
+    // one round's work, so one policy covers all of them - the code
+    // reader's own fix pass at the end included.
+    const round = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), async () => {
       // One `runAttempts` call per pass. Almost always exactly one: a
       // round whose rebase did not conflict, or whose worker resolved the
       // one conflict it was handed, never comes back here. A rebase that
@@ -564,146 +632,174 @@ async function runFixRound(
       // warm worker (same session), in this same round, until it finishes
       // or `continueStoppedRebase` gives up - so one conflicted rebase
       // costs the Client one round, not one round per conflicting commit.
-      for (;;) {
-        const handed = stopped;
-        // Set from inside `beforeCommit`, the only place that learns how
-        // this pass's rebase ended.
-        let step: FixRebaseStep | undefined;
-        // Issue #235: the worker resolves markers in place (its own git
-        // is read-only), so the host stages that resolution and continues
-        // the rebase - and that has to happen before this attempt's own
-        // commit, which assumes a branch the rebase has finished moving.
-        // Returning a judgement means this attempt is judged on the
-        // rebase alone, never committed and never handed to a check or
-        // Inspector; it is the round's own judgement only when the loop
-        // ends here, and is discarded when another pass follows.
-        const beforeCommit = handed
-          ? async (): Promise<Judgement | undefined> => {
-              step = continueStoppedRebase(recordHome, taskId, line, handed);
-              // `stopped` tracks what is in flight RIGHT NOW, for the
-              // cleanup below: nothing, once the rebase finished or was
-              // aborted; the new conflict, when it stopped again.
-              if (step.status === "completed") {
-                stopped = undefined;
-                // The branch has only just stopped moving: this is the
-                // first moment its publish lease is knowable (and the
-                // last before this attempt commits on top of it).
-                lease = publishLeaseAfterRebase(line, rebase.tips);
-                return undefined;
-              }
-              if (step.status === "give-up") {
-                stopped = undefined;
-                // Aborted, so nothing was rewritten and there is nothing
-                // to lease - and this round publishes nothing anyway.
-                lease = undefined;
-                // Aborted: the branch is back at its own fork point, so
-                // that is what this round's delivery is pinned to again.
-                roundBaseCommit = baseCommit;
+      const runRebasePasses = async (): Promise<AttemptLoopResult> => {
+        for (;;) {
+          const handed = stopped;
+          // Set from inside `beforeCommit`, the only place that learns how
+          // this pass's rebase ended.
+          let step: FixRebaseStep | undefined;
+          // Issue #235: the worker resolves markers in place (its own git
+          // is read-only), so the host stages that resolution and continues
+          // the rebase - and that has to happen before this attempt's own
+          // commit, which assumes a branch the rebase has finished moving.
+          // Returning a judgement means this attempt is judged on the
+          // rebase alone, never committed and never handed to a check or
+          // Inspector; it is the round's own judgement only when the loop
+          // ends here, and is discarded when another pass follows.
+          const beforeCommit = handed
+            ? async (): Promise<Judgement | undefined> => {
+                step = continueStoppedRebase(recordHome, taskId, line, handed);
+                // `stopped` tracks what is in flight RIGHT NOW, for the
+                // cleanup below: nothing, once the rebase finished or was
+                // aborted; the new conflict, when it stopped again.
+                if (step.status === "completed") {
+                  stopped = undefined;
+                  // The branch has only just stopped moving: this is the
+                  // first moment its publish lease is knowable (and the
+                  // last before this attempt commits on top of it).
+                  lease = publishLeaseAfterRebase(line, rebase.tips);
+                  return undefined;
+                }
+                if (step.status === "give-up") {
+                  stopped = undefined;
+                  // Aborted, so nothing was rewritten and there is nothing
+                  // to lease - and this round publishes nothing anyway.
+                  lease = undefined;
+                  // Aborted: the branch is back at its own fork point, so
+                  // that is what this round's delivery is pinned to again.
+                  roundBaseCommit = baseCommit;
+                  return {
+                    kind: "rebase-conflicted",
+                    base: handed.base,
+                    reason: step.reason,
+                    conflict: step.conflict,
+                    stops: step.stops,
+                  };
+                }
+                stopped = step.stopped;
                 return {
                   kind: "rebase-conflicted",
                   base: handed.base,
-                  reason: step.reason,
-                  conflict: step.conflict,
-                  stops: step.stops,
+                  // Honest only if this is where the round ends (a cap stop
+                  // in the same pass) - otherwise the next pass replaces it.
+                  reason: "round-ended",
+                  conflict: step.stopped.conflict,
+                  stops: step.stopped.stop,
                 };
               }
-              stopped = step.stopped;
-              return {
-                kind: "rebase-conflicted",
-                base: handed.base,
-                // Honest only if this is where the round ends (a cap stop
-                // in the same pass) - otherwise the next pass replaces it.
-                reason: "round-ended",
-                conflict: step.stopped.conflict,
-                stops: step.stopped.stop,
-              };
-            }
-          : undefined;
+            : undefined;
 
-        const result = await runAttempts({
-          brain,
-          // Issue #142: the project's own settings decide whether this
-          // brief also carries the only-touched-tests ruling. Resolved
-          // here, the same way do.ts's round resolves it, so a fix round
-          // and a first attempt can never disagree about it.
-          brief: workerBrief(
-            recordHome,
-            line.project,
-            // Both extras can apply at once (a round answering a refusal
-            // whose own rebase then conflicted), so they are joined rather
-            // than one winning: each describes a different part of the
-            // state this worker is being handed.
-            buildFixBrief(
-              // The issue this task names, and the project's knowledge
-              // notes, ride along on a fix round too: the Client's note
-              // corrects the work, it does not replace the request the
-              // issue spells out or the notes the project stands on.
-              withKnowledge(withIssueText(originalBrief, issueText), knowledgeNotes),
-              note,
-              [
-                refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,
-                redChecksOutput !== undefined ? checksCorrection(redChecksOutput) : undefined,
-                handed ? rebaseConflictInstructions(handed) : undefined,
-              ]
-                .filter((part): part is string => part !== undefined)
-                .join("\n\n---\n\n") || undefined
-            ),
-            {
-              testMap,
-              // Unlike a first round, a fix round's branch already
-              // carries this task's own diff - so its worker is handed
-              // the concrete tests its touched files map to, and the
-              // concrete files that map to nothing, instead of only the
-              // lookup rule. Read per pass from the round's own base
-              // commit, which a rebase may have moved.
-              touched: diffFiles(line.project, line.branch, roundBaseCommit),
-            }
-          ),
-          workdir: line.workdir,
-          taskId,
-          judge,
-          totalAttempts: 1,
-          stopEarlyOnGreen: true,
-          // Re-read per pass: each one's receipt is on the record by the
-          // time the next starts, so rule 10's per-task cap still counts
-          // every worker call this round made.
-          spendLimits: spendLimitsFor(recordHome, taskId, caps),
-          modelChoice,
-          // Issue #189: a fix round is held to the same stop threshold as
-          // any other - see do.ts for why this is read here rather than
-          // threaded in like `caps`.
-          pauseRule: { rule: pauseRuleFor(recordHome) },
-          onReceipt: (receipt) => recordReceipt(recordHome, receipt),
-          ...(session ? { initialSession: session } : {}),
-          startAttempt: priorReceipts.length + earlierReceipts.length + 1,
-          commitLabel: "(fix)",
-          ...(beforeCommit ? { beforeCommit } : {}),
-          onHeartbeat: (attempt) => {
-            appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
-          },
-          // Issue #199: a fix round's worker call is retried once on a
-          // dropped connection exactly like any other, and recorded.
-          onTransportRetry: (details) => {
-            appendEvent(recordHome, { taskId, name: "transport-retry", details });
-          },
-          // Issue #70: fires as each entry is known, not once per attempt -
-          // see runAttempts' own onTranscriptEntry doc for why every entry
-          // lands here exactly once either way.
-          onTranscriptEntry: (entry) => {
-            appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
-          },
-        });
+          const result = await runAttempts({
+            brain,
+            // Issue #142: the project's own settings decide whether this
+            // brief also carries the only-touched-tests ruling. Resolved
+            // here, the same way do.ts's round resolves it, so a fix round
+            // and a first attempt can never disagree about it.
+            brief: briefFor(handed ? rebaseConflictInstructions(handed) : undefined),
+            workdir: line.workdir,
+            taskId,
+            judge,
+            totalAttempts: 1,
+            stopEarlyOnGreen: true,
+            // Re-read per pass: each one's receipt is on the record by the
+            // time the next starts, so rule 10's per-task cap still counts
+            // every worker call this round made.
+            spendLimits: spendLimitsFor(recordHome, taskId, caps),
+            modelChoice,
+            // Issue #189: a fix round is held to the same stop threshold as
+            // any other - see do.ts for why this is read here rather than
+            // threaded in like `caps`.
+            pauseRule: { rule: pauseRuleFor(recordHome) },
+            onReceipt: (receipt) => recordReceipt(recordHome, receipt),
+            ...(session ? { initialSession: session } : {}),
+            startAttempt: priorReceipts.length + earlierReceipts.length + 1,
+            commitLabel: "(fix)",
+            ...(beforeCommit ? { beforeCommit } : {}),
+            onHeartbeat: (attempt) => {
+              appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
+            },
+            // Issue #199: a fix round's worker call is retried once on a
+            // dropped connection exactly like any other, and recorded.
+            onTransportRetry: (details) => {
+              appendEvent(recordHome, { taskId, name: "transport-retry", details });
+            },
+            // Issue #70: fires as each entry is known, not once per attempt -
+            // see runAttempts' own onTranscriptEntry doc for why every entry
+            // lands here exactly once either way.
+            onTranscriptEntry: (entry) => {
+              appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
+            },
+          });
 
-        // Another pass only when the rebase is genuinely still stopped
-        // AND nothing else ended this round: a spending cap or the pause
-        // rule stopping the loop must never be answered by calling the
-        // worker again.
-        if (step?.status !== "handed-again" || result.capStop || result.meterStop) return result;
-        // `stopped` is already this pass's new conflict (set above).
-        session = result.receipts.at(-1)?.session ?? session;
-        earlierReceipts.push(...result.receipts);
-        if (result.declaredGateChanges) earlierGateDeclarations.push(result.declaredGateChanges);
-      }
+          // Another pass only when the rebase is genuinely still stopped
+          // AND nothing else ended this round: a spending cap or the pause
+          // rule stopping the loop must never be answered by calling the
+          // worker again.
+          if (step?.status !== "handed-again" || result.capStop || result.meterStop) return result;
+          // `stopped` is already this pass's new conflict (set above).
+          session = result.receipts.at(-1)?.session ?? session;
+          earlierReceipts.push(...result.receipts);
+          if (result.declaredGateChanges) earlierGateDeclarations.push(result.declaredGateChanges);
+        }
+      };
+
+      const attemptsResult = await runRebasePasses();
+
+      // After Inspector's green, the code reader reads the whole diff
+      // and anything it flags comes back to this same warm worker before
+      // the delivery is written (inspector issue #34). Inside this same
+      // network policy, because it is one more worker call of this round.
+      //
+      // `roundJudge`, deliberately, not `judge`: `readAndFlag` does its
+      // own `skipIfUnchanged` wrapping, and double-wrapping would be
+      // harmless but misleading about which comparison matters.
+      return readAndFlag(
+        recordHome,
+        taskId,
+        {
+          line,
+          baseCommit: roundBaseCommit,
+          mode,
+          reader,
+          alreadyRead,
+          judge: roundJudge,
+          ...(readDiff ? { read: readDiff } : {}),
+          startAttempt: priorReceipts.length + earlierReceipts.length + attemptsResult.receipts.length + 1,
+          fixPass: ({ correction, judge: passJudge, startAttempt, beforeCommit }) =>
+            runAttempts({
+              brain,
+              brief: briefFor(correction),
+              workdir: line.workdir,
+              taskId,
+              judge: passJudge,
+              totalAttempts: 1,
+              stopEarlyOnGreen: true,
+              spendLimits: spendLimitsFor(recordHome, taskId, caps),
+              modelChoice,
+              pauseRule: { rule: pauseRuleFor(recordHome) },
+              onReceipt: (receipt) => recordReceipt(recordHome, receipt),
+              startAttempt,
+              beforeCommit,
+              commitLabel: "(reader)",
+              // The same machine the ruling asks for: the worker that
+              // just did this work, resumed, so it reads the findings
+              // against what it did rather than rediscovering it.
+              ...(attemptsResult.receipts.at(-1)?.session ?? session
+                ? { initialSession: (attemptsResult.receipts.at(-1)?.session ?? session)! }
+                : {}),
+              onHeartbeat: (attempt) => {
+                appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
+              },
+              onTransportRetry: (details) => {
+                appendEvent(recordHome, { taskId, name: "transport-retry", details });
+              },
+              onTranscriptEntry: (entry) => {
+                appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
+              },
+            }),
+        },
+        attemptsResult
+      );
     });
 
     // A rebase still in flight here is one the round ended underneath (a
@@ -730,12 +826,16 @@ async function runFixRound(
         mode,
         caps,
         priorReceipts,
-        roundReceipts: earlierReceipts,
+        // The rebase loop's own earlier passes, then whatever the reader
+        // stage left earlier than the result being honoured - both are
+        // this round's, in the order they happened.
+        roundReceipts: [...earlierReceipts, ...round.earlierReceipts],
         priorGateDeclarations,
-        roundGateDeclarations: earlierGateDeclarations,
+        roundGateDeclarations: [...earlierGateDeclarations, ...round.earlierGateDeclarations],
         testMap,
+        ...(round.reader === undefined ? {} : { reader: round.reader }),
       },
-      attemptsResult
+      round.attempts
     );
   } finally {
     // Issue #235: a rebase must never outlive the round that started it.

@@ -21,6 +21,7 @@ import {
   buildNothingChangedDelivery,
   buildPausedByMeterDelivery,
   renderDeliveryMarkdown,
+  withRead,
   withTestMapReport,
 } from "./delivery.ts";
 import { mergeGateDeclarations } from "./gate-declarations.ts";
@@ -34,6 +35,7 @@ import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf, recordCapStop, spendUnknownUnderCap } from "./caps.ts";
 import type { Caps, ProductionLine } from "../../contract/surface.ts";
 import type { Delivery, Receipt } from "../inspector/types.ts";
+import type { ReaderOnDelivery } from "../reader/index.ts";
 
 export type RoundRecordResult =
   /** Inspector reached no verdict - nothing recorded here, since
@@ -91,6 +93,13 @@ export function recordRoundResult(
      * report would read as "nothing was mapped" when the truth is
      * "nothing here maps anything". */
     testMap?: TestMapEntry[] | null;
+    /** The code reader's read of this task's diff (inspector issue #34),
+     * when this round is the one that reached it - built by
+     * `reader-round.ts` before this is called. Put onto the delivery and
+     * onto the `"delivered"` event, and read by nothing here: a flagger
+     * never moves an outcome, so it is attached to a finished delivery
+     * rather than passed to any builder as an input. */
+    reader?: ReaderOnDelivery;
   },
   attempts: AttemptLoopResult
 ): RoundRecordResult {
@@ -186,16 +195,19 @@ export function recordRoundResult(
   // double-reported, so it is deliberately not: the attempt that was
   // cut short is the one the pause explains.
   if (meterStop !== undefined) {
-    const delivery = withTests({
-      ...buildPausedByMeterDelivery({
-        attempts: allReceipts.length,
-        branch: line.branch,
-        files: diffFiles(line.project, line.branch, ctx.baseCommit),
-        declaredGateChanges,
-        pause: meterStop,
+    const delivery = withRead(
+      withTests({
+        ...buildPausedByMeterDelivery({
+          attempts: allReceipts.length,
+          branch: line.branch,
+          files: diffFiles(line.project, line.branch, ctx.baseCommit),
+          declaredGateChanges,
+          pause: meterStop,
+        }),
+        ...stamp(),
       }),
-      ...stamp(),
-    });
+      ctx.reader
+    );
     validateDelivery(delivery);
     recordMeterPause(recordHome, taskId, meterStop);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
@@ -244,6 +256,7 @@ export function recordRoundResult(
       // its own last commit - so this is the change the Client is being
       // asked to rule on, not the half-replayed state the rebase was in.
       stamp: stamp(),
+      ...(ctx.reader === undefined ? {} : { reader: ctx.reader }),
     });
     if (capStop) recordCapStop(recordHome, taskId, capStop, "a rebase conflict stopped this round");
     return { kind: "recorded", outcome: "inspection-red" };
@@ -256,19 +269,22 @@ export function recordRoundResult(
   // wrapped with `skipIfUnchanged`, so `lastJudgement.kind` is never
   // `"unchanged"` there.
   if (lastJudgement.kind === "unchanged" && !capStop) {
-    const delivery = withTests({
-      ...buildNothingChangedDelivery({
-        attempts: allReceipts.length,
-        branch: line.branch,
-        files: diffFiles(line.project, line.branch, ctx.baseCommit),
-        declaredGateChanges,
+    const delivery = withRead(
+      withTests({
+        ...buildNothingChangedDelivery({
+          attempts: allReceipts.length,
+          branch: line.branch,
+          files: diffFiles(line.project, line.branch, ctx.baseCommit),
+          declaredGateChanges,
+        }),
+        // Stamped like every other outcome, and expected to match: a
+        // round whose worker left the branch where it was carries the
+        // same change it already carried, which is exactly what the mark
+        // should say rather than being left off.
+        ...stamp(),
       }),
-      // Stamped like every other outcome, and expected to match: a
-      // round whose worker left the branch where it was carries the
-      // same change it already carried, which is exactly what the mark
-      // should say rather than being left off.
-      ...stamp(),
-    });
+      ctx.reader
+    );
     validateDelivery(delivery);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
     appendEvent(recordHome, {
@@ -317,20 +333,23 @@ export function recordRoundResult(
     // #54 follow-up) - caught and turned into a delivery of its own
     // instead, scoped minimally, no retry machinery.
     newReceipts[newReceipts.length - 1].outcome = "failed";
-    const delivery = withTests({
-      ...buildCommitFailureDelivery({
-        attempts: allReceipts.length,
-        lastGate,
-        evidenceAttempt,
-        branch: line.branch,
-        declaredGateChanges,
-        error: commitError,
+    const delivery = withRead(
+      withTests({
+        ...buildCommitFailureDelivery({
+          attempts: allReceipts.length,
+          lastGate,
+          evidenceAttempt,
+          branch: line.branch,
+          declaredGateChanges,
+          error: commitError,
+        }),
+        // The commit failed, so the branch holds whatever it held before
+        // this round - which is the honest thing to stamp: the delivery's
+        // own `files` is `[]` for the same reason.
+        ...stamp(),
       }),
-      // The commit failed, so the branch holds whatever it held before
-      // this round - which is the honest thing to stamp: the delivery's
-      // own `files` is `[]` for the same reason.
-      ...stamp(),
-    });
+      ctx.reader
+    );
     validateDelivery(delivery);
     writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));
     appendEvent(recordHome, {
@@ -353,31 +372,34 @@ export function recordRoundResult(
   // src/foreman/README.md's "Rule 9: blocked by CI, not by Fabrica's own
   // mark" for the full reasoning. Enforcement lives entirely outside
   // Fabrica, in `.github/workflows/rule9-gate.yml`.
-  const delivery = withTests({
-    ...buildDelivery(outcome, {
-      taskText: ctx.taskText,
-      attempts: allReceipts.length,
-      lastGate,
-      evidenceAttempt,
-      branch: line.branch,
-      files: diffFiles(line.project, line.branch, ctx.baseCommit),
-      declaredGateChanges,
-      inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
-      selfTested: ctx.mode.mode === "self-test",
-      notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
-      writeupInvalid: lastJudgement.kind === "verdict" ? lastJudgement.writeupInvalid : undefined,
-      // Issue #267, read off the judgement exactly the way writeupInvalid
-      // above is: the round is red, and this says whether it was the pull
-      // request's own checks rather than Inspector that said so.
-      ciRed: lastJudgement.kind === "verdict" ? lastJudgement.ciRed : undefined,
-      capStop,
-      taskId,
-      spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, ctx.caps),
+  const delivery = withRead(
+    withTests({
+      ...buildDelivery(outcome, {
+        taskText: ctx.taskText,
+        attempts: allReceipts.length,
+        lastGate,
+        evidenceAttempt,
+        branch: line.branch,
+        files: diffFiles(line.project, line.branch, ctx.baseCommit),
+        declaredGateChanges,
+        inspection: lastJudgement.kind === "verdict" ? lastJudgement.inspection : undefined,
+        selfTested: ctx.mode.mode === "self-test",
+        notVerifiedReason: lastJudgement.kind === "not-verified" ? lastJudgement.reason : undefined,
+        writeupInvalid: lastJudgement.kind === "verdict" ? lastJudgement.writeupInvalid : undefined,
+        // Issue #267, read off the judgement exactly the way writeupInvalid
+        // above is: the round is red, and this says whether it was the pull
+        // request's own checks rather than Inspector that said so.
+        ciRed: lastJudgement.kind === "verdict" ? lastJudgement.ciRed : undefined,
+        capStop,
+        taskId,
+        spendUnknownUnderCap: spendUnknownUnderCap(recordHome, taskId, ctx.caps),
+      }),
+      // Taken after the commit above, which is the last thing this round
+      // does to the branch.
+      ...stamp(),
     }),
-    // Taken after the commit above, which is the last thing this round
-    // does to the branch.
-    ...stamp(),
-  });
+    ctx.reader
+  );
 
   // Never present a malformed delivery as done (rule 4) — prove the
   // Foreman's own output before anyone else has to.

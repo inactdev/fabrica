@@ -43,10 +43,11 @@ import { abortRebase, branchTip, finishRebase, rebaseOntoOriginDefault } from ".
 import type { BranchTips, RebaseConflict } from "../line/index.ts";
 import type { ProductionLine } from "../../contract/surface.ts";
 import type { Receipt } from "../inspector/types.ts";
-import { buildRebaseConflictDelivery, renderDeliveryMarkdown, withTestMapReport } from "./delivery.ts";
+import { buildRebaseConflictDelivery, renderDeliveryMarkdown, withRead, withTestMapReport } from "./delivery.ts";
 import { reportForRound } from "./test-map.ts";
 import type { TestMapEntry } from "../testmap/index.ts";
 import type { DeliveryStamp } from "./fingerprint.ts";
+import type { ReaderOnDelivery } from "../reader/index.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf } from "./caps.ts";
 
@@ -314,23 +315,31 @@ export function deliverRebaseConflict(
      * `files` is built from a base the caller pins: one place decides
      * what this round's branch state IS. */
     stamp: DeliveryStamp;
+    /** The code reader's read of this task's diff, when this round
+     * reached one before its rebase went wrong (inspector issue #34).
+     * Carried onto the delivery like every other outcome's - a read that
+     * happened is reported whatever the round then did. */
+    reader?: ReaderOnDelivery;
   }
 ): void {
   const files = diffFiles(line.project, line.branch, ctx.baseCommit);
-  const delivery = withTestMapReport(
-    {
-      ...buildRebaseConflictDelivery({
-        branch: line.branch,
-        files,
-        declaredGateChanges: ctx.declaredGateChanges,
-        base: ctx.base,
-        conflict: ctx.conflict,
-        reason: ctx.reason,
-        stops: ctx.stops,
-      }),
-      ...ctx.stamp,
-    },
-    reportForRound(ctx.testMap, line.project, files, ctx.workerTestsRun)
+  const delivery = withRead(
+    withTestMapReport(
+      {
+        ...buildRebaseConflictDelivery({
+          branch: line.branch,
+          files,
+          declaredGateChanges: ctx.declaredGateChanges,
+          base: ctx.base,
+          conflict: ctx.conflict,
+          reason: ctx.reason,
+          stops: ctx.stops,
+        }),
+        ...ctx.stamp,
+      },
+      reportForRound(ctx.testMap, line.project, files, ctx.workerTestsRun)
+    ),
+    ctx.reader
   );
   validateDelivery(delivery);
   writeTaskFile(recordHome, taskId, "delivery.md", renderDeliveryMarkdown(delivery, costLabelOf(recordHome, taskId)));

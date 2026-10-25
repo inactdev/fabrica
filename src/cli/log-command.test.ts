@@ -32,8 +32,12 @@ test("runLogCommand: prints the task's full event history, in order", async () =
   assert.deepEqual(io.err, []);
   const names = io.out.map((line) => line.split(/\s+/)[1]);
   // With Inspector, each attempt is judged by Inspector's own run, never a
-  // Fabrica "check-run" (issue #64).
-  assert.deepEqual(names, ["task-received", "ask-cost-recorded", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "delivered"]);
+  // Fabrica "check-run" (issue #64). "reader-failed" is here because this
+  // record home configures no `[reader]` (inspector issue #34): the read
+  // was due the moment Inspector went green, and a read that was due and
+  // could not happen is said out loud rather than skipped - `fabrica do`
+  // is what refuses a real task for this up front.
+  assert.deepEqual(names, ["task-received", "ask-cost-recorded", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "reader-failed", "delivered"]);
 });
 
 test("runLogCommand: --transcript appends the worker's raw transcript", async () => {

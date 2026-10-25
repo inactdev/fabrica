@@ -40,6 +40,39 @@ export function baseCommitOf(workdir: string): string {
   }
 }
 
+/**
+ * The same diff `diffFiles` names, as the patch itself: what the code
+ * reader is handed after Inspector turns a change green (inspector
+ * issue #34, "the whole diff goes to the code reader").
+ *
+ * Read from the project's own git history for exactly the reasons
+ * `diffFiles` is, and pinned to the same fork point, so "the files this
+ * branch touched" and "the diff that was read" can never describe two
+ * different changes.
+ *
+ * `--no-color` and `--no-ext-diff` are explicit rather than assumed: a
+ * Client whose own git config turns colour on, or points `diff.external`
+ * at a pager or a custom differ, would otherwise have escape codes or
+ * some other tool's output sent to a model as if it were a patch.
+ */
+export function diffPatch(project: string, branch: string, base: string): string {
+  try {
+    return execFileSync("git", ["diff", "--no-color", "--no-ext-diff", base, branch], {
+      cwd: project,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      // Same reasoning as diffFiles': the default 1 MiB ceiling scales
+      // with nothing, and a large change must not abort a round.
+      maxBuffer: 100 * 1024 * 1024,
+    });
+  } catch (err) {
+    throw new DeliveryError(
+      "branch-unreadable",
+      `could not read the diff of branch "${branch}" in ${project}: ${describeGitError(err)}`
+    );
+  }
+}
+
 export function diffFiles(project: string, branch: string, base?: string): string[] {
   // `base`, when given, is the fork point recorded at the moment the
   // ProductionLine was cut (baseCommitOf above) — immune to the Client's

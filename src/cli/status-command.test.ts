@@ -14,6 +14,7 @@ import { runStatusCommand } from "./status-command.ts";
 import { CHECKING_QUIET_CEILING_MS, PRE_WORK_QUIET_CEILING_MS } from "./render.ts";
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { fixtureCheckBox } from "../../contract/helpers/fake-check-box.ts";
+import { addReaderToHome } from "../reader/helpers/configured-home.ts";
 
 // A real, separate detached process (see do-command.test.ts): runCheck is
 // synchronous execSync, so a slow check blocks that process's own event
@@ -44,7 +45,12 @@ function taskRows(out: string[]): string[] {
     (line) =>
       !line.startsWith("spent in the last 24 hours:") &&
       !line.startsWith("subscription meters:") &&
-      !line.startsWith("blocked edit attempts on record:")
+      !line.startsWith("blocked edit attempts on record:") &&
+      // Inspector issue #34's own counted line, at the bottom beside
+      // the blocked-edit count. These record homes name no `[reader]`,
+      // so every green round's read fails and is counted - which the
+      // reader-specific tests below assert on directly.
+      !line.startsWith("code reads that failed, on record:")
   );
 }
 
@@ -999,4 +1005,95 @@ test("runStatusCommand: a task a meter paused reads as waiting on the Client, wi
   assert.match(row, /93% of the 7-day window/);
   assert.match(row, new RegExp(`fabrica verdict ${taskId} fix`));
   assert.doesNotMatch(row, /FAILED/, "a pause is never a failure (Client's clarification)");
+});
+
+// Inspector issue #34: the read is a fact about the green the Client is
+// being asked to accept, so it belongs on the delivered row - and a read
+// that could not run belongs there too, worded differently, plus counted
+// at the bottom.
+
+test("runStatusCommand: a delivered task's row says what the code reader found", async () => {
+  const recordHome = tempRecordHome();
+  addReaderToHome(recordHome);
+  const project = makeFixtureRepo("exit 0");
+  await createForeman({
+    recordHome,
+    inspector: fixtureInspector(),
+    readDiff: async () => ({ model: "close-reader/reader-1", findings: [], diffBytes: 120 }),
+  }).do("small change", { project, brain: fakeBrain() });
+  const io = captureIo();
+
+  await runStatusCommand([], { recordHome, ...io });
+
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1);
+  assert.match(rows[0], /code reader found nothing to flag \(close-reader\/reader-1\)/);
+  // A clean read is not a failure, so nothing is counted at the bottom.
+  assert.ok(
+    !io.out.some((line) => line.startsWith("code reads that failed")),
+    `a clean read was counted as a failure:\n${io.out.join("\n")}`
+  );
+});
+
+test("runStatusCommand: a failed read shows on the row and is counted at the bottom", async () => {
+  const recordHome = tempRecordHome();
+  addReaderToHome(recordHome);
+  const project = makeFixtureRepo("exit 0");
+  await createForeman({
+    recordHome,
+    inspector: fixtureInspector(),
+    readDiff: async () => {
+      throw new Error("upstream is down");
+    },
+  }).do("small change", { project, brain: fakeBrain() });
+  const io = captureIo();
+
+  await runStatusCommand([], { recordHome, ...io });
+
+  const rows = taskRows(io.out);
+  assert.equal(rows.length, 1);
+  // Still awaiting a verdict: the reader never blocks a delivery.
+  assert.match(rows[0], /AWAITING YOUR VERDICT/);
+  assert.match(rows[0], /code reader failed .*upstream is down/);
+  assert.ok(
+    io.out.some((line) => line === "code reads that failed, on record: 1 (see `fabrica log <id>` for each)"),
+    `the failure was not counted:\n${io.out.join("\n")}`
+  );
+});
+
+test("runStatusCommand: a flagged read names the count and the worker's declines", async () => {
+  const recordHome = tempRecordHome();
+  addReaderToHome(recordHome);
+  const project = makeFixtureRepo("exit 0");
+  let pass = 0;
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => {
+      pass++;
+      writeFileSync(join(workdir, `pass-${pass}.txt`), "work\n");
+      if (pass === 2) {
+        writeFileSync(
+          join(workdir, ".fabrica-reader-declines.json"),
+          JSON.stringify({ declines: [{ finding: 2, reason: "not a real case" }] })
+        );
+      }
+    },
+  });
+  await createForeman({
+    recordHome,
+    inspector: fixtureInspector(),
+    readDiff: async () => ({
+      model: "close-reader/reader-1",
+      findings: [
+        { file: "a.txt", finding: "one" },
+        { file: "b.txt", finding: "two" },
+      ],
+      diffBytes: 200,
+    }),
+  }).do("small change", { project, brain });
+  const io = captureIo();
+
+  await runStatusCommand([], { recordHome, ...io });
+
+  const rows = taskRows(io.out);
+  assert.match(rows[0], /code reader flagged 2 things, 1 declined by the worker \(close-reader\/reader-1\)/);
 });

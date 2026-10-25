@@ -575,6 +575,61 @@ nothing registered: a project that declares `testPaths` with no
 is nowhere to be found. A project that declares no `testPaths` needs no
 reviewer and is unaffected by any of this.
 
+## Who reads the diff
+
+Once Inspector has turned a change green, its **whole diff** is read by
+a second model whose only job is to flag what you should look at. It is
+not a gate: it cannot stop a change and it cannot approve one. Anything
+it flags goes straight back to the same worker as one more pass, before
+the task is ever delivered to you - so by the time you see a delivery,
+the easy findings have usually already been dealt with, and the ones the
+worker disagreed with come with its written reason beside them.
+
+Every task is read. So unlike the reviewer above, this one is required
+whatever a project's `.inspector.json` says. Name it in
+`~/.fabrica/projects.toml`:
+
+    [reader]
+    vendor = "<the reading vendor>"
+    model  = "<that vendor's model>"
+
+and, in `~/.fabrica/brain.env`, **both** of:
+
+    <VENDOR>_API_KEY=<the key>
+    <VENDOR>_BASE_URL=<that vendor's endpoint, without /chat/completions>
+
+The base URL is required here, where it is optional for a reviewer, for
+one reason: Fabrica makes this call itself rather than handing it to
+Inspector, and it keeps no table of which vendor lives at which address.
+Either value may be set in the environment instead, which wins over the
+file.
+
+One project can have a reader of its own, replacing the global one for
+that project:
+
+    [projects.spending-app.reader]
+    vendor = "<a different one>"
+    model  = "<that vendor's model>"
+
+`[reader]` is **never** taken from `[reviewer]`. They are two different
+jobs - one judges a change's test edits inside Inspector's own run, the
+other reads the whole diff afterwards and only flags - so you name each
+one yourself, and you can give them to different models.
+
+`fabrica do` refuses before anything is registered, and before a cent is
+spent, if a project has no reader, no key for it, or no endpoint to send
+the call to - printing the exact lines to add. (This is the one new
+reason a `fabrica do` that used to work on a record home with no
+`projects.toml` at all now stops: the reader is named in that file.)
+
+A reader that cannot run **never blocks a delivery** - a flagger that
+became a gate by failing would be the worst of both. It is never quiet
+about it either: the failure lands on the task's record, on its
+`fabrica status` row, in its delivery, and in one counted line at the
+bottom of `fabrica status`:
+
+    code reads that failed, on record: 3 (see `fabrica log <id>` for each)
+
 While it runs, you can see where it stands without opening a record file
 yourself:
 

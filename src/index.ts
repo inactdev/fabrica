@@ -25,7 +25,15 @@ export { recordVerdictDecision, runRecordedFix } from "./foreman/index.ts";
 export { recordStopDecision } from "./foreman/index.ts";
 export type { LastWorkerActivity, StoppedByOwnerDetails } from "./foreman/index.ts";
 export { DEFAULT_HEARTBEAT_INTERVAL_MS } from "./foreman/index.ts";
-export { readTranscript, eventsByTask, stateOf, deliveryOf, deliveredBranchOf, earlyStopKindOf } from "./foreman/index.ts";
+export {
+  readTranscript,
+  eventsByTask,
+  stateOf,
+  deliveryOf,
+  deliveredBranchOf,
+  earlyStopKindOf,
+  readerFailureCount,
+} from "./foreman/index.ts";
 // The change fingerprint a pass's delivery carries (`git patch-id` of
 // its own diff against its merge-base with origin's default branch),
 // how it compared with the pass before it, and the one wording every
@@ -207,6 +215,14 @@ export type { IssueReader } from "./foreman/index.ts";
 // that cannot be settled - `fabrica do` refuses up front on all three.
 export { resolveReviewer } from "./reviewer/index.ts";
 export type { ResolvedReviewer, ReviewerResolution } from "./reviewer/index.ts";
+// Who reads a change's whole diff once Inspector turns it green
+// (inspector issue #34), and the grounds on which that cannot be
+// settled - `fabrica do` refuses up front on all of them, since every
+// task is read. `describeRead` is the one wording for a read that
+// `fabrica status`/`log`/`watch`, the live view and the delivery all
+// show, so no two surfaces can describe the same read differently.
+export { describeRead, resolveReader } from "./reader/index.ts";
+export type { ReadFinding, ReaderOnDelivery, ReaderResolution, ResolvedReader } from "./reader/index.ts";
 // `fabrica update`'s Inspector step (src/cli/update-command.ts): the
 // installed Inspector's own build, main's tip, how the two are ordered,
 // and the one classifier doctor's inspector line branches on too, so
@@ -240,6 +256,7 @@ export type {
   ProjectConfig,
   FabricaConfig,
   CheckedProjectConfig,
+  ReaderConfig,
   ReviewerConfig,
 } from "./config/index.ts";
 

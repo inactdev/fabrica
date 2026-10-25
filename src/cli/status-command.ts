@@ -23,6 +23,7 @@ import {
   loadConfigOrProblem,
   meterPauseOf,
   modelFromEvents,
+  readerFailureCount,
   refusalFor,
   SPEND_UNKNOWN_LINE,
   standingOf,
@@ -42,6 +43,7 @@ import {
   isDeadEnd,
   projectFromEvents,
   prUrlFromEvents,
+  readFromEvents,
   testMapNoteFromEvents,
 } from "./render.ts";
 import { cachedProcessTable, probeTaskWorker } from "./task-process.ts";
@@ -155,6 +157,17 @@ record, which needs no config. Without that line the caps would read as
 "no cap set", which is what an unreadable config looks like from here and
 is not the same thing at all. (\`fabrica do\`, \`answer\` and \`verdict\`
 refuse outright on the same file - they spend money; this only reports.)
+
+Every delivered task also says what the code reader made of its diff -
+"code reader flagged 2 things, 1 declined by the worker (<model>)", or
+"code reader found nothing to flag (<model>)". The reader runs once per
+task, on the whole diff, after Inspector turns it green; it never blocks
+and never approves, so this is information for your verdict, not a
+judgement on it. A reader that could not run at all says so instead
+("code reader failed (<model>): ..."), and every such failure across the
+record is also counted at the bottom, "code reads that failed, on
+record: N" - a reader that cannot run is usually one fact about this
+machine, not N facts about N tasks.
 
 A blocked file-edit attempt (issue #13's off-the-books net) is not a
 task and never appears as one here - the record's own
@@ -381,6 +394,11 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
             // the same events this listing already holds; only a
             // delivered line shows it, and it always shows something.
             checkMode: checkModeFromEvents(events),
+            // Inspector issue #34: what the code reader made of this
+            // task's diff, read off the delivery this listing already
+            // holds - the Client is being asked for a verdict on this
+            // line, and this is what was already looked at.
+            read: readFromEvents(events),
             ...(pausedByMeter === undefined ? {} : { pausedByMeter }),
           })
         );
@@ -388,6 +406,19 @@ export async function runStatusCommand(argv: string[], opts: RunStatusCommandOpt
     }
 
     if (blockedEditCount > 0) stdout(`blocked edit attempts on record: ${blockedEditCount}`);
+
+    // Inspector issue #34, the Client's own clarification: a reader
+    // failure is "counted". Counted across the whole record home rather
+    // than per task, and shown next to the blocked-edit count for the
+    // same reason that one is: a reader that cannot run is nearly always
+    // one fact about this machine's configuration or a provider's
+    // outage, not N separate facts about N tasks. Each task's own line
+    // still says so individually; this is the number that makes a
+    // pattern visible.
+    const readerFailures = readerFailureCount(allEvents);
+    if (readerFailures > 0) {
+      stdout(`code reads that failed, on record: ${readerFailures} (see \`fabrica log <id>\` for each)`);
+    }
 
     return 0;
   } catch (err) {

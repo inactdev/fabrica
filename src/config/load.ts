@@ -53,7 +53,14 @@ export function loadConfig(recordHome: string): FabricaConfig {
     throw new ConfigError("malformed", `${path} must contain a TOML table at its root.`);
   }
 
-  const { caps: rawCaps, pause: rawPause, projects: rawProjects, reviewer: rawReviewer, ...rest } = parsed;
+  const {
+    caps: rawCaps,
+    pause: rawPause,
+    projects: rawProjects,
+    reviewer: rawReviewer,
+    reader: rawReader,
+    ...rest
+  } = parsed;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     const staleTables = extra.filter((key) => isTable(rest[key]));
@@ -74,7 +81,7 @@ export function loadConfig(recordHome: string): FabricaConfig {
     throw new ConfigError(
       "malformed",
       `${path}: ${sentences.join(" ")} Projects live under [projects.<name>] ` +
-        `and globals under [caps], [pause] and [reviewer].`
+        `and globals under [caps], [pause], [reviewer] and [reader].`
     );
   }
 
@@ -82,8 +89,15 @@ export function loadConfig(recordHome: string): FabricaConfig {
   const pause = parsePause(rawPause, path);
   const projects = parseProjects(rawProjects, path);
   const reviewer = parseReviewer(rawReviewer, `${path}: [reviewer]`);
+  const reader = parseVendorModel(rawReader, `${path}: [reader]`);
 
-  return { caps, pause, projects, ...(reviewer === undefined ? {} : { reviewer }) };
+  return {
+    caps,
+    pause,
+    projects,
+    ...(reviewer === undefined ? {} : { reviewer }),
+    ...(reader === undefined ? {} : { reader }),
+  };
 }
 
 /**
@@ -269,6 +283,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     maxRequestBytes,
     maxCallsPerTask,
     reviewer,
+    reader,
     knowledge,
     onlyTouchedTests,
     ...rest
@@ -278,8 +293,8 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, reviewer, knowledge and ` +
-        `onlyTouchedTests are recognized.`
+        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, reviewer, reader, knowledge ` +
+        `and onlyTouchedTests are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -328,6 +343,8 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   }
   const ownReviewer = parseReviewer(reviewer, `${path}: [projects.${name}.reviewer]`);
   if (ownReviewer !== undefined) project.reviewer = ownReviewer;
+  const ownReader = parseVendorModel(reader, `${path}: [projects.${name}.reader]`);
+  if (ownReader !== undefined) project.reader = ownReader;
   const ownKnowledge = parseKnowledge(knowledge, path, `${path}: [projects.${name}.knowledge]`);
   if (ownKnowledge !== undefined) project.knowledge = ownKnowledge;
   return project;
@@ -425,6 +442,17 @@ function requireNoteName(value: string, label: string): string {
  * not this function's business (src/reviewer/resolve.ts enforces the
  * standing ruling against the Worker's own vendor); only the shape is. */
 function parseReviewer(value: unknown, label: string): ReviewerConfig | undefined {
+  return parseVendorModel(value, label);
+}
+
+/** The shape `[reviewer]` and `[reader]` both have: a vendor and a
+ * model, both required together. One function rather than two identical
+ * ones, since the two tables differ only in what the settled value is
+ * then used for — `[reviewer]` is handed to Inspector as flags
+ * (src/reviewer/), `[reader]` is dialled by Fabrica itself
+ * (src/reader/) — and never in what a well-formed table looks like.
+ * `label` is what carries the difference into every message. */
+function parseVendorModel(value: unknown, label: string): { vendor: string; model: string } | undefined {
   if (value === undefined) return undefined;
   if (!isTable(value)) {
     throw new ConfigError(
@@ -440,10 +468,13 @@ function parseReviewer(value: unknown, label: string): ReviewerConfig | undefine
       `${label} has unknown field(s): ${extra.join(", ")}. Only vendor and model are recognized.`
     );
   }
-  return { vendor: requireReviewerField(vendor, `${label}.vendor`), model: requireReviewerField(model, `${label}.model`) };
+  return {
+    vendor: requireVendorModelField(vendor, `${label}.vendor`),
+    model: requireVendorModelField(model, `${label}.model`),
+  };
 }
 
-function requireReviewerField(value: unknown, label: string): string {
+function requireVendorModelField(value: unknown, label: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new ConfigError("malformed", `${label} must be a non-empty string.`);
   }

@@ -7,6 +7,7 @@ import type {
   Receipt as ContractReceipt,
 } from "../../contract/surface.ts";
 import type { MeterReading } from "../brain/meters.ts";
+import type { ReaderOnDelivery } from "../reader/types.ts";
 import type { TestMapReport } from "../testmap/types.ts";
 
 /** Inspector's independent verdict after Fabrica's own checks are green.
@@ -203,6 +204,18 @@ export type Delivery = Omit<ContractDelivery, "outcome"> & {
    * pass that could not be stamped, and on a delivery written before
    * fingerprints existed - in all three there is nothing to compare. */
   fingerprintMatch?: FingerprintMatch;
+  /** The code reader's own read of the whole diff, after Inspector
+   * turned this change green (inspector issue #34): what it flagged,
+   * which model read it, and the worker's reason for any finding it
+   * declined. Absent when this task never reached a read - a round
+   * that never went green, a self-tested task with no Inspector at
+   * all, or a round of a task whose one read already happened.
+   *
+   * It is never a verdict. The reader does not block and does not
+   * approve, so nothing here moves `outcome`; a reader that failed
+   * outright says so (`state: "failed"`) and the delivery still
+   * stands. */
+  reader?: ReaderOnDelivery;
 };
 
 export type FabricaTask = Omit<ContractFabricaTask, "state"> & {
@@ -317,7 +330,26 @@ export type FabricaEventName =
    * above it: which credential Fabrica reached GitHub with is its own
    * bookkeeping, not a new promise to the Client about a seam, and
    * `contract/surface.ts` is a path `rule9-gate.yml` protects. */
-  | "token-minted";
+  | "token-minted"
+  /** The code reader read this task's whole diff after Inspector turned
+   * it green and found nothing to flag (inspector issue #34). Details:
+   * `src/foreman/reader-round.ts`'s `ReaderReadDetails`. No fix round
+   * followed; the delivery went ahead. */
+  | "reader-clean"
+  /** The same read, with findings. Details: the same shape, carrying
+   * them and the model that produced them. Exactly one reader fix round
+   * follows, which is why this lands at most once per task. */
+  | "reader-flagged"
+  /** The read itself never produced findings - an unreachable or
+   * refusing model, an answer that could not be read as findings, a
+   * diff too large to send. Details:
+   * `src/foreman/reader-round.ts`'s `ReaderFailedDetails`. **Never
+   * blocks the delivery** (the reader is a flagger, so a reader that
+   * cannot run must not become a gate by failing), and never silent:
+   * it shows on the status row, rides on the delivery, and is counted
+   * on `fabrica status`'s own bottom line. Here rather than in the
+   * contract for the same reason as the names above it. */
+  | "reader-failed";
 
 export interface FabricaEvent extends Omit<ContractFabricaEvent, "name"> {
   name: FabricaEventName;
