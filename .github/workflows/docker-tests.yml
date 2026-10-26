@@ -13,15 +13,17 @@
 # Docker is real, so the Docker-gated tests execute for real instead of
 # skipping.
 #
-# Deliberately the whole `npm test`, not a hand-maintained list of "the
-# Docker test files": that list would be a second source of truth for
-# "what's Docker-dependent" that can silently drift the moment a new
-# Docker-gated test is added elsewhere and nobody remembers to add it
-# here - the opposite of this project's own `find`-based test discovery
-# (see package.json / CLAUDE.md, "discovery is a find, not a shell glob,
-# so a nested test file is never silently skipped"). Running the whole
-# suite costs a little more time but can never silently miss a new
-# Docker test.
+# WHEN it runs that suite is now gated by what the pull request changed
+# (see "The path gate" below). WHAT it runs, when it runs at all, is
+# unchanged and deliberately the whole `npm test`, not a hand-maintained
+# list of "the Docker test files": that list would be a second source of
+# truth for "what's Docker-dependent" that can silently drift the moment
+# a new Docker-gated test is added elsewhere and nobody remembers to add
+# it here - the opposite of this project's own `find`-based test
+# discovery (see package.json / AGENTS.md, "discovery is a find, not a
+# shell glob, so a nested test file is never silently skipped"). Running
+# the whole suite costs a little more time but can never silently miss a
+# new Docker test.
 #
 # The "Confirm Docker is actually available" step below exists because a
 # green `npm test` run proves nothing about Docker if every Docker-gated
@@ -42,21 +44,203 @@
 # The job id below (`docker-tests`) is the string that needs adding to
 # this repository's required-status-check settings by hand, the same way
 # `block-protected-path-change` and `inspector stamp` already are - this
-# workflow cannot do that for you.
+# workflow cannot do that for you. `block-protected-path-change` lives in
+# rule9-gate.yml and is untouched by anything here; it keeps running on
+# every pull request with no path gate of its own, because it has to
+# judge every pull request.
+#
+# THE PATH GATE - why it is a step `if`, and not any of the obvious
+# alternatives:
+#
+# Most pull requests here cannot change what a Docker-dependent test
+# does, and the full suite on a Docker runner is the slowest check on
+# the board. So on a pull request the suite now runs only when the
+# change touches one of the paths DOCKER_PATHS names below; every other
+# pull request still reports a real success, in seconds, after logging
+# which paths would have triggered the full run and which files it
+# actually changed.
+#
+# The gate is NOT GitHub's own `on.pull_request.paths:` filter. A
+# workflow a path filter excludes does not run at all, so this job would
+# never report its status - and a REQUIRED status check that never
+# reports leaves the pull request pending forever rather than passing.
+# For the same family of reasons there is no job-level `if` and no
+# second `needs:`-gated job either: a job an `if` (or an unmet `needs`)
+# skips reports a "skipped" conclusion, and whether GitHub treats
+# "skipped" as satisfying a required status check is a known trap, not a
+# documented guarantee (rule9-gate.yml's own comments say the same about
+# its job). This repository's own CI reader treats `skipped` as "the
+# repository says this check does not apply" (src/ci/README.md), which
+# would quietly absorb a gate bug instead of showing it. So the job
+# always runs on every pull request and decides in its first step; the
+# expensive steps are the ones an `if` skips, and the job itself always
+# reports a genuine pass or fail.
+#
+# The gate can only ever skip the suite on positive evidence that
+# nothing Docker-dependent changed. Every other outcome runs everything:
+# a trigger that isn't a pull request (a push to master, a manual
+# dispatch), a changed-file list GitHub won't give us, and a listing
+# whose length disagrees with the pull request's own changed_files count
+# (the API caps that listing at 3000 files silently, and a push landing
+# mid-run moves the count too). A gate that skipped on a silence would
+# be exactly the hollow pass the `docker info` guard above exists to
+# prevent, arrived at from the other direction.
 name: docker-tests
 
 on:
   pull_request:
   push:
     branches: [master]
+  # Always runs the full suite (the gate below only applies to pull
+  # requests) - so this is also the way to run everything on demand
+  # against a branch whose pull request took the fast path.
+  workflow_dispatch:
 
 jobs:
   docker-tests:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Only for the changed-file listing the gate step reads. Same
+      # endpoint, same minimum scope rule9-gate.yml declares for its own
+      # read of it - never the default token scope.
+      pull-requests: read
     steps:
+      - name: Decide whether this run needs the full suite
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # The pull request's own count of changed files, straight from
+          # the event payload GitHub supplies - not from the branch, and
+          # not subject to the listing cap the step checks it against.
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          # Everything whose behaviour a real Docker daemon decides:
+          # src/containment (the worker box itself), src/relay (the
+          # switchboard's own container and network), src/line (worktree
+          # git mounts, proven from inside a box), src/brain/adapters
+          # (the worker image and the adapter that runs in it), and
+          # Docker's own build inputs anywhere in the repository.
+          #
+          # One pattern per line, read with `read -r` rather than
+          # word-split, exactly as rule9-gate.yml's own pattern lists
+          # are: a pattern containing a space would otherwise split into
+          # two patterns that can never match a real path. `*` matches
+          # any characters, `/` included, in bash's `[[ ]]` pattern
+          # matching - which is why `src/containment/*` covers nested
+          # files, and why each basename pattern needs a `*/`-prefixed
+          # twin to match the same name in a subdirectory without also
+          # matching `my-Dockerfile`.
+          DOCKER_PATHS: |
+            src/containment/*
+            src/relay/*
+            src/line/*
+            src/brain/adapters/*
+            Dockerfile
+            */Dockerfile
+            Dockerfile.*
+            */Dockerfile.*
+            .dockerignore
+            */.dockerignore
+            docker-compose*.yml
+            */docker-compose*.yml
+        run: |
+          # Nothing in this step ever fails the job: the gate decides
+          # how much to run, never whether the pull request is allowed.
+          # Every case it cannot settle resolves to the full suite.
+          run_full() {
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Running the full test suite - $1"
+          }
+
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            run_full "this run was triggered by \"$EVENT_NAME\", not a pull request, and only pull requests are gated by changed paths."
+            exit 0
+          fi
+
+          # The same source, and the same rename handling, as
+          # rule9-gate.yml's own changed-file read: GitHub supplies the
+          # list directly (no checkout needed, which is what makes the
+          # fast path cost seconds), and a pure rename reports as ONE
+          # entry - the new filename plus previous_filename - so a file
+          # renamed OUT of a watched directory still triggers the full
+          # run. per_page=100 is the endpoint's maximum, so the fewest
+          # sequential requests.
+          if ! touched=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" --paginate \
+            --jq '.[] | [.filename, (.previous_filename // empty)] | @tsv'); then
+            run_full "GitHub would not give us this pull request's changed-file list, so there is no way to tell whether it touches a Docker-dependent path. Running everything rather than skipping on a guess."
+            exit 0
+          fi
+
+          if [ -z "$touched" ]; then
+            listed=0
+          else
+            listed=$(printf '%s\n' "$touched" | wc -l | tr -d '[:space:]')
+          fi
+
+          if [ "$listed" != "$CHANGED_FILES" ]; then
+            # Two different causes, same safe answer: that endpoint
+            # silently caps its listing at 3000 files, and CHANGED_FILES
+            # is an event-payload snapshot that a push landing mid-run
+            # makes stale. Either way the list in hand is not this pull
+            # request's whole list, so it cannot be used to rule the
+            # suite out.
+            run_full "this pull request's changed-file list could not be read in full (GitHub listed $listed file(s), the pull request itself reports $CHANGED_FILES - either the API's 3000-file cap, or a push that landed mid-run). Running everything rather than gating on a partial list."
+            exit 0
+          fi
+
+          matched=""
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            while IFS=$'\t' read -r file previous_file; do
+              for candidate in "$file" "$previous_file"; do
+                [ -n "$candidate" ] || continue
+                if [[ "$candidate" == $pattern ]]; then
+                  matched="$candidate"
+                  # Out of all three loops - the `for`, the file loop and
+                  # the pattern loop. Every one of them runs in this same
+                  # shell (here-strings, not pipes), so the assignment
+                  # above survives.
+                  break 3
+                fi
+              done
+            done <<< "$touched"
+          done <<< "$DOCKER_PATHS"
+
+          if [ -n "$matched" ]; then
+            run_full "this pull request changes \"$matched\", whose behaviour a real Docker daemon decides."
+            exit 0
+          fi
+
+          echo "run_full=false" >> "$GITHUB_OUTPUT"
+
+          watched=$(printf '%s\n' "$DOCKER_PATHS" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 } END { print "" }')
+          echo "::notice::Skipping the full test suite: this pull request changes nothing a real Docker daemon decides. Paths that would have triggered the full run: $watched"
+
+          echo "Paths that would have triggered the full run:"
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            echo "  - $pattern"
+          done <<< "$DOCKER_PATHS"
+
+          echo "This pull request's changed files:"
+          if [ "$listed" -eq 0 ]; then
+            echo "  (none)"
+          else
+            while IFS=$'\t' read -r file previous_file; do
+              [ -n "$file" ] || continue
+              if [ -n "$previous_file" ]; then
+                echo "  - $file (renamed from $previous_file)"
+              else
+                echo "  - $file"
+              fi
+            done <<< "$touched"
+          fi
+
       - uses: actions/checkout@v7
+        if: steps.gate.outputs.run_full == 'true'
 
       # The version comes from the repository's own `.node-version`
       # file rather than a number typed here: this job used to pin
@@ -71,10 +255,12 @@ jobs:
       # same file is what nvm/fnm/asdf read in a contributor's shell,
       # so there is one declaration for the runner and the developer.
       - uses: actions/setup-node@v7
+        if: steps.gate.outputs.run_full == 'true'
         with:
           node-version-file: .node-version
 
       - name: Confirm Docker is actually available
+        if: steps.gate.outputs.run_full == 'true'
         run: |
           if ! docker info > /dev/null 2>&1; then
             echo "::error::Docker is not available on this runner. This job exists specifically to run Fabrica's Docker-dependent tests for real instead of letting them skip - a runner without Docker makes it a hollow pass, so failing loudly instead of reporting one."
@@ -82,5 +268,7 @@ jobs:
           fi
 
       - run: npm ci
+        if: steps.gate.outputs.run_full == 'true'
 
       - run: npm test
+        if: steps.gate.outputs.run_full == 'true'
