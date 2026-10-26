@@ -65,6 +65,11 @@ test("answerTask resumes an asking task, extends the brief, and delivers", async
       "inspector-called",
       "inspection-finished",
       "receipt-recorded",
+      // This record home configures no `[reader]` (inspector issue #34),
+      // so the read that fell due on Inspector's green could not happen
+      // - said out loud rather than skipped. `fabrica do` is what
+      // refuses a real task for this, before it ever starts.
+      "reader-failed",
       "delivered",
     ]
   );
@@ -219,6 +224,8 @@ test("answerTask allows a retry when the previous resume attempt threw before ev
     "inspector-called",
     "inspection-finished",
     "receipt-recorded",
+    // No `[reader]` in this record home - see the first test above.
+    "reader-failed",
     "delivered",
   ]);
 

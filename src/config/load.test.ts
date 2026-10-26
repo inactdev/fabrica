@@ -806,7 +806,101 @@ test("loadConfig: knowledge is a known project field, not an unknown one", () =>
     () => loadConfig(makeTestHome(`[projects.app]\npath = "~/app"\nnope = 1\n`)),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
-      assert.match(err.message, /reviewer, knowledge and onlyTouchedTests are recognized/);
+      assert.match(err.message, /reviewer, reader, knowledge and onlyTouchedTests are recognized/);
+      return true;
+    }
+  );
+});
+
+// Inspector issue #34: `[reader]` is a second, separate vendor/model
+// table - who reads a change's whole diff after Inspector turns it
+// green. Loaded exactly like `[reviewer]` (same shape, same
+// project-wins-outright rule) and deliberately never derived from it.
+
+test("loadConfig: a global [reader] table loads", () => {
+  const recordHome = makeTestHome(`
+    [reader]
+    vendor = "reading-vendor"
+    model = "reading-model"
+
+    [projects.spending-app]
+    path = "~/code/spending-app"
+  `);
+
+  const config = loadConfig(recordHome);
+  assert.deepEqual(config.reader, { vendor: "reading-vendor", model: "reading-model" });
+  assert.equal(config.projects["spending-app"].reader, undefined, "a project inherits rather than copies");
+});
+
+test("loadConfig: no [reader] table at all is not an error here", () => {
+  // The refusal is src/reader/resolve.ts's and `fabrica do`'s, not the
+  // loader's: an unconfigured record home still has to load for
+  // `fabrica status` and `fabrica log` to work at all.
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/code/spending-app"
+  `);
+
+  assert.equal(loadConfig(recordHome).reader, undefined);
+});
+
+test("loadConfig: a project may carry its own reader alongside the global one", () => {
+  const recordHome = makeTestHome(`
+    [reader]
+    vendor = "global-reader"
+    model = "global-reader-model"
+
+    [projects.spending-app]
+    path = "~/code/spending-app"
+
+    [projects.spending-app.reader]
+    vendor = "project-reader"
+    model = "project-reader-model"
+  `);
+
+  const config = loadConfig(recordHome);
+  assert.deepEqual(config.reader, { vendor: "global-reader", model: "global-reader-model" });
+  assert.deepEqual(config.projects["spending-app"].reader, {
+    vendor: "project-reader",
+    model: "project-reader-model",
+  });
+});
+
+test("loadConfig: [reader] and [reviewer] are independent - neither is read from the other", () => {
+  const recordHome = makeTestHome(`
+    [reviewer]
+    vendor = "reviewing-vendor"
+    model = "reviewing-model"
+
+    [projects.spending-app]
+    path = "~/code/spending-app"
+  `);
+
+  const config = loadConfig(recordHome);
+  assert.deepEqual(config.reviewer, { vendor: "reviewing-vendor", model: "reviewing-model" });
+  assert.equal(config.reader, undefined, "the reviewer was borrowed as a reader");
+});
+
+test("loadConfig: half a reader is refused rather than quietly ignored", () => {
+  for (const half of [`vendor = "only-a-vendor"`, `model = "only-a-model"`]) {
+    assert.throws(
+      () => loadConfig(makeTestHome(`[reader]\n${half}\n`)),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.match(err.message, /\[reader\]\.(vendor|model) must be a non-empty string/);
+        return true;
+      },
+      `half a reader loaded: ${half}`
+    );
+  }
+});
+
+test("loadConfig: an unknown field in [reader] is refused", () => {
+  assert.throws(
+    () => loadConfig(makeTestHome(`[reader]\nvendor = "v"\nmodel = "m"\nmake = "x"\n`)),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /\[reader\] has unknown field\(s\): make/);
       return true;
     }
   );

@@ -7,16 +7,19 @@
 // attempts behaves the way it does, why the promise doesn't resolve
 // early).
 
-import { appendEvent, appendTaskFile, readTaskFile } from "../record/index.ts";
+import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile } from "../record/index.ts";
 import { createProductionLine, destroyProductionLine, reopenProductionLine } from "../line/index.ts";
 import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
 import { prepareRound } from "./judge.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
+import type { DiffReader } from "./reader-round.ts";
 import { runAttempts } from "./attempts.ts";
 import { deliveredState } from "./delivery.ts";
 import { recordRoundResult } from "./round.ts";
+import { readAndFlag } from "./reader-round.ts";
+import { alreadyReadFor } from "./queries.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
@@ -32,7 +35,9 @@ import { recordReceipt, spendLimitsFor } from "./caps.ts";
 import { pauseRuleFor } from "./meters.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { IssueReader } from "./task-issue.ts";
-import type { FabricaTask } from "../inspector/types.ts";
+import type { TransportRetryDetails } from "./transport-retry.ts";
+import type { TranscriptEntry } from "../brain/index.ts";
+import type { FabricaTask, Receipt } from "../inspector/types.ts";
 import type { Inspector } from "../inspector/index.ts";
 import type { CheckBox } from "../brain/index.ts";
 
@@ -65,6 +70,9 @@ export async function doTask(
     /** Issue #187's seam: where this round's GitHub App tokens are
      * minted from. Omitted uses the real App on this machine. */
     minter?: TokenMinter;
+    /** Inspector issue #34's seam (reader-round.ts's `DiffReader`) -
+     * omitted makes the real call to the project's configured reader. */
+    readDiff?: DiffReader;
     caps?: Caps;
     onTaskRegistered?: (taskId: string) => void;
   }
@@ -99,6 +107,7 @@ export async function doTask(
     checkBox: opts.checkBox,
     checksReader: opts.checksReader,
     minter: opts.minter,
+    readDiff: opts.readDiff,
     caps: opts.caps,
   });
 }
@@ -131,6 +140,9 @@ export async function runProductionRound(
     /** Issue #187's seam: where this round's GitHub App tokens are
      * minted from. Omitted uses the real App on this machine. */
     minter?: TokenMinter;
+    /** Inspector issue #34's seam (reader-round.ts's `DiffReader`) -
+     * omitted makes the real call to the project's configured reader. */
+    readDiff?: DiffReader;
     caps?: Caps;
   }
 ): Promise<FabricaTask> {
@@ -166,10 +178,13 @@ async function productionRound(
     /** Issue #187's seam: where this round's GitHub App tokens are
      * minted from. Omitted uses the real App on this machine. */
     minter?: TokenMinter;
+    /** Inspector issue #34's seam (reader-round.ts's `DiffReader`) -
+     * omitted makes the real call to the project's configured reader. */
+    readDiff?: DiffReader;
     caps?: Caps;
   }
 ): Promise<FabricaTask> {
-  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, checkBox, checksReader, minter, caps } = ctx;
+  const { project, brain, totalAttempts, explicitAttempts, isRetry, inspector, checkBox, checksReader, minter, readDiff, caps } = ctx;
   // The delivery's summary/evidence want the Client's original one-line
   // ask, not the full brief a resumed round's worker receives - `brief`
   // for an answer.ts retry is request.md plus the whole "## Clarification"
@@ -277,7 +292,7 @@ async function productionRound(
 
     // Who judges each attempt: Inspector, or the worker's own box (issue
     // #64) - never a check run on the host.
-    const { judge, mode } = prepareRound(recordHome, taskId, line, baseCommit, {
+    const { judge, mode, reader } = prepareRound(recordHome, taskId, line, baseCommit, {
       inspector,
       checkBox,
       closesIssue,
@@ -298,61 +313,122 @@ async function productionRound(
       details: { project: line.project, ...modelChoice },
     });
 
+    // Issue #142: the project's own settings decide whether this brief
+    // also carries the only-touched-tests ruling. Built here, not at
+    // each caller, so a resumed round (answer.ts) and a first attempt
+    // resolve it identically.
+    // The task's own words, the issue it names, then the project's
+    // knowledge notes - all inside what `workerBrief` puts the standing
+    // prefix in front of. Kept as its own value because the reader's fix
+    // pass (inspector issue #34) appends its correction to exactly these
+    // words, the same way verdict.ts's fix round appends the Client's.
+    const roundWords = withKnowledge(withIssueText(brief, issueText), knowledgeNotes);
+
+    // Everything every pass of this round shares. One object rather than
+    // two call sites, so an ordinary attempt and the reader's fix pass
+    // can never drift apart on the brain, the workdir, the pause rule or
+    // any of the callbacks.
+    const passBasics = {
+      brain,
+      workdir: line.workdir,
+      taskId,
+      modelChoice,
+      // Issue #189: the thresholds that stop an attempt already
+      // running. Read from projects.toml here rather than threaded in
+      // like `caps`, since the pause rule has no "unset" - a record
+      // home with no projects.toml still has one, at its defaults.
+      pauseRule: { rule: pauseRuleFor(recordHome) },
+      onReceipt: (receipt: Receipt) => recordReceipt(recordHome, receipt),
+      onHeartbeat: (attempt: number) => {
+        appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
+      },
+      // Issue #199: a dropped model call is retried once, on the same
+      // model, and the record says so - never a silent reconnect, and
+      // never a silent downgrade to a different model.
+      onTransportRetry: (details: TransportRetryDetails) => {
+        appendEvent(recordHome, { taskId, name: "transport-retry", details });
+      },
+      // Issue #70: fires as each entry is known, not once per attempt -
+      // see runAttempts' own onTranscriptEntry doc for why every entry
+      // lands here exactly once either way.
+      onTranscriptEntry: (entry: TranscriptEntry) => {
+        appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
+      },
+    };
+
+    // Once per task (inspector issue #34), decided from the record and
+    // not from this round: a task whose first round went red is read in
+    // the fix round that finally turns it green, and a task already read
+    // is never read again.
+    const alreadyRead = alreadyReadFor(readEventsForTask(recordHome, taskId));
+
     // Issue #186: every call this round makes runs under the project's
     // own network policy - the hosts it declared in projects.toml, the
     // relay's limits, and this task's record for a refusal to land on.
     // Wrapped around the whole loop rather than each attempt: one
     // policy holds for the task, and every attempt's relay is started
-    // from inside this call (src/brain/task-network.ts).
-    const attemptsResult = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), () =>
-      runAttempts({
-        brain,
-        // Issue #142: the project's own settings decide whether this
-        // brief also carries the only-touched-tests ruling. Built here,
-        // not at each caller, so a resumed round (answer.ts) and a
-        // first attempt resolve it identically.
-        // The task's own words, the issue it names, then the project's
-        // knowledge notes - all inside what `workerBrief` puts the
-        // standing prefix in front of.
+    // from inside this call (src/brain/task-network.ts). The reader's
+    // own fix pass is inside it too - it is one more worker call of this
+    // same round, under the same policy.
+    const round = await withTaskNetwork(networkPolicyFor(recordHome, taskId, line.project), async () => {
+      const attemptsResult = await runAttempts({
+        ...passBasics,
         // No `touched` here, deliberately: a first round has changed
         // nothing yet, and a round resumed from questions cannot have
         // either (answer.ts refuses a second answer once a round
         // completed), so there is no diff to resolve the map against.
         // Its worker gets the lookup rule; a fix round, whose branch
         // does carry a diff, gets the concrete tests (verdict.ts).
-        brief: workerBrief(recordHome, line.project, withKnowledge(withIssueText(brief, issueText), knowledgeNotes), {
-          testMap,
-        }),
-        workdir: line.workdir,
-        taskId,
+        brief: workerBrief(recordHome, line.project, roundWords, { testMap }),
         judge,
         totalAttempts,
         stopEarlyOnGreen: !explicitAttempts,
         spendLimits: spendLimitsFor(recordHome, taskId, caps),
-        modelChoice,
-        // Issue #189: the thresholds that stop an attempt already
-        // running. Read from projects.toml here rather than threaded in
-        // like `caps`, since the pause rule has no "unset" - a record
-        // home with no projects.toml still has one, at its defaults.
-        pauseRule: { rule: pauseRuleFor(recordHome) },
-        onReceipt: (receipt) => recordReceipt(recordHome, receipt),
-        onHeartbeat: (attempt) => {
-          appendEvent(recordHome, { taskId, name: "heartbeat", details: { attempt } });
+      });
+
+      // After Inspector's green, the whole diff goes to the code reader;
+      // anything it flags comes back to this same warm worker as a fix
+      // pass before anything is delivered. Returns the round's own
+      // result untouched whenever no read applies, which is every round
+      // of a self-tested task and every round after the first green one.
+      return readAndFlag(
+        recordHome,
+        taskId,
+        {
+          line,
+          baseCommit,
+          mode,
+          reader,
+          alreadyRead,
+          judge,
+          ...(readDiff ? { read: readDiff } : {}),
+          startAttempt: attemptsResult.receipts.length + 1,
+          fixPass: ({ correction, judge: passJudge, startAttempt, beforeCommit }) =>
+            runAttempts({
+              ...passBasics,
+              brief: workerBrief(recordHome, line.project, `${roundWords}\n\n---\n\n${correction}`),
+              judge: passJudge,
+              totalAttempts: 1,
+              stopEarlyOnGreen: true,
+              // Re-read for this pass: the round's own attempts are on
+              // the record by now, so rule 10's per-task cap counts
+              // every worker call this round made.
+              spendLimits: spendLimitsFor(recordHome, taskId, caps),
+              startAttempt,
+              beforeCommit,
+              commitLabel: "(reader)",
+              // The same warm worker, as the ruling asks ("its findings
+              // go back to the same machine"): it already knows this
+              // change, so it reads the findings against what it did
+              // rather than rediscovering the branch.
+              ...(attemptsResult.receipts.at(-1)?.session
+                ? { initialSession: attemptsResult.receipts.at(-1)!.session! }
+                : {}),
+            }),
         },
-        // Issue #199: a dropped model call is retried once, on the same
-        // model, and the record says so - never a silent reconnect, and
-        // never a silent downgrade to a different model.
-        onTransportRetry: (details) => {
-          appendEvent(recordHome, { taskId, name: "transport-retry", details });
-        },
-        // Issue #70: fires as each entry is known, not once per attempt -
-        // see runAttempts' own onTranscriptEntry doc for why every entry
-        // lands here exactly once either way.
-        onTranscriptEntry: (entry) => {
-          appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);
-        },
-      })
-    );
+        attemptsResult
+      );
+    });
 
     // judge-commit-outcome-deliver-record: one shared tail (issue #182),
     // round.ts's recordRoundResult, also used by verdict.ts's fix round.
@@ -360,8 +436,18 @@ async function productionRound(
       recordHome,
       taskId,
       line,
-      { baseCommit, taskText, totalAttempts, mode, caps, testMap },
-      attemptsResult
+      {
+        baseCommit,
+        taskText,
+        totalAttempts,
+        mode,
+        caps,
+        testMap,
+        roundReceipts: round.earlierReceipts,
+        roundGateDeclarations: round.earlierGateDeclarations,
+        ...(round.reader === undefined ? {} : { reader: round.reader }),
+      },
+      round.attempts
     );
 
     if (result.kind === "refused") return { id: taskId, state: "refused" };

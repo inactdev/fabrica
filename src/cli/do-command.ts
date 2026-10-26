@@ -11,7 +11,7 @@
 // process has already exited, which is the whole point of detachment
 // (see the module README's "Why detached execution" section).
 
-import { ConfigError, notSetUpMessage, originSetup, resolveReviewer } from "../index.ts";
+import { ConfigError, notSetUpMessage, originSetup, resolveReader, resolveReviewer } from "../index.ts";
 import type { FabricaConfig } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
@@ -85,6 +85,11 @@ Environment:
  * the reason the first case is: a task nothing can properly judge
  * should never reach a worker or spend a cent.
  *
+ * Third: an inspected project with no usable code reader (inspector
+ * issue #34). Every task's diff is read once Inspector turns it green,
+ * so unlike the reviewer this one needs no `testPaths` to become
+ * required - it always is.
+ *
  * "Base commit" means origin's default branch, which is where a task's
  * branch is actually cut from (src/line/cut.ts) - never the Client's
  * local checkout. `originSetup` answering `null` means it could not
@@ -105,17 +110,35 @@ function refusalForUnsetUpProject(
   if (setup === null) return null;
   if (!setup.inspectorConfigured) return `fabrica do: ${notSetUpMessage(projectPath)}`;
 
+  // The Client's own word for this project when he gave one, so every
+  // message below names what he typed rather than a path he did not.
+  const projectLabel = Object.hasOwn(config.projects, projectArg) ? projectArg : projectPath;
+
   const reviewer = resolveReviewer({
     recordHome,
     config,
     projectPath,
-    // The Client's own word for this project when he gave one, so the
-    // message names what he typed rather than a path he did not.
-    projectLabel: Object.hasOwn(config.projects, projectArg) ? projectArg : projectPath,
+    projectLabel,
     declaresTestPaths: setup.declaresTestPaths,
     env: process.env,
   });
-  return reviewer.kind === "refused" ? `fabrica do: ${reviewer.message}` : null;
+  if (reviewer.kind === "refused") return `fabrica do: ${reviewer.message}`;
+
+  // Third: no code reader (inspector issue #34). This project's work
+  // will be read, in full, the moment Inspector turns it green - every
+  // task's is - so a project with no `[reader]`, no key for it, or no
+  // endpoint to send the call to is refused here, with the exact lines
+  // to add. This is the Client's own ruling about where that refusal
+  // belongs: at task start, where it costs nothing and where the
+  // message can be acted on, rather than three attempts later when the
+  // read falls due.
+  //
+  // Reached only past the `inspectorConfigured` check above, so a
+  // self-tested project - which never reaches a read at all - is never
+  // asked for a reader it would not use. That is the same scoping the
+  // reviewer check gets, for the same reason.
+  const reader = resolveReader({ recordHome, config, projectPath, projectLabel, env: process.env });
+  return reader.kind === "refused" ? `fabrica do: ${reader.message}` : null;
 }
 
 export interface RunDoCommandOptions {

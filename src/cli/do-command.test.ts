@@ -17,11 +17,24 @@ import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { createForeman } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
+import { addReaderToHome, READER_TOML } from "../reader/helpers/configured-home.ts";
 import { runDoCommand } from "./do-command.ts";
 
 const FAKE_ENTRY = fileURLToPath(new URL("./helpers/fake-run-task-entry.ts", import.meta.url));
 
+/** A record home with a code reader configured in it, since `fabrica
+ * do` refuses an inspected project without one (inspector issue #34) -
+ * so every test below whose subject is something else gets past that
+ * gate. The gate's own tests build their homes by hand. */
 function tempRecordHome(): string {
+  const recordHome = mkdtempSync(join(tmpdir(), "fabrica-cli-do-command-"));
+  addReaderToHome(recordHome);
+  return recordHome;
+}
+
+/** A record home with no reader configured at all - what a machine
+ * looks like before the Client has named one. */
+function unconfiguredRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-do-command-"));
 }
 
@@ -283,7 +296,7 @@ test("runDoCommand: a registered project name resolves through projects.toml", a
   const project = makeFixtureRepo("exit 0");
   writeFileSync(
     join(recordHome, "projects.toml"),
-    `[projects.demo]\npath = "${project}"\ncheck = "./check.sh"\n`
+    `${READER_TOML}\n[projects.demo]\npath = "${project}"\ncheck = "./check.sh"\n`
   );
   const io = captureIo();
 
@@ -298,8 +311,42 @@ test("runDoCommand: a registered project name resolves through projects.toml", a
   assert.match(io.out[0], /^\d{8}-/);
 });
 
-test("runDoCommand: no projects.toml at all still works against a literal path (first run)", async () => {
-  const recordHome = tempRecordHome(); // freshly made, nothing written into it
+// This used to read "no projects.toml at all still works against a
+// literal path (first run)", and it genuinely did. Inspector issue #34
+// changed that, deliberately and visibly: every task's diff is read
+// after Inspector's green, the reader is named in projects.toml, and the
+// Client's ruling is to refuse at task start with the exact lines to
+// add. So a record home with no projects.toml can no longer start an
+// inspected task - a literal `--project` path included - and the
+// refusal is the whole point rather than a side effect.
+//
+// The first run against a literal path still needs no *project entry*,
+// which is what that property was really protecting: the test below
+// ("a literal project path registers a task") has none and passes. What
+// it now needs is a `[reader]`.
+test("runDoCommand: a record home with no reader configured refuses, with the lines to add", async () => {
+  const recordHome = unconfiguredRecordHome(); // freshly made, nothing written into it
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+
+  const code = await runDoCommand(["add a comment", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, [], "a refused task must not print an id");
+  assert.match(io.err.join("\n"), /no code reader is configured/);
+  assert.match(io.err.join("\n"), /\[reader\]/);
+  // Nothing was registered: the refusal costs nothing, which is the
+  // reason it lives here rather than inside the round.
+  assert.equal(existsSync(join(recordHome, "tasks")), false);
+});
+
+test("runDoCommand: a reader named in projects.toml is enough - no project entry needed", async () => {
+  const recordHome = tempRecordHome(); // the [reader] table and its credentials only
   const project = makeFixtureRepo("exit 0");
   const io = captureIo();
 
@@ -329,7 +376,7 @@ test("runDoCommand: bad usage refuses with exact instructions and exit 1, nothin
 test("runDoCommand: a registered project with no check command refuses before spawning", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
-  writeFileSync(join(recordHome, "projects.toml"), `[projects.demo]\npath = "${project}"\n`);
+  writeFileSync(join(recordHome, "projects.toml"), `${READER_TOML}\n[projects.demo]\npath = "${project}"\n`);
   const io = captureIo();
 
   const code = await runDoCommand(["add a comment", "--project", "demo"], {
@@ -378,7 +425,7 @@ test("runDoCommand: a malformed projects.toml is a real refusal, not silently ig
 // task to look at.
 test("runDoCommand: an unknown cost under a cap exits non-zero, naming the unmeasured task", async () => {
   const recordHome = tempRecordHome();
-  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 100\n");
+  writeFileSync(join(recordHome, "projects.toml"), `${READER_TOML}\n[caps]\nperDayUsd = 100\n`);
   const project = makeFixtureRepo("exit 0");
   const unmeasured = await createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fixtureInspector() }).do("unmeasured", {
     project,
@@ -404,7 +451,7 @@ test("runDoCommand: an unknown cost under a cap exits non-zero, naming the unmea
 
 test("runDoCommand: a daily-cap refusal exits non-zero with the numbers", async () => {
   const recordHome = tempRecordHome();
-  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 0\n");
+  writeFileSync(join(recordHome, "projects.toml"), `${READER_TOML}\n[caps]\nperDayUsd = 0\n`);
   const project = makeFixtureRepo("exit 0");
   const io = captureIo();
 

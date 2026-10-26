@@ -15,6 +15,7 @@ import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { main } from "./main.ts";
 import { runCostCommand } from "./cost-command.ts";
+import { withReaderConfigured } from "../reader/helpers/configured-home.ts";
 import { runDoCommand } from "./do-command.ts";
 import { runStatusCommand } from "./status-command.ts";
 
@@ -29,7 +30,9 @@ function captureIo() {
 
 async function blockedHome(): Promise<{ recordHome: string; project: string; unmeasuredId: string }> {
   const recordHome = mkdtempSync(join(tmpdir(), "fabrica-cli-cost-"));
-  writeFileSync(join(recordHome, "projects.toml"), "[caps]\nperDayUsd = 100\n");
+  // A [reader] too: `fabrica do` refuses an inspected project without
+  // one (inspector issue #34), and this test runs a real `fabrica do`.
+  withReaderConfigured(recordHome, "[caps]\nperDayUsd = 100\n");
   const project = makeFixtureRepo("exit 0");
   const task = await createForeman({ recordHome, caps: { perDayUsd: 100 }, inspector: fixtureInspector() }).do("unmeasured", {
     project,

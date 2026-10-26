@@ -71,8 +71,11 @@ test("events() returns this task's events only, in order", async () => {
   assert.deepEqual(
     eventsA.map((e) => e.name),
     // With Inspector, each attempt is judged by Inspector's own run, never a
-    // Fabrica "check-run" (issue #64).
-    ["task-received", "ask-cost-recorded", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "delivered"]
+    // Fabrica "check-run" (issue #64). "reader-failed" is there because
+    // this record home configures no `[reader]` (inspector issue #34), so
+    // the read that fell due on Inspector's green could not happen - said
+    // out loud rather than skipped.
+    ["task-received", "ask-cost-recorded", "line-cut", "work-started", "inspector-called", "inspection-finished", "receipt-recorded", "reader-failed", "delivered"]
   );
 
   const eventsB = await foreman.events(taskB.id);

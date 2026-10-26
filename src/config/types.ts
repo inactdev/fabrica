@@ -20,6 +20,23 @@ export interface ReviewerConfig {
   model: string;
 }
 
+/** Who reads a change's whole diff after Inspector has called it green
+ * (inspector issue #34): the model Fabrica itself calls, directly, to
+ * flag what a reviewer should look at. The same two fields `[reviewer]`
+ * carries and for the same reason — this is a direct model call, not a
+ * machine with a workstation, so there is no make to name.
+ *
+ * Deliberately a separate table from `[reviewer]`, and never a fallback
+ * to it: the two jobs are different (one judges a change's test edits
+ * inside Inspector's own run, one reads the whole diff afterwards and
+ * only flags), so the Client picks each one himself. A project with no
+ * reader configured is refused at task start, naming the lines to add —
+ * see src/reader/resolve.ts. */
+export interface ReaderConfig {
+  vendor: string;
+  model: string;
+}
+
 /** One entry in projects.toml. `check` is optional at load time — a
  * project may be registered before its check command is decided — but
  * required before any task on it is allowed to proceed (rule 2). */
@@ -57,6 +74,10 @@ export interface ProjectConfig {
    * overriding the global `[reviewer]` table outright (not field by
    * field: a project that names one names both fields). */
   reviewer?: ReviewerConfig;
+  /** `[projects.<name>.reader]` — this project's own code reader,
+   * overriding the global `[reader]` table outright (not field by
+   * field, exactly like `reviewer` above). */
+  reader?: ReaderConfig;
   /** `[projects.<name>.knowledge]` — the knowledge-base notes every
    * brief on this project carries, in full. Absent means none. */
   knowledge?: KnowledgeConfig;
@@ -129,4 +150,10 @@ export interface FabricaConfig {
    * only becomes a refusal for a project whose `.inspector.json`
    * declares `testPaths` (src/reviewer/resolve.ts). */
   reviewer?: ReviewerConfig;
+  /** `[reader]` — the code reader every project uses unless its own
+   * entry overrides it. Unlike `[reviewer]`, absence is a refusal for
+   * any project Inspector actually runs on: the reader is wired into
+   * every task, so there is no shape of project it is optional for
+   * (src/reader/resolve.ts). */
+  reader?: ReaderConfig;
 }

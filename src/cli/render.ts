@@ -9,6 +9,7 @@ import {
   describeDeclaration,
   describeFingerprint,
   describeModel,
+  describeRead,
   describeTestMapNote,
   formatAge,
   formatUsd,
@@ -19,6 +20,7 @@ import type {
   FabricaTask,
   FingerprintMatch,
   ModelSource,
+  ReaderOnDelivery,
   TestMapReport,
   TranscriptEntry,
 } from "../index.ts";
@@ -137,6 +139,30 @@ export function checksSummaryFromEvents(events: FabricaEvent[]): string | null {
     const details = events[i].details as { summary?: string } | undefined;
     const summary = typeof details?.summary === "string" ? details.summary.trim() : "";
     return summary.length > 0 ? summary : null;
+  }
+  return null;
+}
+
+/** The code reader's read of this task's diff (inspector issue #34), as
+ * the one phrase `describeRead` builds for it - "code reader flagged 2
+ * things, 1 declined by the worker (<model>)", "code reader found
+ * nothing to flag (<model>)", "code reader failed (<model>): ...". Null
+ * until a delivery carries one, which is every task that never reached
+ * a read.
+ *
+ * Read off the delivery on the `"delivered"` event rather than off the
+ * three `reader-*` events, deliberately: the delivery's copy is the one
+ * with the worker's own declines folded in beside the findings they
+ * answer, and it is the same object the live view and `delivery.md`
+ * show. Latest-wins, for the same reason `checksSummaryFromEvents` is:
+ * a later round delivers again, and the newest delivery is the only one
+ * still being ruled on. */
+export function readFromEvents(events: FabricaEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].name !== "delivered") continue;
+    const details = events[i].details as { delivery?: { reader?: ReaderOnDelivery } } | undefined;
+    const read = details?.delivery?.reader;
+    return read === undefined ? null : describeRead(read);
   }
   return null;
 }
@@ -443,6 +469,19 @@ export function formatStatusLine(
      * fact about a change being handed over, and that is the one state
      * where there is one. Omitted (or null) says nothing. */
     fingerprint?: string | null;
+    /** Inspector issue #34: `describeRead`'s own phrase for the code
+     * reader's read of this task's diff - shown verbatim, never
+     * re-worded here, so the delivery, this line and the live view say
+     * the same thing about the same read. On a delivered task's own
+     * line and nowhere else, for the same reason `checkMode` is: that
+     * is the line where the Client is being asked for a verdict, and
+     * "a reader flagged three things" is exactly what he wants in hand
+     * before giving one. Omitted (or null) when this task reached no
+     * read - a self-tested task, or one whose round never went green.
+     * A read that *failed* is never omitted: it has a phrase of its
+     * own, because a reader that could not run must not look the same
+     * as a reader that found nothing. */
+    read?: string | null;
   }
 ): string {
   const project = opts.project ?? "unknown project";
@@ -458,6 +497,10 @@ export function formatStatusLine(
     // Client is being pointed at. Never conditional: every delivered
     // line says how it was checked, "check mode unknown" included.
     const mode = `  ${describeCheckMode(opts.checkMode ?? "unknown")}`;
+    // Beside the check mode, for the same reason it is there: both say
+    // what has already been done to this green before the Client is
+    // asked to accept it.
+    const read = opts.read ? `  ${opts.read}` : "";
     const pr = opts.prUrl ? `  pull request: ${opts.prUrl}` : "";
     // Before the pull request link rather than after it: a long URL at
     // the end of the line is where the eye stops, and this is a fact
@@ -470,11 +513,11 @@ export function formatStatusLine(
     const stamp = opts.fingerprint ? `  ${opts.fingerprint}` : "";
     if (opts.pausedByMeter !== undefined) {
       return (
-        `${base}${mode}  <- PAUSED BY THE SUBSCRIPTION METER: ${opts.pausedByMeter} - nothing restarts by itself: ` +
+        `${base}${mode}${read}  <- PAUSED BY THE SUBSCRIPTION METER: ${opts.pausedByMeter} - nothing restarts by itself: ` +
         `\`fabrica verdict ${task.id} fix\` continues it${standing}${stamp}${pr}`
       );
     }
-    return `${base}${mode}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${standing}${stamp}${pr}`;
+    return `${base}${mode}${read}  <- AWAITING YOUR VERDICT: fabrica verdict ${task.id} accept|fix|wrong${standing}${stamp}${pr}`;
   }
   if (isDeadEnd(task.state, opts.hasDelivery)) {
     if (task.state === "failed") {
@@ -967,6 +1010,30 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
       const d = details as { summary?: string; verdict?: string; prUrl?: string };
       const summary = d.summary && d.summary.length > 0 ? d.summary : (d.verdict ?? "?");
       return `${CHECKS_LABEL} checks finished: ${summary}${d.prUrl ? ` (${d.prUrl})` : ""}`;
+    }
+
+    // Inspector issue #34, the three ways one read can end. Worded here
+    // rather than through `describeRead` - that one speaks about a read
+    // on a *delivery*, where the worker's declines are already folded
+    // in; these describe the read itself, at the moment it happened,
+    // before any worker has answered it.
+    case "reader-clean": {
+      const d = details as { model?: string; diffBytes?: number };
+      const size = d.diffBytes !== undefined ? ` (${d.diffBytes} bytes of diff)` : "";
+      return `code reader found nothing to flag${d.model ? ` - ${d.model}` : ""}${size}`;
+    }
+
+    case "reader-flagged": {
+      const d = details as { model?: string; findings?: { file?: string; finding?: string }[] };
+      const findings = d.findings ?? [];
+      const listed = findings.map((f, i) => `${i + 1}) ${f.file ?? "?"}: ${f.finding ?? "?"}`).join("; ");
+      const count = `${findings.length} ${findings.length === 1 ? "thing" : "things"}`;
+      return `code reader flagged ${count}${d.model ? ` - ${d.model}` : ""}${listed ? `: ${listed}` : ""}`;
+    }
+
+    case "reader-failed": {
+      const d = details as { model?: string; error?: string };
+      return `code reader failed${d.model ? ` (${d.model})` : ""}: ${d.error ?? "?"}`;
     }
 
     case "delivered": {

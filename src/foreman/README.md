@@ -1844,15 +1844,135 @@ silently dropped, and never turned into a red. Inventing a red out of a
 silence is the same lie as calling it green. See `src/ci/README.md` for
 the verdict table, the three bounds, and the GitHub-side sharp edges.
 
+## The code reader: a flagger between Inspector's green and the delivery (inspector issue #34)
+
+Inspector's green says the change holds up mechanically. It says nothing
+about whether a reviewer would want to look at anything. So after that
+green — and before the delivery is written — **the whole diff goes to a
+model whose only job is to flag**, and anything it flags comes back to
+the same warm worker as a fix round. It never blocks and never approves.
+
+Who that model is lives in `src/reader/` (the `[reader]` table, the
+call, the prompt, the parsing). *When* it runs, and what happens to what
+it says, is `reader-round.ts`.
+
+### Why it sits in the shared tail, not in the attempt loop
+
+`readAndFlag` is called between `runAttempts` resolving and
+`recordRoundResult` writing the delivery — the one shared tail issue
+#182 established, which `do.ts`'s round and `verdict.ts`'s fix round
+both pass through. That placement is what makes "once per task, on the
+first pass Inspector turns green" expressible at all: a task whose first
+round goes red turns green for the first time in a **fix** round, so the
+hook has to be somewhere both callers reach.
+
+Putting it inside the attempt loop — where the green verdict is already
+in hand and a correction brief already exists for a red check — is the
+smaller change, and was rejected on two counts, either of which is
+fatal:
+
+1. A pass run from in there spends **rule 3's counted attempt budget**.
+   A fix round deliberately draws from no budget (issue #65, "separate
+   the two, unlimited but counted"), and the reader's pass is a fix
+   round, not an attempt at the task. A task whose attempts were already
+   used would silently never be read.
+2. The judge runs **per attempt**, so the reader would read every green
+   attempt of every round. The ruling is once per task.
+
+### The conditions, and the once-per-task rule
+
+A read happens when all three hold: the round is in Inspector mode (a
+self-tested task has no Inspector green to follow, so it never reaches
+one); the last judgement is a green gate **and** a green inspection — so
+a green Inspector whose pull request then went red (issue #267)
+correctly waits for the round that clears it; and `queries.ts`'s
+`alreadyReadFor` says this task has not been read.
+
+That last one counts `reader-failed` as "the read happened". The
+alternative is every later fix round retrying it, which is exactly the
+repeat the ruling forbids. The cost is real and named: a read lost to a
+transient outage is lost for that task, and the Client sees it on the
+delivery and in `fabrica status`'s own count rather than quietly getting
+no read.
+
+### What a flagged read does
+
+Every finding goes over **as-is** — no severity, no ranking, no
+filtering — as a correction appended to the round's own brief
+(`src/reader/correction.ts`'s `readerCorrection`), the same shape a
+Client's `fix` note takes. The worker may decline any of them with a
+written reason, and that reason is recorded beside the finding it
+answers.
+
+Two sharp edges in that pass:
+
+- **The worker answers through a file in its own workdir**, not through
+  the write-up. But unlike `src/quiz/recheck.ts`'s scratch checkout,
+  *this* worktree gets committed — so `.fabrica-reader-declines.json`
+  must never survive into the diff. It is read and deleted inside
+  `attempts.ts`'s existing `beforeCommit` hook, the one hook that runs
+  immediately before the commit.
+- **A pass whose worker changes nothing must not discard the
+  already-green round.** Wrapped with `skipIfUnchanged` it would deliver
+  `nothing-changed`, throwing away a green delivery; unwrapped it would
+  re-hand an identical commit to Inspector and draw a refusal. So
+  `readAndFlag` wraps the judge itself and, on `unchanged`, keeps the
+  round's own green judgement and write-up while taking the pass's
+  receipt as the last one — chronological order preserved, rule 10 still
+  sees the money, and the green stands.
+
+A reader fix pass is otherwise a **real pass**: if its worker changes
+something, Inspector judges it and that verdict is the round's. A pass
+that goes red delivers `inspection-red` for the Client to rule on. "The
+reader never blocks" is about the reader *stage*, never about a worker
+pass that then fails its own check.
+
+### Where the refusal lives, and why not here
+
+The Client's ruling is "absent for a project: refuse at task start with
+the exact lines to add". Task start is `fabrica do`, and
+`src/cli/do-command.ts` refuses there — before anything is registered,
+before a cent is spent, with the lines to paste. That is the
+enforcement.
+
+`reader.ts`'s `readerForRound` therefore **does not throw**, which is
+its one real difference from `requireReviewer`. A round that threw would
+throw *after* its worker had done the work and Inspector had called it
+green, destroying a finished green delivery over a configuration
+problem — worse than what the ruling protects against, and flatly
+against the amendment's own standing answer that the reader never
+blocks. An unsettleable reader comes back as a problem and is recorded
+as `reader-failed` at the moment the read fell due, with its message
+folded to one line (it becomes a status row and a `delivery.md` field;
+`fabrica do` keeps the paragraphs).
+
+### What lands where
+
+| | |
+| --- | --- |
+| `reader-clean` | Nothing flagged. No fix pass. Details: model, findings (empty), diff bytes. |
+| `reader-flagged` | Findings and the model. Exactly one fix pass follows, so this lands at most once per task. |
+| `reader-failed` | The read never produced findings — no reader configured, an unreachable or refusing model, an unreadable answer, a diff past `MAX_DIFF_BYTES`. Never blocks; never silent. |
+| `delivery.reader` | The same read with the worker's declines folded in beside the findings they answer (`src/reader/on-delivery.ts`), plus a `note` for anything in the worker's own answer that could not be read. Attached to a *finished* delivery by `delivery.ts`'s `withRead` rather than passed to any builder, because it never moves an outcome, a confidence or a summary. |
+| `fabrica status` | `describeRead`'s one phrase on the delivered row, and a counted bottom line, `code reads that failed, on record: N`. |
+
+Both `Delivery.reader` and the three event names are widened in
+`src/inspector/types.ts`, not in `contract/surface.ts` — the same reason
+everything else there is: the contract is a path `rule9-gate.yml`
+protects, and what a flagger found is Fabrica's own bookkeeping about a
+change, not a new promise about a seam.
+
 ## Files
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`, issue #189's `meter-refused` (a subscription meter past its refuse threshold - not a dollar cap), `not-running` (issue #203: `stop` on a task that is not running), issue #199's `model-call-failed` (a model call was dropped in transit, retried once on the same model, and dropped again - see "A dropped model call is retried once" above), and `inspector-not-ready` (Inspector mode with no usable GitHub App to mint a publishing token from - see `src/inspector/README.md`), issue #187's `no-github-repo` (a project with no github.com `origin`, so there is no repository to scope a token to and nothing to publish to either - see `github-token.ts`), `reviewer-not-ready` (no model could be settled to judge a project that asks for its test changes judged - see `src/reviewer/README.md`), `knowledge-unavailable` (a project's named knowledge-base notes could not be carried into the brief - see "The knowledge-base notes a project names" above), and `project-not-a-repo`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`, issue #189's `meter-refused` (a subscription meter past its refuse threshold - not a dollar cap), `not-running` (issue #203: `stop` on a task that is not running), issue #199's `model-call-failed` (a model call was dropped in transit, retried once on the same model, and dropped again - see "A dropped model call is retried once" above), and `inspector-not-ready` (Inspector mode with no usable GitHub App to mint a publishing token from - see `src/inspector/README.md`), issue #187's `no-github-repo` (a project with no github.com `origin`, so there is no repository to scope a token to and nothing to publish to either - see `github-token.ts`), `reviewer-not-ready` (no model could be settled to judge a project that asks for its test changes judged - see `src/reviewer/README.md`). There is deliberately **no** `reader-not-ready` to match that last one: an unsettleable code reader is recorded as `reader-failed` rather than thrown, since a flagger must never destroy a green round - see "Where the refusal lives, and why not here" above. Also `knowledge-unavailable` (a project's named knowledge-base notes could not be carried into the brief - see "The knowledge-base notes a project names" above), and `project-not-a-repo`. |
 | `judge.ts` | Who judges each attempt (issue #64): Inspector, or a self-test in the Worker's box. `prepareRound` picks the mode, and - only for a task that will actually be inspected - settles who reviews its test changes (`reviewer.ts`'s `requireReviewer`, refusing with `reviewer-not-ready` before Inspector is called at all); `roundOutcome` turns the last judgement into a delivery outcome. `Judge` is handed each attempt's resolved `finalMessage` (pr-body.ts) alongside `gateChanges`, so `inspectorJudge`'s own per-attempt commit and Inspector's pull request always carry the same title/body `attempts.ts` computed - `attempts.ts` only calls `judge()` once that message is valid, so this commit and that pull request are only ever made with a valid write-up as their message. Nothing here runs a check on the host - `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`. `skipIfUnchanged(judge, workdir, priorHead)` wraps any `Judge` so an attempt that leaves `workdir`'s HEAD exactly at `priorHead` never reaches the real judge at all - returns `Judgement.unchanged` instead - `verdict.ts`'s `runFixRound` is the one caller, `priorHead` being the branch's HEAD the moment that round's line was reopened. |
 | `pr-body.ts` | `writeupProblem`/`finalMessageFor`/`renderCommitMessage`: checks a worker's structured write-up (`BrainWorkResult.writeup` - title at most 60 characters, seven other non-empty required string fields, a `confidence` number from 0 to 100, a `quiz` of exactly three answered questions, and the one optional `couldNotVerify`; issues #185/#194/#98, Client ruling 2026-10-18) and renders it as the commit message and (when Inspector is configured) the pull request title and body - the Client's own template, five sections to the heading: `## Context (Why)`, `## Description (What)`, `## Changes in the codebase (How)` and `## Changes outside the codebase` each holding one field verbatim, then `## Additional information` folding confidence/assumptions/expectedOutcomes/deviations/couldNotVerify into labelled bullets in that fixed order, a bullet with nothing in it omitted entirely rather than rendered as a placeholder - or, when it is missing or invalid, a fallback naming what is wrong, never the task's own words. Nothing is parsed out of the worker's prose. The `quiz` is the one required field this does NOT render: it is validated here and shown to the owner on the live view (`/review` and `/quiz`, issue #98), never in the pull request body, whose layout is the Client's own ratified template. Each of those five headings (`TEMPLATE_HEADINGS`) is Fabrica's own to emit and appears in a rendered body exactly once: a worker that echoes a heading into one of its own fields - the one way a real pull request ended up reading `## Additional information` twice in a row, since no code path here has ever emitted it more than once - has that heading-only line dropped as the field renders (`withoutTemplateHeadings`), keeping every word around it, where refusing the write-up outright would cost a red round for a cosmetic slip. A heading inside a fenced code block is kept exactly as written: a write-up quoting this template is showing a heading, not emitting one. Also `closesIssueFor`/`issueNamedByTaskText`/`withClosesLine`: whether this task's pull request should close an issue on merge - only when the task is the *whole* of that issue's work, from `taskText` opening with "Issue #N:" or from an `issue` number the chat agent named explicitly (`Foreman.do`'s `opts.issue`, persisted once at registration by `ask.ts`) - prepended as the pull request **body**'s first line by `judge.ts`'s `inspectorJudge`, never put on the commit message. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention; `requireCheckCommand` refuses a self-tested task with none. |
 | `reviewer.ts` | The round's half of the reviewer seam (`src/reviewer/README.md`): `requireReviewer` settles who judges this project's test changes, reading `testPaths` from `.inspector.json` **at the task's base commit** - never the worktree a Worker has touched, so a Worker cannot change who reviews its own work. Refuses with `ForemanError("reviewer-not-ready")` on the same three grounds `fabrica do` already printed up front, so a resumed round, a fix round, and a library caller stop too. Resolved here rather than once in `createForeman`, which also runs for `status`/`log`/the live view, none of which call Inspector. |
+| `reader.ts` | The round's half of the code reader seam (`src/reader/README.md`): `readerForRound` settles who will read this round's diff once Inspector turns it green. Deliberately does **not** throw, unlike `reviewer.ts` - see "Where the refusal lives, and why not here" above. |
+| `reader-round.ts` | When the read happens and what happens to what it says: once per task, after Inspector's green, before the delivery; one fix pass for findings; a recorded failure for everything that can go wrong. `DiffReader` is the seam `createForeman`'s `readDiff` option replaces in tests. See the section above. |
 | `registered-project.ts` | `registeredProject(recordHome, projectPath)` - which `projects.toml` entry, if any, is this project, both sides resolved through `realpath`. Shared by `network-policy.ts` and `touched-tests.ts`; a malformed registry reads as "unregistered" here, since `resolve-check.ts` runs first in every round and is the right place for that error to surface loudly. |
 | `touched-tests.ts` | Issue #142's "run only the tests you touched": `onlyTouchedTestsFor` (the project's `onlyTouchedTests` setting, unless this task's own words ask for the full suite) and `workerBrief`, the one function every round calls to build the brief a Worker actually receives. See the section above. |
 | `task-knowledge.ts` | The knowledge-base notes a project names in `projects.toml` (`src/knowledge/`): `knowledgeNotesFor` reads them off the disk - run by `ask.ts`/`do.ts`/`verdict.ts` before any ProductionLine is cut or reopened, so a missing knowledge base or note refuses with `ForemanError("knowledge-unavailable")` naming which - and `withKnowledge` appends them to a brief, idempotently, refusing rather than trimming when the brief would pass `MAX_BRIEF_BYTES`. See the section above. |

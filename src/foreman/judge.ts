@@ -28,6 +28,8 @@ import type { Delivery } from "../inspector/types.ts";
 import type { ScopedToken, TokenMinter } from "../githubapp/index.ts";
 import { publishToken } from "./github-token.ts";
 import { requireCheckCommand, resolveCheckCommand } from "./resolve-check.ts";
+import { readerForRound } from "./reader.ts";
+import type { RoundReader } from "./reader.ts";
 import { requireReviewer } from "./reviewer.ts";
 import { ForemanError } from "./errors.ts";
 import { handToInspector } from "./inspection.ts";
@@ -242,8 +244,17 @@ export function selfTestJudge(
 }
 
 /** Everything a round needs settled before its first attempt: who judges
- * it. Mode b refuses up front when there is no check to run, as before;
- * mode a needs no check file of Fabrica's own. */
+ * it, and - in Inspector mode - who will read its diff once Inspector
+ * turns it green. Mode b refuses up front when there is no check to
+ * run, as before; mode a needs no check file of Fabrica's own.
+ *
+ * The reader is settled HERE, before any worker starts, and not at the
+ * moment of the read (inspector issue #34, the Client's own condition):
+ * a task that spent its attempts and turned green before discovering
+ * nobody can read it has spent money to reach a stage it could not
+ * complete. Settled only in Inspector mode, for the same reason the
+ * reviewer is - a self-tested round never reaches a read, and a reader
+ * it will never use has no business refusing it. */
 export function prepareRound(
   recordHome: string,
   taskId: string,
@@ -267,7 +278,7 @@ export function prepareRound(
      * task either way (`github-token.ts`'s `recordingMinter`). */
     minter?: TokenMinter;
   }
-): { judge: Judge; mode: CheckMode } {
+): { judge: Judge; mode: CheckMode; reader?: RoundReader } {
   const check = resolveCheckCommand(recordHome, line.project);
   // Settled before the mode is chosen, but only for a task that will
   // actually be inspected: a project with no .inspector.json at its
@@ -285,6 +296,13 @@ export function prepareRound(
     reviewer,
     publishToken(recordHome, taskId, line.project, opts.minter)
   );
+  // Settled before the first worker starts, so the answer is this
+  // project's configuration as it stood when the round began rather
+  // than whatever projects.toml says an hour later. Never throws - see
+  // reader.ts's header for why a round must not be destroyed over this
+  // - so an unsettleable reader is carried as a problem and recorded at
+  // the moment the read was due.
+  const reader = mode.mode === "inspector" ? readerForRound(recordHome, line.project) : undefined;
   if (mode.mode === "self-test") {
     requireCheckCommand(line.workdir, check);
     appendEvent(recordHome, { taskId, name: "inspection-skipped", details: { reason: mode.reason } });
@@ -312,7 +330,7 @@ export function prepareRound(
           opts.minter
         )
       : selfTestJudge(recordHome, taskId, line, check, opts.checkBox ?? defaultCheckBox());
-  return { judge, mode };
+  return { judge, mode, ...(reader === undefined ? {} : { reader }) };
 }
 
 /**

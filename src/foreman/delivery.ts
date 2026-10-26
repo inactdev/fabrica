@@ -18,6 +18,8 @@ import { describeFingerprint } from "./fingerprint.ts";
 import { describeInvalidWriteup } from "./pr-body.ts";
 import { describeTestMapReport } from "../testmap/index.ts";
 import type { TestMapReport } from "../testmap/index.ts";
+import { describeRead } from "../reader/index.ts";
+import type { ReaderOnDelivery } from "../reader/index.ts";
 
 /**
  * How many lines of a check's output a delivery's `evidence` shows. The
@@ -485,10 +487,10 @@ export function withTestMapReport(delivery: Delivery, report: TestMapReport | un
  * `delivery.md` — a convenience view; the "delivered" event's `details`
  * carries the structured object deliveryOf() actually reads.
  *
- * The test-map block goes last, after `gateChanges` and the one-line
- * `fingerprint`: it is the one part of a delivery that runs to several
- * lines of its own, and the fields above it are the ones every reader
- * scans for first. */
+ * The read and the test-map block go last, after `gateChanges` and the
+ * one-line `fingerprint`: they are the two parts of a delivery that run
+ * to several lines of their own, and the fields above them are the ones
+ * every reader scans for first. */
 export function renderDeliveryMarkdown(delivery: Delivery, cost?: string): string {
   const tests = describeTestMapReport(delivery.tests);
   return (
@@ -507,9 +509,37 @@ export function renderDeliveryMarkdown(delivery: Delivery, cost?: string): strin
       // (`fingerprint.ts`'s `describeFingerprint`) - `fabrica status`
       // and `fabrica log` render the identical string.
       `fingerprint: ${describeFingerprint(delivery.fingerprint, delivery.fingerprintMatch)}`,
-      // Last, because it is the only multi-line block here - the
-      // one-line facts above it stay scannable as a column.
+      // The two blocks that can run to several lines of their own go
+      // last, after every one-line fact, so the facts above them stay
+      // scannable as a column: the read (one line plus a line per
+      // finding), then the test-map report.
+      `reader:     ${delivery.reader ? renderRead(delivery.reader) : ""}`,
       ...(tests.length === 0 ? [] : [`tests:\n${tests}`]),
     ].join("\n") + "\n"
   );
+}
+
+/** The read as `delivery.md` shows it: the one-phrase summary every
+ * other surface shows (`describeRead`), then one indented line per
+ * finding with the worker's reason beneath any it declined - which is
+ * what "recorded in the delivery beside the finding" means in a
+ * plain-text view. Never a verdict line: there is no verdict to show. */
+function renderRead(read: ReaderOnDelivery): string {
+  const lines = [describeRead(read)];
+  read.findings.forEach((finding, index) => {
+    lines.push(`  ${index + 1}. ${finding.file}: ${finding.finding}`);
+    if (finding.declined !== undefined) lines.push(`     declined by the worker: ${finding.declined}`);
+  });
+  if (read.note !== undefined) lines.push(`  note: ${read.note}`);
+  return lines.join("\n");
+}
+
+/** Puts the read onto a delivery the builders above have finished with.
+ * One place rather than a `reader` parameter on all five of them: the
+ * read is not an input to what any of them decides - it never moves an
+ * outcome, a confidence or a summary, because the reader does not block
+ * and does not approve - so threading it through their arguments would
+ * imply a say it deliberately does not have. */
+export function withRead(delivery: Delivery, read: ReaderOnDelivery | undefined): Delivery {
+  return read === undefined ? delivery : { ...delivery, reader: read };
 }

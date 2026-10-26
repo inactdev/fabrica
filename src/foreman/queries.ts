@@ -611,3 +611,27 @@ function earlyFailureReason(events: FabricaEvent[]): string {
   if (askFailedMessage) return askFailedMessage;
   return "brain's clarify step threw before any work started";
 }
+
+/** Whether this task's one code read has already happened (inspector
+ * issue #34: once per task). Any of the three read events counts,
+ * `"reader-failed"` included - deliberately, because the alternative is
+ * every later fix round retrying it, which is exactly the repeat the
+ * "once per task" ruling forbids. The cost of that is real and known: a
+ * read lost to a transient outage is lost for that task, and the Client
+ * sees it on the delivery and in `fabrica status`'s own count rather
+ * than silently getting no read at all. */
+export function alreadyReadFor(events: FabricaEvent[]): boolean {
+  return events.some(
+    (event) => event.name === "reader-clean" || event.name === "reader-flagged" || event.name === "reader-failed"
+  );
+}
+
+/** How many reads failed across a whole record home - the number
+ * `fabrica status` shows at the bottom, next to the blocked-edit count.
+ * Counted across every task, since a reader that cannot run is a fact
+ * about the machine's configuration far more often than about one task
+ * (Client's clarification: a reader failure is "counted by the
+ * noticer"). */
+export function readerFailureCount(events: FabricaEvent[]): number {
+  return events.filter((event) => event.name === "reader-failed").length;
+}
