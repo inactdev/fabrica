@@ -112,6 +112,100 @@ future round needs to carry into the tail - a test map, a reader's read,
 the next thing - is added there, in one place, instead of to a signature
 that two functions now share.
 
+## The publish token's third permission (plan, written before the edit)
+
+`master`'s own fix for Inspector's 403 added `statuses: "write"` to
+`src/githubapp/scopes.ts`'s `PUBLISH_PERMISSIONS` - Inspector posts the
+`inspector` commit status, and two permissions could not. Six assertions
+across three test files still pinned the old two-permission set, so the
+whole suite arrives red for every task in the fleet on a decision the
+Client has already shipped.
+
+The plan, safest first: change no production logic at all, and only
+restate in those tests what the shipped constant already is - plus the
+doc comment at the definition site, which still said "kept to the two
+permissions that call genuinely needs" three lines above a set of three.
+One of the six is not a plain restatement: the narrowing test holds an
+App with `contents: read`, and leaving `statuses` out of what that App
+holds now makes the stub refuse the mint outright (422, "not granted to
+this installation"), which is a different test than the one that was
+written - so the App there holds `statuses: write` too, and only
+`contents` is narrowed, which is what that test is about.
+
+Rejected: leaving the suite red and only reporting it. The repair is a
+mechanical restatement of a ruling that is already in the code, and the
+red blocks every other task as well as burying this one's own result.
+Also rejected, flatly: reverting `PUBLISH_PERMISSIONS` to two
+permissions to make the assertions pass - that would undo the Client's
+fix and re-break Inspector's stamp, which is the exact 403 this round
+exists to clear.
+
+Same shape, left standing (prose, no test depends on it): the "only
+`contents: write` and `pull_requests: write`" wording in
+`src/inspector/README.md`, `src/inspector/run.ts`, `src/foreman/judge.ts`,
+`src/foreman/github-token.ts`, `src/githubapp/README.md`, and the fixture
+scope literal in `src/inspector/run.test.ts`.
+
+## A worker cannot remove `.inspector.json`'s `image`
+
+Inspector refused a round of this task with: `.inspector.json` still
+names an `image`, remove that field and commit a `Dockerfile.inspector`
+whose `FROM` names the image it used to name - so the box the work is
+written in and the box it is judged in cannot differ. (Both halves are
+on `master` now, done there rather than here, which is the point of
+this note.)
+
+Half of that was a worker's to do and half was not, and the half that
+was not is not a matter of taste: `src/foreman/inspection.ts`'s handoff
+calls `inspectorConfigMatches(line.workdir, baseCommit)` and refuses
+the round outright - "`.inspector.json` differs from the task base
+commit" - whenever that file's blob is not byte-identical to the base
+commit's. A worker that removes the `image` field therefore trades
+Inspector's refusal for Fabrica's own, one step earlier, and never
+reaches a verdict either way. The standing ruling says the same thing
+in one line ("a worker ... never edits `.inspector.json`"), and
+`src/inspector/README.md` states the reason: a Worker must not be able
+to opt out of or weaken its own inspection, so *any* difference in that
+blob - including a deletion - is a refusal rather than a skip.
+
+What a task can do about a refusal naming that file, then, is nothing
+but say so: the field's removal and the Dockerfile that replaces it both
+have to land on `master` by the Client's own hand, which is where they
+did land. Removing the field inside a task, as the refusal's words
+literally say, provably cannot work - it trades one refusal for another
+one step earlier, and the mechanism that stops it is deliberate.
+
+## When master already said the same thing, its words win (plan, first)
+
+The second rebase landed four conflicts, every one of them the same
+shape: `master` had meanwhile made the identical correction this branch
+carried - the publish token's third permission, and the check's image
+moving out of `.inspector.json` into a committed `Dockerfile.inspector`
+- in its own wording. Nothing disagreed about behaviour; two
+descriptions of one fact collided.
+
+So the resolution takes `master`'s side in all four, rather than keeping
+both or preferring this branch's phrasing. Accurate first: the rest of
+the tree, and every other file that names the publish permissions, now
+matches `master`'s wording, so keeping this branch's would leave two
+spellings of one fact in one suite. And for `Dockerfile.inspector` it is
+not a matter of wording at all - `master`'s version bakes the
+dependencies into the image at build time and its `check.sh` links them
+in, because the check container has no network; this branch's file was a
+bare `FROM` with a comment saying dependencies are installed by
+`check.sh` at check time, which is no longer true. Keeping any of that
+comment would have left a false statement in the tree.
+
+`.inspector.json` needed nothing in the end: `master` removed the
+`image` field itself, which is what Inspector's refusal asked for and
+what a worker cannot do (see the section above - a worker's edit to that
+file is its own refusal).
+
+Rejected: keeping both sides, which is what the previous round's
+conflicts wanted. Here it would mean two test names and two header
+comments saying the same thing twice, and a Dockerfile whose comment
+contradicts its own contents.
+
 ## What issue #204 asks for that is deliberately NOT here
 
 The amendment is explicit that shadow comes first, and the Client's own
