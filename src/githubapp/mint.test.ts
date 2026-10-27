@@ -71,7 +71,7 @@ test("the mint names exactly one repository and exactly the permissions asked fo
     assert.equal(minted.repo, "widgets");
     assert.equal(minted.installationId, 7);
     assert.equal(minted.repositorySelection, "selected");
-    assert.deepEqual(minted.permissions, { contents: "write", pull_requests: "write" });
+    assert.deepEqual(minted.permissions, { contents: "write", pull_requests: "write", statuses: "write" });
     assert.match(minted.expiresAt, /^\d{4}-\d\d-\d\dT/);
 
     const post = github.requests.find((r) => r.method === "POST")!;
@@ -81,7 +81,7 @@ test("the mint names exactly one repository and exactly the permissions asked fo
     // grants every repository the installation has.
     assert.deepEqual(JSON.parse(post.body), {
       repositories: ["widgets"],
-      permissions: { contents: "write", pull_requests: "write" },
+      permissions: { contents: "write", pull_requests: "write", statuses: "write" },
     });
   } finally {
     await github.close();
@@ -144,14 +144,14 @@ test("a token minted for one repository is refused on a second one the same inst
 
 test("GitHub narrowing a permission is recorded as what it granted, never as what was asked", async () => {
   // An App holding only `contents: read` cannot mint `contents: write`.
-  const github = await stub({ appPermissions: { contents: "read", pull_requests: "write" } });
+  const github = await stub({ appPermissions: { contents: "read", pull_requests: "write", statuses: "write" } });
   try {
     const minted = await mintInstallationToken({
       credentials: credentials(),
       apiRoot: github.baseUrl,
       scope: WIDGETS,
     });
-    assert.deepEqual(minted.permissions, { contents: "read", pull_requests: "write" });
+    assert.deepEqual(minted.permissions, { contents: "read", pull_requests: "write", statuses: "write" });
   } finally {
     await github.close();
   }
@@ -287,13 +287,13 @@ test("installationIdFor answers the id, and a non-numeric answer is unreachable 
 });
 
 test("describePermissions reads the same for the same set, whatever order it was built in", () => {
-  assert.equal(describePermissions(PUBLISH_PERMISSIONS), "contents: write, pull_requests: write");
-  assert.equal(describePermissions({ pull_requests: "write", contents: "write" }), "contents: write, pull_requests: write");
+  assert.equal(describePermissions(PUBLISH_PERMISSIONS), "contents: write, pull_requests: write, statuses: write");
+  assert.equal(describePermissions({ statuses: "write", pull_requests: "write", contents: "write" }), "contents: write, pull_requests: write, statuses: write");
   assert.equal(describePermissions({}), "no permissions");
 });
 
 test("the four permission sets are exactly what each call needs, and no set can write what it only reads", () => {
-  assert.deepEqual(PUBLISH_PERMISSIONS, { contents: "write", pull_requests: "write" });
+  assert.deepEqual(PUBLISH_PERMISSIONS, { contents: "write", pull_requests: "write", statuses: "write" });
   assert.deepEqual(READ_ISSUE_PERMISSIONS, { issues: "read" });
   assert.deepEqual(READ_CHECKS_PERMISSIONS, {
     pull_requests: "read",

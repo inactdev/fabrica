@@ -27,7 +27,7 @@ that happens to be wide enough.
 
 | call | where | permissions |
 |---|---|---|
-| push the branch, open/update the pull request | Inspector's handoff (`src/inspector/run.ts`) | `contents: write`, `pull_requests: write` |
+| push the branch, open/update the pull request | Inspector's handoff (`src/inspector/run.ts`) | `contents: write`, `pull_requests: write`, `statuses: write` (the `inspector` stamp) |
 | read the issue a task names, and its comments | registration (`src/foreman/task-issue.ts`) | `issues: read` |
 | read the pull request's own checks | after a green inspection (`src/ci/`) | `pull_requests`, `checks`, `statuses`, `actions`, all read |
 

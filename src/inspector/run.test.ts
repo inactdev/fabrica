@@ -26,7 +26,7 @@ function mintedFake(token: string) {
     expiresAt: "2026-01-01T01:00:00Z",
     owner: "o",
     repo: "r",
-    permissions: { contents: "write", pull_requests: "write" },
+    permissions: { contents: "write", pull_requests: "write", statuses: "write" },
     installationId: 1,
     repositorySelection: "selected",
   };
