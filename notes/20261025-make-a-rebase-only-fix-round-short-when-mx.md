@@ -120,3 +120,51 @@ carries master's new shape. "Keep both sides" there means re-applying
 the branch's *intent* inside master's structure — the rebase-only
 lookup moved into `briefFor`'s options — not pasting both texts and
 hoping the result compiles.
+
+## Inspector retired `image` and `network`, and no task can migrate them
+
+Found when a later round of this task was refused with `.inspector.json
+still names an "image"`. Inspector's own README (read 2026-10-27) is the
+authority; the short version, because this refuses every task in every
+project until the Client acts:
+
+- `"image"` and `"network"` are **retired keys**, and a config that
+  still carries either is refused by name, with any value — never
+  silently dropped. This repository's own `.inspector.json` carries
+  both.
+- The check environment is now whatever a committed
+  **`Dockerfile.inspector`** at the repository root builds. The path is
+  fixed and there is no config key for it; a project that commits none
+  is refused by that file's name. The point is that the box work is
+  written in and the box it is judged in cannot differ — "one file, one
+  name, in both places."
+- Two constructs in it are refused outright: a variable in `FROM` (the
+  base must resolve to a digest) and a `# escape=` directive. A
+  Dockerfile carrying `COPY`/`ADD`/`RUN --mount` is rebuilt every run;
+  a pure toolchain install is built once and then skipped.
+- **The check container has no network, and there is no way to ask for
+  one.** Dependency installation therefore has to move into the image
+  build, which still has network. `check.sh` running `npm ci` when
+  `node_modules` is absent is exactly the shape that stops working.
+
+Why a task can never do this itself, however plainly the refusal asks:
+Inspector treats *any* final `.inspector.json` differing from the base
+commit — deletion included — as a refusal rather than a skip, which is
+what stops a Worker weakening its own inspection. So an edit to it from
+inside a round is guaranteed to draw the refusal it was meant to clear.
+`Dockerfile.inspector` sits in the same always-protected floor, and the
+standing rulings allow a merge override only for the contract, a
+workflow file, or `check.sh` — so neither file can reach master through
+a task branch at all. Both are the Client's own commits, on master, and
+a round that hits this refusal should say so and change nothing.
+
+Everything in this repository that still writes the retired keys, none
+of it touched by this task: `src/register/scaffold.ts`'s
+`inspectorConfigJson` (`image` is a required parameter; `--network`
+writes `network: true`), `src/register/propose.ts`'s
+`proposeImage`/`proposeNetwork` and the two lines of its proposal note,
+`src/register/tools.ts`'s registration check (runs in `--image`),
+`src/register/README.md`'s description of the schema, and
+`contract/helpers/fixture.ts`'s `FIXTURE_INSPECTOR_CONFIG` plus the
+fixture configs in a dozen test files. So `fabrica register` currently
+proposes and writes a config today's Inspector refuses.
