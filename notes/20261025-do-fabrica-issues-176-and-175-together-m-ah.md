@@ -122,6 +122,42 @@ first answer to that id wins for the rest of the task.
   silent on a machine with no Docker, so calling it up to three times in
   a row costs nothing.
 
+## The re-run round, and why it changed nothing
+
+- **Plan for the re-run round (safest, then most accurate, then
+  fastest): change nothing.** Inspector's refusal named a 403 on
+  creating the commit status, after reporting that the check itself
+  passed - a publication failure, not a judgment on this tree. The
+  safest action against a tree whose own mapped tests are green is no
+  action; it is also the most accurate, because the only red tests in
+  the suite are not this task's and editing them would misattribute
+  someone else's fix to this delivery; and it is the fastest, being a
+  re-run. *Alternative rejected:* aligning the six assertions that
+  master's own hotfix `c888f29` left behind (it added `statuses:
+  "write"` to `PUBLISH_PERMISSIONS` and updated no test). Rejected on
+  four counts - none of the three files involved is a file this task
+  touched, so the test-map protocol's "fix your mapped tests first"
+  never reaches them; `*.test.ts` is a protected path, so those edits
+  belong to a task authorized to make them; a sibling task fixing the
+  same hotfix would collide on the identical lines; and quietly
+  repairing a half-landed hotfix inside an unrelated delivery hides it
+  instead of failing loudly.
+- **Why some publish-permission sites went red and others did not,
+  worth knowing before the next permission change.** A site that
+  *references* `PUBLISH_PERMISSIONS` (`github-token.test.ts`'s "the
+  publishing token mints for the project's own repository", whose
+  `deepEqual` names the constant; `inspector-github-app.test.ts`'s own
+  `SCOPE`) follows the constant automatically. A site that *restates*
+  its contents as a literal (`mint.test.ts` x5,
+  `github-token.test.ts`'s rendered `permissions` string,
+  `inspector-github-app.test.ts:84`) pins the old set and goes red.
+  `src/inspector/run.test.ts:29` restates it too but never asserts
+  against the constant - it is a fake mint's return value - so it is
+  stale rather than failing. Prose naming "the two permissions"
+  (`scopes.ts`, `run.ts`, `judge.ts`, `github-token.ts`,
+  `githubapp/README.md`, `inspector/README.md`, and two test *names*)
+  is in the same position: wrong now, and invisible to the suite.
+
 ## Resolving this branch's rebases, and the rule that keeps working
 
 - **Plan, written before the change (safest, then most accurate, then
@@ -156,3 +192,12 @@ first answer to that id wins for the rest of the task.
   rebase-only round. Taking either side whole silently drops real
   documentation for two modules, and nothing in the suite reads this
   table to notice.
+- **This very note conflicted too, and prose merges by heading.** A
+  later stop of the same rebase landed on this file: both sides had
+  appended different bullets at the end, one round's reasoning each.
+  Prose has no "longer side carries the other" test to apply, so the
+  resolution is to keep both passages verbatim and give each its own
+  heading, in the order the rounds happened. A one-file-per-task note
+  is still the right home for this - it conflicts with *itself* across
+  rounds, which is trivial, instead of with every other task's note
+  the way a shared file does.
