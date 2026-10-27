@@ -20,6 +20,7 @@ import type { AppPermission } from "./types.ts";
 export const PUBLISH_PERMISSIONS: Readonly<Record<string, AppPermission>> = Object.freeze({
   contents: "write",
   pull_requests: "write",
+  statuses: "write",
 });
 
 /** The issue a task names, read once at registration
