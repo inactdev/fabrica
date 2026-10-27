@@ -158,6 +158,100 @@ first answer to that id wins for the rest of the task.
   `githubapp/README.md`, `inspector/README.md`, and two test *names*)
   is in the same position: wrong now, and invisible to the suite.
 
+## The Dockerfile.inspector round
+
+- **Plan, written before the change (safest, then most accurate, then
+  fastest).** Inspector refused this round for something squarely in
+  this tree: `.inspector.json` still names an `image`, which Inspector
+  no longer accepts - it builds the check box from a committed
+  `Dockerfile.inspector` instead, so the box the work is written in and
+  the box it is judged in cannot differ. Three things are needed to
+  satisfy it: commit `Dockerfile.inspector` with `FROM
+  cimg/node:24.18.0`; move `fabrica doctor`'s Node pin onto that file;
+  and delete the `"image"` field. **The first two are a Worker's to
+  do and the third is not.** `.inspector.json` is in its own
+  `protectedPaths`, which `src/register/scaffold.ts` defines as "the
+  paths a Worker may never quietly change ... the gate and the gate's
+  own definition; a setup that protected the check but not the file
+  naming it would protect nothing (CONTRACT rule 9's whole subject)",
+  and the standing rulings say flatly that a worker never edits
+  `.inspector.json`. So this round does the two halves it may and hands
+  over a one-line deletion, with every consequence of that deletion
+  already absorbed. *Alternative rejected:* deleting the `"image"` line
+  here as well, to get through Inspector in one go. Rejected because a
+  Worker editing the file that defines how it is judged is the
+  self-grading hazard that list exists to prevent - a cheap, visible
+  hand edit by the Client is a far better failure mode than a broken
+  invariant - and because the change would have to pass the very
+  protected-path rule it breaks.
+- **Removing the `image` field was never a one-line deletion until
+  now.** `src/cli/doctor-command.ts`'s `pinnedNodeVersion()` read that
+  field for the Node version the check box runs, and
+  `src/cli/node-version-pins.test.ts` asserts that value equals
+  `.node-version`'s. Delete the field with nothing else changed and
+  `pinnedNodeVersion()` returns `null`, which makes
+  `node-version-pins.test.ts` fail ("`.inspector.json`'s image tag says
+  nothing") *and* makes `fabrica doctor`'s own `node` check report
+  `ok: true` with "no pinned version found to compare with" - the
+  silent skip the standing rulings forbid, in the one preflight that
+  exists to catch exactly this drift. Pointing `pinnedNodeVersion()` at
+  `Dockerfile.inspector`'s `FROM` line is what makes the deletion
+  consequence-free, and it leaves `node-version-pins.test.ts`
+  unchanged while quietly re-aiming it: that test now proves the new
+  file's `FROM` agrees with `.node-version`, so a Node bump still has
+  to move all four declarations together.
+- **The pin is read off the `FROM` line, not the whole file.** The old
+  reader regexed a bare image string, where anything matching was the
+  image. A Dockerfile has comments, so the version is taken from the
+  first `FROM` only - otherwise a comment mentioning another Node could
+  satisfy the pin while the box ran something else, which is the exact
+  drift this pin exists to catch.
+
+## Resolving a rebase conflict where master made the same change
+
+- **Plan, written before the change (safest, then most accurate, then
+  fastest).** `master` has since done all three halves of the round
+  above - `Dockerfile.inspector` is committed (and builds the check
+  box with this project's dependencies baked into `/deps`, since that
+  box has no network), `.inspector.json`'s `image` field is gone, and
+  `check.sh` links those baked dependencies in - so both conflicting
+  files are two independent implementations of one idea, not two
+  different ideas to merge. The resolution is therefore: take master's
+  side whole wherever both sides implement the same behavior, and keep
+  from this branch's side only commentary master's side does not
+  already carry and that is still true of master's implementation.
+  *Alternative rejected:* concatenating both sides' comments in
+  `Dockerfile.inspector`. Rejected because this branch's comment ended
+  "Nothing else belongs in here. `check.sh` installs whatever the
+  check needs, in the box" - true when it was written, flatly untrue
+  of master's file, which installs dependencies at build time
+  precisely because the check box has no network. A comment that
+  contradicts the file it sits in is worse than no comment.
+- **`Dockerfile.inspector` is a protected path now**, listed in
+  `.inspector.json`'s own `protectedPaths` next to `check.sh` and
+  `.inspector.json` - the box the work is judged in belongs to the
+  same "a Worker may never quietly change this" set as the check and
+  the config naming it. That settles how its conflict resolves beyond
+  the reasoning above: it resolves to master's content exactly, byte
+  for byte, so the branch carries no change to it at all. Resolving a
+  conflict in a protected path by *keeping the protected side whole*
+  is the only resolution that needs no override; anything this branch
+  had to say about that file belongs in a note like this one instead.
+- **Where the two `pinnedNodeVersion()` readers differ.** Master's is
+  one anchored regex (`/^FROM\s+\S*node:(\d+\.\d+\.\d+)/m`); this
+  branch's read the first `FROM` line's image and then the version out
+  of it. They agree on today's single-stage file. They diverge on a
+  multi-stage one whose first `FROM` is not a node tag: master's keeps
+  looking and finds the node-tagged stage, this branch's returns
+  `null`, and `null` makes `fabrica doctor`'s `node` check pass with
+  "no pinned version found to compare with" - a silent skip in the one
+  preflight that exists to catch Node drift. Master's behavior is the
+  better of the two for that reason as well as being the merged one,
+  so it is what survived; only the rationale comment ("a comment
+  mentioning some other Node must never satisfy a pin the box does not
+  honor") came across, since master's regex earns that property and
+  did not say so.
+
 ## Resolving this branch's rebases, and the rule that keeps working
 
 - **Plan, written before the change (safest, then most accurate, then
@@ -192,12 +286,16 @@ first answer to that id wins for the rest of the task.
   rebase-only round. Taking either side whole silently drops real
   documentation for two modules, and nothing in the suite reads this
   table to notice.
-- **This very note conflicted too, and prose merges by heading.** A
-  later stop of the same rebase landed on this file: both sides had
-  appended different bullets at the end, one round's reasoning each.
-  Prose has no "longer side carries the other" test to apply, so the
-  resolution is to keep both passages verbatim and give each its own
-  heading, in the order the rounds happened. A one-file-per-task note
-  is still the right home for this - it conflicts with *itself* across
-  rounds, which is trivial, instead of with every other task's note
-  the way a shared file does.
+- **This very note conflicted too, and prose merges by heading.** Two
+  later stops of the same rebase landed on this file: first both sides
+  had appended different bullets at the end, then whole sections of
+  two *earlier* rounds of this same branch arrived against the section
+  a later round had already written. Prose has no "longer side carries
+  the other" test to apply, so the resolution both times is to keep
+  both passages verbatim and give each its own heading - ordered by
+  the round that wrote it, never by which side of the conflict it
+  arrived on, since replaying a branch commit by commit hands over the
+  oldest reasoning last. A one-file-per-task note is still the right
+  home for this - it conflicts with *itself* across rounds, which is
+  trivial, instead of with every other task's note the way a shared
+  file does.
