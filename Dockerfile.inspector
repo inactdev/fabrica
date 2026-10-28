@@ -1,0 +1,11 @@
+# The image inspector runs ./check.sh in (inspector#47). The check container
+# has no network, so dependencies are installed here, at build time, into
+# /deps; check.sh links /deps/node_modules into a checkout that has none.
+# Inspector rebuilds this whenever package-lock.json changes.
+FROM cimg/node:24.18.0
+USER root
+RUN mkdir -p /deps/scripts && chown -R circleci:circleci /deps
+USER circleci
+COPY --chown=circleci:circleci package.json package-lock.json /deps/
+COPY --chown=circleci:circleci scripts/write-build-info.mjs /deps/scripts/
+RUN cd /deps && npm ci

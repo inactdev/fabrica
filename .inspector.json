@@ -1,12 +1,11 @@
 {
   "check": "./check.sh",
-  "image": "cimg/node:24.18.0",
-  "network": true,
   "timeoutSeconds": 1200,
   "protectedPaths": [
     "check.sh",
     ".inspector.json",
-    "*.test.ts"
+    "*.test.ts",
+    "Dockerfile.inspector"
   ],
   "protectedPathsNote": "Temporary test protection until inspector#7 lands; remove it then. Tracked by https://github.com/inactdev/fabrica/issues/96.",
   "testPaths": [
