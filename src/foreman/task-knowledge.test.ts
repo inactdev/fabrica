@@ -129,7 +129,7 @@ test("the named notes reach the clarifying step and every round's brief, in full
   const project = makeFixtureRepo("exit 0");
   const base = makeKnowledgeBase();
   const recordHome = homeNaming(project, base, ["worker-boxes", "the-record"]);
-  const { brain, briefs } = recordingBrain({ askQuestions: ["Which parser?"] });
+  const { brain, briefs } = recordingBrain({ askQuestion: { question: "Which parser?", options: ["The old one", "A new one"] } });
   const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   const asked = await foreman.do("rework the parser", { project, brain });

@@ -39,9 +39,44 @@ own failure - a brain that asks about everything makes the tool nobody
 wants to use - so drawing that line narrowly is the brain's job, not
 something callers second-guess.
 
-Returns `{ questions?: string[] }`. Non-empty means "stop and ask
-these" - numbered, Client-facing, worth quoting back verbatim. Empty or
-omitted means "clear enough, proceed to `work()`."
+Returns `{ question?: { question, options } }` (issue #176). One question
+means "stop and ask this"; omitted (or `null`) means "clear enough,
+proceed to `work()`."
+
+**The shape is fixed, and Fabrica enforces it at dispatch**
+(`ask-shape.ts`, the one copy of these rules - an adapter asks its brain
+for exactly this, and the Foreman checks exactly this):
+
+- Exactly **one** question. More than one thing unclear means asking
+  about the one that would change what gets built the most; the rest can
+  be decided while the work runs.
+- **Two to four options**: the answers the brain thinks most likely, each
+  a short phrase.
+- **No "other" of the brain's own.** Fabrica appends `OTHER_OPTION` to
+  every question, and the Client can always answer in his own words; a
+  brain that includes its own is rejected rather than silently given two.
+- The ratified free-form `questions?: string[]`
+  (`contract/surface.ts`) is **itself a rejection** now. It is still
+  declared, so a brain *can* send it - and will be told the shape and
+  asked again.
+
+Anything out of shape is turned away with a reason, recorded as
+`"ask-rejected"`, and the brain is asked again inside the same pass -
+twice at most, after which the pass fails loudly
+(`ForemanError("ask-shape-invalid")`). Every one of those calls spends
+money, so every one of them records its own cost. An adapter should
+therefore pass a wrong-shaped ask through **untouched** rather than
+tidying it up: tidying makes the re-ask unreachable and hides the one
+thing the shape rule exists to catch. Output that is not an ask attempt
+at all (unparseable junk) still reads as "nothing to ask" - see the
+reference adapter's `parseAskResult`.
+
+Fabrica derives a **stable id** for every question from its own text plus
+its options (issue #175: `deriveQuestionId`, a hash - a brain never
+supplies one, so two different questions can never collide on one), and
+the first answer to that id wins for the rest of the task: a question
+that comes back is answered from the record instead of being put to the
+Client twice.
 
 No `workdir` is a deliberate part of the contract, not an oversight: it
 means this call structurally cannot read or write anything of the

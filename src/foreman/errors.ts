@@ -58,6 +58,18 @@ export type ForemanErrorCode =
   | "no-questions-pending"
   | "already-answered"
   | "missing-answer"
+  /** Issue #176: the clarifying step never asked in the fixed shape -
+   * one question with two to four options - across its first call and
+   * both re-asks. Carries the last rejection's own words. The pass fails
+   * rather than silently proceeding as though nothing needed asking. */
+  | "ask-shape-invalid"
+  /** `fabrica answer --question <id>` named an id this task never asked
+   * (issue #175). Lists the ids it did ask. */
+  | "unknown-question"
+  /** `fabrica answer --option <n>` named an option the question does not
+   * have, or paired a listed option with words of the Client's own,
+   * which would leave two answers to one question. */
+  | "invalid-option"
   | "cap-refused"
   /** Issue #189's pause rule refused to start anything: a subscription
    * meter is past its refuse threshold. Carries the numbers and the

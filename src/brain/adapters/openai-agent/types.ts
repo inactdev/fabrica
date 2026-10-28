@@ -161,7 +161,14 @@ export interface AgentResult {
   writeup?: unknown;
   /** "work" mode: the worker's own rule 9 declaration, when it made one. */
   gateChanges?: string;
-  /** "ask" mode: the clarifying questions, or an empty list. */
+  /** "ask" mode: the one question, in issue #176's fixed shape, or
+   * omitted when there is nothing to ask. Typed loosely on purpose -
+   * whatever the model sent is handed to the Foreman as-is, which
+   * rejects anything out of shape and has it ask again. */
+  question?: unknown;
+  /** "ask" mode: a free-form list, kept only so a machine that still
+   * sends one is rejected by name rather than read as "nothing to ask"
+   * (issue #176). */
   questions?: string[];
   /** Set when `ok` is false: what went wrong, for the Client to read. */
   error?: string;

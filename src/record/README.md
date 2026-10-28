@@ -37,7 +37,7 @@ A line of `events.jsonl` looks like this:
 Three different documents live in a task's folder, and they used to be conflated into one (`task.md`, holding the original text with clarification rounds appended onto it — indistinguishable from each other once appended). They're kept apart because that distinction is itself worth keeping:
 
 - **`request.md`** — what the Client originally wrote. Verbatim, immutable: `registerTask` writes it once, at registration, and nothing in this module ever appends to it or overwrites it again.
-- **`answers.md`** — every clarification round so far, one section per round: the question that was asked, and the answer the Client gave. Appended to by `src/foreman/`'s `answerTask` (issue #8), one round at a time.
+- **`answers.md`** — every clarification round so far, one section per round: the question that was asked, its options with the picked one marked (issue #176), and the answer the Client gave. Appended to by `src/foreman/`'s `answerTask` (issue #8), one round at a time — plus, for a question the task had already answered, by `autoAnswerFromRecord` (issue #175), which marks the round as reused rather than asking the Client again.
 - **`brief.md`** — the request plus every answer, assembled into the single document a Worker actually receives. This is exactly what gets passed as the `brief` argument to `Brain.work` (see `src/brain/README.md`). Re-derived from `request.md` and `answers.md` every time `fabrica answer` runs, so it can never drift out of sync with what it's assembled from.
 
 Why keep them apart instead of one growing file? Because "this task needed three rounds of clarification" and "this task ran straight through" are different facts about a task — and, over time, about the Client's own task-writing — and merging request and answers into one blob destroys that signal. It feeds directly into:
@@ -55,7 +55,7 @@ Each task gets `tasks/<id>/`, holding:
 | File | Holds | Written by |
 | --- | --- | --- |
 | `request.md` | The Client's original task text, verbatim | `registerTask`, once, at registration; never appended to or overwritten again. |
-| `answers.md` | Every clarification round: question asked, answer given | The Foreman's `answerTask` (issue #8), one round appended per `fabrica answer`. |
+| `answers.md` | Every clarification round: question asked, its options with the picked one marked, answer given | The Foreman's `answerTask` (issue #8), one round appended per `fabrica answer` that actually applies — a second answer to a question that already has one leaves the first standing and appends nothing (issue #175). |
 | `brief.md` | `request.md` plus every answer in `answers.md`, assembled — what a Worker actually receives | The Foreman, at registration, verbatim from the request (no answers exist yet); re-derived and rewritten by `answerTask` each time a round is added. |
 | `plan.md` | The agent's plan, on the runs where it proceeds straight to work instead of asking questions | The worker, once. |
 | `delivery.md` | The delivery block, or a failure report | The Foreman, after checks run - rewritten in place by a `fix` verdict's extra round, so it always shows the latest one. |

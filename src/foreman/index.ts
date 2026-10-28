@@ -8,6 +8,13 @@ export { DEFAULT_ATTEMPTS } from "./do.ts";
 // src/cli/ can run the first in the foreground and hand the second to a
 // detached process. See answer.ts/verdict.ts for the full reasoning.
 export { recordAnswerDecision, runRecordedAnswer } from "./answer.ts";
+export type { AnswerDecision, AnswerDecisionOptions } from "./answer.ts";
+// Issues #176/#175: the clarifying step's record side - which question a
+// task is stopped on, which of its questions already have an answer, and
+// the latest answer to each (the Client may correct one).
+export { answeredQuestionsOf, answerFor, askedQuestionsOf, deriveBrief, renderAnswerRound } from "./questions.ts";
+export type { AnswerRecord, AnswersGivenDetails } from "./questions.ts";
+export type { AskedDetails, AskRejectedDetails, QuestionAutoAnsweredDetails } from "./ask.ts";
 export { recordVerdictDecision, runRecordedFix } from "./verdict.ts";
 // Issue #203: the Client's own stop - the record half only (the process
 // half is src/cli/task-process.ts; see stop.ts's header for why).

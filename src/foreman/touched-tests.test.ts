@@ -155,7 +155,7 @@ test("a task asking for the full suite opts itself out, leaving the project's ow
 test("an answered round and a fix round carry the ruling too", async () => {
   const project = makeFixtureRepo("exit 0");
   const recordHome = freshHome(`[projects.demo]\npath = "${project}"\ncheck = "./check.sh"\n`);
-  const { brain, briefs } = recordingBrain({ askQuestions: ["Which parser?"] });
+  const { brain, briefs } = recordingBrain({ askQuestion: { question: "Which parser?", options: ["The old one", "A new one"] } });
   const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
 
   const asked = await foreman.do("rework the parser", { project, brain });

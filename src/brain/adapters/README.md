@@ -200,9 +200,14 @@ export function terminalToolAdapter(): Brain {
     async ask(brief) {
       // SPEC.md step 2, before any ProductionLine exists - so no workdir
       // and nothing on disk to run against; see ../README.md. A real one
-      // runs the tool in a throwaway scratch dir and parses its answer
-      // defensively (reference adapter: claude-code.md's "ask(brief)").
-      return { questions: [] };
+      // runs the tool in a throwaway scratch dir, asks for issue #176's
+      // fixed shape with ASK_SHAPE_NOTICE (../ask-shape.ts - never a
+      // wording of its own), and parses the answer defensively
+      // (reference adapter: claude-code.md's "ask(brief)"). Nothing to
+      // ask is `{}`; a question is `{ question: { question, options } }`,
+      // handed on exactly as the model sent it so the Foreman is what
+      // rejects a wrong shape and re-asks.
+      return {};
     },
     async work(brief, workdir, opts) {
       // Real flag names come from verifying the live binary (issue #6).

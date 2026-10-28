@@ -713,12 +713,16 @@ ordering places "Clarify-or-proceed" (step 2) *before* "Isolates" (step
 all. So `Brain.ask(brief)` is a second, narrower socket: no `workdir`
 parameter, because at this point in the loop there is no ProductionLine
 yet to hand one from - CONTRACT rule 1 holds here by construction, not by
-trusting a brain's good behavior. It returns `{ questions?: string[] }`;
-empty or omitted means proceed straight to work.
+trusting a brain's good behavior. It returns `{ question?: { question,
+options } }` in issue #176's fixed shape (see "A question has a fixed
+shape, and an id" below); omitted means proceed straight to work.
 
 **`ask.ts`'s `registerAndAsk`** owns steps 1-2 of `do()`: register the
-task, then call `brain.ask(taskText)`. A non-empty result gets recorded
-as `"questions-asked"` (details: the questions, plus `project`,
+task, then call `brain.ask(taskText)`. A question gets recorded
+as `"questions-asked"` (details: `question` - the question, its options
+with "other" appended, and Fabrica's own derived id - plus `questions`,
+the same question's text as a one-element list for every reader that
+predates #176, plus `project`,
 `totalAttempts`, and `explicitAttempts` - a later `fabrica answer` has no
 ProductionLine to remember these on, since none was ever cut, so they
 ride on this event instead) and `doTask` returns `{ id, state: "asking" }`
@@ -736,14 +740,73 @@ result falls through to `runProductionRound` (do.ts), the exact same
 isolate/work/verify/inspect/result pipeline this file runs, now factored
 out so `answer.ts` can reach it too.
 
-**`answer.ts`'s `answerTask`** is what `fabrica answer <id> -m "<text>"`
-calls: find the task's last `"questions-asked"` event (refuses with
-`ForemanError("no-questions-pending")` if there isn't one), append the
+**`answer.ts`'s `answerTask`** is what `fabrica answer <id>` calls: find
+the task's last `"questions-asked"` event (refuses with
+`ForemanError("no-questions-pending")` if there isn't one), work out
+which option the Client picked, append the
 round to `answers.md`, re-derive `brief.md` as `request.md` plus every
-answer so far, append `"answers-given"`, then call `runProductionRound`
+answer so far, append `"answers-given"` (details: the answer, the
+question's id, and the option picked), then call `runProductionRound`
 with the extended brief - what the *worker* receives. It never calls
 `brain.ask()` again, regardless of whether the extended brief would
 still look ambiguous - the dial is fixed, not a negotiation loop.
+
+An answer is one of two things (`resolveAnswer`): a **listed option**,
+whose own text is then the whole answer the worker receives and which
+needs no words of the Client's at all, or **"other"**, which requires
+them and makes them the answer (Client ruling 2026-10-25). `-m "<text>"`
+with no option named is "other", which is exactly what this command has
+always meant, so every older invocation still does what it did. Pairing
+a listed option *with* `-m` is refused (`ForemanError("invalid-option")`)
+rather than guessed at: that would leave the worker two answers to one
+question.
+
+### A question has a fixed shape, and an id (issues #176/#175)
+
+`src/brain/ask-shape.ts` owns the shape and the id - it lives there
+rather than here because the adapters ask their brain for exactly this
+shape and must not import from `src/foreman/`; `src/brain/README.md`'s
+`ask(brief)` section states the rules in full. What this module does with
+them:
+
+- **Rejects and re-asks, then fails loudly.** `registerAndAsk` loops:
+  anything `askShapeProblem` turns away lands on the record as
+  `"ask-rejected"` (details: the call number, the problem in the same
+  words the brain was given, and how many re-asks are left) and the
+  brain is asked again with the rejection appended to its brief
+  (`withAskRejection`). After `ASK_RESHAPE_LIMIT` (2) re-asks - three
+  `ask()` calls in all - the pass throws
+  `ForemanError("ask-shape-invalid")`, which the surrounding
+  `recordingFailure` wrapper records as this task's `"task-failed"`.
+  (Deliberately not `"ask-failed"`, which means `brain.ask()` itself
+  threw; this brain answered, it just never used the shape.) **Every one
+  of those calls appends its own `"ask-cost-recorded"`** - a re-asked
+  pass is not a free pass through rule 10's ledger.
+- **The first answer wins** (`questions.ts`). Every question carries a
+  Fabrica-derived id, so an answer is filed against a specific question
+  rather than against "the round". `autoAnswerFromRecord` is the guard
+  every ask goes through: a question whose id this task already answered
+  is answered from the record - recorded as `"question-auto-answered"`
+  (which `fabrica status` counts), written into `answers.md` as a real
+  round, and the task proceeds instead of stopping. A Fabrica task asks
+  once, on its first pass, so on that pass this finds nothing; it is
+  keyed off the record rather than off anything in memory precisely so
+  the guarantee holds for any round that does ask, in whatever process.
+  The live half of the same rule is on the answer side: a second
+  `fabrica answer` that names no question (the documented retry of a
+  round that threw) leaves the first answer standing and appends
+  nothing, where before #175 it appended a duplicate round and handed
+  the worker the Client's words twice.
+- **A correction is a new record, never an edit.** `fabrica answer <id>
+  --question <qid> -m "<text>"` is the one thing that gets past
+  `already-answered`: it appends a second round for that question,
+  `answeredQuestionsOf` takes the latest, and nothing is rewritten.
+  A correction arriving after the round already finished is recorded but
+  resumes nothing - there is no round left to restart, which is what
+  `already-answered` has always protected - and `recordAnswerDecision`
+  returns `resume: false` so both callers (the CLI and the live view's
+  `/review` page) say so rather than starting a second clarification
+  round v1 does not have.
 
 `runProductionRound` itself keeps two things distinct that a first-ever
 round never had to: `brief` (what `brain.work()` gets - the full,
@@ -2114,7 +2177,7 @@ from it, is still the cheap fix and is still unbuilt.
 
 | File | Holds |
 | --- | --- |
-| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`, issue #189's `meter-refused` (a subscription meter past its refuse threshold - not a dollar cap), `not-running` (issue #203: `stop` on a task that is not running), issue #199's `model-call-failed` (a model call was dropped in transit, retried once on the same model, and dropped again - see "A dropped model call is retried once" above), and `inspector-not-ready` (Inspector mode with no usable GitHub App to mint a publishing token from - see `src/inspector/README.md`), issue #187's `no-github-repo` (a project with no github.com `origin`, so there is no repository to scope a token to and nothing to publish to either - see `github-token.ts`), `reviewer-not-ready` (no model could be settled to judge a project that asks for its test changes judged - see `src/reviewer/README.md`). There is deliberately **no** `reader-not-ready` to match that last one: an unsettleable code reader is recorded as `reader-failed` rather than thrown, since a flagger must never destroy a green round - see "Where the refusal lives, and why not here" above. Also `knowledge-unavailable` (a project's named knowledge-base notes could not be carried into the brief - see "The knowledge-base notes a project names" above), and `project-not-a-repo`. |
+| `errors.ts` | `ForemanError`, with codes `no-brain`, `invalid-attempts`, `missing-check`, `commit-failed`, `unknown-task`, `not-delivered`, `inspection-refused`, `already-closed`, `invalid-verdict`, `missing-note`, `no-questions-pending`, `already-answered`, `missing-answer`, issue #176's `ask-shape-invalid` (the clarifying step never used the fixed shape, across its first call and both re-asks) and `invalid-option`, issue #175's `unknown-question`, rule 10's `cap-refused`, `spend-unknown`, `invalid-cost`, `nothing-to-record`, issue #189's `meter-refused` (a subscription meter past its refuse threshold - not a dollar cap), `not-running` (issue #203: `stop` on a task that is not running), issue #199's `model-call-failed` (a model call was dropped in transit, retried once on the same model, and dropped again - see "A dropped model call is retried once" above), and `inspector-not-ready` (Inspector mode with no usable GitHub App to mint a publishing token from - see `src/inspector/README.md`), issue #187's `no-github-repo` (a project with no github.com `origin`, so there is no repository to scope a token to and nothing to publish to either - see `github-token.ts`), `reviewer-not-ready` (no model could be settled to judge a project that asks for its test changes judged - see `src/reviewer/README.md`). There is deliberately **no** `reader-not-ready` to match that last one: an unsettleable code reader is recorded as `reader-failed` rather than thrown, since a flagger must never destroy a green round - see "Where the refusal lives, and why not here" above. Also `knowledge-unavailable` (a project's named knowledge-base notes could not be carried into the brief - see "The knowledge-base notes a project names" above), and `project-not-a-repo`. |
 | `judge.ts` | Who judges each attempt (issue #64): Inspector, or a self-test in the Worker's box. `prepareRound` picks the mode, and - only for a task that will actually be inspected - settles who reviews its test changes (`reviewer.ts`'s `requireReviewer`, refusing with `reviewer-not-ready` before Inspector is called at all); `roundOutcome` turns the last judgement into a delivery outcome. `Judge` is handed each attempt's resolved `finalMessage` (pr-body.ts) alongside `gateChanges`, so `inspectorJudge`'s own per-attempt commit and Inspector's pull request always carry the same title/body `attempts.ts` computed - `attempts.ts` only calls `judge()` once that message is valid, so this commit and that pull request are only ever made with a valid write-up as their message. Nothing here runs a check on the host - `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`. `skipIfUnchanged(judge, workdir, priorHead)` wraps any `Judge` so an attempt that leaves `workdir`'s HEAD exactly at `priorHead` never reaches the real judge at all - returns `Judgement.unchanged` instead - `verdict.ts`'s `runFixRound` is the one caller, `priorHead` being the branch's HEAD the moment that round's line was reopened. `withPullRequestMessage(judge, map)` is the other wrapper: it changes only the title and body handed to Inspector, which is how a rebase-only round's section is appended to the pull request's existing body instead of replacing it - the message `attempts.ts` commits with is untouched. |
 | `pr-body.ts` | `writeupProblem`/`finalMessageFor`/`renderCommitMessage`: checks a worker's structured write-up (`BrainWorkResult.writeup` - title at most 60 characters, seven other non-empty required string fields, a `confidence` number from 0 to 100, a `quiz` of exactly three answered questions, and the one optional `couldNotVerify`; issues #185/#194/#98, Client ruling 2026-10-18) and renders it as the commit message and (when Inspector is configured) the pull request title and body - the Client's own template, five sections to the heading: `## Context (Why)`, `## Description (What)`, `## Changes in the codebase (How)` and `## Changes outside the codebase` each holding one field verbatim, then `## Additional information` folding confidence/assumptions/expectedOutcomes/deviations/couldNotVerify into labelled bullets in that fixed order, a bullet with nothing in it omitted entirely rather than rendered as a placeholder - or, when it is missing or invalid, a fallback naming what is wrong, never the task's own words. Nothing is parsed out of the worker's prose. The `quiz` is the one required field this does NOT render: it is validated here and shown to the owner on the live view (`/review` and `/quiz`, issue #98), never in the pull request body, whose layout is the Client's own ratified template. Each of those five headings (`TEMPLATE_HEADINGS`) is Fabrica's own to emit and appears in a rendered body exactly once: a worker that echoes a heading into one of its own fields - the one way a real pull request ended up reading `## Additional information` twice in a row, since no code path here has ever emitted it more than once - has that heading-only line dropped as the field renders (`withoutTemplateHeadings`), keeping every word around it, where refusing the write-up outright would cost a red round for a cosmetic slip. A heading inside a fenced code block is kept exactly as written: a write-up quoting this template is showing a heading, not emitting one. Also `closesIssueFor`/`issueNamedByTaskText`/`withClosesLine`: whether this task's pull request should close an issue on merge - only when the task is the *whole* of that issue's work, from `taskText` opening with "Issue #N:" or from an `issue` number the chat agent named explicitly (`Foreman.do`'s `opts.issue`, persisted once at registration by `ask.ts`) - prepended as the pull request **body**'s first line by `judge.ts`'s `inspectorJudge`, never put on the commit message. `titleProblem` is the title's own check (empty, or over 60 characters), split out so a rebase-only round - which publishes one section and so checks the title and that section alone - cannot grow a second idea of what a usable title is. |
 | `resolve-check.ts` | Picks the check command: a registered project's `check`, or the `check.sh` convention; `requireCheckCommand` refuses a self-tested task with none. |
@@ -2136,11 +2199,12 @@ from it, is still the cheap fix and is still unbuilt.
 | `inspection.ts` | Records the configured Inspector handoff and its green, red, or refused result. A refusal reaches the record and task status but never becomes a red delivery. |
 | `ci-checks.ts` | Issue #267: records what the repository's own checks said about the pull request Inspector opened or updated - one `"ci-check-concluded"` per concluded check (name, conclusion, log URL, and the tail of its job log when red), then one `"ci-checks-finished"` summary carrying the phrase every task line shows and the checks that never concluded. `ChecksReader` is the seam the GitHub read sits behind (`src/ci/`'s `readPullRequestChecks` by default, a fake in tests, threaded from `createForeman`'s `checksReader` option the same way `inspector`/`checkBox` are); the record writing is here so no fake can skip it, exactly as with `inspection.ts`. Reads nothing itself and executes nothing - see "The pull request's own checks are part of the round" above. |
 | `github-token.ts` | Issue #187: the task-facing half of the GitHub App. Which repository a project's tokens are scoped to (`projectRepo`, from `origin` — refusing `no-github-repo` for a project with no github.com remote), the three per-call scopes (`publishToken`, `readIssueScope`, `readChecksScope`), and `recordingMinter`, which puts one `"token-minted"` event (`TokenMintedDetails`: repository, installation, the permissions GitHub *granted*, expiry, purpose — never the token) on the task for every mint. The minting itself is `src/githubapp/`'s; the record writing is here so no fake minter can skip it, exactly as with `inspection.ts` and `ci-checks.ts`. |
-| `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass; records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
+| `ask.ts` | `registerAndAsk` (issue #8) — register the task, then `brain.ask()`'s first pass, rejecting and re-asking anything out of issue #176's fixed shape (`"ask-rejected"`, then `ForemanError("ask-shape-invalid")` after two re-asks); records `"questions-asked"` when materially ambiguous, `"ask-failed"` (then rethrows) when the call itself throws. See "The ask-first seam" above. |
 | `do.ts` | `doTask` (registers, asks-or-proceeds) and `runProductionRound` (isolate/work/verify/inspect/result, shared with `answer.ts`'s resume path) - its tail, once a round's attempts are done, is `round.ts`'s `recordRoundResult`. |
-| `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for questions: appends the round, re-derives `brief.md`, calls `runProductionRound`. See "The ask-first seam" above. Split in two (issue #123) so `src/cli/answer-command.ts` can detach the round: `recordAnswerDecision` (validate + record, no round) and `runRecordedAnswer` (re-derives the brief/ctx from the record and calls `runProductionRound`) - `answerTask` composes both, unchanged for every other caller. |
+| `answer.ts` | `answerTask` (issue #8) — resumes a task that stopped for a question: resolves the option picked (issue #176), appends the round, re-derives `brief.md`, calls `runProductionRound`. Returns what the caller has to *say* about the decision (issue #175): whether the question already had an answer that stands, and whether there is a round to resume at all. See "The ask-first seam" above. Split in two (issue #123) so `src/cli/answer-command.ts` can detach the round: `recordAnswerDecision` (validate + record, no round) and `runRecordedAnswer` (re-derives the brief/ctx from the record and calls `runProductionRound`) - `answerTask` composes both, unchanged for every other caller. |
 | `verdict.ts` | `recordVerdict` — rule 6, described above: closes on accept/wrong (wrong alone also closes a task Inspector refused with no delivery, via `queries.ts`'s `refusedWithNoDelivery`, or a task that failed before any delivery, via `failedWithNoDelivery`; accept and wrong both still rule on an earlier real delivery a later fix round's refusal supersedes, recording `supersedesRefusal: true`), re-enters the same line and worker on fix - including on a task whose latest word IS such a refusal (`queries.ts`'s `refusalAfterDelivery`), where the round's brief carries Inspector's own reason as a correction (`refusalCorrection`) and `"verdict-recorded"` notes `answersRefusal: true`. Split in two for its `fix` path (issue #123) so `src/cli/verdict-command.ts` can detach the round: `recordVerdictDecision` (validate + record, no round) and `runRecordedFix` (re-derives project/baseCommit/prior receipts/the note from the record and calls the module-private `runFixRound`) - `recordVerdict` composes both, unchanged for every other caller. `runFixRound` captures the branch's HEAD before the round's one attempt runs and wraps its judge with `judge.ts`'s `skipIfUnchanged`, so a round that lands no new commit delivers `"nothing-changed"` (`delivery.ts`'s `buildNothingChangedDelivery`) without ever calling Inspector or a self-test check - unless rule 10's cap already stopped the same round, which still wins, or the round is answering a refusal (nothing was reviewed, so the unchanged commit is handed over again rather than skipped); its tail, same as `do.ts`'s, is `round.ts`'s `recordRoundResult`. |
 | `stop.ts` | `recordStopDecision` (issue #203) - the record half of the Client stopping a task himself from the review page: refuses a task that is not `"working"`/`"checking"` (`not-running`, naming the state), otherwise appends `"stopped-by-owner"` carrying who stopped it (the Tailscale login), which state it was stopped from, and the worker's last transcript line with its timestamp. Signaling the process is deliberately NOT here - that needs `ps`, and `no-host-check.test.ts` fails if anything under `src/foreman` spawns anything but `git`; `src/cli/task-process.ts` owns it, and `integrations/live-view/server.ts` composes the two the same way `src/cli/` composes `recordVerdictDecision` with `spawnDetachedResume`. |
+| `questions.ts` | Issues #176/#175 — the clarifying step's record side: `askedQuestionsOf`/`answeredQuestionsOf`/`answerFor` (latest answer per question id), `autoAnswerFromRecord` ("the first answer wins", applied at an ask), `renderAnswerRound` and `deriveBrief`. The shape and the id itself are `src/brain/ask-shape.ts`'s, which the adapters need too. |
 | `queries.ts` | `deliveryOf`, `receiptsOf`/`reconstructReceipts`, `gateDeclarationsOf`, `passFingerprintsOf`/`priorPassFingerprints`/`deliveredFingerprintOf`, `eventsOf`, `statusOf`, `latestDeliveredDetails`, `eventsByTask`, `stateOf`, `refusedWithNoDelivery`, `refusalAfterDelivery`, `redPublishedChecksOf`, `failedWithNoDelivery`, `earlyStopKindOf` - all read from `events.jsonl`. `deliveryOf` suppresses an older delivery after a newer Inspector refusal. `receiptsOf` reconstructs the task's whole receipt list from every event carrying one, keyed by attempt with the latest restatement winning, and `gateDeclarationsOf` does the same for rule 9's per-round declarations - both tolerate a record written before issue #68, when each event carried the cumulative view instead. `refusedWithNoDelivery` is narrower than that: true only when there is no `"delivered"` event at all and the latest `"inspection-finished"` is a refusal - `verdict.ts`'s one carve-out letting `wrong` close such a task. `refusalAfterDelivery` is its exact other side: the latest `"inspection-finished"` is a refusal, it is newer than the task's last `"delivered"` event, and there IS one - the state a `fix` verdict re-enters the worker for, carrying that refusal's own report as the correction. `failedWithNoDelivery` (issue #143) is the sibling carve-out for a task that never reached a delivery because it failed first - `stateOf` reads `"failed"` and no `"delivered"` event exists anywhere in its history. `earlyStopKindOf` names *why*, in words, for whichever of those two applies (Inspector's own report, or whichever of `"cap-refused"`/`"task-failed"`/`"ask-failed"` actually killed the task) - the one function `fabrica status` and the phone review page (`integrations/live-view/record-view.ts`'s `getReviewRows`) both call, so a task waiting on a `wrong` verdict for either reason can never read differently on the two surfaces. `fixRoundOf` counts *every* `"verdict-recorded"` event with `ruling: "fix"`, since every round matters, not just the latest. `eventsByTask` groups the whole log in one pass and `stateOf` derives a state from events already in hand, so a reader like `fabrica status` doesn't re-read the log per task. `stateOf` has two absorbing states rather than pure "last event wins": `"stopped"` (issue #203) and a recorded failure, which only `CLEARS_FAILURE`'s three event names take a task back out of - see "A recorded failure is absorbing too" above. `passFingerprintsOf` reads the change fingerprint each pass ended on (one pass per `"work-started"`, its stamp being the last one that pass's `"receipt-recorded"` events carried, so a pass Inspector refused still counts); `priorPassFingerprints` drops the pass currently running, which is what stops a round being compared with its own stamp; `deliveredFingerprintOf` is what `fabrica status` marks a delivered line with. |
 | `transcript.ts` | Read side of a task's `transcript.log` (`readTranscript`) for `fabrica log --transcript`; skips a half-written line rather than throwing, since it reads a file still being appended to. |
 | `follow.ts` | `followTask` — the same two files (`transcript.log` and this task's slice of `events.jsonl`) read *incrementally* for `fabrica watch`, over `src/record/tail.ts`'s byte-offset line reader. A one-shot reader can afford to re-read its whole file; a 2Hz poll can't, on a log that holds every task the record home has ever seen and grows by a heartbeat per running task per 15s. Each `read()` still returns the task's full history — `stateOf` and the quiet/terminal notices all derive from the whole list — it just parses only what landed since the last call, and hands back fresh arrays each time (rule 5). |

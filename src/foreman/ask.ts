@@ -15,8 +15,17 @@
 // not this module's.
 
 import { appendEvent, registerTask, writeTaskFile } from "../record/index.ts";
-import { withTaskNetwork } from "../brain/index.ts";
-import type { Brain, BrainAskResult } from "../brain/index.ts";
+import {
+  ASK_MAX_OPTIONS,
+  ASK_MIN_OPTIONS,
+  ASK_RESHAPE_LIMIT,
+  askShapeProblem,
+  recordQuestion,
+  withAskRejection,
+  withTaskNetwork,
+} from "../brain/index.ts";
+import type { Brain, BrainAskResult, RecordedQuestion } from "../brain/index.ts";
+import { autoAnswerFromRecord } from "./questions.ts";
 import { networkPolicyFor } from "./network-policy.ts";
 import { ForemanError } from "./errors.ts";
 import { requireRoomToStart } from "./caps.ts";
@@ -41,10 +50,44 @@ export const DEFAULT_ATTEMPTS = 2;
  * back to resume the task exactly as `do()` would have run it, since no
  * ProductionLine was ever cut to remember them on. */
 export interface AskedDetails {
+  /** The question's own text, as a one-element list. Kept beside the
+   * structured `question` below (issue #176) rather than replaced by it,
+   * so every existing reader of this event - `fabrica log`'s renderer,
+   * the live view, this repository's own integrations, and the events
+   * already on disk - keeps working untouched. The record is
+   * append-only; nothing is backfilled. */
   questions: string[];
+  /** The one question this pass asks, with Fabrica's own derived id and
+   * the options the Client picks from, `OTHER_OPTION` last (issues
+   * #176/#175). Omitted on events recorded before those issues. */
+  question?: RecordedQuestion;
   project: string;
   totalAttempts: number;
   explicitAttempts: boolean;
+}
+
+/** Everything the `"ask-rejected"` event's `details` carries (issue
+ * #176): which of this pass's `ask()` calls was turned away, why, in the
+ * same words the machine was given, and how many re-asks are left. A
+ * rejection is never silent - a machine that keeps sending the wrong
+ * shape must be visible in `fabrica log`, not inferred from a cost with
+ * no question behind it. */
+export interface AskRejectedDetails {
+  call: number;
+  problem: string;
+  reasksLeft: number;
+}
+
+/** Everything the `"question-auto-answered"` event's `details` carries
+ * (issue #175): the question that came back, and the answer the record
+ * already held for it. The Client is told it happened - `fabrica status`
+ * counts these - but is never asked a second time. */
+export interface QuestionAutoAnsweredDetails {
+  questionId: string;
+  question: string;
+  answer: string;
+  /** When the answer this reused was originally given. */
+  answeredAt: string;
 }
 
 /** Everything the "ask-failed" event's `details` carries (issue #8
@@ -57,11 +100,17 @@ export interface AskFailedDetails {
 
 export interface RegisterAndAskResult {
   taskId: string;
-  /** request.md's content - identical to brief.md at this point, since
-   * no answer round has happened yet. */
+  /** What a worker is given: request.md's content, extended with any
+   * answer round this call wrote itself - a question whose id the record
+   * already had an answer for is answered on the spot (issue #175), so
+   * the brief returned here carries that answer rather than stopping. */
   brief: string;
-  /** Empty when the task is clear enough to proceed straight to work. */
+  /** Empty when the task is clear enough to proceed straight to work -
+   * including when the one question it asked answered itself from the
+   * record. One element at most (issue #176). */
   questions: string[];
+  /** The question the Client is being asked, when there is one. */
+  question?: RecordedQuestion;
   project: string;
   totalAttempts: number;
   explicitAttempts: boolean;
@@ -224,62 +273,132 @@ export async function registerAndAsk(
     // failed task must never look like a started one). Rethrown after
     // recording, unchanged - every direct caller of registerAndAsk/doTask
     // still sees the real error; only the record gains a trace of it.
-    let asked: BrainAskResult;
-    const askStartedAt = new Date().toISOString();
-    try {
-      // Issue #186: the clarifying step is a real model call over the
-      // real relay, so it runs under this task's own network policy
-      // too - a host it is refused lands on this task's record, not
-      // nowhere. Nothing about `ask(brief)`'s own ratified signature
-      // changes; see src/brain/task-network.ts.
-      asked = await withTaskNetwork(networkPolicyFor(recordHome, taskId, opts.project), () =>
-        // Issue #199: this call is as droppable as a worker's own, and
-        // gets the same one retry on the same model, recorded. Both
-        // failing throws ForemanError("model-call-failed"), which the
-        // catch below records as this task's "ask-failed" - naming the
-        // model and the real error, rather than leaving a task dead
-        // with nothing said about why.
-        withTransportRetry(
-          () =>
-            // The task's own words plus the issue they refer to, in
-            // full, plus the project's knowledge notes - every round's
-            // worker brief carries the same sections (do.ts/verdict.ts,
-            // via `withIssueText`/`withKnowledge`), so the clarifying
-            // step and the work see the same request and the same
-            // notes.
-            brain.ask(withKnowledge(withIssueText(taskText, issueText), knowledgeNotes)),
-          {
+    // The task's own words plus the issue they refer to, in full, plus
+    // the project's knowledge notes - every round's worker brief carries
+    // the same sections (do.ts/verdict.ts, via `withIssueText`/
+    // `withKnowledge`), so the clarifying step and the work see the same
+    // request and the same notes.
+    const askBrief = withKnowledge(withIssueText(taskText, issueText), knowledgeNotes);
+
+    // Issue #176: a question that does not arrive in the fixed shape is
+    // rejected and asked again inside this same pass, up to
+    // ASK_RESHAPE_LIMIT times, and the pass then fails loudly rather
+    // than quietly proceeding as though nothing needed asking (Client
+    // ruling 2026-10-25). Every call spends, so every call records its
+    // own cost - a re-asked pass is not a free pass through rule 10's
+    // ledger.
+    let question: RecordedQuestion | undefined;
+    /** Set once a question has been rejected: the same brief with the
+     * rejection appended, so the machine's next try is told what was
+     * wrong instead of guessing. */
+    let reaskBrief: string | undefined;
+    for (let call = 1; ; call++) {
+      let asked: BrainAskResult;
+      const askStartedAt = new Date().toISOString();
+      try {
+        // Issue #186: the clarifying step is a real model call over the
+        // real relay, so it runs under this task's own network policy
+        // too - a host it is refused lands on this task's record, not
+        // nowhere. Nothing about `ask(brief)`'s own ratified signature
+        // changes; see src/brain/task-network.ts.
+        asked = await withTaskNetwork(networkPolicyFor(recordHome, taskId, opts.project), () =>
+          // Issue #199: this call is as droppable as a worker's own, and
+          // gets the same one retry on the same model, recorded. Both
+          // failing throws ForemanError("model-call-failed"), which the
+          // catch below records as this task's "ask-failed" - naming the
+          // model and the real error, rather than leaving a task dead
+          // with nothing said about why.
+          withTransportRetry(() => brain.ask(reaskBrief ?? askBrief), {
             which: "ask",
             model: receiptModel(modelChoice.declaredModel, brain.model),
             onRetry: (details) => appendEvent(recordHome, { taskId, name: "transport-retry", details }),
-          }
-        )
-      );
-    } catch (err) {
-      const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };
-      appendEvent(recordHome, { taskId, name: "ask-failed", details });
-      throw markRecorded(err);
-    } finally {
-      // The clarifying step is a real model call, so it opens this
-      // task's worker networks too (`withTaskNetwork` above is what
-      // puts this task's id on them) - and it runs before any
-      // ProductionLine exists, so there is no line teardown to sweep
-      // after it. A task that stops here to ask leaves none behind
-      // either way. See ./task-networks.ts.
-      await sweepTaskNetworks(taskId);
-    }
-    // Rule 10: the clarifying step spends too. A cost the brain did not
-    // report (null or absent) is recorded as unknown - never as zero.
-    const costUsd =
-      typeof asked.costUsd === "number" && Number.isFinite(asked.costUsd) && asked.costUsd >= 0 ? asked.costUsd : null;
-    appendEvent(recordHome, { taskId, name: "ask-cost-recorded", details: { costUsd, startedAt: askStartedAt } });
-    const questions = (asked.questions ?? []).filter((q) => q.trim().length > 0);
+          })
+        );
+      } catch (err) {
+        const details: AskFailedDetails = { error: err instanceof Error ? err.message : String(err) };
+        appendEvent(recordHome, { taskId, name: "ask-failed", details });
+        throw markRecorded(err);
+      } finally {
+        // The clarifying step is a real model call, so it opens this
+        // task's worker networks too (`withTaskNetwork` above is what
+        // puts this task's id on them) - and it runs before any
+        // ProductionLine exists, so there is no line teardown to sweep
+        // after it. A task that stops here to ask leaves none behind
+        // either way. A rejected shape asks again, so this runs once per
+        // call rather than once per task: each call opened its own.
+        // See ./task-networks.ts.
+        await sweepTaskNetworks(taskId);
+      }
+      // Rule 10: the clarifying step spends too. A cost the brain did not
+      // report (null or absent) is recorded as unknown - never as zero.
+      const costUsd =
+        typeof asked.costUsd === "number" && Number.isFinite(asked.costUsd) && asked.costUsd >= 0 ? asked.costUsd : null;
+      appendEvent(recordHome, { taskId, name: "ask-cost-recorded", details: { costUsd, startedAt: askStartedAt } });
 
-    if (questions.length > 0) {
-      const details: AskedDetails = { questions, project: opts.project, totalAttempts, explicitAttempts };
-      appendEvent(recordHome, { taskId, name: "questions-asked", details });
+      // Nothing to ask at all: not a shape problem, and the one answer
+      // this loop ever accepts without a question. Checked before
+      // `askShapeProblem`, whose "no question was sent at all" is about a
+      // machine that tried to ask and sent something unusable.
+      // Typed loosely on purpose, exactly like `askShapeProblem`'s own
+      // filter: whatever a brain actually sent is judged, not what its
+      // declared type promised.
+      const freeForm = (asked.questions ?? []).filter((q) => typeof q === "string" && q.trim().length > 0);
+      if (!asked.question && freeForm.length === 0) break;
+
+      const problem = askShapeProblem(asked);
+      if (problem === null) {
+        question = recordQuestion(asked.question!);
+        break;
+      }
+
+      const reasksLeft = ASK_RESHAPE_LIMIT - (call - 1);
+      const details: AskRejectedDetails = { call, problem, reasksLeft: Math.max(reasksLeft, 0) };
+      appendEvent(recordHome, { taskId, name: "ask-rejected", details });
+      if (reasksLeft <= 0) {
+        // Loudly, and as this task's own failure: three tries at one
+        // fixed shape is not a formatting slip to work around.
+        throw new ForemanError(
+          "ask-shape-invalid",
+          `fabrica do: the clarifying step asked ${call} times and never used the required shape ` +
+            `(last rejection: ${problem}). A question must be one question with ` +
+            `${ASK_MIN_OPTIONS} to ${ASK_MAX_OPTIONS} options.`
+        );
+      }
+      reaskBrief = withAskRejection(askBrief, problem);
     }
 
-    return { taskId, brief: taskText, questions, project: opts.project, totalAttempts, explicitAttempts };
+    if (question === undefined) {
+      return { taskId, brief: taskText, questions: [], project: opts.project, totalAttempts, explicitAttempts };
+    }
+
+    // Issue #175: this exact question - same text, same options, so the
+    // same derived id - may already have an answer on this task's
+    // record. The first answer wins: it is reused rather than stopping
+    // the task to ask the Client the same thing twice. See
+    // `autoAnswerFromRecord` for what that records, and for where this
+    // can and cannot fire today.
+    const auto = autoAnswerFromRecord(recordHome, taskId, question);
+    if (auto) {
+      return { taskId, brief: auto.brief, questions: [], project: opts.project, totalAttempts, explicitAttempts };
+    }
+
+    const details: AskedDetails = {
+      questions: [question.question],
+      question,
+      project: opts.project,
+      totalAttempts,
+      explicitAttempts,
+    };
+    appendEvent(recordHome, { taskId, name: "questions-asked", details });
+
+    return {
+      taskId,
+      brief: taskText,
+      questions: [question.question],
+      question,
+      project: opts.project,
+      totalAttempts,
+      explicitAttempts,
+    };
   });
 }

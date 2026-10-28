@@ -496,13 +496,20 @@ so there is no verified work to be had; refusing before anything starts
 is what makes that cost nothing.
 
 If the task is ambiguous enough that the answer would change what gets
-built, nothing is started: you get numbered questions instead, and one
-round to answer them.
+built, nothing is started: you get one question instead - with two to
+four options plus "other" - and one round to answer it.
 
-    fabrica answer <id> -m "<text>"
+    fabrica answer <id> --option <n>
+    fabrica answer <id> -m "<text>"          # "other", in your own words
 
 That folds your answer into the brief and runs the task, this time in
 the foreground.
+
+Every question carries an id, and the first answer to it wins: a round
+retried after a failure is never asked the same thing twice. To change
+an answer you already gave, name its question - `fabrica answer <id>
+--question <qid> -m "<text>"`. The record keeps both answers, the newer
+one applies to the task's later rounds, and nothing is rewritten.
 
 If the task's base commit contains `.inspector.json`, a green Fabrica
 check triggers Inspector before delivery. Fabrica never pushes the

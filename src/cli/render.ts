@@ -21,6 +21,7 @@ import type {
   FingerprintMatch,
   ModelSource,
   ReaderOnDelivery,
+  RecordedQuestion,
   TestMapReport,
   TranscriptEntry,
 } from "../index.ts";
@@ -482,6 +483,12 @@ export function formatStatusLine(
      * own, because a reader that could not run must not look the same
      * as a reader that found nothing. */
     read?: string | null;
+    /** Issue #175: how many of this task's questions came back and were
+     * answered from the record instead of being put to the Client a
+     * second time ("the first answer wins"). Shown as a fact column when
+     * there are any, and omitted entirely when there are none - which is
+     * every ordinary task. */
+    autoAnswered?: number;
   }
 ): string {
   const project = opts.project ?? "unknown project";
@@ -489,7 +496,8 @@ export function formatStatusLine(
   const checks = opts.checksSummary ? `  ${CHECKS_LABEL}: ${opts.checksSummary}` : "";
   const tests = opts.testMapNote ? `  ${opts.testMapNote}` : "";
   const model = opts.model === undefined ? "" : `  model: ${opts.model}`;
-  const base = `${task.id}  ${project}  ${task.state}  ${age} old${model}${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}${checks}${tests}`;
+  const reused = opts.autoAnswered ? `  ${opts.autoAnswered} question(s) answered from the record` : "";
+  const base = `${task.id}  ${project}  ${task.state}  ${age} old${model}${opts.cost === undefined ? "" : `  cost: ${opts.cost}`}${checks}${tests}${reused}`;
 
   if (task.state === "delivered") {
     // Issue #111: in the fact columns, before the call-to-action - it is
@@ -825,9 +833,16 @@ export function formatTerminalNotice(
       // unlike "delivered", there is no fix path left to reopen this one.
       return "-- task closed - your verdict is recorded; nothing more will ever land on this transcript --";
     case "asking":
-      // Stopped for clarifying questions before any Worker ran (issue #8)
-      // - polling forever here would look like a hang with no way out.
-      return `-- task asking - stopped for clarifying questions; answer with \`fabrica answer ${ctx.taskId} -m "<text>"\` to resume it --`;
+      // Stopped for a clarifying question before any Worker ran (issue
+      // #8) - polling forever here would look like a hang with no way
+      // out. Both ways of answering are named (issue #176): the question
+      // itself is one question with a numbered menu, and the last option
+      // is always "other".
+      return (
+        `-- task asking - stopped for a clarifying question; answer it with ` +
+        `\`fabrica answer ${ctx.taskId} --option <n>\`, or in your own words with ` +
+        `\`fabrica answer ${ctx.taskId} -m "<text>"\`, to resume it (\`fabrica log ${ctx.taskId}\` shows the options) --`
+      );
     case "stopped":
       // Issue #203: the Client stopped it himself. Terminal, and
       // deliberately not worded as a failure or as something to resolve
@@ -1111,19 +1126,47 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     }
 
     case "questions-asked": {
-      // `src/foreman/ask.ts` emits this with `details.questions` as a
-      // string[] (issue #8) - the array branch below is the confirmed
-      // shape; the string branch stays for tolerance, so a question list
-      // always reads as questions, not JSON.
-      const d = details as { questions?: string[] | string };
+      // `src/foreman/ask.ts` emits this with `details.question` - one
+      // question, its options and Fabrica's own id for it (issues
+      // #176/#175) - plus `details.questions`, the same question's text
+      // as a one-element list, which is all a pre-#176 event carries.
+      // Both branches stay: the record is append-only.
+      const d = details as { questions?: string[] | string; question?: RecordedQuestion };
+      if (d.question?.question) {
+        const options = (d.question.options ?? []).map((option, i) => `${i + 1}) ${option}`).join("; ");
+        return `[${d.question.id}] ${d.question.question} - ${options}`;
+      }
       if (Array.isArray(d.questions)) return d.questions.map((q, i) => `${i + 1}) ${q}`).join("; ");
       if (typeof d.questions === "string") return d.questions;
       return fallbackDetail(details);
     }
 
+    case "ask-rejected": {
+      // `src/foreman/ask.ts`'s AskRejectedDetails (issue #176): a
+      // question that did not arrive in the fixed shape, and how many
+      // re-asks the pass has left before it fails.
+      const d = details as { call?: number; problem?: string; reasksLeft?: number };
+      if (!d.problem) return fallbackDetail(details);
+      const left = d.reasksLeft === 0 ? "no re-asks left" : `${d.reasksLeft} re-ask(s) left`;
+      return `question ${d.call} rejected: ${d.problem} (${left})`;
+    }
+
+    case "question-auto-answered": {
+      // `src/foreman/ask.ts`'s QuestionAutoAnsweredDetails (issue #175):
+      // the same question came back and was answered from the record.
+      const d = details as { questionId?: string; question?: string; answer?: string };
+      if (!d.answer) return fallbackDetail(details);
+      return `asked again [${d.questionId}]${d.question ? ` ${d.question}` : ""} - answered from the record: ${d.answer}`;
+    }
+
     case "answers-given": {
-      const d = details as { answer?: string };
-      return d.answer ? `answer: ${d.answer}` : fallbackDetail(details);
+      const d = details as { answer?: string; questionId?: string; option?: string };
+      if (!d.answer) return fallbackDetail(details);
+      // The option picked is shown when it isn't simply the answer
+      // itself - which is the case exactly when the Client wrote his own
+      // words ("other").
+      const picked = d.option && d.option !== d.answer ? ` (${d.option})` : "";
+      return `answer${d.questionId ? ` to ${d.questionId}` : ""}: ${d.answer}${picked}`;
     }
 
     case "line-cut": {

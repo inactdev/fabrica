@@ -405,7 +405,11 @@ export function inspectNpmLinkSite(site: { prefix: string; npmDefault: boolean }
  * `git` are: node-version-pins.test.ts proves this repo's four Node
  * declarations agree, and it has to read the FROM tag through the one
  * reader doctor itself refuses on, not a second regex that could be
- * right while doctor is wrong. */
+ * right while doctor is wrong.
+ *
+ * Anchored to a FROM line rather than matched anywhere in the file: a
+ * Dockerfile has comments, and a comment mentioning some other Node
+ * must never be able to satisfy a pin the box itself does not honor. */
 export function pinnedNodeVersion(): string | null {
   try {
     const dockerfile = readFileSync(join(CHECKOUT, "Dockerfile.inspector"), "utf8");

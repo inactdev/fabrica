@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFixtureRepo, pushToOrigin } from "../../contract/helpers/fixture.ts";
 import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
-import { createForeman } from "../index.ts";
+import { createForeman, OTHER_OPTION } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
 import { addReaderToHome, READER_TOML } from "../reader/helpers/configured-home.ts";
@@ -211,7 +211,7 @@ test("runDoCommand: a materially ambiguous task's stdout is exactly the task id,
   assert.deepEqual(events, ["task-received", "ask-cost-recorded", "questions-asked"]);
 });
 
-test("runDoCommand: a materially ambiguous task prints the numbered questions and how to answer them, to stderr", async () => {
+test("runDoCommand: a materially ambiguous task prints the one question, its numbered options and how to pick, to stderr", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
   const io = captureIo();
@@ -226,9 +226,14 @@ test("runDoCommand: a materially ambiguous task prints the numbered questions an
   assert.equal(code, 0);
   const taskId = io.out[0];
   assert.match(io.err.join("\n"), /materially ambiguous/);
-  assert.match(io.err.join("\n"), /1\. What database should this use\?/);
-  assert.match(io.err.join("\n"), /2\. Should it support multi-tenancy\?/);
-  assert.match(io.err.join("\n"), new RegExp(`fabrica answer ${taskId} -m "<text>"`));
+  // Issue #176: one question, and the menu to answer it from - the last
+  // option is always the "other" Fabrica appends.
+  assert.match(io.err.join("\n"), /What database should this use\?/);
+  assert.match(io.err.join("\n"), /1\. Postgres/);
+  assert.match(io.err.join("\n"), /2\. SQLite/);
+  assert.match(io.err.join("\n"), new RegExp(`3\\. ${OTHER_OPTION.replace(/[()]/g, "\\$&")}`));
+  assert.match(io.err.join("\n"), new RegExp(`fabrica answer ${taskId} --option <1-3>`));
+  assert.match(io.err.join("\n"), new RegExp(`fabrica answer ${taskId} --option 3 -m "<text>"`));
 });
 
 // Client ruling, issue #8 follow-up: a task that fails before any work

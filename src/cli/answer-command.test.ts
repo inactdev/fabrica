@@ -39,7 +39,7 @@ test("runAnswerCommand: returns before the resumed round finishes, and the round
   const recordHome = tempRecordHome();
   const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
     project: makeFixtureRepo("exit 0"),
-    brain: fakeBrain({ askQuestions: ["What database should this use?"] }),
+    brain: fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } }),
   });
   assert.equal(task.state, "asking");
   const io = captureIo();
@@ -128,7 +128,7 @@ test("runAnswerCommand: answering the same task twice refuses the second time", 
   const recordHome = tempRecordHome();
   const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
     project: makeFixtureRepo("exit 0"),
-    brain: fakeBrain({ askQuestions: ["Which?"] }),
+    brain: fakeBrain({ askQuestion: { question: "Which?", options: ["This", "That"] } }),
   });
   const first = await runAnswerCommand([task.id, "-m", "First answer."], {
     recordHome,
@@ -151,4 +151,61 @@ test("runAnswerCommand: answering the same task twice refuses the second time", 
 
   assert.equal(code, 1);
   assert.match(io.err[0], /already got its one clarification round/);
+});
+
+// Issue #176: answering by picking an option, which is the ordinary way
+// now - no words of the Client's own at all.
+test("runAnswerCommand: an option pick records that option's own text as the answer", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain({ askQuestion: { question: "Which database?", options: ["Postgres", "SQLite"] } }),
+  });
+  const io = captureIo();
+
+  const code = await runAnswerCommand([task.id, "--option", "2"], { recordHome, entryScript: FAKE_ANSWER_ENTRY, ...io });
+
+  assert.equal(code, 0, io.err[0]);
+  const answered = readEventsForTask(recordHome, task.id).find((e) => e.name === "answers-given");
+  assert.equal((answered!.details as { answer?: string }).answer, "SQLite");
+});
+
+// Issue #175: the first answer wins, and the Client is told so rather
+// than left thinking his second answer was applied.
+test("runAnswerCommand: a second answer that names no question says the first one stands", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain({ askQuestion: { question: "Which database?", options: ["Postgres", "SQLite"] } }),
+  });
+  await runAnswerCommand([task.id, "--option", "1"], { recordHome, entryScript: FAKE_ANSWER_ENTRY, ...captureIo() });
+
+  const io = captureIo();
+  const code = await runAnswerCommand([task.id, "-m", "No, SQLite."], {
+    recordHome,
+    entryScript: FAKE_ANSWER_ENTRY,
+    ...io,
+  });
+
+  assert.equal(code, 0);
+  assert.match(io.err.join("\n"), /already has an answer - the first answer stands \("Postgres"\)/);
+  assert.match(io.err.join("\n"), /--question q-[0-9a-f]{12}/);
+  // Only the first answer is on the record; nothing was rewritten.
+  const answers = readEventsForTask(recordHome, task.id).filter((e) => e.name === "answers-given");
+  assert.equal(answers.length, 1);
+});
+
+test("runAnswerCommand: an option the question does not have refuses, and records nothing", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain({ askQuestion: { question: "Which database?", options: ["Postgres", "SQLite"] } }),
+  });
+  const io = captureIo();
+
+  const code = await runAnswerCommand([task.id, "--option", "7"], { recordHome, entryScript: FAKE_ANSWER_ENTRY, ...io });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /there is no option 7 on this question/);
+  assert.ok(!readEventsForTask(recordHome, task.id).some((e) => e.name === "answers-given"));
 });

@@ -31,10 +31,24 @@ result is not spent: call
 this again to retry it (the same error comes back until whatever
 caused it is dealt with).
 
-  <taskId>   The task's id, from \`fabrica do\`'s output.
-  -m <text>  Your answer, in plain words. Quote it. Same shape as
-             \`fabrica verdict -m\`, so an answer starting with a dash
-             ("-1 means unlimited") goes through as written.
+A question arrives as one question with two to four options plus
+"other" (issue #176). Pick one by number, or answer in your own words -
+which is what picking "other" means.
+
+  <taskId>        The task's id, from \`fabrica do\`'s output.
+  -o, --option <n>
+                  The option you pick, numbered as \`fabrica do\` and
+                  \`fabrica status\` list them. The last one is always
+                  "other", and that one needs -m as well; any other
+                  option is the whole answer on its own.
+  --question <id> Which question you are answering (\`fabrica log\` shows
+                  the id). Omitted, it's the one the task is stopped on.
+                  Naming one you already answered corrects it: the record
+                  keeps both answers and the newer one applies to this
+                  task's later rounds. Nothing is ever rewritten.
+  -m <text>       Your answer, in plain words. Quote it. Same shape as
+                  \`fabrica verdict -m\`, so an answer starting with a
+                  dash ("-1 means unlimited") goes through as written.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -57,15 +71,38 @@ export async function runAnswerCommand(argv: string[], opts: RunAnswerCommandOpt
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
   try {
-    const { taskId, text } = parseAnswerArgs(argv);
+    const { taskId, text, option, questionId } = parseAnswerArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
     const caps = loadConfigOrDefault(recordHome).caps;
 
     // Validates and records the answer right here, synchronously - a bad
     // answer (an unknown task, no question pending, an already-spent
-    // round, a cap refusal) fails on the spot, before anything is handed
-    // off to the background.
-    recordAnswerDecision(recordHome, taskId, text, { caps });
+    // round, an option the question doesn't have, a cap refusal) fails on
+    // the spot, before anything is handed off to the background.
+    const decision = recordAnswerDecision(recordHome, taskId, text, { caps, option, questionId });
+
+    // Issue #175: the question already had an answer and this call did
+    // not name it, so the first answer stands. Said out loud rather than
+    // swallowed - the Client typed something that was not applied.
+    if (decision.duplicate) {
+      stderr(
+        `that question already has an answer - the first answer stands ("${decision.answer}"), ` +
+          `and what you just typed was not applied. To change it, name the question: ` +
+          `fabrica answer ${taskId} --question ${decision.questionId} -m "<text>"`
+      );
+    }
+
+    // A correction to a question whose round already finished changes
+    // what a later round is told and nothing else: there is no round
+    // here to resume, and starting one would be a second clarification
+    // round, which v1 does not have.
+    if (!decision.resume) {
+      stdout(
+        `${taskId}: answer to ${decision.questionId} recorded - it applies to this task's later rounds. ` +
+          `Nothing was resumed; the round that asked has already finished.`
+      );
+      return 0;
+    }
 
     spawnDetachedResume({ recordHome, taskId, kind: "answer", entryScript: opts.entryScript });
 

@@ -699,21 +699,44 @@ async function handleRecordAnswer(
     return;
   }
 
-  // Only the shape is checked here; whether the text is actually usable
-  // is `recordAnswerDecision`'s own call, so an empty answer is refused
-  // in exactly the words `fabrica answer` would use rather than a second
-  // wording invented here.
-  const { answer } = (typeof body === "object" && body !== null ? body : {}) as { answer?: unknown };
+  // Only the shape is checked here; whether the answer is actually
+  // usable - an option the question doesn't have, "other" with no words
+  // behind it - is `recordAnswerDecision`'s own call, so it is refused in
+  // exactly the words `fabrica answer` would use rather than a second
+  // wording invented here. `option` (issue #176) is the number of the
+  // choice tapped, 1-based as the record lists them; without one the
+  // answer is the Client's own words, which is what this route has
+  // always taken.
+  const { answer, option } = (typeof body === "object" && body !== null ? body : {}) as {
+    answer?: unknown;
+    option?: unknown;
+  };
   if (typeof answer !== "string") {
     send(res, 400, "application/json", JSON.stringify({ error: "an answer needs text - send {\"answer\": \"<your words>\"}." }));
+    return;
+  }
+  if (option !== undefined && (typeof option !== "number" || !Number.isInteger(option) || option < 1)) {
+    send(
+      res,
+      400,
+      "application/json",
+      JSON.stringify({ error: 'an option is the choice\'s number - send {"option": 1} or leave it out.' })
+    );
     return;
   }
 
   try {
     const caps = loadConfigOrDefault(recordHome).caps;
-    recordAnswerDecision(recordHome, taskId, answer, { caps });
-    spawnDetachedResume({ recordHome, taskId, kind: "answer", entryScript: answerEntryScript });
-    send(res, 200, "application/json", JSON.stringify({ ok: true }));
+    const decision = recordAnswerDecision(recordHome, taskId, answer, {
+      caps,
+      ...(option === undefined ? {} : { option }),
+    });
+    // A correction to a question whose round has already finished has
+    // nothing to resume - the same rule `fabrica answer` itself follows.
+    if (decision.resume) {
+      spawnDetachedResume({ recordHome, taskId, kind: "answer", entryScript: answerEntryScript });
+    }
+    send(res, 200, "application/json", JSON.stringify({ ok: true, resumed: decision.resume, duplicate: decision.duplicate }));
   } catch (err) {
     send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }

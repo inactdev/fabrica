@@ -193,10 +193,13 @@ The one command this issue builds. What it does, in order:
    polls that task's own record for whichever of `"questions-asked"`,
    `"ask-failed"`, `"task-failed"`, `"cap-refused"` or `"work-started"`
    lands first:
-   - **Materially ambiguous** → stops, printing the numbered questions
-     and how to answer them (`fabrica answer <id> -m "<text>"`) to
+   - **Materially ambiguous** → stops, printing the one question, its
+     numbered options and both ways to answer it (`fabrica answer <id>
+     --option <n>`, or `--option <other's number> -m "<text>"`) to
      **stderr**. No Worker ever ran; nothing keeps running in the
-     background for this task until answered.
+     background for this task until answered. An event recorded before
+     issue #176 carries question text and no options, and still prints
+     the old way - the record is append-only.
    - **`brain.ask()` itself threw** (the reference adapter's documented
      credential gap is today's live path) → stops, printing the real
      reason to **stderr** and exiting **non-zero** (Client ruling, issue
@@ -251,10 +254,32 @@ exceptions: this process already knows and reports those outcomes
 directly (the failed one non-zero), since no work was ever started to
 detach from.
 
-## `fabrica answer <taskId> -m "<text>"`
+## `fabrica answer <taskId> [--option <n>] [--question <id>] [-m "<text>"]`
 
-Answers the clarifying questions `fabrica do` printed and stopped on
-(issue #8), and resumes the task. Like `fabrica do` (issue #123), this
+Answers the clarifying question `fabrica do` printed and stopped on
+(issue #8), and resumes the task.
+
+A question arrives as one question with two to four options plus "other"
+(issue #176), so there are two ways to answer it, and the Foreman -
+never this layer - decides which is allowed for a given option:
+`--option <n>` picks by number as `fabrica do`/`fabrica status` list
+them, and that option's own text is the whole answer; `-m "<text>"`
+answers in the Client's own words, which is what picking the last option
+("other") means and is exactly what this command has always taken.
+`answer-args.ts` checks only the *spellings* (a positive whole number, a
+`q-` id) - whether the question actually has an option 7 is the
+record's business, so that refusal comes back in the Foreman's own words.
+
+`--question <id>` names which question is being answered (issue #175).
+Omitted, it is the one the task is stopped on. Naming one the task
+already answered is a **correction**: the record keeps both answers, the
+newer one applies to later rounds, nothing is rewritten. Two things this
+command now says out loud rather than swallowing, both read off
+`recordAnswerDecision`'s returned decision: a second answer that names
+no question did **not** apply (the first answer stands - printed to
+stderr, with the `--question` form to use if a change was really
+meant), and a correction whose round has already finished resumed
+**nothing** (there is no round left to restart). Like `fabrica do` (issue #123), this
 returns immediately: `answer-command.ts` calls `recordAnswerDecision`
 (`src/foreman/answer.ts`) right here, synchronously - validates the
 answer against the record, writes it to `answers.md`, re-derives
@@ -837,7 +862,11 @@ them can reach a running worker.
   ("PAUSED BY THE SUBSCRIPTION METER: ..."), never as a failure.
 - **`status`** lists every open task, one line each: id, project, state,
   age, cost (`cost: unknown` for unmeasured spend, never a silent $0, and
-  `cost: no attempts yet` before any attempt ran). A `delivered` task is flagged as awaiting the Client's verdict -
+  `cost: no attempts yet` before any attempt ran), and - issue #175 -
+  "N question(s) answered from the record" when any of this task's
+  questions came back and were answered from its own record instead of
+  being put to the Client twice (counted off `"question-auto-answered"`;
+  omitted entirely at zero, which is every ordinary task). A `delivered` task is flagged as awaiting the Client's verdict -
   nothing else in the tool says a task is waiting on him. A `working`
   task with no recorded activity for longer than `QUIET_THRESHOLD_MS` is
   flagged "quiet" rather than left looking identical to progress; a
@@ -1350,7 +1379,7 @@ already recorded, and the response says `signaled: false`.
 | `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus every command those prefixes are for, each spelled exactly once: `UPSTREAM_GIT_URL`/`UPSTREAM_BRANCH`, the three steps that install a copy which knows its own commit (`cloneCommandArgs`, `packInCloneCommandArgs`, `installTarballCommandArgs`, with `isPackedTarball` for the tarball name between them), and `clonePackInstallProcedure`, those same three built into one pasteable line for every message that prints them - so the procedure advised and the procedure run cannot drift. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
 | `global-reinstall.ts` | Replacing an installed copy with the current code on master, as a `git clone` into a throwaway staging directory, an `npm pack` run inside that clone, and an `npm install -g` of the tarball - because installing the git spec directly symlinks the package at a clone npm then deletes, and packing that spec packs a tree with no `.git`, leaving the installed copy unable to name its commit (both reproduced; see the `fabrica update` section above). One injected `GlobalReinstallIo` covers every step that touches the machine, so its tests assert the exact argv git and npm are handed, and the directory each runs in, without running either, making a directory, or reaching the network - with `installed-commit.test.ts` running the whole chain for real against a local remote. Also home to `commandFailureMessage` (stderr if the command said anything, node's own message otherwise), which `update-command.ts`'s `git` calls share. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
-| `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"`, `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
+| `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"` (carrying the question with its options, issue #176), `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |
 | `run-task-entry.ts` | The detached child's real entry point: picks the default adapter, calls `run-task.ts`, and writes the task's `worker.pid` from `onTaskRegistered` (issue #203 - the first moment both the id and this process's own pid are known). |
 | `errors.ts` | `CliError`, with codes `bad-usage`, `unknown-command`, `unknown-task`, `project-not-found`, `spawn-failed`, `registration-timeout`. |

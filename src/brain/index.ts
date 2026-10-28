@@ -7,6 +7,21 @@ export type {
   WorkerWriteup,
   WriteupQuizEntry,
 } from "./types.ts";
+export type { AskQuestion, RecordedQuestion } from "./ask-shape.ts";
+export {
+  ASK_MAX_OPTIONS,
+  ASK_MIN_OPTIONS,
+  ASK_RESHAPE_LIMIT,
+  ASK_SHAPE_NOTICE,
+  askShapeProblem,
+  deriveQuestionId,
+  isOtherOption,
+  OTHER_OPTION,
+  QUESTION_ID_PATTERN,
+  recordQuestion,
+  withAskRejection,
+  withOtherOption,
+} from "./ask-shape.ts";
 export {
   quizEntriesOf,
   quizProblem,

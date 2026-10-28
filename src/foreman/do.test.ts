@@ -555,7 +555,7 @@ test("doTask records an honest failure-report, not silence, when the pre-teardow
 test("doTask stops and returns 'asking' when the brain finds the task materially ambiguous, without starting a worker", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
-  const brain = fakeBrain({ askQuestions: ["What database should this use?", "Multi-tenant?"] });
+  const brain = fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } });
 
   const task = await doTask(recordHome, "build me an app", { project, brain, checkBox: fixtureCheckBox().box });
 
@@ -584,7 +584,7 @@ test("doTask stops and returns 'asking' when the brain finds the task materially
 test("doTask on an unambiguous task is unaffected: ask() is consulted but the task runs exactly as before", async () => {
   const project = makeFixtureRepo("exit 0", { inspector: false });
   const recordHome = freshHome();
-  const brain = fakeBrain(); // no askQuestions configured - nothing to ask
+  const brain = fakeBrain(); // no askQuestion configured - nothing to ask
 
   const task = await doTask(recordHome, "small change", { project, brain, checkBox: fixtureCheckBox().box });
 

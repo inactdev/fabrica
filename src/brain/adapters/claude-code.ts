@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
 import { WRITEUP_FIELDS, WRITEUP_QUIZ_LENGTH, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
+import { ASK_SHAPE_NOTICE } from "../ask-shape.ts";
 import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgressNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
@@ -492,16 +493,20 @@ export function buildAskPrompt(brief: string): string {
     "before any work starts on it - ambiguous in a way that would change " +
     "what actually gets built, not something a reasonable person would " +
     "fill in the same way every time. If it is materially ambiguous, " +
-    "write the numbered questions whose answers would change what gets " +
-    "built. If it is already clear enough to proceed, ask nothing. " +
+    "ask the one question whose answer would change what gets built the " +
+    "most. If it is already clear enough to proceed, ask nothing. " +
     "The project's files are not present at this step on purpose - they " +
     "will be there when work starts - so ask only about what the Client " +
     "wants, never about where the code is.\n\n" +
+    // Issue #176's fixed shape, worded once in src/brain/ask-shape.ts so
+    // this adapter and every other cannot ask for two different shapes
+    // while the Foreman rejects one of them.
+    `${ASK_SHAPE_NOTICE}\n\n` +
     "Respond with ONLY a JSON object, no other text before or after it, " +
     "in exactly this shape:\n" +
-    '{"questions": ["question one", "question two"]}\n' +
+    '{"question": "which database should this use?", "options": ["Postgres", "SQLite"]}\n' +
     "or, if nothing needs asking:\n" +
-    '{"questions": []}\n\n' +
+    '{"question": null}\n\n' +
     `Task:\n${brief}`
   );
 }
@@ -521,22 +526,40 @@ function buildAskArgs(prompt: string, opts: ClaudeCodeAdapterOptions): string[] 
 
 /** The model is asked for bare JSON but may still wrap it in a fenced
  * code block despite the instruction - stripped defensively before
- * parsing. Anything that still isn't valid JSON, or isn't shaped like
- * BrainAskResult, is treated as "nothing to ask" rather than failing the
- * task over a formatting slip - the same defensive spirit as
- * parseLines() below, and matching this issue's own stated bias toward
- * not over-asking when uncertain. */
+ * parsing. Output that isn't valid JSON at all is treated as "nothing to
+ * ask" rather than failing the task over a formatting slip - the same
+ * defensive spirit as parseLines() below, and matching issue #8's own
+ * stated bias toward not over-asking when uncertain.
+ *
+ * Output that IS an ask attempt and merely wrong-shaped (issue #176: no
+ * options, too many, a free-form `questions` list) is passed through
+ * **untouched**, so `registerAndAsk` can reject it in the machine's own
+ * hearing and have it ask again. Cleaning it up here would make that
+ * re-ask loop unreachable and hide the one thing #176 exists to catch. */
 function parseAskResult(text: string): BrainAskResult {
   const fenced = text.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   const candidate = fenced ? fenced[1] : text.trim();
   try {
-    const parsed: unknown = JSON.parse(candidate);
-    const questions = (parsed as { questions?: unknown } | null)?.questions;
-    if (Array.isArray(questions)) {
-      // Blank or non-string entries are dropped, not treated as grounds
-      // to throw the whole list away - one stray element must not lose a
-      // real question. registerAndAsk filters the same way.
-      const kept = questions.filter((q): q is string => typeof q === "string" && q.trim().length > 0);
+    const parsed = JSON.parse(candidate) as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== "object") return {};
+    // The fixed shape, flat ({"question": "...", "options": [...]}) as
+    // the prompt asks for it, or nested under "question" - both are the
+    // model's own plausible readings of the instruction, and which one
+    // it picked is not a shape violation worth a re-ask.
+    const nested = parsed.question;
+    if (nested && typeof nested === "object") return { question: nested as BrainAskResult["question"] };
+    if (typeof nested === "string") {
+      return nested.trim().length === 0
+        ? {}
+        : { question: { question: nested, options: Array.isArray(parsed.options) ? (parsed.options as string[]) : [] } };
+    }
+    // Nothing to ask, said in any of the ways the prompt's own example
+    // and the old free-form shape spell it.
+    if (nested === null && parsed.questions === undefined) return {};
+    if (Array.isArray(parsed.questions)) {
+      const kept = parsed.questions.filter((q): q is string => typeof q === "string" && q.trim().length > 0);
+      // A free-form list is a rejection now, not an answer: handed over
+      // as-is so the Foreman says so and asks again.
       return kept.length > 0 ? { questions: kept } : {};
     }
   } catch {
