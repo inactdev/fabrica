@@ -41,6 +41,17 @@ export interface StubGithubOptions {
    * is refused 422, the way GitHub refuses a token that would exceed
    * what the App holds. Defaults to "whatever was asked for". */
   appPermissions?: Record<string, string>;
+  /** GitHub's *other* answer to a mint asking for more than the App
+   * holds: 201, with the permission simply absent from the response's
+   * `permissions` map (issue #304 - the behaviour four green tasks were
+   * lost to on 2026-10-27, where the mint succeeded and only the
+   * `statuses` write was missing). GitHub's reference documents the
+   * ceiling ("The installation access token cannot be granted
+   * permissions that the app was not granted") and both a 201 and a
+   * 422, but not which one it picks when, so the stub models both and
+   * Fabrica has to survive both. Needs `appPermissions`; without it
+   * every mint is granted in full and there is nothing to narrow. */
+  narrowSilently?: boolean;
   /** Forced answers, for the refusal paths: `{ "/app": 401 }`. The
    * body is GitHub's own `{ message }` shape. */
   force?: Record<string, { status: number; body?: string }>;
@@ -196,9 +207,11 @@ export async function startStubGithub(opts: StubGithubOptions): Promise<StubGith
         }
         const permissions = (asked.permissions ?? {}) as Record<string, string>;
         // GitHub documents that a token "cannot exceed" the App's own
-        // permissions, and refuses when one is asked for that the App
-        // does not hold.
-        if (opts.appPermissions !== undefined) {
+        // permissions, without documenting which of its two answers it
+        // gives: a 422 refusal naming the permission (this branch), or a
+        // 201 that quietly leaves it off the grant (`narrowSilently`,
+        // below - what actually happened on 2026-10-27).
+        if (opts.appPermissions !== undefined && !opts.narrowSilently) {
           const beyond = Object.keys(permissions).filter((key) => opts.appPermissions![key] === undefined);
           if (beyond.length > 0) {
             send(422, { message: `The permissions requested are not granted to this installation: ${beyond.join(", ")}.` });
@@ -294,9 +307,17 @@ export async function startStubGithub(opts: StubGithubOptions): Promise<StubGith
   };
 }
 
+/** The grant GitHub reports: never more than the App holds. A key the
+ * App holds at `read` where `write` was asked comes back as `read`; a
+ * key it does not hold at all is left off the map entirely, which is the
+ * answer only reachable with `narrowSilently` (the 422 branch above
+ * intercepts it otherwise). */
 function narrow(asked: Record<string, string>, held: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [key, level] of Object.entries(asked)) out[key] = held[key] === "read" ? "read" : level;
+  for (const [key, level] of Object.entries(asked)) {
+    if (held[key] === undefined) continue;
+    out[key] = held[key] === "read" ? "read" : level;
+  }
   return out;
 }
 

@@ -165,10 +165,16 @@ Webhook.
 |---|---|---|
 | Contents | Read and write | pushing the task branch |
 | Pull requests | Read and write | opening and updating the pull request |
+| Commit statuses | Read and write | posting Inspector's `inspector` stamp, and reading the checks on the pull request |
 | Issues | Read-only | reading the issue a task names |
-| Commit statuses | Read-only | reading the checks on the pull request |
 | Checks | Read-only | the same |
 | Actions | Read-only | the log of a check that went red |
+
+**Commit statuses** has to be **Read and write**, not Read-only: the
+`inspector` commit status that gates every merge is posted with this
+token. `fabrica doctor` now mints a real publishing token and checks what
+GitHub granted on it, so a level that is too low is a FAIL that names the
+setting — rather than four green tasks that cannot be published.
 
 **3.** Under "Where can this GitHub App be installed?" choose **Only on
 this account**, then **Create GitHub App**.
@@ -199,6 +205,12 @@ The second one is a *path to* the key, not the key itself.
 App**, pick your account, and choose **Only select repositories** —
 then select the repositories you run tasks on. Fabrica's own checks
 fail if the App is not installed on a project you have registered.
+
+If you ever widen a permission on an App that is already installed,
+GitHub asks you to accept the change on the installation itself — it
+emails you a link, or you can use **Configure**. Until you do, the
+installation keeps the narrower set and tokens minted off it are still
+short. That is the failure `fabrica doctor` is looking for.
 
 **8. Remove the old token.** If `GITHUB_TOKEN` is still set in your
 shell or sitting in `~/.fabrica/brain.env`, delete it and revoke it on

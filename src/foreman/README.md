@@ -2044,6 +2044,72 @@ everything else there is: the contract is a path `rule9-gate.yml`
 protects, and what a flagger found is Fabrica's own bookkeeping about a
 change, not a new promise about a seam.
 
+## A task that cannot be published is never worked (issue #304)
+
+On 2026-10-27 four tasks ran, reached Inspector, went green, and ended
+as incomplete publications: the GitHub App's installation token lacked
+`statuses: write`, so posting the `inspector` commit status answered
+403. Nothing on Fabrica's side could have said so earlier. `fabrica
+doctor`'s **github app** line proved the key signs a JWT GitHub accepts
+and that the installation covers the project's repository — and both of
+those were true the whole time.
+
+`publish-permissions.ts`'s `requirePublishPermissions` is the gate that
+closes it, third in the row of start gates `ask.ts`'s `registerAndAsk`
+runs — `requireRoomToStart` (rule 10), `requireMeterRoomToStart` (the
+pause rule), then this — and ahead of both `brain.ask()` and the issue
+read, so nothing at all is spent on a task that cannot land.
+
+**The evidence is the grant, not a write.** GitHub narrows an
+installation token to what the App holds *and* what the installation has
+accepted; its own documentation on modifying permissions says an owner
+who does not approve a widening keeps the old set. So the gate mints the
+publishing token (`src/githubapp/publish-permissions.ts`) and compares
+the `permissions` map GitHub hands back against `PUBLISH_PERMISSIONS`.
+Nothing is written anywhere, nothing but `permissions` is read off the
+token, and the token is discarded. The mint goes through the task's own
+recording minter, so it leaves one `"token-minted"` event exactly like
+every other mint.
+
+### The one finding that refuses, and why the rest do not
+
+It refuses on a mint that **succeeded and came back short**. Everything
+else leaves the task to proceed exactly as it did before: no App
+configured, a project whose `origin` is not a github.com repository, a
+key GitHub rejects, GitHub unreachable, an installation that does not
+cover the repository.
+
+That is the difference between evidence and the absence of it. A project
+with no `.inspector.json` at its base commit publishes nothing at all
+(`judge.ts`'s `chooseCheckMode` self-test mode) and legitimately has no
+App, no github.com remote and nothing to publish — refusing those here
+would stop work that has always worked and that issue #304 says nothing
+about. Each of them already refuses loudly at the point publishing is
+actually about to happen: `publishToken`'s `check()` runs `projectRepo`
+and `requireConfigured()` from `Inspector.prepare()`, before any push.
+And the could-not-ask cases are reported where someone can act on them —
+`fabrica doctor`'s own line already carries them as "could not check
+`<project>`: `<reason>`".
+
+### Why only `fabrica do` carries this gate
+
+Issue #304 names `fabrica do`, and that is where it is. Three other
+paths start a round — `fabrica answer` (`answer.ts`'s
+`recordAnswerDecision`), `fabrica verdict fix` (`verdict.ts`'s
+`runFixRound`) and the quiz re-check round (`src/quiz/recheck.ts`) — and
+none of them calls it. The first two resume a task that already passed
+the gate at registration; the quiz re-check publishes nothing.
+
+Underneath that is the structural gap
+`notes/20261023-do-fabrica-issue-103-as-written-4s.md` named in its §8
+and this gate does nothing to close: `requireGitRoot`,
+`requireRoomToStart`, `requireMeterRoomToStart` and now
+`requirePublishPermissions` are each wired in by hand at the sites that
+need them, and review is the only thing that notices a new gate landing
+at some of them. One `requireStartGates(...)` every start path calls,
+plus a test that fails when a new `require*ToStart` export is not called
+from it, is still the cheap fix and is still unbuilt.
+
 ## Files
 
 | File | Holds |
@@ -2082,6 +2148,7 @@ change, not a new promise about a seam.
 | `caps.ts` | Rule 10's enforcement: `requireRoomToStart`, the per-round `spendLimitsFor`, the `"receipt-recorded"`/`"cap-stopped"` writers, and `recordCost`. See "Rule 10: spending caps" above. |
 | `model.ts` | Issue #184's model facts: `resolveModelChoice` (the flag beats the project's setting beats nothing), `writeModelChoice`/`readModelChoice` (the `model.json` task file), `modelFromTranscript` (the brain's own report for one call), `receiptModel` (the only builder of a receipt's `model`, and the reason "default" can never appear in one again), `modelFromEvents` (what a task row can say, from events the caller already holds) and the shared wording `describeModel`/`describeDeclaration`. See "Which model ran" above. |
 | `meters.ts` | Issue #189's pause rule: `pauseRuleFor` (projects.toml's `[pause]`, defaults when there is no file), `standingOf`/`refusalFor`/`stopFor` (the three decisions), `meterReadingFromTranscript` and `latestMeterReading` (the two ways a reading is read back - an attempt's own, and the record's newest), `requireMeterRoomToStart` (the start gate, called beside `requireRoomToStart` at all three of its sites), `recordMeterPause`/`meterPauseOf`, and the shared wording (`describeMeters`, `formatPercent`, `pauseMessage`) that `fabrica status` and the phone review page both show. See "The pause rule" above. |
+| `publish-permissions.ts` | Issue #304's start gate: `requirePublishPermissions` mints this task's publishing token, reads the permissions GitHub actually granted on it, and refuses `ForemanError("publish-not-permitted")` when they are short of `PUBLISH_PERMISSIONS` - naming the shortfall and the exact App setting, in the same words `fabrica doctor`'s github-app line uses. Called from `ask.ts` behind `requireRoomToStart` and `requireMeterRoomToStart`, before `brain.ask()`, so a task whose work could never be published never reaches a machine. No write is attempted; the grant is the evidence. It refuses on that one finding only - no App configured, a project with no github.com origin, a key GitHub rejects, GitHub unreachable - all proceed, because a project self-tested in the worker's box publishes nothing at all and legitimately has none of those, and each already refuses at `Inspector.prepare()` where publishing actually begins. The mint goes through the task's own recording minter, so it lands a `"token-minted"` event like every other. See "Why only `fabrica do` carries this gate" below. |
 | `task-failure.ts` | #73: `recordingFailure` appends `"task-failed"` (with the message) for any error after `task-received` and before a delivery or refusal - except one already on the record as `ask-failed` or `cap-refused`. `requireGitRoot` refuses a project path that is missing or not a git root before the clarifying step spends anything. |
 | `task-networks.ts` | `sweepTaskNetworks` - removes every Docker network opened for a task, by label, in a `finally` around every round and around the clarifying call. Never throws, never fails a round, silent on a machine with no Docker; a removal that failed is written to `cli.log` with `docker network prune -f`. Reaches Docker only through `src/containment` - nothing here spawns anything but git. See "A task's Docker networks go when its round does" above. |
 | `standing-question.ts` | CONTRACT rule 11: `withStandingQuestion` puts the standing question, then the write-up notice (the structured write-up every worker must return), then the same-shape notice (a fix lists every other place in the code with the same shape, in the write-up, fixed or not - issue #147), then the durable-notes notice (a durable project fact goes in `notes/`, one file per task, never appended straight into the project's root agent-memory file's shared body - the merge-conflict fix that file documents) - all stated here rather than left to a file a worker might not read - at the start of every brief, applied by `touched-tests.ts`'s `workerBrief` once per round and again where `attempts.ts` hands its correction brief over, never twice. Also `ONLY_TOUCHED_TESTS_NOTICE` (issue #142), which unlike those four is conditional - `withStandingQuestion`'s `onlyTouchedTests` option adds it after the fixed prefix, and `touched-tests.ts` decides it; so are its two alternatives, a project's own test-map notice and a rebase-only round's (`rebaseOnly`), of which exactly one ever reaches a brief. Only `STANDING_QUESTION` itself is ratified text (`contract/rule11.standing-question.test.ts` holds a verbatim copy); a new standing line is added as its own exported constant folded into `STANDING_PREFIX`, never appended to that question, so it needs no change to a protected contract path. |

@@ -27,6 +27,12 @@ export interface FakeMinterOptions {
   refuse?: Error;
   /** Thrown by `mint()` only: configured, but GitHub refused. */
   refuseMint?: Error;
+  /** What GitHub granted on every minted token, instead of everything
+   * the scope asked for - the shape of an App that holds less than the
+   * call needs, or an installation that never accepted a widening
+   * (issue #304). A key left out of this map is a permission the grant
+   * does not carry at all. */
+  granted?: Record<string, string>;
 }
 
 export function fakeMinter(opts: FakeMinterOptions = {}): FakeMinter {
@@ -49,7 +55,10 @@ export function fakeMinter(opts: FakeMinterOptions = {}): FakeMinter {
         expiresAt: "2026-01-01T01:00:00Z",
         owner: scope.owner,
         repo: scope.repo,
-        permissions: { ...scope.permissions },
+        // Read back off "GitHub", never echoed from the request - the
+        // real minter's own rule, and what makes a short grant
+        // testable.
+        permissions: opts.granted === undefined ? { ...scope.permissions } : { ...opts.granted },
         installationId: 42,
         repositorySelection: "selected",
       };

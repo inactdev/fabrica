@@ -23,6 +23,7 @@ import { requireRoomToStart } from "./caps.ts";
 import { receiptModel, resolveModelChoice, writeModelChoice } from "./model.ts";
 import { withTransportRetry } from "./transport-retry.ts";
 import { requireMeterRoomToStart } from "./meters.ts";
+import { requirePublishPermissions } from "./publish-permissions.ts";
 import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.ts";
 import { sweepTaskNetworks } from "./task-networks.ts";
 import { fetchTaskIssue, parseIssueArgOrRefuse, withIssueText } from "./task-issue.ts";
@@ -169,6 +170,17 @@ export async function registerAndAsk(
     // it is checked separately. Fails open on a reading nobody could
     // use (see meters.ts) - never refuses on an unread number.
     requireMeterRoomToStart(recordHome, taskId, { project: opts.project });
+
+    // Issue #304, third in the same row of start gates and for the
+    // bluntest reason of the three: a task whose work could never be
+    // published must never be worked. The publishing token is minted
+    // here and its granted permissions read - no write is attempted -
+    // so a GitHub App missing `statuses: write` (which cost four green
+    // tasks their publication on 2026-10-27) refuses here, with the
+    // setting to change, instead of after a machine has run. Placed
+    // ahead of the issue read below so nothing is spent, not even one
+    // API call for the issue's text, on a task that cannot land.
+    await requirePublishPermissions(recordHome, taskId, opts.project, opts.minter);
 
     // The issue this task names, read once and frozen (Client ruling:
     // "fetched once at registration and frozen for the life of the task
