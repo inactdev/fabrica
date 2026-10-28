@@ -214,6 +214,46 @@ test("propose: a go.sum becomes a go mod download step at build time", () => {
   assert.ok(stderr.includes("dependencies: go mod download from go.sum"), stderr);
 });
 
+// The other half of the mechanism, on the one route where nothing
+// writes check.sh for the Client: `npm ci` at build time lands in /deps,
+// not in the checkout, so a check.sh that links nothing in finds no
+// node_modules and has no network to fix that.
+test("propose: a node project is told its own check.sh has to link /deps/node_modules in", () => {
+  const { stderr } = propose({
+    checkScript: "#!/bin/sh\nset -e\nnpm test\n",
+    packageJson: pkg({ dependencies: { tsx: "^4.19.0" } }),
+    packageLock: true,
+  });
+
+  assert.ok(stderr.includes("  check.sh: whatever this check ends up running"), stderr);
+  assert.ok(stderr.includes("ln -s /deps/node_modules node_modules"), stderr);
+});
+
+// A Go module cache lives in the image, outside the checkout, where the
+// toolchain already looks - there is nothing to link, so saying there is
+// would be noise.
+test("propose: a go project is told nothing about linking, having nothing to link", () => {
+  const { stderr } = propose({
+    goMod: "module example.com/app\n\ngo 1.22\n\nrequire github.com/x/y v1.2.3\n",
+    goSum: true,
+  });
+
+  assert.ok(!stderr.includes("  check.sh:"), stderr);
+});
+
+// One instruction, in one place: a fetching check's warning already
+// carries it, so the note does not repeat it underneath.
+test("propose: the linking instruction is not said twice when the check also fetches", () => {
+  const { stderr } = propose({
+    checkScript: "#!/bin/sh\nset -e\nnpm ci\nnpm test\n",
+    packageLock: true,
+  });
+
+  assert.ok(stderr.includes("  warning: the check runs `npm ci`"), stderr);
+  assert.ok(stderr.includes("ln -s /deps/node_modules node_modules"), stderr);
+  assert.ok(!stderr.includes("  check.sh: whatever"), stderr);
+});
+
 // A check that fetches cannot fetch at all in that box, whatever else is
 // true - named on its own line rather than answered with a key that no
 // longer exists.

@@ -55,6 +55,12 @@ export interface DependencyShape {
   linksNodeModules: boolean;
   /** One sentence for a note, a summary line or a pull request body. */
   note: string;
+  /** A caveat about the install step itself, written into the Dockerfile
+   * as a comment above it. The install runs with only the manifest and
+   * the lockfile copied in, which is enough for the common case and not
+   * for every one - the file says which rather than leaving the next
+   * person to find out from a failed build. */
+  buildNote?: string;
 }
 
 const NPM: DependencyShape = {
@@ -66,6 +72,10 @@ const NPM: DependencyShape = {
     `${PACKAGE_LOCK} at the repository root is this project's lockfile, so the check image installs exactly it ` +
     `with \`npm ci\` at build time, into ${DEPS_DIR}, and ${CHECK_SCRIPT} links ${DEPS_DIR}/node_modules into ` +
     `the checkout`,
+  buildNote:
+    `\`npm ci\` runs this project's own install lifecycle scripts (\`prepare\`, \`postinstall\`), and only the ` +
+    `manifest and the lockfile copied below are in ${DEPS_DIR} when it does. If one of those scripts needs ` +
+    `another file, add a COPY for it too.`,
 };
 
 const GO: DependencyShape = {
@@ -165,8 +175,10 @@ function comment(text: string): string[] {
  * image needs around them. */
 function installLines(shape: DependencyShape, from: string): string[] {
   const user = knownNonRootUser(from);
+  const caveat = shape.buildNote === undefined ? [] : [`#`, ...comment(shape.buildNote)];
   if (user !== null) {
     return [
+      ...caveat,
       `USER root`,
       `RUN mkdir -p ${DEPS_DIR} && chown -R ${user}:${user} ${DEPS_DIR}`,
       `USER ${user}`,
@@ -175,6 +187,7 @@ function installLines(shape: DependencyShape, from: string): string[] {
     ];
   }
   return [
+    ...caveat,
     ...comment(
       `This installs as the image's own default user, assuming that user may write ${DEPS_DIR} - true of a ` +
         `root-default image. An image that runs as someone else needs ${DEPS_DIR} handed to them first:`

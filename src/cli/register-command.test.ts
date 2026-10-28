@@ -213,6 +213,49 @@ test("registerSummary: the shortcut case says the project is ready now, not that
   assert.ok(!lines.includes("Merge"));
 });
 
+// The two things about the new third file the Client has to see on his
+// own screen, not only in the pull request: that a Dockerfile.inspector
+// he already had was left alone, and anything worth a look before he
+// merges.
+test("registerSummary: a left-alone Dockerfile.inspector and a warning both reach the screen", () => {
+  const lines = registerSummary({
+    kind: "full",
+    name: "spending-app",
+    path: "/srv/spending-app",
+    check: "./check.sh",
+    defaultBranch: "main",
+    tomlPath: "/home/c/.fabrica/projects.toml",
+    tomlEntry: '[projects.spending-app]\npath = "/srv/spending-app"\n',
+    branch: "fabrica/register",
+    pullRequestUrl: "https://github.com/c/spending-app/pull/7",
+    dockerfile: "already-committed",
+    warnings: ["the check command runs `npm ci`, and the check box has no network at all"],
+  }).join("\n");
+
+  assert.ok(lines.includes("already committed there - left exactly as it is"), lines);
+  assert.ok(!lines.includes("check.sh and Dockerfile.inspector"), "it does not claim to have written that file");
+  assert.ok(lines.includes("worth a look: the check command runs `npm ci`"), lines);
+});
+
+test("registerSummary: a written Dockerfile.inspector is named among the files, with no warnings line", () => {
+  const lines = registerSummary({
+    kind: "full",
+    name: "spending-app",
+    path: "/srv/spending-app",
+    check: "./check.sh",
+    defaultBranch: "main",
+    tomlPath: "/home/c/.fabrica/projects.toml",
+    tomlEntry: '[projects.spending-app]\npath = "/srv/spending-app"\n',
+    branch: "fabrica/register",
+    pullRequestUrl: "https://github.com/c/spending-app/pull/7",
+    dockerfile: "written",
+  }).join("\n");
+
+  assert.ok(lines.includes("check.sh and Dockerfile.inspector"), lines);
+  assert.ok(!lines.includes("left exactly as it is"), lines);
+  assert.ok(!lines.includes("worth a look"), lines);
+});
+
 test("main: `fabrica register --help` prints its usage and exits 0", async () => {
   const io = captureIo();
   assert.equal(await main(["register", "--help"], io), 0);

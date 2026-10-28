@@ -245,6 +245,20 @@ of a check image that actually builds and passes. A Go module needs no
 link: its module cache lives in the image, outside the checkout, where
 `go test` already looks.
 
+The npm step carries one caveat in the file itself, since the build is
+where it bites: `npm ci` runs the project's own `prepare`/`postinstall`
+scripts, and only the manifest and the lockfile are in `/deps` when it
+does — a lifecycle script needing another file needs a `COPY` of its
+own. This repository's `Dockerfile.inspector` copies one extra script
+(`scripts/write-build-info.mjs`) for exactly that reason, which is the
+evidence the comment is worth writing.
+
+On the **proposal** route nothing writes `check.sh`, so the link half
+cannot be written either — `proposeDependencies`'s note line is
+followed by a `check.sh:` line spelling out the `ln -s` that whatever
+the Client commits has to do, unless `fetchingCheckWarning` already
+said it (one instruction, in one place, never twice).
+
 A `cimg/*` image does **not** run as root (its user is `circleci`), so
 `/deps` is handed to that user before anything installs into it — again
 copied from this repository's own file, which is the evidence for it.
@@ -258,6 +272,11 @@ ruling, issue #303's clarification 2). A repository that already carries
 one keeps it, byte for byte; the summary, the commit message and the
 pull request body all say so, and say that the proving run used
 `--image` while the box Inspector builds is the one that file describes.
+`check.sh` is still written with its link preamble in that case — the
+shape is a fact about the repository's lockfiles, not about the
+Dockerfile — so the pull request body also names the one thing only the
+reviewer can settle: whether their own file puts the dependencies where
+`check.sh` looks for them.
 
 ## `--timeout`, and the one proving run
 

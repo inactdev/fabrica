@@ -187,6 +187,10 @@ test("register: a committed Dockerfile.inspector is left untouched, and said so"
   const dir = project({ inspector: false });
   const theirs = "FROM their/own:image\n# hand-written, and not ours to rewrite\n";
   writeFileSync(join(dir, DOCKERFILE_INSPECTOR), theirs);
+  // A lockfile too, so check.sh still gets its link preamble from a file
+  // register did not write - the one thing the reviewer has to check the
+  // two halves agree on.
+  writeFileSync(join(dir, "package-lock.json"), "{}\n");
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-qm", "add our own check image"]);
   git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
@@ -203,6 +207,11 @@ test("register: a committed Dockerfile.inspector is left untouched, and said so"
   assert.ok(notes.some((line) => line.includes("leaving it exactly as it is")), notes.join("\n"));
   const [pr] = tools.pullRequestCalls;
   assert.ok(pr.body.includes("never overwrites a committed file"), pr.body);
+  // check.sh expects /deps/node_modules, and their file may put the
+  // dependencies somewhere else entirely - the reviewer is told to check
+  // that, rather than finding out from a red first task.
+  assert.ok(pr.body.includes("/deps/node_modules"), pr.body);
+  assert.ok(pr.body.includes("has no network to install them at check time"), pr.body);
 });
 
 // A check that installs its own dependencies cannot, in a box with no

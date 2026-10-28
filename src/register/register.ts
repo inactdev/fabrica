@@ -55,6 +55,7 @@ import {
 import { appendProjectEntry, existingRegistration, isUsableProjectName } from "./registry-write.ts";
 import { checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.ts";
 import {
+  DEPS_DIR,
   DOCKERFILE_INSPECTOR,
   dependencyInstallerIn,
   dependencyShapeInTree,
@@ -220,7 +221,13 @@ export function pullRequestBodyFor(
       : `- \`${DOCKERFILE_INSPECTOR}\` is **not** touched - this repository already\n` +
         `  carries one, and \`fabrica register\` never overwrites a committed file.\n` +
         `  The check was proven in \`${image}\` here, but the box Inspector builds is\n` +
-        `  the one that file describes.\n`;
+        `  the one that file describes.\n` +
+        (shape !== null && shape.linksNodeModules
+          ? `  Worth checking against it: \`${CHECK_SCRIPT}\` uses \`${DEPS_DIR}/node_modules\`\n` +
+            `  when it is there, and installs with \`${shape.install}\` when it is not. If that\n` +
+            `  file builds the dependencies somewhere else, point \`${CHECK_SCRIPT}\` at it -\n` +
+            `  the check container has no network to install them at check time.\n`
+          : ``);
 
   const timeout =
     box.timeoutSeconds !== undefined

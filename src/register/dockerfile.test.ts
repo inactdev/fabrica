@@ -109,6 +109,36 @@ test("inspectorDockerfile: a go.sum project fills the module cache at build time
   assert.ok(instructions(text).includes(`RUN cd ${DEPS_DIR} && go mod download`), text);
 });
 
+// `npm ci` runs the project's own `prepare`/`postinstall` scripts, and
+// only the two files copied above it are there when it does - this
+// repository's own Dockerfile.inspector copies a third for exactly that
+// reason. Named in the file rather than left to a failed build.
+test("inspectorDockerfile: the npm install step names its lifecycle-script caveat", () => {
+  const text = inspectorDockerfile({
+    from: "node:24.18.0",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({ packageLock: true, goSum: false }),
+  });
+
+  assert.ok(text.includes("lifecycle scripts"), text);
+  assert.ok(text.includes("postinstall"), text);
+  // Still a comment, never an invented COPY of a file nothing named.
+  assert.deepEqual(
+    instructions(text).filter((line) => line.startsWith("COPY")),
+    [`COPY package.json package-lock.json ${DEPS_DIR}/`]
+  );
+});
+
+test("inspectorDockerfile: the go install step has no lifecycle-script caveat to make", () => {
+  const text = inspectorDockerfile({
+    from: "golang:1.22",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({ packageLock: false, goSum: true }),
+  });
+
+  assert.ok(!text.includes("lifecycle scripts"), text);
+});
+
 // "A shape it does not recognize gets a comment in the Dockerfile naming
 // what still has to be installed there, never a silent gap" - issue #303.
 test("inspectorDockerfile: an unrecognized shape gets a comment, never a silent gap", () => {

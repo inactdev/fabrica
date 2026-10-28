@@ -56,6 +56,16 @@ that fails loudly rather than deleting it.
   anything else, writes the plain root-default form plus a comment
   naming exactly what to add if that image runs as someone else. It
   never guesses a user name.
+- **`npm ci` at build time runs the project's own lifecycle scripts.**
+  `prepare`/`postinstall` execute during the image build, with only the
+  manifest and the lockfile copied into `/deps` - which is exactly why
+  this repository's own `Dockerfile.inspector` copies a third file
+  (`scripts/write-build-info.mjs`). A generated Dockerfile cannot know
+  which extra files a project's own scripts need, so the npm install
+  step carries a comment saying to add a `COPY` for them. The same class
+  of trap, one level up: the **proposal** route writes no `check.sh`, so
+  the link half of the `/deps` mechanism cannot be written either and is
+  spelled out as a `check.sh:` note line instead.
 - **Three places still name an `image` key, deliberately untouched:**
   `contract/helpers/fixture.ts`'s `FIXTURE_INSPECTOR_CONFIG` and
   `src/inspector/run.test.ts`'s inline config are test fixtures whose

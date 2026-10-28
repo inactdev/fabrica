@@ -34,6 +34,7 @@
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, fileExistsOnRef, readFileOnRef } from "./origin.ts";
 import { inspectorConfigJson } from "./scaffold.ts";
 import {
+  DEPS_DIR,
   DOCKERFILE_INSPECTOR,
   GO_MOD,
   GO_SUM,
@@ -399,10 +400,35 @@ function fetchingCheckWarning(check: CheckField, dependencies: DependencyField):
         `already there rather than fetching.`
       : `${DOCKERFILE_INSPECTOR} installs them at build time instead${
           dependencies.shape.linksNodeModules
-            ? ` - link them in the way this repository's own ${CHECK_SCRIPT} does (\`[ -d /deps/node_modules ] ` +
-              `&& ln -s /deps/node_modules node_modules\`) rather than fetching`
+            ? ` - link them in the way Fabrica's own ${CHECK_SCRIPT} does (\`[ -d ${DEPS_DIR}/node_modules ] ` +
+              `&& ln -s ${DEPS_DIR}/node_modules node_modules\`) rather than fetching`
             : ``
         }.`)
+  );
+}
+
+/**
+ * The other half of the `/deps` mechanism, on the one route where
+ * `register` does not write it: a proposal writes no `check.sh`, so the
+ * Client's own has to use what the image installed. `npm ci` at build
+ * time lands in `/deps` rather than in the checkout - Inspector puts the
+ * repository's own files in place at check time, over anything installed
+ * at that path - so a `check.sh` that links nothing in runs against a
+ * checkout with no `node_modules` and no network to fix it.
+ *
+ * Only for a shape that needs linking at all, and only when
+ * `fetchingCheckWarning` is not already saying it: one instruction, in
+ * one place.
+ */
+function linkingNote(dependencies: DependencyField, warned: boolean): string | null {
+  if (warned || dependencies.shape === null || !dependencies.shape.linksNodeModules) return null;
+  return (
+    `  ${CHECK_SCRIPT}: whatever this check ends up running, it has to use what the image installed - ` +
+    `\`${dependencies.shape.install}\` puts it in ${DEPS_DIR}, not in the checkout, since Inspector puts the ` +
+    `repository's own files in place at check time. Fabrica's own ${CHECK_SCRIPT} does it with ` +
+    `\`[ -d ${DEPS_DIR}/node_modules ] && ln -s ${DEPS_DIR}/node_modules node_modules\`, falling back to ` +
+    `\`${dependencies.shape.install}\` anywhere that does have a network; passing --check "<command>" has ` +
+    `\`fabrica register\` write that preamble for you.`
   );
 }
 
@@ -471,6 +497,7 @@ export function proposeInspectorConfig(
   });
 
   const warning = fetchingCheckWarning(check, dependencies);
+  const linking = linkingNote(dependencies, warning !== null);
 
   const notes = [
     `fabrica register: ${ctx.projectPath} has no ${INSPECTOR_CONFIG} on origin/${ctx.defaultBranch}, so it ` +
@@ -493,6 +520,7 @@ export function proposeInspectorConfig(
     `  ${DOCKERFILE_INSPECTOR} dependencies: ${dependencies.summary} - ${dependencies.reason}.`,
     ...checkDisagreements(signals, pkg),
     ...(warning === null ? [] : [warning]),
+    ...(linking === null ? [] : [linking]),
     `${INSPECTOR_CONFIG} is on stdout, alone: \`fabrica register ${ctx.projectPath} > ` +
       `${ctx.projectPath}/${INSPECTOR_CONFIG}\` writes exactly it and nothing else. ${DOCKERFILE_INSPECTOR} ` +
       `goes next to it, and is this - it is deliberately not on stdout, since that stream is the one file ` +
