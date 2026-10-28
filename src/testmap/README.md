@@ -61,6 +61,28 @@ fast, targeted test for that file, and saying so out loud is the
 loudness the standing ruling ("a silent skip is a bug") asks for here.
 It never fails the pass.
 
+**Only code can be unmapped** (issue #305). Deliveries read
+"tests.map: 31 touched files unmapped (HANDBOOK.md, README.md, ...)"
+when most of that diff was prose, and counting documentation hid the
+files that genuinely lacked a test. So `classify.ts` answers "does this
+file need a test at all" in one place, for the brief, the delivery and
+the status row alike:
+
+| | |
+|---|---|
+| documentation, never counted | any `*.md`; anything under a `notes/` or `docs/` directory, at any depth; at the **root** only, every dot-prefixed file and `LICENSE` |
+| a test file | covers itself - reported as mapped to itself, and named in the brief's run-these-first list, even with no line in the map |
+| everything else | code: unmapped when no entry matches it |
+
+Two consequences worth knowing. A documentation file that *does* match
+an entry is mapped by it as usual - the exemption is only about what
+counts as *missing* a test, so pointing `docs/**` at a link checker
+still works. And a round whose code was all covered says nothing at all
+about the map: silence means nothing is missing, which is why a
+documentation-only task's delivery now carries no `tests.map` line.
+The status row names up to five files before the "and N more" tail
+(`STATUS_FILES_NAMED`).
+
 **A broken mapping is reported, not fatal.** A mapping naming a test
 *file* the project does not have is reported the same way, with the line
 number to edit. Only path-shaped targets are checked (`match.ts`'s

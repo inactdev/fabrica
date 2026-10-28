@@ -1206,7 +1206,7 @@ test("testMapNoteFromEvents reads the latest delivery's report, and says nothing
   assert.equal(testMapNoteFromEvents([delivered(undefined)]), null, "a project with no test map said something");
   assert.equal(
     testMapNoteFromEvents([delivered({ mapped: [], tests: [], unmapped: ["src/a.ts"], broken: [] })]),
-    "tests.map: 1 touched file unmapped (src/a.ts)"
+    "tests.map: 1 touched code file unmapped (src/a.ts)"
   );
 
   // Latest-wins: a fix round records its own delivery, and only the
@@ -1223,9 +1223,15 @@ test("testMapNoteFromEvents reads the latest delivery's report, and says nothing
 test("formatStatusLine carries the test-map note in the fact columns, and omits it when there is none", () => {
   const line = formatStatusLine(
     { id: "task-1", state: "working" },
-    { project: "demo", ageMs: 1000, liveness: null, hasDelivery: false, testMapNote: "tests.map: 1 touched file unmapped (src/a.ts)" }
+    {
+      project: "demo",
+      ageMs: 1000,
+      liveness: null,
+      hasDelivery: false,
+      testMapNote: "tests.map: 1 touched code file unmapped (src/a.ts)",
+    }
   );
-  assert.match(line, /tests\.map: 1 touched file unmapped \(src\/a\.ts\)/);
+  assert.match(line, /tests\.map: 1 touched code file unmapped \(src\/a\.ts\)/);
 
   const quiet = formatStatusLine(
     { id: "task-1", state: "working" },
