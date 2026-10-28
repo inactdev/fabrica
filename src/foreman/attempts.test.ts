@@ -141,6 +141,55 @@ function slowBrain(delayMs: number): Brain {
   };
 }
 
+/** Waits for something the test is expecting to happen, however long a
+ * loaded machine takes to get there. The ceiling is only so a real
+ * regression fails the test instead of hanging it - it is never the
+ * thing being measured. Same shape as the helper in
+ * wait-for-ask-outcome.test.ts. */
+async function waitFor(condition: () => boolean, timeoutMs = 20_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return condition();
+}
+
+/** A worker that comes back only once the test lets it, never on a timer
+ * of its own.
+ *
+ * Issue #133: a fixed sleep plus a short heartbeat interval measures how
+ * many ticks the machine managed to fit into the sleep, which is a
+ * reading of the machine's load and not of the heartbeat - two beats out
+ * of an expected eight went to one beat on a loaded two-core box, and
+ * the test failed for a reason that had nothing to do with the code it
+ * covers. A test about how many beats arrive holds the worker's call
+ * open until those beats really have arrived, then releases it. */
+function heldBrain(): { brain: Brain; release: () => void } {
+  let released = false;
+
+  return {
+    release: () => {
+      released = true;
+    },
+    brain: {
+      name: "held",
+      model: "held-1",
+      async work() {
+        await waitFor(() => released);
+        return {
+          transcript: [],
+          session: "s1",
+          writeup: SLOW_WRITEUP,
+        };
+      },
+      async ask() {
+        return {};
+      },
+    },
+  };
+}
+
 /** A worker whose `work()` never settles - no timer, so it holds nothing
  * open once the test that abandoned it is over. Stands in for a box
  * running against a network that is no longer there. */
@@ -159,9 +208,10 @@ function stuckBrain(): Brain {
 
 test("runAttempts: onHeartbeat fires repeatedly while brain.work is in flight", async () => {
   const beats: number[] = [];
+  const { brain, release } = heldBrain();
 
   await runAttempts({
-    brain: slowBrain(300),
+    brain,
     brief: "do it",
     workdir: scratchWorkdir(),
     taskId: "t1",
@@ -169,7 +219,13 @@ test("runAttempts: onHeartbeat fires repeatedly while brain.work is in flight", 
     totalAttempts: 1,
     stopEarlyOnGreen: true,
     heartbeatIntervalMs: 10,
-    onHeartbeat: (attempt) => beats.push(attempt),
+    // "Repeatedly" is the whole claim, so the call is held open until
+    // the third beat has really landed rather than for a fixed stretch
+    // of wall-clock time a loaded machine may fit fewer ticks into.
+    onHeartbeat: (attempt) => {
+      beats.push(attempt);
+      if (beats.length >= 3) release();
+    },
   });
 
   assert.ok(beats.length >= 3, `expected several heartbeats, got ${beats.length}`);
@@ -205,9 +261,10 @@ test("runAttempts: a throwing onHeartbeat loses the beat, never the task", async
   // worker process mid-task - no delivery event, orphaned worktree.
   // appendEvent throws for real on a short write, ENOSPC, or EACCES.
   let beats = 0;
+  const { brain, release } = heldBrain();
 
   const result = await runAttempts({
-    brain: slowBrain(40),
+    brain,
     brief: "do it",
     workdir: scratchWorkdir(),
     taskId: "t1",
@@ -217,6 +274,12 @@ test("runAttempts: a throwing onHeartbeat loses the beat, never the task", async
     heartbeatIntervalMs: 5,
     onHeartbeat: () => {
       beats++;
+      // The second beat is the entire point: the first one threw, and
+      // the tick has to have survived it. Releasing the worker here,
+      // rather than after a fixed sleep, is what keeps the count below
+      // out of the machine's hands (issue #133). Released before the
+      // throw, since this line never returns.
+      if (beats >= 2) release();
       throw new Error("record write failed: ENOSPC");
     },
   });
