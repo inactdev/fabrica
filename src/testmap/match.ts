@@ -12,10 +12,16 @@
 //     is the loudness required."
 //   - "record it as a broken mapping in the delivery and continue; same
 //     visibility as unmapped."
+//   - (issue #305) "files that are documentation by extension or
+//     location are never counted as unmapped", and "a touched file that
+//     is itself a test is mapped to itself" - so the list the Client
+//     reads names only code files that genuinely lack a test. Which file
+//     is which is `classify.ts`'s answer, not this file's.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { isDocumentation, isTestFile, normalizeFile } from "./classify.ts";
 import { matchesGlob } from "./glob.ts";
 import type { BrokenMapping, MappedFile, TestMapEntry, TestMapReport } from "./types.ts";
 
@@ -26,6 +32,13 @@ import type { BrokenMapping, MappedFile, TestMapEntry, TestMapReport } from "./t
  * still exists; pass it as the project root. Omit it and `broken` comes
  * back empty - a caller with no checkout to look at reports nothing
  * rather than guessing that every mapping is broken.
+ *
+ * A file no entry matches lands in `unmapped` only when it is code: a
+ * test file covers itself and is reported as mapped to itself, and
+ * documentation is left out of all three lists, since there is no test
+ * for it to be missing (issue #305). A file that *does* match an entry
+ * is mapped by it either way - a project is free to point `docs/*.md` at
+ * a link checker, and that mapping is honoured like any other.
  */
 export function testMapReport(
   entries: TestMapEntry[],
@@ -37,15 +50,22 @@ export function testMapReport(
   const tests: string[] = [];
 
   for (const file of files) {
-    const path = normalize(file);
+    const path = normalizeFile(file);
     const covering: string[] = [];
     for (const entry of entries) {
       if (!matchesGlob(entry.pattern, path)) continue;
       for (const test of entry.tests) if (!covering.includes(test)) covering.push(test);
     }
     if (covering.length === 0) {
-      unmapped.push(file);
-      continue;
+      // A test nobody has mapped yet still has a test: itself. Named in
+      // `tests` too, so the brief tells the worker to run it.
+      if (isTestFile(path)) covering.push(path);
+      // Documentation needs none, so it is neither mapped nor missing.
+      else if (isDocumentation(path)) continue;
+      else {
+        unmapped.push(file);
+        continue;
+      }
     }
     mapped.push({ file, tests: covering });
     for (const test of covering) if (!tests.includes(test)) tests.push(test);
@@ -94,12 +114,4 @@ export function brokenMappings(entries: TestMapEntry[], projectPath: string): Br
  */
 export function looksLikePath(test: string): boolean {
   return !/[\s|&;<>$(){}*?]/.test(test);
-}
-
-/** A touched file as the map's patterns are written: project-relative,
- * "/"-separated, no leading "./". `git diff --name-only` already gives
- * this shape; the normalization is for a hand-written caller and for
- * Windows-style separators that would otherwise match nothing. */
-function normalize(file: string): string {
-  return file.replace(/\\/g, "/").replace(/^\.\//, "");
 }

@@ -43,18 +43,66 @@ test("the round's test list is deduped across files, in first-seen order", () =>
   assert.equal(report.mapped.length, 3);
 });
 
-test("a touched file no entry matches is reported as unmapped, never dropped", () => {
+test("a touched code file no entry matches is reported as unmapped, never dropped", () => {
   const entries = parseTestMap("src/cli/*.ts: src/cli/suite.test.ts");
 
-  const report = testMapReport(entries, ["src/cli/main.ts", "README.md", "src/cli/helpers/fake.ts"]);
+  const report = testMapReport(entries, ["src/cli/main.ts", "stray.txt", "src/cli/helpers/fake.ts"]);
 
   // "src/cli/*.ts" does not cross a separator, so the nested file is
   // genuinely uncovered and has to say so.
-  assert.deepEqual(report.unmapped, ["README.md", "src/cli/helpers/fake.ts"]);
+  assert.deepEqual(report.unmapped, ["stray.txt", "src/cli/helpers/fake.ts"]);
   assert.deepEqual(
     report.mapped.map((entry) => entry.file),
     ["src/cli/main.ts"]
   );
+});
+
+test("documentation no entry matches is counted as nothing at all - not unmapped, not mapped", () => {
+  const entries = parseTestMap("src/cli/*.ts: src/cli/suite.test.ts");
+
+  // Issue #305: the delivery's list is the files that genuinely lack a
+  // test, and prose never lacked one. Silence there means nothing is
+  // missing.
+  const report = testMapReport(entries, [
+    "README.md",
+    "notes/20261028-a-note.md",
+    "integrations/live-view/docs/shape.txt",
+    ".gitignore",
+    "LICENSE",
+    "src/cli/main.ts",
+  ]);
+
+  assert.deepEqual(report.unmapped, []);
+  assert.deepEqual(
+    report.mapped.map((entry) => entry.file),
+    ["src/cli/main.ts"]
+  );
+});
+
+test("a mapping that does cover documentation is still honoured", () => {
+  // The exemption is only about what counts as *missing* a test. A
+  // project pointing its docs at a link checker gets that checker named.
+  const entries = parseTestMap("docs/**: npm run docs-lint");
+
+  const report = testMapReport(entries, ["docs/architecture.md"]);
+
+  assert.deepEqual(report.tests, ["npm run docs-lint"]);
+  assert.deepEqual(report.mapped, [{ file: "docs/architecture.md", tests: ["npm run docs-lint"] }]);
+  assert.deepEqual(report.unmapped, []);
+});
+
+test("a touched test file no entry matches is mapped to itself, and named as a test to run", () => {
+  const entries = parseTestMap("src/cli/main.ts: src/cli/main.test.ts");
+
+  const report = testMapReport(entries, ["src/cli/main.ts", "./src/cli/brand-new.test.ts"]);
+
+  assert.deepEqual(report.unmapped, []);
+  assert.deepEqual(report.mapped, [
+    { file: "src/cli/main.ts", tests: ["src/cli/main.test.ts"] },
+    // The map's own path shape, whatever shape the caller passed it in.
+    { file: "./src/cli/brand-new.test.ts", tests: ["src/cli/brand-new.test.ts"] },
+  ]);
+  assert.deepEqual(report.tests, ["src/cli/main.test.ts", "src/cli/brand-new.test.ts"]);
 });
 
 test("a touched file is matched by its project-relative, forward-slashed form", () => {
@@ -75,9 +123,9 @@ test("a mapping naming a test file the project does not have is reported broken,
 
   // And it reaches the report, independently of which files this round
   // happened to touch - a stale mapping is stale either way.
-  const report = testMapReport(entries, ["README.md"], { projectPath: project });
+  const report = testMapReport(entries, ["src/cli/stray.ts"], { projectPath: project });
   assert.equal(report.broken.length, 1);
-  assert.deepEqual(report.unmapped, ["README.md"]);
+  assert.deepEqual(report.unmapped, ["src/cli/stray.ts"]);
 });
 
 test("a mapping naming a command is never reported broken", () => {

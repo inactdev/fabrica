@@ -9,9 +9,12 @@ import { TEST_MAP_FILENAME } from "./parse.ts";
 import type { TestMapReport } from "./types.ts";
 
 /** How many unmapped files a one-line status row names before it stops
- * counting out loud. Three is enough to recognize the shape of the gap
- * without pushing the rest of a delivered task's line off the screen. */
-export const STATUS_FILES_NAMED = 3;
+ * counting out loud. Five, by the Client's ruling on issue #305: now
+ * that documentation is not counted at all, a round's list of genuinely
+ * untested code files is short enough that five names it outright far
+ * more often than not, and the "and N more" tail is what keeps the line
+ * from pushing the rest of a delivered task's row off the screen. */
+export const STATUS_FILES_NAMED = 5;
 
 /**
  * The notice a brief carries when the project commits a test map: the
@@ -40,7 +43,9 @@ export function testMapBriefNotice(report?: TestMapReport): string {
       `your own report of what ran, and is what the Client reads instead of guessing. A touched file the map ` +
       `covers with nothing is reported to him as unmapped, so name any you hit in your write-up rather than ` +
       `leaving it to be noticed - the whole suite still runs, so nothing goes unchecked; what is missing is a ` +
-      `fast test for that file, which is worth saying out loud.`,
+      `fast test for that file, which is worth saying out loud. Only code counts there: documentation needs no ` +
+      `test and is never reported (any \`*.md\`, anything under \`notes/\` or \`docs/\` at any depth, and the ` +
+      `root's own dotfiles and \`LICENSE\`), and a test file you touched counts as covering itself.`,
   ];
 
   if (report !== undefined && report.tests.length > 0) {
@@ -88,9 +93,10 @@ export function describeTestMapReport(report: TestMapReport | undefined): string
 
   if (report.unmapped.length > 0) {
     lines.push(
-      `touched files ${TEST_MAP_FILENAME} maps to nothing - unmapped, never silently skipped:\n${report.unmapped
-        .map((file) => `  - ${file}`)
-        .join("\n")}`
+      `touched code files ${TEST_MAP_FILENAME} maps to nothing - unmapped, never silently skipped (documentation ` +
+        `is never counted here, and a test file covers itself):\n${report.unmapped
+          .map((file) => `  - ${file}`)
+          .join("\n")}`
     );
   }
 
@@ -111,12 +117,17 @@ export function describeTestMapReport(report: TestMapReport | undefined): string
  * nothing wrong worth a word on a one-line listing. Deliberately says
  * only what is missing: which tests ran belongs on the delivery, where
  * there is room for the worker's own report beside it.
+ *
+ * Null therefore means nothing is missing, and that is now the ordinary
+ * case for a documentation-only round (issue #305): `report.unmapped`
+ * holds code files only, so a task that touched nothing but prose says
+ * nothing at all here rather than listing its whole diff.
  */
 export function describeTestMapNote(report: TestMapReport | undefined): string | null {
   if (report === undefined) return null;
   const parts: string[] = [];
   if (report.unmapped.length > 0) {
-    parts.push(`${count(report.unmapped.length, "touched file")} unmapped (${nameSome(report.unmapped)})`);
+    parts.push(`${count(report.unmapped.length, "touched code file")} unmapped (${nameSome(report.unmapped)})`);
   }
   if (report.broken.length > 0) {
     parts.push(`${count(report.broken.length, "broken mapping")} (${nameSome(report.broken.map((entry) => entry.test))})`);
@@ -130,7 +141,9 @@ function count(howMany: number, noun: string): string {
 
 /** The first few names, then how many went unnamed - a status row is one
  * line, and a task that touched twenty unmapped files would otherwise
- * push everything after it out of sight. */
+ * push everything after it out of sight. Shared by the unmapped list and
+ * the broken-mapping list on purpose: one line, one shape, whichever of
+ * the two is being counted. */
 function nameSome(names: string[]): string {
   if (names.length <= STATUS_FILES_NAMED) return names.join(", ");
   const rest = names.length - STATUS_FILES_NAMED;
