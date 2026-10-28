@@ -60,9 +60,14 @@ export const READ_CHECKS_PERMISSIONS: Readonly<Record<string, AppPermission>> = 
   actions: "read",
 });
 
-// `fabrica doctor` has no entry here on purpose: it asks whether the App
-// exists and where it is installed, and both of those questions are
-// answered by JWT-authenticated endpoints (`GET /app`, `GET
-// /repos/{owner}/{repo}/installation`). A preflight that spends nothing
-// should also mint nothing - there is no reason for a check to end up
-// holding a credential that can touch a repository.
+// `fabrica doctor` has no entry here on purpose, and still does not,
+// even though it mints now. Its first two questions - does this key
+// work, and where is the App installed - are answered by
+// JWT-authenticated endpoints (`GET /app`, `GET
+// /repos/{owner}/{repo}/installation`) and need no token at all. Its
+// third (issue #304: would a publishing token actually be allowed to
+// publish?) can only be answered off a real grant, so it mints
+// `PUBLISH_PERMISSIONS` above - deliberately the very set it is
+// checking, never a wider "preflight" set of its own. It attempts no
+// write with it, reads nothing off it but `permissions`, and discards
+// it; see `publish-permissions.ts`.

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { APP_ID_VAR, APP_KEY_VAR } from "./config.ts";
 import { githubAppStatus } from "./doctor-checks.ts";
+import { PUBLISH_PERMISSIONS } from "./scopes.ts";
 import { startStubGithub, type StubGithub, type StubGithubOptions } from "./helpers/stub-github.ts";
 import { testKeyPair } from "./helpers/test-key.ts";
 
@@ -166,6 +167,129 @@ test("no registered project has a github.com origin: still OK, and it says so", 
 
     assert.equal(check.ok, true);
     assert.match(check.detail, /no registered project has a github.com origin/);
+    // Nothing to mint for, so nothing was minted - a machine with no
+    // GitHub-backed project never makes this call.
+    assert.equal(github.granted.length, 0);
+  } finally {
+    await github.close();
+  }
+});
+
+// --- Issue #304: the publishing token's own granted permissions --------
+
+test("a publish token GitHub would mint is proof, not the installation lookup: one mint per project", async () => {
+  const github = await stub({ installations: { 7: ["acme/widgets", "acme/vault"] } });
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [WIDGETS, VAULT], { apiRoot: github.baseUrl });
+
+    assert.equal(check.ok, true);
+    assert.equal(github.granted.length, 2);
+    // Exactly the publishing scope, one repository at a time - a
+    // preflight must never mint something wider than the thing it is
+    // checking.
+    for (const grant of github.granted) {
+      assert.deepEqual(grant.permissions, { ...PUBLISH_PERMISSIONS });
+      assert.equal(grant.repositories.length, 1);
+    }
+    assert.match(check.detail, /publishing token carries every permission a handoff needs/);
+  } finally {
+    await github.close();
+  }
+});
+
+test("the 2026-10-27 failure: a token minted without statuses: write is a FAIL naming the setting", async () => {
+  const github = await stub({
+    appPermissions: { contents: "write", pull_requests: "write" },
+    narrowSilently: true,
+  });
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [WIDGETS], { apiRoot: github.baseUrl });
+
+    assert.equal(check.ok, false);
+    assert.match(check.detail, /widgets/);
+    assert.match(check.detail, /statuses: write/);
+    // One line, like every other doctor line.
+    assert.ok(!check.detail.includes("\n"), `the detail spanned lines: ${check.detail}`);
+    // The exact App setting to change, plus the half nobody remembers.
+    assert.match(check.fix ?? "", /Permissions & events -> Repository permissions -> Commit statuses -> Read and write/);
+    assert.match(check.fix ?? "", /accept the permission change on the installation/);
+  } finally {
+    await github.close();
+  }
+});
+
+test("a permission narrowed to read-only is a FAIL too, saying what was granted", async () => {
+  const github = await stub({
+    appPermissions: { contents: "write", pull_requests: "write", statuses: "read" },
+  });
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [WIDGETS], { apiRoot: github.baseUrl });
+
+    assert.equal(check.ok, false);
+    assert.match(check.detail, /granted read/);
+  } finally {
+    await github.close();
+  }
+});
+
+test("not installed on a project outranks a short grant: the install step comes first", async () => {
+  // A repository the App does not cover cannot be asked about at all,
+  // so its permissions are the same finding one step further on - and
+  // sending the Client to a permissions page he cannot act on yet would
+  // waste the trip.
+  const github = await stub({
+    installations: { 7: ["acme/widgets"] },
+    appPermissions: { contents: "write", pull_requests: "write" },
+    narrowSilently: true,
+  });
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [WIDGETS, VAULT], { apiRoot: github.baseUrl });
+
+    assert.equal(check.ok, false);
+    assert.match(check.detail, /not on vault \(acme\/vault\)/);
+    assert.match(check.fix ?? "", /Configure/);
+  } finally {
+    await github.close();
+  }
+});
+
+test("two projects short of the same permission get one fix line, not two", async () => {
+  const github = await stub({
+    installations: { 7: ["acme/widgets", "acme/vault"] },
+    appPermissions: { contents: "write", pull_requests: "write" },
+    narrowSilently: true,
+  });
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [WIDGETS, VAULT], { apiRoot: github.baseUrl });
+
+    assert.equal(check.ok, false);
+    // Both named, since what an installation accepted is per
+    // installation and two accounts can disagree.
+    assert.match(check.detail, /widgets/);
+    assert.match(check.detail, /vault/);
+    assert.equal((check.fix ?? "").match(/Commit statuses -> Read and write/g)?.length, 1);
+  } finally {
+    await github.close();
+  }
+});
+
+test("no minted token ever reaches the check's own words", async () => {
+  const github = await stub({
+    appPermissions: { contents: "write", pull_requests: "write" },
+    narrowSilently: true,
+  });
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [WIDGETS], { apiRoot: github.baseUrl });
+
+    for (const grant of github.granted) {
+      assert.ok(!JSON.stringify(check).includes(grant.token), "the check carried a minted token");
+    }
   } finally {
     await github.close();
   }

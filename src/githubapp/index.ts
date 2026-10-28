@@ -23,6 +23,17 @@ export {
   mintInstallationToken,
 } from "./mint.ts";
 export type { AppCallOptions } from "./mint.ts";
+export {
+  PERMISSION_SETTING_NAMES,
+  describeMissingPermissions,
+  grantPermissionsFix,
+  missingPermissions,
+  settingLevelFor,
+  settingNameFor,
+} from "./granted.ts";
+export type { MissingPermission } from "./granted.ts";
+export { publishGapDetail, publishPermissionGap } from "./publish-permissions.ts";
+export type { PublishPermissionGap } from "./publish-permissions.ts";
 export { defaultTokenMinter, scopedToken } from "./minter.ts";
 export type { ScopedToken, TokenMinterOptions } from "./minter.ts";
 export {

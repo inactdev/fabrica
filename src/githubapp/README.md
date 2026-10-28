@@ -42,11 +42,41 @@ log with `null` — so without this permission every red check would
 quietly arrive with no log, which is the silent skip the standing
 rulings forbid.
 
-`fabrica doctor` mints nothing. Both questions it asks — does this key
-work, and where is the App installed — are answered by
+### Why the preflight mints, and what it reads off the token
+
+`fabrica doctor` used to mint nothing: the two questions it asked — does
+this key work, and where is the App installed — are both answered by
 JWT-authenticated endpoints (`GET /app`, `GET
-/repos/{owner}/{repo}/installation`), so a preflight never ends up
-holding a credential that can touch a repository.
+/repos/{owner}/{repo}/installation`).
+
+Issue #304 added a third question those two cannot answer. On
+2026-10-27 four tasks ran, reached Inspector, went green, and ended as
+incomplete publications: the installation token lacked `statuses:
+write`, so posting the `inspector` commit status answered 403. The key
+signed, the installation covered the repository, and both existing
+checks were green the whole time.
+
+GitHub narrows an installation token to what the App holds **and what
+the installation has accepted** — its own documentation on modifying an
+App's permissions is explicit that an owner who does not approve a
+widening keeps the old set — and the only place that narrowing is
+visible is the `permissions` map on a token it actually minted. So the
+**github app** line now mints a real publishing token per registered
+project (`publish-permissions.ts`) and compares that map against
+`PUBLISH_PERMISSIONS` (`granted.ts`). A shortfall is a FAIL naming the
+permission and the exact setting to change.
+
+No write is ever attempted with it, nothing but `permissions` is read
+off it, and the token is discarded — which is what keeps this cheap
+enough to run as often as the Client likes. The mint's own installation
+lookup is what 404s on a repository the App is not installed on, so this
+answers the second question on the way past and costs one extra API call
+per project rather than two. A preflight has no task to record a mint
+against, so `defaultTokenMinter` is built here with no `onMinted`
+recorder; the same comparison at task start
+(`src/foreman/publish-permissions.ts`) goes through the task's own
+recording minter and lands a `"token-minted"` event like every other
+mint.
 
 ## How a mint works
 
@@ -109,9 +139,20 @@ Two things make that land early rather than mid-task:
   work refuses with `ForemanError("inspector-not-ready")` before any
   worker starts, exactly as the missing personal token used to.
 - `fabrica doctor`'s **github app** line fails on an App that is not
-  configured, whose key GitHub rejects, that is installed nowhere, or
-  that is not installed on a registered project's own repository — and
-  `fabrica up` refuses to start a session over it.
+  configured, whose key GitHub rejects, that is installed nowhere, that
+  is not installed on a registered project's own repository, or whose
+  publishing token comes back short of what a handoff needs (issue
+  #304) — and `fabrica up` refuses to start a session over it.
+- **`fabrica do` refuses at task start** on that last one
+  (`src/foreman/publish-permissions.ts`, called from
+  `registerAndAsk` behind rule 10's cap gate and issue #189's meter
+  gate): a task whose work could never be published must never be
+  worked. It refuses on one finding only — a mint that succeeded and
+  came back short. A machine with no App configured, a project with no
+  github.com origin, or GitHub unreachable is left to proceed exactly as
+  before, because a project self-tested in the worker's box publishes
+  nothing at all and legitimately has none of those; each of those cases
+  still refuses at `Inspector.prepare()`, and doctor reports it.
 
 ## What the record says
 

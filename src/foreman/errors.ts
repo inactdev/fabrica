@@ -34,6 +34,15 @@ export type ForemanErrorCode =
    * from such a project, so it is refused rather than started - see
    * src/foreman/github-token.ts. */
   | "no-github-repo"
+  /** GitHub would mint this project's publishing token short of what
+   * publishing needs (issue #304): the App does not hold a permission
+   * `PUBLISH_PERMISSIONS` asks for, or the installation never accepted
+   * it. Raised at task start, before any machine runs, from the granted
+   * permissions on a real minted token - no write is attempted. Carries
+   * the shortfall and the exact App setting to change; the same words
+   * `fabrica doctor`'s github-app line says. See
+   * src/foreman/publish-permissions.ts. */
+  | "publish-not-permitted"
   | "inspector-not-ready"
   /** No reviewer could be settled for a project whose test changes need
    * one judged - see src/reviewer/resolve.ts for the three grounds. */

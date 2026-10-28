@@ -196,7 +196,7 @@ src/foreman/answer.test.ts: src/foreman/answer.test.ts
 src/foreman/answer.ts: src/foreman/answer.test.ts
 src/foreman/ask-cost.test.ts: src/foreman/ask-cost.test.ts
 src/foreman/ask.test.ts: src/foreman/ask.test.ts
-src/foreman/ask.ts: src/foreman/ask.test.ts
+src/foreman/ask.ts: src/foreman/ask.test.ts, src/foreman/publish-permissions.test.ts
 src/foreman/attempts.test.ts: src/foreman/attempts.test.ts
 src/foreman/attempts.ts: src/foreman/attempts.test.ts
 src/foreman/base-standing.test.ts: src/foreman/base-standing.test.ts
@@ -236,6 +236,8 @@ src/foreman/network-policy.ts: src/foreman/network-policy.test.ts
 src/foreman/no-host-check.test.ts: src/foreman/no-host-check.test.ts
 src/foreman/pr-body.test.ts: src/foreman/pr-body.test.ts
 src/foreman/pr-body.ts: src/foreman/pr-body.test.ts
+src/foreman/publish-permissions.test.ts: src/foreman/publish-permissions.test.ts
+src/foreman/publish-permissions.ts: src/foreman/publish-permissions.test.ts
 src/foreman/queries.test.ts: src/foreman/queries.test.ts
 src/foreman/queries.ts: src/foreman/queries.test.ts
 src/foreman/rebase-only.test.ts: src/foreman/rebase-only.test.ts
@@ -269,18 +271,23 @@ src/github/fetch-issue.ts: src/github/fetch-issue.test.ts
 src/github/issue-ref.test.ts: src/github/issue-ref.test.ts
 src/github/issue-ref.ts: src/github/issue-ref.test.ts
 src/githubapp/config.test.ts: src/githubapp/config.test.ts
-src/githubapp/config.ts: src/githubapp/config.test.ts
+src/githubapp/config.ts: src/githubapp/config.test.ts, src/githubapp/granted.test.ts
 src/githubapp/doctor-checks.test.ts: src/githubapp/doctor-checks.test.ts
 src/githubapp/doctor-checks.ts: src/githubapp/doctor-checks.test.ts
 src/githubapp/errors.ts: src/githubapp/config.test.ts, src/githubapp/mint.test.ts
-src/githubapp/helpers/stub-github.ts: src/githubapp/mint.test.ts
+src/githubapp/granted.test.ts: src/githubapp/granted.test.ts
+src/githubapp/granted.ts: src/githubapp/granted.test.ts, src/githubapp/doctor-checks.test.ts
+src/githubapp/helpers/fake-minter.ts: src/githubapp/publish-permissions.test.ts, src/foreman/publish-permissions.test.ts, src/foreman/github-token.test.ts
+src/githubapp/helpers/stub-github.ts: src/githubapp/mint.test.ts, src/githubapp/doctor-checks.test.ts, src/githubapp/publish-permissions.test.ts
 src/githubapp/jwt.test.ts: src/githubapp/jwt.test.ts
 src/githubapp/jwt.ts: src/githubapp/jwt.test.ts
 src/githubapp/live.test.ts: src/githubapp/live.test.ts
 src/githubapp/mint.test.ts: src/githubapp/mint.test.ts
 src/githubapp/mint.ts: src/githubapp/mint.test.ts
 src/githubapp/minter.ts: src/foreman/github-token.test.ts, src/githubapp/mint.test.ts
-src/githubapp/scopes.ts: src/githubapp/mint.test.ts
+src/githubapp/publish-permissions.test.ts: src/githubapp/publish-permissions.test.ts
+src/githubapp/publish-permissions.ts: src/githubapp/publish-permissions.test.ts, src/githubapp/doctor-checks.test.ts, src/foreman/publish-permissions.test.ts
+src/githubapp/scopes.ts: src/githubapp/mint.test.ts, src/githubapp/granted.test.ts
 src/inspector/ancestry.test.ts: src/inspector/ancestry.test.ts
 src/inspector/ancestry.ts: src/inspector/ancestry.test.ts
 src/inspector/contract-sync-workflow.test.ts: src/inspector/contract-sync-workflow.test.ts

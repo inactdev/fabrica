@@ -29,7 +29,8 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { requireAppCredentials } from "./config.ts";
 import { installationIdFor, mintInstallationToken } from "./mint.ts";
-import { READ_ISSUE_PERMISSIONS } from "./scopes.ts";
+import { PUBLISH_PERMISSIONS, READ_ISSUE_PERMISSIONS } from "./scopes.ts";
+import { describeMissingPermissions, grantPermissionsFix, missingPermissions } from "./granted.ts";
 import { GITHUB_API_ROOT, GITHUB_API_VERSION } from "./mint.ts";
 
 export const LIVE_FLAG = "FABRICA_GITHUB_APP_LIVE";
@@ -72,7 +73,8 @@ after(() => {
     [
       "",
       rule,
-      line("SKIPPED: the LIVE GitHub App scoping proof did not run."),
+      line("SKIPPED: the LIVE GitHub App scoping and publish-permission"),
+      line("proofs did not run."),
       line(),
       line(`Why: ${SKIP}`),
       line(),
@@ -160,6 +162,26 @@ test("LIVE: the expiry GitHub sets is within the hour it documents", { skip: SKI
   // "Installation access tokens expire after 1 hour" - a little slack
   // either way for the round trip and for clock skew.
   assert.ok(lifetimeMs <= 65 * 60 * 1000, `the token lives longer than an hour (${minted.expiresAt})`);
+});
+
+test("LIVE: the real App's publishing token carries every permission a handoff needs", { skip: SKIP ?? false }, async () => {
+  // Issue #304, against the real App rather than a stub: the exact
+  // check `fabrica doctor` now runs, as a test. On 2026-10-27 this
+  // would have failed on `statuses: write` - the mint succeeded and the
+  // grant was quietly short, which is why nothing noticed until four
+  // green tasks could not be stamped. No write is attempted here
+  // either; the grant is the evidence.
+  const credentials = requireAppCredentials(process.env, RECORD_HOME);
+  const a = parseRepo(process.env[LIVE_REPO_VAR]!, LIVE_REPO_VAR);
+
+  const minted = await mintInstallationToken({ credentials, scope: { ...a, permissions: PUBLISH_PERMISSIONS } });
+  const missing = missingPermissions(PUBLISH_PERMISSIONS, minted.permissions);
+
+  assert.deepEqual(
+    missing,
+    [],
+    `the real App's publishing token is short of ${describeMissingPermissions(missing)} - ${grantPermissionsFix(missing)}`
+  );
 });
 
 test("LIVE: the App is not installed on a repository that does not exist", { skip: SKIP ?? false }, async () => {
