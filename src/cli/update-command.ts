@@ -47,6 +47,18 @@
 // commit did not change (an already-up-to-date pull), the ordinary
 // version comparison decides, and a current or absent live view is left
 // exactly as it is.
+//
+// What this command never does is open a browser tab on that live view -
+// no opener is passed to `refreshStaleLiveView`, and none is in scope
+// here to pass. `fabrica update` runs mid-session, where the page is
+// already open in a tab that reconnects to the restarted server on its
+// own, and the summary line below ends by telling the Client to run
+// `fabrica up --continue`, which opens one if anything does. While both
+// commands opened their own, that sequence cost two tabs - and in the
+// state where neither side can name its commit (an installed copy with
+// no readable build-info.json, so the `/api/version` comparison is
+// inconclusive and both commands restart the live view), two every
+// single time.
 
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -112,6 +124,9 @@ session:
      than no page. If the commit did not change, a live view running
      older code (checked via its own /api/version) is still replaced,
      and one already current, or not running at all, is left alone.
+     No browser tab is ever opened here - the tab you already have
+     reconnects by itself, and \`fabrica up\` is the one command that
+     opens one.
   4. Prints one summary line: the commit before and after, the
      installed Inspector before and after, whether the live view was
      restarted, started or left as is, and the exact next step.
@@ -206,13 +221,15 @@ export interface RunUpdateCommandOptions {
   liveViewPort?: number;
   /** The remaining options below are forwarded verbatim to
    * refreshStaleLiveView (up-command.ts) - see its own
-   * RefreshStaleLiveViewOptions for what each replaces. */
+   * RefreshStaleLiveViewOptions for what each replaces. There is
+   * deliberately no browser-opener among them: `fabrica update` never
+   * opens a tab (see this file's own header), so there is nothing to
+   * replace. */
   isLiveViewListening?: (host: string, port: number) => Promise<boolean>;
   fetchLiveViewVersion?: (port: number) => Promise<string | null>;
   findLiveViewProcess?: (recordHome: string) => { pid: number } | null;
   stopLiveViewProcess?: (pid: number) => void;
   startLiveView?: (opts: { recordHome: string; port: number }) => void;
-  openBrowser?: (url: string) => void;
   liveViewStartTimeoutMs?: number;
 }
 
@@ -301,7 +318,8 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
     findLiveViewProcess: opts.findLiveViewProcess,
     stopLiveViewProcess: opts.stopLiveViewProcess,
     startLiveView: opts.startLiveView,
-    openBrowser: opts.openBrowser,
+    // Deliberately nothing for up-command's own ready-callback here -
+    // this command opens no browser tab, ever.
     startTimeoutMs: opts.liveViewStartTimeoutMs,
   });
 
@@ -442,8 +460,9 @@ function describeInspectorOutcome(outcome: InspectorUpdateOutcome): string {
 
 /** The three words this summary line can end on. "started" is its own
  * word rather than folded into "restarted": nothing was running, so
- * nothing was restarted, and the Client is about to be told a browser
- * tab he never had is now open. */
+ * nothing was restarted, and a live view the Client did not have a
+ * moment ago is now serving - without a tab on it, which is what the
+ * `fabrica up --continue` this line ends on is for. */
 function describeLiveViewOutcome(outcome: LiveViewStaleOutcome): string {
   if (outcome === "restarted") return "restarted";
   if (outcome === "started") return "started";

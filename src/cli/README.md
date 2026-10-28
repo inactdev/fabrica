@@ -645,7 +645,20 @@ homes, so a different `FABRICA_HOME`'s own copy is still found this way).
 If neither identifies a real live view, `fabrica up` reports an error and
 touches nothing - never guesses by killing whatever is bound to the port.
 A freshly started live view gets its default browser opened once it's
-confirmed listening; (3) launches the chat harness in the foreground, in
+confirmed listening - at most one tab per run, whichever of the paths
+above started it (`openAtMostOnce` wraps the opener once, where the run
+resolves it, so "one tab per `fabrica up`" is a property of the command
+rather than something to re-derive from its branches), and never a tab
+for a live view this run found already running on this commit.
+`fabrica up` is also the only command that opens one at all: nothing
+else passes `refreshStaleLiveView` a ready-callback, which is why the
+`fabrica update` immediately before a `fabrica up --continue` costs no
+second tab. That last part is a fact about *who calls* that function,
+which no test can see from outside the commands it runs, so
+`up-command.test.ts` pins the complete caller set by reading the source
+of everything under `src/` and `integrations/`: a third caller fails it,
+and whoever adds one decides whether it owes the Client a tab on purpose
+instead of inheriting "no tab" silently from the default; (3) launches the chat harness in the foreground, in
 the current folder, with
 HANDBOOK.md's contents appended to its system prompt and this harness's
 own `settings.json` loaded, both through the harness's own documented
@@ -832,6 +845,25 @@ pull, a reinstall of the same commit), the ordinary `/api/version`
 comparison decides exactly as it does for `fabrica up`: a live view on an
 older commit is still replaced, and one already current, or not listening
 at all, is left alone.
+
+**No browser tab is ever opened here**, whatever it did to the live
+view: no ready-callback is passed to `refreshStaleLiveView`, and none is
+in scope in `update-command.ts` to pass. This command runs mid-session,
+where the Client already has the page open in a tab that reconnects to
+the restarted server on its own, and its summary line ends by telling
+him to run `fabrica up --continue`, which is the one command that opens
+a tab. While both commands opened their own, that sequence cost two
+tabs - and in the state where neither side can name its commit (an
+installed copy with no readable `build-info.json`, so the
+`/api/version` comparison is inconclusive and *both* commands restart
+the live view on purpose), two every single time. The staleness rule
+itself is unchanged; only who may open a tab is. Counted across the
+whole sequence in `up-command.test.ts`, and guarded from two sides:
+`update-command.test.ts` reads this file's own source and fails on any
+route a tab could come back through (a ready-callback, a re-added
+browser-opener option, a direct spawn of the OS opener behind both their
+backs), and `up-command.test.ts` pins the full set of
+`refreshStaleLiveView` callers this command is one of.
 
 Unlike `fabrica up`, which prints a line per step, `fabrica update`
 prints exactly one summary line: the commit before and after, the

@@ -55,6 +55,10 @@ order:
      instead of opening a browser. One running older code (e.g. left
      over from before a merge) is stopped first and replaced with a
      fresh one - never reused, and never a second copy either way.
+     At most one browser tab is ever opened per run, and only for a
+     live view this run itself started or restarted: no other command
+     opens one, so running \`fabrica update\` first costs you no
+     second tab.
   4. Launches your chat harness in this folder, with HANDBOOK.md
      appended to its system prompt and this harness's own settings
      loaded through its own command-line flags - nothing is ever
@@ -295,6 +299,20 @@ async function defaultFetchLiveViewVersion(port: number): Promise<string | null>
   }
 }
 
+/** The one browser tab a run may open. Wrapping the opener once, where
+ * the run resolves it, makes "at most one tab per `fabrica up`" a
+ * property of this command rather than something a reader has to
+ * re-derive from the branches below every time a call site is added -
+ * which is how a second tab got opened in the first place. */
+export function openAtMostOnce(open: (url: string) => void): (url: string) => void {
+  let alreadyOpened = false;
+  return (url: string) => {
+    if (alreadyOpened) return;
+    alreadyOpened = true;
+    open(url);
+  };
+}
+
 /** Best-effort only: a failure to find an opener on this machine (no
  * `xdg-open`, no GUI at all) must never stop the session from
  * launching - the printed address is the real fallback either way. */
@@ -318,13 +336,18 @@ function defaultOpenBrowser(url: string): void {
 /** Starts a fresh live view and reports the outcome - shared by both the
  * "nothing listening yet" and "stale, just stopped" paths below, and by
  * refreshStaleLiveView's own restart, so there is exactly one place that
- * starts a live view and announces whether it actually came up in time. */
+ * starts a live view and announces whether it actually came up in time.
+ *
+ * `onReady` is also the one place anything is ever handed the live
+ * view's address to open a browser tab on, and it fires only once the
+ * live view has confirmed it is listening - a tab on a server that
+ * never came up would show an error page. */
 async function startLiveViewAndReport(opts: {
   recordHome: string;
   port: number;
   isListening: (host: string, port: number) => Promise<boolean>;
   startLiveView: (opts: { recordHome: string; port: number }) => void;
-  openBrowser: (url: string) => void;
+  onReady: (url: string) => void;
   startTimeoutMs: number;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
@@ -332,7 +355,7 @@ async function startLiveViewAndReport(opts: {
   opts.startLiveView({ recordHome: opts.recordHome, port: opts.port });
   const started = await waitUntilListening(opts.isListening, opts.port, opts.startTimeoutMs);
   if (started) {
-    opts.openBrowser(liveViewUrl(opts.port));
+    opts.onReady(liveViewUrl(opts.port));
     opts.stdout(`Live view started - ${liveViewUrl(opts.port)}`);
   } else {
     opts.stderr(`the live view did not start listening on 127.0.0.1:${opts.port} in time - continuing anyway.`);
@@ -372,7 +395,18 @@ export interface RefreshStaleLiveViewOptions {
   findLiveViewProcess?: (recordHome: string) => { pid: number } | null;
   stopLiveViewProcess?: (pid: number) => void;
   startLiveView?: (opts: { recordHome: string; port: number }) => void;
-  openBrowser?: (url: string) => void;
+  /** Called once with the live view's address when this call itself
+   * started or restarted one and it confirmed it is listening - the one
+   * moment a browser tab is owed. Omitted (the default), nothing is
+   * handed the address and no tab is opened at all: `fabrica up` passes
+   * its opener here, and it is the only command that ever does.
+   * `fabrica update` passes none, deliberately - it restarts the live
+   * view mid-session, where the Client already has the page open in a
+   * tab that reconnects to the fresh server by itself, and it ends by
+   * telling him to run `fabrica up --continue` anyway. While this
+   * defaulted to the real browser opener instead, the two commands
+   * opened a tab each and that sequence cost two. */
+  onLiveViewReady?: (url: string) => void;
   startTimeoutMs?: number;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -407,11 +441,11 @@ export async function refreshStaleLiveView(opts: RefreshStaleLiveViewOptions): P
   const stdout = opts.stdout ?? (() => {});
   const stderr = opts.stderr ?? (() => {});
   const startLiveView = opts.startLiveView ?? (() => spawnDetachedLiveView({ recordHome }));
-  const openBrowser = opts.openBrowser ?? defaultOpenBrowser;
+  const onReady = opts.onLiveViewReady ?? (() => {});
 
   if (!(await isListening("127.0.0.1", port))) {
     if (!opts.startIfStopped) return "not-listening";
-    await startLiveViewAndReport({ recordHome, port, isListening, startLiveView, openBrowser, startTimeoutMs, stdout, stderr });
+    await startLiveViewAndReport({ recordHome, port, isListening, startLiveView, onReady, startTimeoutMs, stdout, stderr });
     return "started";
   }
 
@@ -439,7 +473,7 @@ export async function refreshStaleLiveView(opts: RefreshStaleLiveViewOptions): P
   stopProcess(found.pid);
   await waitUntilNotListening(isListening, port, startTimeoutMs);
 
-  await startLiveViewAndReport({ recordHome, port, isListening, startLiveView, openBrowser, startTimeoutMs, stdout, stderr });
+  await startLiveViewAndReport({ recordHome, port, isListening, startLiveView, onReady, startTimeoutMs, stdout, stderr });
   return "restarted";
 }
 
@@ -571,13 +605,21 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   const isListening = opts.isLiveViewListening ?? probePortListening;
   const startTimeoutMs = opts.liveViewStartTimeoutMs ?? 10_000;
 
+  // The one browser tab this run may open, resolved once here: both
+  // paths below share it, so whichever of them starts or restarts the
+  // live view, a run opens a tab at most once - and a run that reuses
+  // one it did not have to touch opens none at all. `fabrica up` is
+  // also the only command that passes an opener anywhere (see
+  // RefreshStaleLiveViewOptions.onLiveViewReady).
+  const openBrowser = openAtMostOnce(opts.openBrowser ?? defaultOpenBrowser);
+
   const startFreshLiveView = () =>
     startLiveViewAndReport({
       recordHome,
       port,
       isListening,
       startLiveView: opts.startLiveView ?? (() => spawnDetachedLiveView({ recordHome })),
-      openBrowser: opts.openBrowser ?? defaultOpenBrowser,
+      onReady: openBrowser,
       startTimeoutMs,
       stdout,
       stderr,
@@ -593,7 +635,7 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
       findLiveViewProcess: opts.findLiveViewProcess,
       stopLiveViewProcess: opts.stopLiveViewProcess,
       startLiveView: opts.startLiveView,
-      openBrowser: opts.openBrowser,
+      onLiveViewReady: openBrowser,
       startTimeoutMs,
       stdout,
       stderr,

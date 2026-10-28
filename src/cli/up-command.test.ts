@@ -15,7 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import type { DoctorCheck, DoctorProbes } from "./doctor-command.ts";
-import { runUpCommand } from "./up-command.ts";
+import { openAtMostOnce, runUpCommand } from "./up-command.ts";
+import { runUpdateCommand, type UpdateProbes } from "./update-command.ts";
 import { findLiveViewProcess } from "./live-view-process.ts";
 import { ownProcessesOnly } from "./helpers/own-processes-only.ts";
 
@@ -882,4 +883,260 @@ test("runUpCommand: propagates the harness session's own exit code", async () =>
   assert.equal(code, 7);
   assert.match(io.out.join("\n"), /still running at http:\/\/localhost:7777/);
   assert.match(io.out.join("\n"), /stop it with:/);
+});
+
+// --- One browser tab, across a whole sequence of commands ----------
+
+/** Real-shaped commits: 40 hex characters, which is what `git rev-parse
+ * HEAD` reports, what a build-info.json carries and what /api/version
+ * answers with. Nothing in the comparison cares about the shape - it is
+ * a string equality either side of a process boundary - but a fixture
+ * that hands both halves of a sequence a value no machine would ever
+ * produce proves less than one that doesn't. */
+const COMMIT_A = "4a9f0c1d2b3e4f5061728394a5b6c7d8e9f00112";
+const COMMIT_B = "b17c2d3e4f5061728394a5b6c7d8e9f001122334";
+
+/** A live view the way a command can actually see one from outside: a
+ * port that is either bound or not, plus the commit the bound process
+ * answers `/api/version` with - the commit the copy on disk was at when
+ * THAT process started, never re-read afterwards
+ * (integrations/live-view/server.ts). One world shared by every command
+ * in a sequence, so `fabrica update` followed by `fabrica up` is
+ * observed exactly as the machine would see it, browser tabs included.
+ *
+ * `diskCommit` is what the copy of fabrica on disk reads as - what a
+ * freshly started live view captures, and what each command compares an
+ * already-running one against. Setting it to null is the real,
+ * reachable state of an installed copy with no readable
+ * build-info.json: `fabrica doctor` reports it, and deliberately lets a
+ * session start anyway (UP_HELP step 2).
+ *
+ * Every fact this fixture models is one the real component it stands in
+ * for is separately tested on, so a reviewer can check the
+ * correspondence rather than take it on trust:
+ *   - `/api/version` answers the commit captured when THAT process
+ *     started and never re-reads the checkout -
+ *     integrations/live-view/server.test.ts, "keeps reporting the
+ *     startup commit after the checkout moves under it".
+ *   - it answers null rather than crashing when the commit is
+ *     unreadable - same file, "reports null ... when the commit
+ *     override itself returns null".
+ *   - the commit each command compares that against is
+ *     `runningCopyCommit`, which is null for exactly that copy -
+ *     doctor-command.test.ts's own test for it.
+ * What it deliberately does not model, because no tab count can turn on
+ * it: the OS taking a moment to bind and free the port (here both are
+ * instant; the real waits are waitUntilListening/waitUntilNotListening),
+ * and something other than a live view holding the port, which has its
+ * own test above.
+ */
+function liveViewWorld(initial: { listening: boolean; diskCommit: string | null }) {
+  let listening = initial.listening;
+  let startupCommit = initial.diskCommit;
+  const world = {
+    opens: [] as string[],
+    starts: 0,
+    stops: 0,
+    diskCommit: initial.diskCommit,
+    /** Everything but the browser opener: these seams exist on both
+     * `fabrica up` and `fabrica update`, under the same names. */
+    seams() {
+      return {
+        isLiveViewListening: async () => listening,
+        fetchLiveViewVersion: async () => (listening ? startupCommit : null),
+        findLiveViewProcess: () => (listening ? { pid: 4_242 } : null),
+        stopLiveViewProcess: () => {
+          world.stops += 1;
+          listening = false;
+        },
+        startLiveView: () => {
+          world.starts += 1;
+          listening = true;
+          startupCommit = world.diskCommit;
+        },
+        liveViewStartTimeoutMs: 2_000,
+      };
+    },
+    openBrowser: (url: string) => world.opens.push(url),
+  };
+  return world;
+}
+
+/** The `fabrica up` half of a sequence, with every live-view seam wired
+ * to one shared world and the harness/doctor steps stubbed out. */
+function upAgainst(world: ReturnType<typeof liveViewWorld>, io: ReturnType<typeof captureIo>) {
+  return runUpCommand(["--continue"], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    ...world.seams(),
+    openBrowser: world.openBrowser,
+    getRunningCommit: () => world.diskCommit,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+}
+
+/** A dev checkout `fabrica update` moves from one commit to another -
+ * the same shape update-command.test.ts's own fixture builds, inline
+ * here so this sequence test owns the commits it hands to both halves. */
+function updateProbesMoving(world: ReturnType<typeof liveViewWorld>, to: string | null): UpdateProbes {
+  return {
+    copy: () => ({ kind: "dev-checkout", root: "/fake/checkout", branch: "master", commit: world.diskCommit, version: "0.0.0" }),
+    isDirty: () => false,
+    pull: () => {
+      world.diskCommit = to;
+      return { ok: true, message: "Fast-forward" };
+    },
+    reinstall: () => {
+      throw new Error("must not reinstall a dev checkout");
+    },
+    inspector: {
+      build: () => null,
+      mainCommit: () => null,
+      ancestry: () => "unknown",
+      install: () => {
+        throw new Error("must not install an Inspector in a live-view test");
+      },
+    },
+  };
+}
+
+test("fabrica update then fabrica up --continue costs no browser tab at all - the one already open is still the live view's", async () => {
+  const world = liveViewWorld({ listening: true, diskCommit: COMMIT_A });
+  const updateIo = captureIo();
+
+  const updateCode = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: updateProbesMoving(world, COMMIT_B),
+    ...world.seams(),
+    ...updateIo,
+  });
+
+  assert.equal(updateCode, 0, updateIo.err.join("\n"));
+  assert.match(updateIo.out.join("\n"), /live view restarted/);
+  assert.deepEqual(world.opens, [], "fabrica update must open no browser tab of its own");
+
+  const upIo = captureIo();
+  const upCode = await upAgainst(world, upIo);
+
+  assert.equal(upCode, 0, upIo.err.join("\n"));
+  assert.deepEqual(world.opens, [], "nothing in the sequence may open a tab: the live view is current by the time up runs");
+  assert.match(upIo.out.join("\n"), /already running - http:\/\/localhost:7777/);
+  assert.equal(world.starts, 1, "only update's own restart - up must reuse what it found");
+});
+
+test("fabrica update then fabrica up --continue opens one tab in total even when neither side can name its commit", async () => {
+  // The state that opened two tabs: an installed copy with no readable
+  // build-info.json, so `runningCopyCommit` is null and the live view's
+  // own /api/version answers null too. The comparison is inconclusive,
+  // which both commands treat as stale on purpose - so both of them
+  // restart the live view, and before this fix both opened a tab for it.
+  const world = liveViewWorld({ listening: true, diskCommit: null });
+  const updateIo = captureIo();
+
+  const updateCode = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: updateProbesMoving(world, null),
+    ...world.seams(),
+    ...updateIo,
+  });
+
+  assert.equal(updateCode, 0, updateIo.err.join("\n"));
+  assert.deepEqual(world.opens, [], "fabrica update must open no browser tab of its own");
+
+  const upIo = captureIo();
+  const upCode = await upAgainst(world, upIo);
+
+  assert.equal(upCode, 0, upIo.err.join("\n"));
+  assert.ok(world.starts >= 2, "this fixture is only meaningful if both commands really did restart the live view");
+  assert.deepEqual(world.opens, ["http://localhost:7777"], "exactly one tab, opened by the run that is starting a session");
+});
+
+test("one fabrica up opens exactly one browser tab, whatever it had to do to the live view", async () => {
+  /** A live view running older code: started while the checkout was on
+   * one commit, which has since moved under it. */
+  const stale = () => {
+    const world = liveViewWorld({ listening: true, diskCommit: COMMIT_A });
+    world.diskCommit = COMMIT_B;
+    return world;
+  };
+
+  const cases = [
+    { label: "nothing listening yet", world: liveViewWorld({ listening: false, diskCommit: COMMIT_A }) },
+    { label: "a live view running older code", world: stale() },
+    { label: "a live view that can't name its commit", world: liveViewWorld({ listening: true, diskCommit: null }) },
+  ];
+
+  for (const { label, world } of cases) {
+    const io = captureIo();
+
+    const code = await upAgainst(world, io);
+
+    assert.equal(code, 0, `${label}: ${io.err.join("\n")}`);
+    assert.deepEqual(world.opens, ["http://localhost:7777"], `${label}: expected exactly one tab`);
+  }
+});
+
+test("fabrica up opens no tab at all for a live view already running this exact commit", async () => {
+  const world = liveViewWorld({ listening: true, diskCommit: COMMIT_A });
+  const io = captureIo();
+
+  const code = await upAgainst(world, io);
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.deepEqual(world.opens, []);
+  assert.equal(world.starts, 0, "must not start a second live view");
+  assert.equal(world.stops, 0, "must not stop a live view running this exact commit");
+});
+
+test("refreshStaleLiveView has exactly two callers, and a third would inherit 'no tab' without saying so", () => {
+  // What the two counting tests above rest on, checked rather than
+  // assumed: a sequence totals one tab because `fabrica up` is the one
+  // caller that hands refreshStaleLiveView a ready-callback. That is a
+  // property of who calls it - nothing either test can observe from
+  // outside the commands it runs. The callback now defaults to opening
+  // nothing, which is the right default for a caller that says nothing,
+  // but it also means a third caller gets "no tab" silently. This fails
+  // the moment one appears, so whoever adds it decides about the tab on
+  // purpose and adds their own sequence to the counts above. Reading the
+  // source is the same approach inspector-stamp-workflow.test.ts takes
+  // for a fact with no code of its own to exercise.
+  const roots = [
+    { label: "src", dir: join(import.meta.dirname, "..") },
+    { label: "integrations", dir: join(import.meta.dirname, "..", "..", "integrations") },
+  ];
+
+  const callers: string[] = [];
+  for (const { label, dir } of roots) {
+    for (const entry of readdirSync(dir, { recursive: true })) {
+      const rel = String(entry);
+      // Tests are excluded on purpose: calling this function directly is
+      // exactly what a test of it should do, and says nothing about
+      // which command opens a tab.
+      if (!rel.endsWith(".ts") || rel.endsWith(".test.ts")) continue;
+      if (readFileSync(join(dir, rel), "utf8").includes("refreshStaleLiveView(")) callers.push(`${label}/${rel}`);
+    }
+  }
+
+  assert.deepEqual(
+    callers.sort(),
+    ["src/cli/up-command.ts", "src/cli/update-command.ts"],
+    "a new caller of refreshStaleLiveView must decide for itself whether it owes the Client a browser tab " +
+      "(RefreshStaleLiveViewOptions.onLiveViewReady, which opens nothing unless passed) and be counted in the " +
+      "one-tab-per-sequence tests above"
+  );
+});
+
+test("openAtMostOnce forwards the first url and drops every one after it", () => {
+  const opened: string[] = [];
+  const open = openAtMostOnce((url) => opened.push(url));
+
+  open("http://localhost:7777");
+  open("http://localhost:7777");
+  open("http://localhost:9999");
+
+  assert.deepEqual(opened, ["http://localhost:7777"]);
 });
