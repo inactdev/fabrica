@@ -328,6 +328,7 @@ export {
 } from "./register/index.ts";
 export type { OriginSetup } from "./register/index.ts";
 export type {
+  DockerfileOutcome,
   InspectorProposal,
   ProposalSignals,
   RegisterErrorCode,

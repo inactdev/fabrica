@@ -346,11 +346,13 @@ command is the one thing that must pass for work on that project to be
 green; the image is what it runs inside, here and for every later task
 (Fabrica never runs a project's check on your machine).
 
-It writes a `check.sh` holding that command and an `.inspector.json`
-naming it, runs the check once inside the image, and - only if it
-passes - commits, pushes a `fabrica/register` branch with your own git
-credentials, and opens a pull request with `gh pr create` for **you**
-to merge. Then it appends the project to `~/.fabrica/projects.toml`:
+It writes a `check.sh` holding that command, an `.inspector.json`
+naming it, and a `Dockerfile.inspector` with that image on its `FROM`
+line - the file Inspector builds the check box from. Then it runs the
+check once inside the image, and - only if it passes - commits, pushes a
+`fabrica/register` branch with your own git credentials, and opens a
+pull request with `gh pr create` for **you** to merge. Then it appends
+the project to `~/.fabrica/projects.toml`:
 
     [projects.spending-app]
     path = "/Users/you/inkling-umbrella/spending-app"
@@ -410,16 +412,21 @@ in, a stopped Docker daemon, a `fabrica/register` branch that already
 exists, or a project already registered. A failing check refuses too,
 with its output - nothing is pushed. It needs `gh` (logged in) and
 Docker; `--protected <glob,...>` adds paths a Worker may never quietly
-change, on top of `check.sh` and `.inspector.json`, which always are.
+change, on top of `check.sh`, `.inspector.json` and
+`Dockerfile.inspector`, which always are.
 
-Two more flags describe the box the check runs in later, and go into
-`.inspector.json`: `--network`, if the check installs its own project
-dependencies (`npm ci`, a virtualenv) and so cannot pass without a
-network, and `--timeout <seconds>`, if it needs longer than Inspector's
-own default. Both are off unless you pass them. A check that installs a
-*system* package needs an `--image` that already ships it rather than a
-flag - every check box runs as your own user, and so can write only
-inside the project.
+**The check box has no network.** Whatever the check needs is installed
+in `Dockerfile.inspector`, at build time, or already ships in the image:
+a project with a `package-lock.json` gets `npm ci` there (and a
+`check.sh` that links the result in), one with a `go.sum` gets `go mod
+download`, and anything else gets a comment in that file naming what
+still has to be installed - never a silent gap. A repository that
+already carries its own `Dockerfile.inspector` keeps it, untouched:
+`fabrica register` never overwrites a committed file.
+
+One more flag describes the box the check runs in later, and goes into
+`.inspector.json`: `--timeout <seconds>`, if the check needs longer than
+Inspector's own default. It is off unless you pass it.
 
 This is the one Fabrica command that pushes, and it is allowed to
 because of what it is: it runs as you, on your machine, with your own
@@ -441,17 +448,19 @@ scripts and `engines`, `go.mod`:
 
 The proposed document is the **only** thing on stdout, so that redirect
 writes exactly it. Every field's reasoning goes to stderr instead, one
-line per field - including why `network` is on or off, which JSON itself
-has nowhere to say - along with any disagreement between two signals
-(an existing `check.sh` always wins one, and the disagreement is named
-rather than dropped).
+line per field, along with any disagreement between two signals (an
+existing `check.sh` always wins one, and the disagreement is named
+rather than dropped) - and so does a proposed `Dockerfile.inspector` to
+commit next to it, since the config names no image any more and the
+check box is built from that file. It is deliberately not on stdout:
+that stream is the one document the redirect writes.
 
-It **prints the file and never writes it**, and exits non-zero, because
-nothing was written and nothing was registered. Read it, replace
-anything marked `REPLACE-ME-with-...` (the image is the one field no
-repository usually names; the placeholder is a deliberately invalid
-Docker reference, so it cannot be committed by accident), commit it
-yourself, and run `fabrica register <path>` again.
+It **prints the files and never writes them**, and exits non-zero,
+because nothing was written and nothing was registered. Read them,
+replace anything marked `REPLACE-ME-with-...` (the image is the one
+field no repository usually names; the placeholder is a deliberately
+invalid Docker reference, so it cannot be committed by accident), commit
+them yourself, and run `fabrica register <path>` again.
 
 That asymmetry is on purpose: `.inspector.json` is the file deciding how
 Fabrica's own work is judged, so Fabrica never puts it in your

@@ -1,5 +1,5 @@
-export { registerProject, commitMessageFor, pullRequestBodyFor } from "./register.ts";
-export type { RegisterRequest, RegisterResult, RegisterOptions } from "./register.ts";
+export { registerProject, commitMessageFor, pullRequestBodyFor, registerWarnings } from "./register.ts";
+export type { DockerfileOutcome, RegisterRequest, RegisterResult, RegisterOptions } from "./register.ts";
 export { RegisterError, RegisterProposalError } from "./errors.ts";
 export type { RegisterErrorCode } from "./errors.ts";
 export { proposeInspectorConfig, readProposalSignals } from "./propose.ts";
@@ -19,6 +19,16 @@ export {
 } from "./origin.ts";
 export type { OriginSetup } from "./origin.ts";
 export { checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.ts";
+export {
+  DEPS_DIR,
+  DOCKERFILE_INSPECTOR,
+  dependencyInstallerIn,
+  dependencyShapeFrom,
+  dependencyShapeInTree,
+  inspectorDockerfile,
+  knownNonRootUser,
+} from "./dockerfile.ts";
+export type { DependencyShape } from "./dockerfile.ts";
 export { appendProjectEntry, existingRegistration, isUsableProjectName } from "./registry-write.ts";
 export { pullRequestUrlIn, realRegisterTools } from "./tools.ts";
 export type { PrerequisiteResult, PullRequestResult, RegisterTools } from "./tools.ts";

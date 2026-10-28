@@ -65,15 +65,21 @@ test("runRegisterCommand: --protected reaches .inspector.json, and --name the re
   const config = JSON.parse(
     execFileSync("git", ["show", "fabrica/register:.inspector.json"], { cwd: dir, encoding: "utf8" })
   );
-  assert.deepEqual(config.protectedPaths, ["check.sh", ".inspector.json", "*.test.ts", "docs/**"]);
+  assert.deepEqual(config.protectedPaths, [
+    "check.sh",
+    ".inspector.json",
+    "Dockerfile.inspector",
+    "*.test.ts",
+    "docs/**",
+  ]);
 });
 
-test("runRegisterCommand: --network and --timeout reach .inspector.json", async () => {
+test("runRegisterCommand: --timeout reaches .inspector.json, and --image the Dockerfile's FROM", async () => {
   const recordHome = tempHome();
   const dir = project({ inspector: false });
 
   const code = await runRegisterCommand(
-    [dir, "--check", "exit 0", "--image", "node:24", "--network", "--timeout", "900"],
+    [dir, "--check", "exit 0", "--image", "node:24", "--timeout", "900"],
     { recordHome, tools: fakeRegisterTools(), ...captureIo() }
   );
 
@@ -81,8 +87,31 @@ test("runRegisterCommand: --network and --timeout reach .inspector.json", async 
   const config = JSON.parse(
     execFileSync("git", ["show", "fabrica/register:.inspector.json"], { cwd: dir, encoding: "utf8" })
   );
-  assert.equal(config.network, true);
   assert.equal(config.timeoutSeconds, 900);
+  assert.equal(Object.hasOwn(config, "image"), false, "inspector#47 retired the image key");
+  const dockerfile = execFileSync("git", ["show", "fabrica/register:Dockerfile.inspector"], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+  assert.ok(dockerfile.includes("FROM node:24"), dockerfile);
+});
+
+// The flag it used to take is gone, and the refusal has to say what
+// replaced it rather than only that it is unknown.
+test("runRegisterCommand: --network refuses, naming Dockerfile.inspector, having touched nothing", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  const io = captureIo();
+
+  const code = await runRegisterCommand(
+    [dir, "--check", "exit 0", "--image", "node:24", "--network"],
+    { recordHome, tools: fakeRegisterTools(), ...io }
+  );
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, []);
+  assert.ok(io.err.join("\n").includes("Dockerfile.inspector"), io.err.join("\n"));
+  assert.equal(existsSync(projectsTomlPath(recordHome)), false);
 });
 
 // `fabrica register .` has to mean this directory, and the registry has
@@ -142,11 +171,20 @@ test("runRegisterCommand: a repository needing setup prints a proposal, JSON alo
   const config = JSON.parse(io.out[0]) as Record<string, unknown>;
   assert.equal(config.check, "./check.sh");
 
-  // ...and every field's reasoning is on stderr instead.
+  // ...and every field's reasoning is on stderr instead, along with the
+  // Dockerfile.inspector to commit next to it - the config names no
+  // image since inspector#47, so the proposal is two files.
   const stderr = io.err.join("\n");
-  for (const key of ["check:", "image:", "network:", "timeoutSeconds:", "protectedPaths:"]) {
+  for (const key of [
+    "check:",
+    "timeoutSeconds:",
+    "protectedPaths:",
+    "Dockerfile.inspector FROM:",
+    "Dockerfile.inspector dependencies:",
+  ]) {
     assert.ok(stderr.includes(key), `${key} should be explained on stderr: ${stderr}`);
   }
+  assert.ok(stderr.includes("FROM "), "the Dockerfile itself belongs on stderr too");
   assert.ok(stderr.includes("Nothing was written"), stderr);
 });
 
@@ -175,15 +213,60 @@ test("registerSummary: the shortcut case says the project is ready now, not that
   assert.ok(!lines.includes("Merge"));
 });
 
+// The two things about the new third file the Client has to see on his
+// own screen, not only in the pull request: that a Dockerfile.inspector
+// he already had was left alone, and anything worth a look before he
+// merges.
+test("registerSummary: a left-alone Dockerfile.inspector and a warning both reach the screen", () => {
+  const lines = registerSummary({
+    kind: "full",
+    name: "spending-app",
+    path: "/srv/spending-app",
+    check: "./check.sh",
+    defaultBranch: "main",
+    tomlPath: "/home/c/.fabrica/projects.toml",
+    tomlEntry: '[projects.spending-app]\npath = "/srv/spending-app"\n',
+    branch: "fabrica/register",
+    pullRequestUrl: "https://github.com/c/spending-app/pull/7",
+    dockerfile: "already-committed",
+    warnings: ["the check command runs `npm ci`, and the check box has no network at all"],
+  }).join("\n");
+
+  assert.ok(lines.includes("already committed there - left exactly as it is"), lines);
+  assert.ok(!lines.includes("check.sh and Dockerfile.inspector"), "it does not claim to have written that file");
+  assert.ok(lines.includes("worth a look: the check command runs `npm ci`"), lines);
+});
+
+test("registerSummary: a written Dockerfile.inspector is named among the files, with no warnings line", () => {
+  const lines = registerSummary({
+    kind: "full",
+    name: "spending-app",
+    path: "/srv/spending-app",
+    check: "./check.sh",
+    defaultBranch: "main",
+    tomlPath: "/home/c/.fabrica/projects.toml",
+    tomlEntry: '[projects.spending-app]\npath = "/srv/spending-app"\n',
+    branch: "fabrica/register",
+    pullRequestUrl: "https://github.com/c/spending-app/pull/7",
+    dockerfile: "written",
+  }).join("\n");
+
+  assert.ok(lines.includes("check.sh and Dockerfile.inspector"), lines);
+  assert.ok(!lines.includes("left exactly as it is"), lines);
+  assert.ok(!lines.includes("worth a look"), lines);
+});
+
 test("main: `fabrica register --help` prints its usage and exits 0", async () => {
   const io = captureIo();
   assert.equal(await main(["register", "--help"], io), 0);
   assert.ok(io.out.join("\n").includes("fabrica register <path>"));
   assert.ok(io.out.join("\n").includes("the one Fabrica command that pushes"));
-  // Every flag it accepts has to be findable from its own help.
-  for (const flag of ["--check", "--image", "--network", "--timeout", "--protected", "--name"]) {
+  // Every flag it accepts has to be findable from its own help - and
+  // the one it no longer accepts must not be there to find.
+  for (const flag of ["--check", "--image", "--timeout", "--protected", "--name"]) {
     assert.ok(io.out.join("\n").includes(flag), `${flag} should be documented in the help`);
   }
+  assert.ok(!io.out.join("\n").includes("--network"), "--network is retired, not documented");
 });
 
 test("main: `fabrica --help` lists register", async () => {

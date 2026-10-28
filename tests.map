@@ -335,6 +335,8 @@ src/record/tail.test.ts: src/record/tail.test.ts
 src/record/tail.ts: src/record/tail.test.ts
 src/record/tasks.test.ts: src/record/tasks.test.ts
 src/record/tasks.ts: src/record/tasks.test.ts
+src/register/dockerfile.test.ts: src/register/dockerfile.test.ts
+src/register/dockerfile.ts: src/register/dockerfile.test.ts
 src/register/origin.test.ts: src/register/origin.test.ts
 src/register/origin.ts: src/register/origin.test.ts
 src/register/propose.test.ts: src/register/propose.test.ts

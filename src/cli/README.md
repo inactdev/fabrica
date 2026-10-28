@@ -77,13 +77,18 @@ from an argument parser would be the wrong place for it.
 `src/register/register.ts` requires them at the point it knows, and
 says why.
 
-`--network` (a bare flag, off by default) and `--timeout <seconds>`
-describe the box Inspector will run the check in later, and only ever
-land in `.inspector.json`. Off is the *absence* of the key, never
-`network: false`; `register`'s own one proving run always allows the
-network regardless, since a check that is about to be green must not
-read as red here. See `src/register/README.md`'s "`--network` and
-`--timeout`".
+`--timeout <seconds>` is the one remaining knob describing the box
+Inspector will run the check in later, and only ever lands in
+`.inspector.json`. There is no `--network` flag any more, and no flag
+can replace it: inspector#47 retired that key, the check box has no
+network at all, and a project's dependencies are installed at build
+time in the `Dockerfile.inspector` register writes. Passing
+`--network` is an unknown-flag refusal that says so, rather than a
+silently ignored argument (`register-args.ts`'s `RETIRED_FLAGS`).
+`register`'s own one proving run still allows the network, since it
+pulls the FROM image and a check that is about to be green must not
+read as red here. See `src/register/README.md`'s "`Dockerfile.inspector`,
+and why `/deps`" and "`--timeout`, and the one proving run".
 
 Progress goes to **stderr** and the summary to stdout: this command
 pulls images, pushes, and calls GitHub, so saying nothing for a minute

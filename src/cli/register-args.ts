@@ -1,5 +1,5 @@
 // Parses the arguments after `fabrica register`. One positional (the
-// repository's path) and six flags; every wrong shape refuses with
+// repository's path) and five flags; every wrong shape refuses with
 // exact instructions, matching do-args.ts's style.
 //
 // --check and --image are deliberately not required here even though the
@@ -12,7 +12,7 @@
 import { CliError } from "./errors.ts";
 
 export const REGISTER_USAGE =
-  'fabrica register <path> --check "<command>" --image <docker image> [--network] ' +
+  'fabrica register <path> --check "<command>" --image <docker image> ' +
   "[--timeout <seconds>] [--protected <glob,...>] [--name <name>]";
 
 export interface RegisterArgs {
@@ -23,39 +23,35 @@ export interface RegisterArgs {
    * dropped. */
   protectedPaths: string[];
   name?: string;
-  /** Present only when --network was passed: off is the absence of the
-   * flag, and of the .inspector.json key it writes. */
-  network?: boolean;
   timeoutSeconds?: number;
 }
 
 const VALUE_FLAGS = ["--check", "--image", "--protected", "--name", "--timeout"] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 
-/** Flags that take no value at all. */
-const BARE_FLAGS = ["--network"] as const;
+/**
+ * Flags this command used to accept, and what to say instead. `--network`
+ * is gone outright since inspector#47 (issue #303, Client ruling): the
+ * check box has no network, with no key left to ask for one, so the
+ * refusal has to say where dependencies go now rather than only that the
+ * flag is unknown - "unknown flag" alone would read as a typo.
+ */
+const RETIRED_FLAGS: Record<string, string> = {
+  "--network": `The check box has no network at all any more, and nothing can ask for one: a project's own ` +
+    `dependencies are installed in Dockerfile.inspector, at build time, which register writes for you.`,
+};
 
 export function parseRegisterArgs(argv: string[]): RegisterArgs {
   const values: Partial<Record<ValueFlag, string>> = {};
   const positionals: string[] = [];
-  let network = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    const bare = BARE_FLAGS.find((flag) => arg === flag);
-    if (bare !== undefined) {
-      network = true;
-      continue;
-    }
-    // Caught separately from "unknown flag", because `--network=true` is
-    // a reasonable guess at a flag that genuinely takes no value, and
-    // there is no spelling of "off" to offer in its place.
-    const bareWithValue = BARE_FLAGS.find((flag) => arg.startsWith(`${flag}=`));
-    if (bareWithValue !== undefined) {
+    const retired = Object.keys(RETIRED_FLAGS).find((flag) => arg === flag || arg.startsWith(`${flag}=`));
+    if (retired !== undefined) {
       throw new CliError(
         "bad-usage",
-        `fabrica register: ${bareWithValue} takes no value - pass it to allow the check network access, or ` +
-          `leave it out to deny it. Usage: ${REGISTER_USAGE}`
+        `fabrica register: unknown flag "${retired}". ${RETIRED_FLAGS[retired]} Usage: ${REGISTER_USAGE}`
       );
     }
     const matched = VALUE_FLAGS.find((flag) => arg === flag || arg.startsWith(`${flag}=`));
@@ -121,7 +117,6 @@ export function parseRegisterArgs(argv: string[]): RegisterArgs {
     ...(values["--image"] !== undefined ? { image: values["--image"] } : {}),
     protectedPaths,
     ...(values["--name"] !== undefined ? { name: values["--name"] } : {}),
-    ...(network ? { network: true } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
   };
 }

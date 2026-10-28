@@ -24,21 +24,18 @@ once per project, before the first \`fabrica do\` against it.
                             once inside --image before anything is
                             pushed - if it fails, nothing is.
   --image <docker image>   The image that command runs inside, here and
-                            for every later task. Fabrica never runs a
-                            project's check on your machine.
-  --network                Lets the check reach the network when it runs
-                            later - what a check that installs its own
-                            project dependencies (npm ci, a virtualenv)
-                            needs. Off unless you pass this. A check that
-                            installs a system package needs an image that
-                            already ships it, not this flag: the box runs
-                            as you and cannot write outside the project.
+                            for every later task. It goes on the FROM
+                            line of a Dockerfile.inspector written at the
+                            repository root, which is what Inspector
+                            builds the check box from. Fabrica never runs
+                            a project's check on your machine.
   --timeout <seconds>      How long the check may take before it counts
                             as failed. Left to Inspector's own default
                             unless you pass this.
   --protected <glob,...>   Extra paths a worker may never quietly change,
-                            on top of check.sh and .inspector.json, which
-                            are always protected.
+                            on top of check.sh, .inspector.json and
+                            Dockerfile.inspector, which are always
+                            protected.
   --name <name>            The name to register it under. Defaults to
                             origin's repository name.
 
@@ -52,11 +49,16 @@ anything is created:
      exactly what is missing, having changed nothing.
   2. Creates a temporary worktree of origin's default branch - never
      your own checkout, which is only ever read.
-  3. Writes .inspector.json (--image, plus --network and --timeout when
-     given) and check.sh there, and runs check.sh inside --image. A
-     failing check refuses here: nothing is pushed. This one proving
-     run always has the network, whether or not --network was passed -
-     otherwise a check that is about to be green would read as red.
+  3. Writes .inspector.json (plus --timeout when given), check.sh, and
+     Dockerfile.inspector with --image on its FROM line - unless the
+     repository already carries one, which is left exactly as it is.
+     The check container has no network, so a project with a
+     package-lock.json or a go.sum gets its dependencies installed in
+     that Dockerfile at build time, and anything else gets a comment
+     there naming what still has to be. Then it runs check.sh inside
+     --image. A failing check refuses here: nothing is pushed. This one
+     proving run does have the network, unlike the check box, so a
+     check about to be green cannot read as red.
   4. Commits, pushes the fabrica/register branch with your own git
      credentials, and opens a pull request with \`gh pr create\`.
   5. Appends [projects.<name>] to projects.toml, including
@@ -82,13 +84,14 @@ and engines, go.mod), and stops having created nothing:
     fabrica register <path> > <path>/.inspector.json
 
 The proposed document is the only thing on stdout, so that redirect
-writes exactly it. Every field's reasoning - including why network is on
-or off, which JSON itself has nowhere to say - goes to stderr, one line
-per field, along with any disagreement between two signals. It exits
-non-zero, because nothing was written and nothing was registered: read
-the proposal, replace anything marked REPLACE-ME..., commit it yourself,
-and run this again. Fabrica never writes that file for you unasked - the
-file defining how Fabrica's own work is judged is yours to commit.
+writes exactly it. Every field's reasoning goes to stderr, one line per
+field, along with any disagreement between two signals - and so does a
+proposed Dockerfile.inspector to commit next to it, since the check box
+is built from that file. It exits non-zero, because nothing was written
+and nothing was registered: read the proposal, replace anything marked
+REPLACE-ME..., commit it yourself, and run this again. Fabrica never
+writes those files for you unasked - the files defining how Fabrica's
+own work is judged are yours to commit.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -111,8 +114,15 @@ export function registerSummary(result: RegisterResult): string[] {
   if (result.kind === "full") {
     lines.push(`Opened a pull request setting ${result.name} up for Fabrica:`);
     lines.push(`  ${result.pullRequestUrl}`);
-    lines.push(`  branch ${result.branch} -> ${result.defaultBranch}, with .inspector.json and check.sh`);
+    lines.push(
+      `  branch ${result.branch} -> ${result.defaultBranch}, with .inspector.json, check.sh` +
+        (result.dockerfile === "already-committed" ? `` : ` and Dockerfile.inspector`)
+    );
+    if (result.dockerfile === "already-committed") {
+      lines.push(`  Dockerfile.inspector was already committed there - left exactly as it is`);
+    }
     lines.push(`  ${result.check} passed inside the image before it was pushed`);
+    for (const warning of result.warnings ?? []) lines.push(`  worth a look: ${warning}`);
   } else {
     lines.push(`${result.name} was already set up on origin/${result.defaultBranch} - registered it as it is.`);
   }
@@ -148,7 +158,6 @@ export async function runRegisterCommand(argv: string[], opts: RunRegisterComman
         ...(args.image !== undefined ? { image: args.image } : {}),
         protectedPaths: args.protectedPaths,
         ...(args.name !== undefined ? { name: args.name } : {}),
-        ...(args.network !== undefined ? { network: args.network } : {}),
         ...(args.timeoutSeconds !== undefined ? { timeoutSeconds: args.timeoutSeconds } : {}),
       },
       {
