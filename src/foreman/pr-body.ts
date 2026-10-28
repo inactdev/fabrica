@@ -111,6 +111,21 @@ function bullet(label: string, value: string): string {
   return `- ${label}: ${value.trim().split("\n").join("\n  ")}`;
 }
 
+/** What is wrong with a write-up's title - empty, or longer than the
+ * commit subject line this project allows - or undefined when it is
+ * usable. Its own function because a rebase-only round
+ * (`rebase-only.ts`) publishes one section and so checks the title and
+ * that section alone, and the two must not grow separate ideas of what
+ * a usable title is. */
+export function titleProblem(title: string): string | undefined {
+  const trimmed = title.trim();
+  if (trimmed.length === 0) return "the title field is empty";
+  if (trimmed.length > WRITEUP_TITLE_MAX_LENGTH) {
+    return `the title is ${trimmed.length} characters (at most ${WRITEUP_TITLE_MAX_LENGTH})`;
+  }
+  return undefined;
+}
+
 /** Everything wrong with a write-up, as one clause - or undefined when it
  * is valid. Checks only the required fields: an absent optional one is
  * not a problem, it just renders nothing.
@@ -124,6 +139,10 @@ export function writeupProblem(writeup: WorkerWriteup | undefined): string | und
   if (writeup === undefined) return "the worker returned no write-up";
   const problems: string[] = [];
   for (const field of WRITEUP_STRING_FIELDS) {
+    // `title` is checked by `titleProblem` below instead - empty and
+    // over-long in one place, so a rebase-only round and this one can
+    // never disagree about a usable title.
+    if (field === "title") continue;
     if (writeup[field].trim().length === 0) problems.push(`the ${field} field is empty`);
   }
   const quiz = quizProblem(writeup.quiz);
@@ -131,10 +150,8 @@ export function writeupProblem(writeup: WorkerWriteup | undefined): string | und
   if (typeof writeup.confidence !== "number" || !Number.isFinite(writeup.confidence) || writeup.confidence < 0 || writeup.confidence > 100) {
     problems.push("the confidence field is not a number from 0 to 100");
   }
-  const title = writeup.title.trim();
-  if (title.length > WRITEUP_TITLE_MAX_LENGTH) {
-    problems.push(`the title is ${title.length} characters (at most ${WRITEUP_TITLE_MAX_LENGTH})`);
-  }
+  const title = titleProblem(writeup.title);
+  if (title !== undefined) problems.push(title);
   return problems.length > 0 ? problems.join("; ") : undefined;
 }
 
