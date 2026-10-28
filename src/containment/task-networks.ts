@@ -56,6 +56,28 @@ export function dockerSaid(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Whether a failed `docker network rm` failed only because the network
+ * is not there any more - in which case the removal's whole point is
+ * already true and there is nothing to report.
+ *
+ * Two networks get removed twice by design: the adapter's own teardown
+ * removes the pair it opened, and the Foreman's end-of-round sweep
+ * (`removeTaskNetworks` below) removes the same pair by label, because
+ * that teardown cannot be relied on to have run at all. Whichever
+ * arrives second finds nothing.
+ *
+ * Matched on Docker's own wording for a network it cannot find
+ * (`network rm`: "Error response from daemon: network <name> not
+ * found"; `network inspect`: "No such network: <name>") and on nothing
+ * else - a network something is still attached to says "has active
+ * endpoints", and a daemon that cannot be reached says it cannot be
+ * connected to, so neither is ever mistaken for a network that went
+ * away. A wording Docker changes later stops matching and the caller's
+ * own error comes back, which is the loud failure, not a silent one. */
+export function networkAlreadyGone(dockerMessage: string): boolean {
+  return /not found/i.test(dockerMessage) || /no such network/i.test(dockerMessage);
+}
+
 /** One `fabrica-worker-*` network as Docker currently has it. */
 export interface WorkerNetwork {
   name: string;

@@ -13,7 +13,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ContainmentError } from "./errors.ts";
 import { networkCreateFailureMessage } from "./network-pools.ts";
-import { dockerSaid, networkLabelArgs } from "./task-networks.ts";
+import { dockerSaid, networkAlreadyGone, networkLabelArgs } from "./task-networks.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -41,14 +41,16 @@ export async function createEgressNetwork(name: string, opts: { taskId?: string 
   return { name };
 }
 
-/** Removes a network created by `createEgressNetwork`. Throws
- * `ContainmentError("network-remove-failed")` on failure (e.g. a
- * container is still attached) rather than leaving it silently in
- * place. */
+/** Removes a network created by `createEgressNetwork`. Idempotent for
+ * the same reasons `removeIsolatedNetwork` is, and on the same terms: a
+ * network Docker says it does not have is success, anything else still
+ * throws `ContainmentError("network-remove-failed")`. */
 export async function removeEgressNetwork(name: string): Promise<void> {
   try {
     await execFileAsync("docker", ["network", "rm", name]);
   } catch (err) {
-    throw new ContainmentError("network-remove-failed", `could not remove egress network "${name}": ${dockerSaid(err)}`);
+    const said = dockerSaid(err);
+    if (networkAlreadyGone(said)) return;
+    throw new ContainmentError("network-remove-failed", `could not remove egress network "${name}": ${said}`);
   }
 }

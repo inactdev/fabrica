@@ -88,12 +88,19 @@ switch (args[1]) {
   }
   case "rm": {
     const names = args.slice(2).filter((arg) => !arg.startsWith("-"));
+    const force = args.includes("-f") || args.includes("--force");
     for (const name of names) {
       const network = networks.find((n) => n.Name === name);
       // `-f` on the real CLI means "do not error if the network does
       // not exist" - it does NOT remove a network something is still
-      // attached to.
-      if (!network) continue;
+      // attached to. Without it, a missing network is an error, and
+      // modelling that is the whole point: a caller that relies on a
+      // missing network being tolerated has to say so, or be seen
+      // failing here the way it would fail against a real daemon.
+      if (!network) {
+        if (force) continue;
+        fail(`network ${name} not found`);
+      }
       if (Object.keys(network.Containers ?? {}).length > 0) {
         fail(`error while removing network: network ${name} has active endpoints`);
       }
