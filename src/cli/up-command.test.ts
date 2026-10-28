@@ -15,7 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import type { DoctorCheck, DoctorProbes } from "./doctor-command.ts";
-import { runUpCommand } from "./up-command.ts";
+import { openAtMostOnce, runUpCommand } from "./up-command.ts";
+import { runUpdateCommand, type UpdateProbes } from "./update-command.ts";
 import { findLiveViewProcess } from "./live-view-process.ts";
 import { ownProcessesOnly } from "./helpers/own-processes-only.ts";
 
@@ -882,4 +883,194 @@ test("runUpCommand: propagates the harness session's own exit code", async () =>
   assert.equal(code, 7);
   assert.match(io.out.join("\n"), /still running at http:\/\/localhost:7777/);
   assert.match(io.out.join("\n"), /stop it with:/);
+});
+
+// --- One browser tab, across a whole sequence of commands ----------
+
+/** A live view the way a command can actually see one from outside: a
+ * port that is either bound or not, plus the commit the bound process
+ * answers `/api/version` with - the commit the copy on disk was at when
+ * THAT process started, never re-read afterwards
+ * (integrations/live-view/server.ts). One world shared by every command
+ * in a sequence, so `fabrica update` followed by `fabrica up` is
+ * observed exactly as the machine would see it, browser tabs included.
+ *
+ * `diskCommit` is what the copy of fabrica on disk reads as - what a
+ * freshly started live view captures, and what each command compares an
+ * already-running one against. Setting it to null is the real,
+ * reachable state of an installed copy with no readable
+ * build-info.json: `fabrica doctor` reports it, and deliberately lets a
+ * session start anyway (UP_HELP step 2).
+ */
+function liveViewWorld(initial: { listening: boolean; diskCommit: string | null }) {
+  let listening = initial.listening;
+  let startupCommit = initial.diskCommit;
+  const world = {
+    opens: [] as string[],
+    starts: 0,
+    stops: 0,
+    diskCommit: initial.diskCommit,
+    /** Everything but the browser opener: these seams exist on both
+     * `fabrica up` and `fabrica update`, under the same names. */
+    seams() {
+      return {
+        isLiveViewListening: async () => listening,
+        fetchLiveViewVersion: async () => (listening ? startupCommit : null),
+        findLiveViewProcess: () => (listening ? { pid: 4_242 } : null),
+        stopLiveViewProcess: () => {
+          world.stops += 1;
+          listening = false;
+        },
+        startLiveView: () => {
+          world.starts += 1;
+          listening = true;
+          startupCommit = world.diskCommit;
+        },
+        liveViewStartTimeoutMs: 2_000,
+      };
+    },
+    openBrowser: (url: string) => world.opens.push(url),
+  };
+  return world;
+}
+
+/** The `fabrica up` half of a sequence, with every live-view seam wired
+ * to one shared world and the harness/doctor steps stubbed out. */
+function upAgainst(world: ReturnType<typeof liveViewWorld>, io: ReturnType<typeof captureIo>) {
+  return runUpCommand(["--continue"], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    ...world.seams(),
+    openBrowser: world.openBrowser,
+    getRunningCommit: () => world.diskCommit,
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+}
+
+/** A dev checkout `fabrica update` moves from one commit to another -
+ * the same shape update-command.test.ts's own fixture builds, inline
+ * here so this sequence test owns the commits it hands to both halves. */
+function updateProbesMoving(world: ReturnType<typeof liveViewWorld>, to: string | null): UpdateProbes {
+  return {
+    copy: () => ({ kind: "dev-checkout", root: "/fake/checkout", branch: "master", commit: world.diskCommit, version: "0.0.0" }),
+    isDirty: () => false,
+    pull: () => {
+      world.diskCommit = to;
+      return { ok: true, message: "Fast-forward" };
+    },
+    reinstall: () => {
+      throw new Error("must not reinstall a dev checkout");
+    },
+    inspector: {
+      build: () => null,
+      mainCommit: () => null,
+      ancestry: () => "unknown",
+      install: () => {
+        throw new Error("must not install an Inspector in a live-view test");
+      },
+    },
+  };
+}
+
+test("fabrica update then fabrica up --continue costs no browser tab at all - the one already open is still the live view's", async () => {
+  const world = liveViewWorld({ listening: true, diskCommit: "old-commit00" });
+  const updateIo = captureIo();
+
+  const updateCode = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: updateProbesMoving(world, "new-commit00"),
+    ...world.seams(),
+    ...updateIo,
+  });
+
+  assert.equal(updateCode, 0, updateIo.err.join("\n"));
+  assert.match(updateIo.out.join("\n"), /live view restarted/);
+  assert.deepEqual(world.opens, [], "fabrica update must open no browser tab of its own");
+
+  const upIo = captureIo();
+  const upCode = await upAgainst(world, upIo);
+
+  assert.equal(upCode, 0, upIo.err.join("\n"));
+  assert.deepEqual(world.opens, [], "nothing in the sequence may open a tab: the live view is current by the time up runs");
+  assert.match(upIo.out.join("\n"), /already running - http:\/\/localhost:7777/);
+  assert.equal(world.starts, 1, "only update's own restart - up must reuse what it found");
+});
+
+test("fabrica update then fabrica up --continue opens one tab in total even when neither side can name its commit", async () => {
+  // The state that opened two tabs: an installed copy with no readable
+  // build-info.json, so `runningCopyCommit` is null and the live view's
+  // own /api/version answers null too. The comparison is inconclusive,
+  // which both commands treat as stale on purpose - so both of them
+  // restart the live view, and before this fix both opened a tab for it.
+  const world = liveViewWorld({ listening: true, diskCommit: null });
+  const updateIo = captureIo();
+
+  const updateCode = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: updateProbesMoving(world, null),
+    ...world.seams(),
+    ...updateIo,
+  });
+
+  assert.equal(updateCode, 0, updateIo.err.join("\n"));
+  assert.deepEqual(world.opens, [], "fabrica update must open no browser tab of its own");
+
+  const upIo = captureIo();
+  const upCode = await upAgainst(world, upIo);
+
+  assert.equal(upCode, 0, upIo.err.join("\n"));
+  assert.ok(world.starts >= 2, "this fixture is only meaningful if both commands really did restart the live view");
+  assert.deepEqual(world.opens, ["http://localhost:7777"], "exactly one tab, opened by the run that is starting a session");
+});
+
+test("one fabrica up opens exactly one browser tab, whatever it had to do to the live view", async () => {
+  /** A live view running older code: started while the checkout was on
+   * one commit, which has since moved under it. */
+  const stale = () => {
+    const world = liveViewWorld({ listening: true, diskCommit: "a-commit0001" });
+    world.diskCommit = "b-commit0001";
+    return world;
+  };
+
+  const cases = [
+    { label: "nothing listening yet", world: liveViewWorld({ listening: false, diskCommit: "a-commit0001" }) },
+    { label: "a live view running older code", world: stale() },
+    { label: "a live view that can't name its commit", world: liveViewWorld({ listening: true, diskCommit: null }) },
+  ];
+
+  for (const { label, world } of cases) {
+    const io = captureIo();
+
+    const code = await upAgainst(world, io);
+
+    assert.equal(code, 0, `${label}: ${io.err.join("\n")}`);
+    assert.deepEqual(world.opens, ["http://localhost:7777"], `${label}: expected exactly one tab`);
+  }
+});
+
+test("fabrica up opens no tab at all for a live view already running this exact commit", async () => {
+  const world = liveViewWorld({ listening: true, diskCommit: "same-commit1" });
+  const io = captureIo();
+
+  const code = await upAgainst(world, io);
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.deepEqual(world.opens, []);
+  assert.equal(world.starts, 0, "must not start a second live view");
+  assert.equal(world.stops, 0, "must not stop a live view running this exact commit");
+});
+
+test("openAtMostOnce forwards the first url and drops every one after it", () => {
+  const opened: string[] = [];
+  const open = openAtMostOnce((url) => opened.push(url));
+
+  open("http://localhost:7777");
+  open("http://localhost:7777");
+  open("http://localhost:9999");
+
+  assert.deepEqual(opened, ["http://localhost:7777"]);
 });

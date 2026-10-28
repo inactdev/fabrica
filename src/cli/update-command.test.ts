@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { CommitAncestry, InspectorBuild } from "../index.ts";
 import type { CopyInfo } from "./doctor-command.ts";
 import { runUpdateCommand, type InspectorUpdateProbes, type UpdateProbes } from "./update-command.ts";
@@ -149,7 +150,6 @@ function startableLiveView() {
         state.startCalls += 1;
         listening = true;
       },
-      openBrowser: () => {},
       liveViewStartTimeoutMs: 2_000,
     },
   };
@@ -386,7 +386,6 @@ test("runUpdateCommand: a changed commit restarts the live view without asking i
       startCalls += 1;
       listening = true;
     },
-    openBrowser: () => {},
     liveViewStartTimeoutMs: 2_000,
     ...io,
   });
@@ -443,7 +442,6 @@ test("runUpdateCommand: an unchanged commit still replaces a live view running o
       startCalls += 1;
       listening = true;
     },
-    openBrowser: () => {},
     liveViewStartTimeoutMs: 2_000,
     ...io,
   });
@@ -694,7 +692,6 @@ test("runUpdateCommand: a stale live view is stopped and restarted, and the summ
       startCalls += 1;
       listening = true;
     },
-    openBrowser: () => {},
     liveViewStartTimeoutMs: 2_000,
     ...io,
   });
@@ -704,4 +701,22 @@ test("runUpdateCommand: a stale live view is stopped and restarted, and the summ
   assert.equal(startCalls, 1);
   assert.match(io.out.join("\n"), /live view restarted/);
   assert.match(io.out.join("\n"), /fabrica up --continue/);
+});
+
+test("runUpdateCommand: nothing here can open a browser tab - there is no callback to open one with", () => {
+  // A tripwire on the one route a tab could come back through: `fabrica
+  // up`'s own onLiveViewReady callback, the single thing anywhere that
+  // is handed the live view's address to open (up-command.ts). No seam
+  // can prove the absence of a call that has nowhere to come from, so
+  // this reads the source instead - the same approach
+  // inspector-stamp-workflow.test.ts takes for a fact with no code of
+  // its own to exercise. The sequence this protects is counted for real
+  // in up-command.test.ts.
+  const source = readFileSync(new URL("./update-command.ts", import.meta.url), "utf8");
+
+  assert.doesNotMatch(
+    source,
+    /onLiveViewReady\s*:/,
+    "fabrica update must pass no ready-callback to refreshStaleLiveView - a tab is fabrica up's alone"
+  );
 });
