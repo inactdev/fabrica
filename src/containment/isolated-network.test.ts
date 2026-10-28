@@ -39,18 +39,22 @@ test("createIsolatedNetwork creates an internal network; removeIsolatedNetwork c
   );
 });
 
-test("removeIsolatedNetwork on a network that never existed throws ContainmentError, not a raw docker error", async (t) => {
+test("removeIsolatedNetwork on a network that never existed is success, not a failure", async (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
 
-  await assert.rejects(
-    removeIsolatedNetwork(`fabrica-test-never-existed-${process.pid}`),
-    (err: unknown) => err instanceof ContainmentError && err.code === "network-remove-failed"
-  );
+  // Removing it twice over, for the shape a round's teardown actually
+  // meets: the Foreman's end-of-round sweep removed it already.
+  const name = `fabrica-test-idempotent-${process.pid}`;
+  await createIsolatedNetwork(name);
+  await removeIsolatedNetwork(name);
+  await removeIsolatedNetwork(name);
+
+  await removeIsolatedNetwork(`fabrica-test-never-existed-${process.pid}`);
 });
 
-// The two tests below need no daemon at all - helpers/fake-docker.mjs
-// goes on PATH as `docker` instead - so they run everywhere and never
-// skip, unlike the daemon-dependent ones above.
+// The tests below need no daemon at all - helpers/fake-docker.mjs goes
+// on PATH as `docker` instead - so they run everywhere and never skip,
+// unlike the daemon-dependent ones above.
 
 test("the network carries its task's label, so a later sweep can find it", async (t) => {
   const docker = installFakeDocker(t, {});
@@ -69,6 +73,35 @@ test("the network carries its task's label, so a later sweep can find it", async
     "fabrica.task=20261025-some-task-x1",
     "fabrica-worker-abc",
   ]);
+});
+
+test("a network docker no longer has is removed successfully, with no force flag used to get there", async (t) => {
+  const docker = installFakeDocker(t, { networks: [] });
+
+  // No rejection: the state this asks for is already true. A round's
+  // teardown runs in a `finally`, where a throw would replace the
+  // round's own result with a plumbing error.
+  await removeIsolatedNetwork("fabrica-worker-already-swept");
+
+  assert.deepEqual(
+    docker.calls(),
+    [["network", "rm", "fabrica-worker-already-swept"]],
+    "the argv must stay the plain removal - the tolerance is in reading docker's answer, not in a flag"
+  );
+});
+
+test("a network that is still there and will not go is still a loud failure", async (t) => {
+  installFakeDocker(t, {
+    networks: [{ Name: "fabrica-worker-held", Containers: { abc123: {} } }],
+  });
+
+  await assert.rejects(
+    removeIsolatedNetwork("fabrica-worker-held"),
+    (err: unknown) =>
+      err instanceof ContainmentError &&
+      err.code === "network-remove-failed" &&
+      err.message.includes("has active endpoints")
+  );
 });
 
 test("exhausted address pools are reported as that, with the prune command", async (t) => {

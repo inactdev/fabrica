@@ -8,7 +8,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { installFakeDocker } from "./helpers/install-fake-docker.ts";
-import { listWorkerNetworks, networkLabelArgs, removeTaskNetworks, TASK_LABEL } from "./task-networks.ts";
+import { listWorkerNetworks, networkAlreadyGone, networkLabelArgs, removeTaskNetworks, TASK_LABEL } from "./task-networks.ts";
+
+test("only docker's own 'this network is not here' wording counts as already gone", () => {
+  // Docker's wording for a network it cannot find: `network rm`'s, then
+  // `network inspect`'s.
+  assert.equal(networkAlreadyGone("Error response from daemon: network fabrica-worker-abc not found"), true);
+  assert.equal(networkAlreadyGone("Error: No such network: fabrica-worker-abc"), true);
+
+  // The two that must never be read as a network that went away: one is
+  // still there with something on it, and the other is nobody having
+  // answered at all.
+  assert.equal(
+    networkAlreadyGone("error while removing network: network fabrica-worker-abc has active endpoints"),
+    false
+  );
+  assert.equal(networkAlreadyGone("Cannot connect to the Docker daemon at unix:///var/run/docker.sock"), false);
+});
 
 test("a network is labelled with its role, and with its task when there is one", () => {
   assert.deepEqual(networkLabelArgs("worker", "t1"), [

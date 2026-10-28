@@ -38,7 +38,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ContainmentError } from "./errors.ts";
 import { networkCreateFailureMessage } from "./network-pools.ts";
-import { dockerSaid, networkLabelArgs } from "./task-networks.ts";
+import { dockerSaid, networkAlreadyGone, networkLabelArgs } from "./task-networks.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,14 +74,22 @@ export async function createIsolatedNetwork(name: string, opts: { taskId?: strin
   return { name };
 }
 
-/** Removes a network created by `createIsolatedNetwork`. Throws
- * `ContainmentError("network-remove-failed")` on failure (e.g. a
- * container is still attached) rather than leaving it silently in
- * place. */
+/** Removes a network created by `createIsolatedNetwork`. Idempotent: a
+ * network Docker says it does not have is the state this asks for, so
+ * it is success (`networkAlreadyGone`, task-networks.ts) - the
+ * Foreman's end-of-round sweep removes the same network by label, so
+ * whichever of the two runs second routinely finds it gone, and this is
+ * called from a round's teardown `finally`, where throwing would
+ * replace the round's own result with a plumbing error. Any other
+ * failure (e.g. a container is still attached) still throws
+ * `ContainmentError("network-remove-failed")` rather than leaving a
+ * network silently in place. */
 export async function removeIsolatedNetwork(name: string): Promise<void> {
   try {
     await execFileAsync("docker", ["network", "rm", name]);
   } catch (err) {
-    throw new ContainmentError("network-remove-failed", `could not remove isolated network "${name}": ${dockerSaid(err)}`);
+    const said = dockerSaid(err);
+    if (networkAlreadyGone(said)) return;
+    throw new ContainmentError("network-remove-failed", `could not remove isolated network "${name}": ${said}`);
   }
 }
