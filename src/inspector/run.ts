@@ -98,7 +98,7 @@ export interface InspectorAdapterOptions {
   reviewer?: ResolvedReviewer;
   /** Where the `GITHUB_TOKEN` Inspector publishes with comes from
    * (issue #187): a GitHub App token minted for this task's repository
-   * alone, with only `contents: write` and `pull_requests: write`, for
+   * alone, with only `contents: write`, `pull_requests: write` and `statuses: write` (the stamp), for
    * this one handoff. Already bound to that repository and those
    * permissions by the caller (`src/githubapp`'s `scopedToken`), so
    * this adapter never learns either.

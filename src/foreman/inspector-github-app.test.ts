@@ -1,6 +1,6 @@
 // Issue #187: the credential Inspector publishes with is a GitHub App
 // installation token, minted for this task's repository alone with only
-// `contents: write` and `pull_requests: write`, handed to the inspector
+// `contents: write`, `pull_requests: write` and `statuses: write` (the stamp), handed to the inspector
 // child as GITHUB_TOKEN, and discarded when that child exits. It is
 // minted once per handoff, never cached across rounds, and never put in
 // Fabrica's own process environment or the worker's box.
@@ -63,7 +63,7 @@ test("the minted token reaches the inspector child as GITHUB_TOKEN, and Fabrica'
   assert.equal(env.GITHUB_TOKEN, undefined, "the environment the adapter was given was changed");
 });
 
-test("one token per handoff, each scoped to the task's own repository and the two publish permissions", async () => {
+test("one token per handoff, each scoped to the task's own repository and the three publish permissions", async () => {
   const minter = fakeMinter();
   const inspector = inspectorAdapter(echoingInspector(), {
     env: { PATH: "/usr/bin:/bin" },
@@ -81,7 +81,7 @@ test("one token per handoff, each scoped to the task's own repository and the tw
     assert.equal(call.purpose, "publish");
     assert.equal(call.scope.owner, "acme");
     assert.equal(call.scope.repo, "widgets");
-    assert.deepEqual(call.scope.permissions, { contents: "write", pull_requests: "write" });
+    assert.deepEqual(call.scope.permissions, { contents: "write", pull_requests: "write", statuses: "write" });
   }
 });
 

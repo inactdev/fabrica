@@ -6,8 +6,9 @@
 //     (.github/workflows/docker-tests.yml's `node-version-file`),
 //   - `package.json`'s `engines.node`, which npm enforces for real
 //     because `.npmrc` sets `engine-strict=true`,
-//   - `.inspector.json`'s image tag, the Node the check box actually
-//     runs and the one `fabrica doctor` refuses a mismatch against,
+//   - `Dockerfile.inspector`'s FROM tag, the Node the check box actually
+//     runs (inspector builds that file) and the one `fabrica doctor`
+//     refuses a mismatch against,
 //   - `src/brain/adapters/docker/Dockerfile`'s node base image, the
 //     Node a Worker writes and runs the project's check on.
 //
@@ -83,7 +84,7 @@ test("all four Node declarations name the same version", () => {
   const pins: Record<string, string | null> = {
     ".node-version": expected,
     "package.json's engines.node": enginesNode(),
-    ".inspector.json's image tag": pinnedNodeVersion(),
+    "Dockerfile.inspector's FROM tag": pinnedNodeVersion(),
     "the worker Dockerfile's node base image": dockerfileBaseVersion(dockerfile),
   };
 
