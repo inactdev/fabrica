@@ -20,10 +20,17 @@ import {
   readProposalSignals,
   type ProposalSignals,
 } from "./propose.ts";
+import { GO_SUM } from "./dockerfile.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const NOTHING: ProposalSignals = { checkScript: null, packageJson: null, goMod: null };
+const NOTHING: ProposalSignals = {
+  checkScript: null,
+  packageJson: null,
+  goMod: null,
+  packageLock: false,
+  goSum: false,
+};
 
 function propose(signals: Partial<ProposalSignals>) {
   const proposal = proposeInspectorConfig(
@@ -115,34 +122,37 @@ test("propose: a Go module whose check.sh runs no go test names that disagreemen
   assert.ok(stderr.includes(GO_MOD), stderr);
 });
 
-// ------------------------------------------------------------- image
+// ------------------------------------------ Dockerfile.inspector: FROM
 
-test("propose: an exactly pinned engines.node derives the image from it", () => {
-  const { config, stderr } = propose({ packageJson: pkg({ engines: { node: "24.18.0" } }) });
+// Since inspector#47 the image is a FROM line in a file, not a key in
+// the config: the check box is built from Dockerfile.inspector.
+test("propose: an exactly pinned engines.node derives the FROM image from it", () => {
+  const { dockerfile, stderr } = propose({ packageJson: pkg({ engines: { node: "24.18.0" } }) });
 
-  assert.equal(config.image, "cimg/node:24.18.0");
+  assert.ok(dockerfile.includes("FROM cimg/node:24.18.0"), dockerfile);
+  assert.ok(stderr.includes("Dockerfile.inspector FROM: cimg/node:24.18.0"), stderr);
   assert.ok(stderr.includes("engines.node pins node 24.18.0"), stderr);
 });
 
-test("propose: a version range names no single tag, so the image is a loud placeholder", () => {
-  const { config, stderr } = propose({ packageJson: pkg({ engines: { node: ">=22" } }) });
+test("propose: a version range names no single tag, so the FROM image is a loud placeholder", () => {
+  const { dockerfile, stderr } = propose({ packageJson: pkg({ engines: { node: ">=22" } }) });
 
-  assert.ok(String(config.image).startsWith(IMAGE_PLACEHOLDER_PREFIX), String(config.image));
+  assert.ok(dockerfile.includes(`FROM ${IMAGE_PLACEHOLDER_PREFIX}`), dockerfile);
   assert.ok(stderr.includes(">=22"), stderr);
 });
 
 test("propose: a Go module's toolchain version is named, but no Go image is invented", () => {
-  const { config, stderr } = propose({ goMod: "module example.com/app\n\ngo 1.22\n" });
+  const { dockerfile, stderr } = propose({ goMod: "module example.com/app\n\ngo 1.22\n" });
 
-  assert.equal(config.image, `${IMAGE_PLACEHOLDER_PREFIX}an-image-that-ships-go-1.22`);
+  assert.ok(dockerfile.includes(`FROM ${IMAGE_PLACEHOLDER_PREFIX}an-image-that-ships-go-1.22`), dockerfile);
   assert.ok(stderr.includes("no verified Go image to offer"), stderr);
 });
 
-test("propose: with no signal at all the image is a placeholder naming what it is for", () => {
-  const { config, stderr } = propose({});
+test("propose: with no signal at all the FROM image is a placeholder naming what it is for", () => {
+  const { dockerfile, stderr } = propose({});
 
-  assert.ok(String(config.image).startsWith(IMAGE_PLACEHOLDER_PREFIX), String(config.image));
-  assert.ok(stderr.includes("nothing can be installed inside a check box"), stderr);
+  assert.ok(dockerfile.includes(`FROM ${IMAGE_PLACEHOLDER_PREFIX}`), dockerfile);
+  assert.ok(stderr.includes("already ships the toolchain the check needs"), stderr);
 });
 
 // A placeholder must fail loudly rather than resolve to something
@@ -155,59 +165,75 @@ test("propose: every image placeholder is an invalid Docker reference, never a p
     { goMod: "module example.com/app\n\ngo 1.23.1\n" },
   ];
   for (const signals of cases) {
-    const image = String(propose(signals).config.image);
+    const image = /^FROM\s+(\S+)/m.exec(propose(signals).dockerfile)?.[1] ?? "";
     assert.notEqual(image, image.toLowerCase(), `${image} should carry uppercase, which Docker rejects`);
     assert.ok(!image.includes(":"), `${image} should not look like a name:tag pair`);
   }
 });
 
-// ----------------------------------------------------------- network
-
-test("propose: a check that fetches its dependencies turns network on, naming the command", () => {
-  const { config, stderr } = propose({
-    checkScript: "#!/bin/sh\nset -e\nnpm ci\nnpm test\n",
-    packageJson: pkg({ dependencies: { tsx: "^4.19.0" } }),
-  });
-
-  assert.equal(config.network, true);
-  assert.ok(stderr.includes("network: true"), stderr);
-  assert.ok(stderr.includes("the check runs `npm ci`"), stderr);
+// The config itself names no image and no network, with any value -
+// inspector#47 retired both keys, and a proposal that still wrote one
+// would be refused on the project's first task.
+test("propose: the proposed config carries no image and no network key", () => {
+  for (const signals of [
+    {},
+    { packageJson: pkg({ engines: { node: "24.18.0" } }), packageLock: true },
+    { checkScript: "#!/bin/sh\nnpm ci && npm test\n" },
+  ]) {
+    const { config } = propose(signals);
+    assert.equal(Object.hasOwn(config, "image"), false, JSON.stringify(config));
+    assert.equal(Object.hasOwn(config, "network"), false, JSON.stringify(config));
+  }
 });
 
-// The command is quoted as the check spells it, not as a label for it: a
-// reason line that says `npm install` about a check that says `npm i` is
-// describing something the repository doesn't say.
-test("propose: the installing command is quoted as the check spells it", () => {
+// ---------------------------------- Dockerfile.inspector: dependencies
+
+// What `network: true` used to stand in for. The check box has no
+// network at all now, so a recognized lockfile becomes a real install
+// step at build time instead of a key asking to fetch at check time.
+test("propose: a package-lock.json becomes an npm ci install step at build time", () => {
+  const { dockerfile, stderr } = propose({
+    checkScript: "#!/bin/sh\nset -e\nnpm test\n",
+    packageJson: pkg({ dependencies: { tsx: "^4.19.0" } }),
+    packageLock: true,
+  });
+
+  assert.ok(dockerfile.includes("COPY package.json package-lock.json /deps/"), dockerfile);
+  assert.ok(dockerfile.includes("RUN cd /deps && npm ci"), dockerfile);
+  assert.ok(stderr.includes("Dockerfile.inspector dependencies: npm ci from package-lock.json"), stderr);
+});
+
+test("propose: a go.sum becomes a go mod download step at build time", () => {
+  const { dockerfile, stderr } = propose({
+    goMod: "module example.com/app\n\ngo 1.22\n\nrequire github.com/x/y v1.2.3\n",
+    goSum: true,
+  });
+
+  assert.ok(dockerfile.includes("COPY go.mod go.sum /deps/"), dockerfile);
+  assert.ok(dockerfile.includes("RUN cd /deps && go mod download"), dockerfile);
+  assert.ok(stderr.includes("dependencies: go mod download from go.sum"), stderr);
+});
+
+// A check that fetches cannot fetch at all in that box, whatever else is
+// true - named on its own line rather than answered with a key that no
+// longer exists.
+test("propose: a check that fetches its dependencies is warned about, quoting its own spelling", () => {
   for (const [body, quoted] of [
     ["npm i\nnpm test\n", "`npm i`"],
     ["go mod tidy\ngo test ./...\n", "`go mod tidy`"],
     ["pip3  install -r requirements.txt\npytest\n", "`pip3 install`"],
   ]) {
-    const { config, stderr } = propose({ checkScript: `#!/bin/sh\nset -e\n${body}` });
-    assert.equal(config.network, true, stderr);
+    const { stderr } = propose({ checkScript: `#!/bin/sh\nset -e\n${body}` });
+    assert.ok(stderr.includes("  warning: the check runs"), stderr);
     assert.ok(stderr.includes(quoted), `${quoted} should be quoted verbatim: ${stderr}`);
+    assert.ok(stderr.includes("no network at all"), stderr);
   }
 });
 
-test("propose: network is off, as an absent key, when nothing the check runs fetches anything", () => {
-  const { config, stderr } = propose({ checkScript: "#!/bin/sh\nexit 0\n" });
+test("propose: a check that fetches nothing gets no warning", () => {
+  const { stderr } = propose({ checkScript: "#!/bin/sh\nexit 0\n" });
 
-  assert.equal(Object.hasOwn(config, "network"), false, "off is the absence of the key, not network: false");
-  assert.ok(stderr.includes("network: omitted"), stderr);
-});
-
-// The trap worth naming: network access does not conjure node_modules.
-// A check with no install step fails in a fresh box whether the network
-// is there or not, so the proposal says that instead of writing a `true`
-// that would not fix it.
-test("propose: declared dependencies with no install step are named, not answered with network: true", () => {
-  const { config, stderr } = propose({
-    packageJson: pkg({ scripts: { test: "node --test" }, dependencies: { a: "1" }, devDependencies: { b: "2" } }),
-  });
-
-  assert.equal(Object.hasOwn(config, "network"), false);
-  assert.ok(stderr.includes("declares 2 dependencies"), stderr);
-  assert.ok(stderr.includes("npm ci"), stderr);
+  assert.ok(!stderr.includes("warning:"), stderr);
 });
 
 test("propose: a test script that installs first is seen through `npm test`", () => {
@@ -216,15 +242,39 @@ test("propose: a test script that installs first is seen through `npm test`", ()
   });
 
   assert.equal(config.check, "npm test");
-  assert.equal(config.network, true, stderr);
-  assert.ok(stderr.includes("the check runs `npm ci`"), stderr);
+  assert.ok(stderr.includes("  warning: the check runs `npm ci`"), stderr);
 });
 
-test("propose: a Go module's require entries are named the same way", () => {
-  const { stderr } = propose({ goMod: "module example.com/app\n\ngo 1.22\n\nrequire github.com/x/y v1.2.3\n" });
+// The trap worth naming: nothing here invents an install step for a
+// shape it does not recognize. A project declaring dependencies with no
+// lockfile is told so, in the notes and in the file itself.
+test("propose: declared dependencies with no lockfile are named, never guessed at", () => {
+  const { dockerfile, stderr } = propose({
+    packageJson: pkg({ scripts: { test: "node --test" }, dependencies: { a: "1" }, devDependencies: { b: "2" } }),
+  });
 
-  assert.ok(stderr.includes("empty module cache"), stderr);
-  assert.ok(stderr.includes("go mod download"), stderr);
+  assert.ok(stderr.includes("declares 2 dependencies"), stderr);
+  assert.ok(stderr.includes("no package-lock.json"), stderr);
+  assert.ok(!dockerfile.includes("RUN "), "no install step is invented");
+  assert.ok(dockerfile.includes("Add what ./check.sh needs here"), dockerfile);
+});
+
+test("propose: a Go module's require entries with no go.sum are named the same way", () => {
+  const { dockerfile, stderr } = propose({
+    goMod: "module example.com/app\n\ngo 1.22\n\nrequire github.com/x/y v1.2.3\n",
+  });
+
+  assert.ok(stderr.includes("no go.sum"), stderr);
+  assert.ok(!dockerfile.includes("RUN "), "no install step is invented");
+});
+
+// The second file is deliberately not on stdout: that stream is the one
+// document `fabrica register <path> > .inspector.json` writes.
+test("propose: the Dockerfile rides on stderr, never on stdout", () => {
+  const { json, stderr, dockerfile } = propose({ packageLock: true });
+
+  assert.ok(!json.includes("FROM"), json);
+  assert.ok(stderr.includes(dockerfile.trimEnd()), stderr);
 });
 
 // ---------------------------------------------- timeout and protection
@@ -271,13 +321,17 @@ test("propose: stdout is one valid, indented JSON document with no trailing newl
 // Same provenance rule as scaffold.test.ts: the only evidence of
 // Inspector's schema in reach is this repository's own live config, so a
 // proposal may never name a key it doesn't use.
-test("propose: every key it can ever write is one this repository's own .inspector.json uses", { skip: "fabrica register still writes the image and network keys inspector#47 retired, and this repository's own config no longer carries them; restored once register scaffolds Dockerfile.inspector instead" }, () => {
+test("propose: every key it can ever write is one this repository's own .inspector.json uses", () => {
   const ours = JSON.parse(readFileSync(join(repoRoot, ".inspector.json"), "utf8")) as Record<string, unknown>;
   const cases: Partial<ProposalSignals>[] = [
     {},
-    { checkScript: "#!/bin/sh\nnpm ci && npm test\n", packageJson: pkg({ engines: { node: "24.18.0" } }) },
+    {
+      checkScript: "#!/bin/sh\nnpm ci && npm test\n",
+      packageJson: pkg({ engines: { node: "24.18.0" } }),
+      packageLock: true,
+    },
     { packageJson: pkg({ scripts: { test: "node --test" } }) },
-    { goMod: "module example.com/app\n\ngo 1.22\n" },
+    { goMod: "module example.com/app\n\ngo 1.22\n", goSum: true },
   ];
 
   for (const signals of cases) {
@@ -296,12 +350,21 @@ test("propose: stderr opens by saying nothing was written, and closes with what 
   assert.ok(last.includes("fabrica register /srv/spending-app"), last);
   assert.ok(last.includes("--check"), last);
   assert.ok(last.includes("--image"), last);
+  // Both files to commit, since the config alone no longer says what the
+  // check runs in.
+  assert.ok(last.includes("Dockerfile.inspector"), last);
 });
 
 test("propose: one line per field, each naming its own key", () => {
   const { notes } = propose({ packageJson: pkg({ scripts: { test: "node --test" } }) });
 
-  for (const key of ["check", "image", "network", "timeoutSeconds", "protectedPaths"]) {
+  for (const key of [
+    "check",
+    "timeoutSeconds",
+    "protectedPaths",
+    "Dockerfile.inspector FROM",
+    "Dockerfile.inspector dependencies",
+  ]) {
     const lines = notes.filter((line) => line.startsWith(`  ${key}: `));
     assert.equal(lines.length, 1, `expected exactly one line for ${key}, got ${lines.length}`);
   }
@@ -345,5 +408,24 @@ test("readProposalSignals: a file that isn't there is null, not an error", () =>
 
   assert.equal(signals.packageJson, null);
   assert.equal(signals.goMod, null);
+  assert.equal(signals.packageLock, false);
+  assert.equal(signals.goSum, false);
   assert.ok(signals.checkScript !== null, "makeFixtureRepo always commits a check.sh");
+});
+
+// A lockfile is read as presence alone - nothing here cares what is
+// inside one, and a package-lock.json is routinely a megabyte - but it
+// is still read off the commit, not the working tree.
+test("readProposalSignals reads the lockfiles off the ref too", () => {
+  const dir = makeFixtureRepo("exit 0", { inspector: false });
+  writeFileSync(join(dir, "package-lock.json"), "{}\n");
+  execFileSync("git", ["add", "-A"], { cwd: dir });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "add lockfile"], { cwd: dir });
+  // Uncommitted, so not a signal.
+  writeFileSync(join(dir, GO_SUM), "example.com/x v1.0.0 h1:abc=\n");
+
+  const signals = readProposalSignals(dir, "HEAD");
+
+  assert.equal(signals.packageLock, true);
+  assert.equal(signals.goSum, false, "an uncommitted go.sum is not a signal");
 });

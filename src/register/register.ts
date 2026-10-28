@@ -27,13 +27,14 @@
 //        created nothing (issue #114, see propose.ts)
 //   8. a temporary worktree of origin's default branch, on
 //      fabrica/register - never the Client's own checkout
-//   9. write .inspector.json and check.sh; run check.sh inside --image
-//      and refuse if it fails
+//   9. write .inspector.json, check.sh and Dockerfile.inspector (never
+//      over a committed one); run check.sh inside --image and refuse if
+//      it fails
 //  10. commit, push, open the pull request with `gh pr create`
 //  11. append [projects.<name>] to projects.toml
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LineError, fetchOriginDefaultBranch, requireRepoRoot } from "../line/index.ts";
@@ -53,6 +54,13 @@ import {
 } from "./origin.ts";
 import { appendProjectEntry, existingRegistration, isUsableProjectName } from "./registry-write.ts";
 import { checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.ts";
+import {
+  DOCKERFILE_INSPECTOR,
+  dependencyInstallerIn,
+  dependencyShapeInTree,
+  inspectorDockerfile,
+  type DependencyShape,
+} from "./dockerfile.ts";
 import { realRegisterTools, type RegisterTools } from "./tools.ts";
 
 export interface RegisterRequest {
@@ -64,18 +72,15 @@ export interface RegisterRequest {
   /** Required for the full setup; not required when origin's default
    * branch already carries .inspector.json. */
   check?: string;
+  /** `--image`: goes on Dockerfile.inspector's FROM line, which is what
+   * the check box is built from since inspector#47 - `.inspector.json`
+   * names no image any more. It is also the image this command's own one
+   * proving run pulls, so the tag is proven to exist before anything is
+   * pushed. */
   image?: string;
   /** Extra globs for .inspector.json's protectedPaths, on top of
-   * check.sh and .inspector.json themselves. */
+   * check.sh, .inspector.json and Dockerfile.inspector themselves. */
   protectedPaths?: readonly string[];
-  /** `--network`: writes `network: true` into .inspector.json, so the
-   * box Inspector later runs the check in can reach the network - what a
-   * check that fetches its own project dependencies (npm ci, a
-   * virtualenv) needs. Off by default. It does not change this
-   * command's own one proving run,
-   * which always allows the network: see src/register/README.md's
-   * "--network and --timeout". */
-  network?: boolean;
   /** `--timeout <seconds>`: writes `timeoutSeconds` into
    * .inspector.json. Omitted entirely when not given, leaving whatever
    * Inspector's own default is. */
@@ -99,7 +104,18 @@ export interface RegisterResult {
   branch?: string;
   pullRequestUrl?: string | null;
   checkOutput?: string;
+  /** Full setup only: whether Dockerfile.inspector was written, or a
+   * committed one was found and left exactly as it was. */
+  dockerfile?: DockerfileOutcome;
+  /** Traps the Client should see before merging - the pull request body
+   * carries the same words. Absent when there are none. */
+  warnings?: string[];
 }
+
+/** What happened to Dockerfile.inspector. `already-committed` is never
+ * an overwrite: register does not touch a file the repository already
+ * carries (Client ruling, issue #303's clarification 2). */
+export type DockerfileOutcome = "written" | "already-committed";
 
 export interface RegisterOptions {
   tools?: RegisterTools;
@@ -146,19 +162,32 @@ function teardown(project: string, parentDir: string, opts: { deleteBranch: bool
   rmSync(parentDir, { recursive: true, force: true });
 }
 
-export function commitMessageFor(name: string, command: string): string {
+export function commitMessageFor(
+  name: string,
+  command: string,
+  dockerfile: DockerfileOutcome = "written"
+): string {
+  const files =
+    dockerfile === "written"
+      ? `Adds ${INSPECTOR_CONFIG}, so Inspector independently judges every task's\n` +
+        `work on this repository, ${CHECK_SCRIPT}, holding the one command that has\n` +
+        `to pass for that work to be green, and ${DOCKERFILE_INSPECTOR}, the image\n` +
+        `that command runs in:\n`
+      : `Adds ${INSPECTOR_CONFIG}, so Inspector independently judges every task's\n` +
+        `work on this repository, and ${CHECK_SCRIPT}, holding the one command that\n` +
+        `has to pass for that work to be green. This repository's own\n` +
+        `${DOCKERFILE_INSPECTOR} is left exactly as it is:\n`;
+
   return (
     `Set ${name} up for Fabrica\n` +
     `\n` +
-    `Adds ${INSPECTOR_CONFIG}, so Inspector independently judges every task's\n` +
-    `work on this repository, and ${CHECK_SCRIPT}, holding the one command that\n` +
-    `has to pass for that work to be green:\n` +
+    files +
     `\n` +
     `    ${command}\n` +
     `\n` +
-    `${CHECK_SCRIPT} and ${INSPECTOR_CONFIG} are both listed as protected paths, so a\n` +
-    `change to either one has to come through a pull request like this one\n` +
-    `rather than from a task's own worker.\n`
+    `${CHECK_SCRIPT}, ${INSPECTOR_CONFIG} and ${DOCKERFILE_INSPECTOR} are all listed as\n` +
+    `protected paths, so a change to any of them has to come through a pull\n` +
+    `request like this one rather than from a task's own worker.\n`
   );
 }
 
@@ -166,31 +195,53 @@ export function pullRequestBodyFor(
   name: string,
   command: string,
   image: string,
-  /** Whatever --network/--timeout put in the config, so the reviewer
-   * reads the same facts the file states rather than only the diff. */
-  box: { network?: boolean; timeoutSeconds?: number } = {}
+  /** What the files actually say, so the reviewer reads the same facts
+   * rather than only the diff. */
+  box: {
+    timeoutSeconds?: number;
+    dockerfile?: DockerfileOutcome;
+    /** The install step Dockerfile.inspector got, when one was
+     * recognized. */
+    shape?: DependencyShape | null;
+    warnings?: readonly string[];
+  } = {}
 ): string {
-  const boxNotes = [
-    ...(box.network === true
-      ? [`The check is given network access, so it can install what it needs.`]
-      : []),
-    ...(box.timeoutSeconds !== undefined
-      ? [`It is given at most ${box.timeoutSeconds} seconds to finish.`]
-      : []),
-  ];
+  const dockerfile = box.dockerfile ?? "written";
+  const shape = box.shape ?? null;
+
+  const dockerfileBullet =
+    dockerfile === "written"
+      ? `- \`${DOCKERFILE_INSPECTOR}\` - the image that command runs in, built from\n` +
+        `  \`${image}\`. The check container has no network, so ` +
+        (shape === null
+          ? `nothing could be installed\n  in it for you: the file says so where an install step would have gone.\n`
+          : `this installs the\n  project's dependencies at build time (\`${shape.install}\`, from\n` +
+            `  \`${shape.lockfile}\`), and \`${CHECK_SCRIPT}\` uses what it finds there.\n`)
+      : `- \`${DOCKERFILE_INSPECTOR}\` is **not** touched - this repository already\n` +
+        `  carries one, and \`fabrica register\` never overwrites a committed file.\n` +
+        `  The check was proven in \`${image}\` here, but the box Inspector builds is\n` +
+        `  the one that file describes.\n`;
+
+  const timeout =
+    box.timeoutSeconds !== undefined
+      ? `The check is given at most ${box.timeoutSeconds} seconds to finish.\n\n`
+      : ``;
+
+  const warnings = (box.warnings ?? []).map((line) => `- ${line}\n`).join("");
 
   return (
     `## What\n` +
     `\n` +
-    `Two new files at the repository root:\n` +
+    `${dockerfile === "written" ? "Three" : "Two"} new files at the repository root:\n` +
     `\n` +
-    `- \`${INSPECTOR_CONFIG}\` - asks Inspector to judge work on this repository,\n` +
-    `  running the check in \`${image}\`.\n` +
+    `- \`${INSPECTOR_CONFIG}\` - asks Inspector to judge work on this repository.\n` +
     `- \`${CHECK_SCRIPT}\` - the one command that has to pass:\n` +
     `\n` +
     `      ${command}\n` +
     `\n` +
-    (boxNotes.length > 0 ? `${boxNotes.join(" ")}\n\n` : ``) +
+    dockerfileBullet +
+    `\n` +
+    timeout +
     `## Why\n` +
     `\n` +
     `Until this merges, Fabrica refuses tasks on ${name}: a task's base commit\n` +
@@ -200,12 +251,34 @@ export function pullRequestBodyFor(
     `## How to check it\n` +
     `\n` +
     `\`${command}\` was run inside \`${image}\` against this exact branch before\n` +
-    `this pull request was opened, and passed. \`${CHECK_SCRIPT}\` and\n` +
-    `\`${INSPECTOR_CONFIG}\` are listed as protected paths in the config, so later\n` +
-    `changes to either need a pull request of their own.\n` +
+    `this pull request was opened, and passed. \`${CHECK_SCRIPT}\`,\n` +
+    `\`${INSPECTOR_CONFIG}\` and \`${DOCKERFILE_INSPECTOR}\` are listed as protected\n` +
+    `paths in the config, so later changes to any of them need a pull request of\n` +
+    `their own.\n` +
+    (warnings.length > 0 ? `\n## Worth a look before merging\n\n${warnings}` : ``) +
     `\n` +
     `Opened by \`fabrica register\`, running as the repository owner.\n`
   );
+}
+
+/** The one trap worth the Client's eye on this route: a check that
+ * installs its own dependencies cannot, in a box with no network. The
+ * Dockerfile installs them at build time instead, so a command that
+ * installs them again would undo that - it is named rather than left to
+ * a red first task. */
+export function registerWarnings(command: string, shape: DependencyShape | null): string[] {
+  const installer = dependencyInstallerIn(command);
+  if (installer === null) return [];
+  return [
+    `the check command runs \`${installer}\`, and the check box has no network at all, so that cannot ` +
+      `succeed there. ` +
+      (shape === null
+        ? `Install what it needs in ${DOCKERFILE_INSPECTOR} at build time, and have ${CHECK_SCRIPT} use what ` +
+          `is already there.`
+        : `${DOCKERFILE_INSPECTOR} installs them at build time (\`${shape.install}\`)${
+            shape.linksNodeModules ? ` and ${CHECK_SCRIPT} links them in` : ``
+          }, so the command should not install them again.`),
+  ];
 }
 
 /** Returns the parsed, validated inputs every path needs, having proved
@@ -434,14 +507,42 @@ export async function registerProject(
     writeFileSync(
       join(worktree, INSPECTOR_CONFIG),
       inspectorConfigJson({
-        image,
         protectedPaths,
-        ...(request.network === true ? { network: true } : {}),
         ...(request.timeoutSeconds !== undefined ? { timeoutSeconds: request.timeoutSeconds } : {}),
       })
     );
-    writeFileSync(join(worktree, CHECK_SCRIPT), checkScript(check));
+
+    // The shape is a fact about the repository (which lockfile it
+    // carries), not about the Dockerfile, so it is read either way: it
+    // decides both the install step a written Dockerfile gets and
+    // whether check.sh links in what an image baked.
+    const shape = dependencyShapeInTree(worktree);
+
+    writeFileSync(join(worktree, CHECK_SCRIPT), checkScript(check, shape));
     chmodSync(join(worktree, CHECK_SCRIPT), 0o755);
+
+    // Never over a committed one (Client ruling, issue #303's
+    // clarification 2): `register` writes the files a repository is
+    // missing, and overwriting a Dockerfile its owner wrote - possibly
+    // the one his check box already builds from - is not a thing a
+    // setup command gets to do quietly.
+    const dockerfile: DockerfileOutcome = existsSync(join(worktree, DOCKERFILE_INSPECTOR))
+      ? "already-committed"
+      : "written";
+    if (dockerfile === "written") {
+      writeFileSync(
+        join(worktree, DOCKERFILE_INSPECTOR),
+        inspectorDockerfile({
+          from: image,
+          reason: `the image \`fabrica register --image ${image}\` was given, and ${RECORDED_CHECK} was run ` +
+            `inside it once before this was committed`,
+          shape,
+        })
+      );
+    } else {
+      notify(`${DOCKERFILE_INSPECTOR} is already committed here - leaving it exactly as it is.`);
+    }
+    const warnings = registerWarnings(check, dockerfile === "written" ? shape : null);
 
     // Inside the image, the way a worker's check runs - never on this
     // machine (issue #64's ruling). A check that cannot be run at all is
@@ -465,13 +566,14 @@ export async function registerProject(
     }
 
     notify(`${RECORDED_CHECK} passed. Committing and pushing ${REGISTER_BRANCH}...`);
+    const written = [INSPECTOR_CONFIG, CHECK_SCRIPT, ...(dockerfile === "written" ? [DOCKERFILE_INSPECTOR] : [])];
     try {
-      git(worktree, ["add", "--", INSPECTOR_CONFIG, CHECK_SCRIPT]);
-      git(worktree, ["commit", "-m", commitMessageFor(name, check)]);
+      git(worktree, ["add", "--", ...written]);
+      git(worktree, ["commit", "-m", commitMessageFor(name, check, dockerfile)]);
     } catch (err) {
       throw new RegisterError(
         "commit-failed",
-        `fabrica register: could not commit ${INSPECTOR_CONFIG} and ${CHECK_SCRIPT}: ${gitFailure(err)}. ` +
+        `fabrica register: could not commit ${written.join(", ")}: ${gitFailure(err)}. ` +
           `Nothing was pushed, no pull request was opened, and nothing was registered.`
       );
     }
@@ -496,8 +598,10 @@ export async function registerProject(
       head: REGISTER_BRANCH,
       title: `Set ${name} up for Fabrica`,
       body: pullRequestBodyFor(name, check, image, {
-        ...(request.network === true ? { network: true } : {}),
         ...(request.timeoutSeconds !== undefined ? { timeoutSeconds: request.timeoutSeconds } : {}),
+        dockerfile,
+        shape,
+        warnings,
       }),
     });
     if (pr.url === null) {
@@ -527,6 +631,8 @@ export async function registerProject(
       branch: REGISTER_BRANCH,
       pullRequestUrl: pr.url,
       checkOutput: result.output,
+      dockerfile,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   } finally {
     teardown(project, parentDir, { deleteBranch: !pushed });

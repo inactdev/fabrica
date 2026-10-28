@@ -20,6 +20,7 @@ import { loadConfig, projectsTomlPath } from "../config/index.ts";
 import { RegisterError, RegisterProposalError } from "./errors.ts";
 import { registerProject } from "./register.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, REGISTER_BRANCH } from "./origin.ts";
+import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
 
 function tempHome(): string {
@@ -65,7 +66,7 @@ function linkedWorktreeCount(dir: string): number {
 
 // ---------------------------------------------------------------- full
 
-test("register: writes the two files, runs the check in the image, pushes a branch, opens a PR, registers", async () => {
+test("register: writes the three files, runs the check in the image, pushes a branch, opens a PR, registers", async () => {
   const recordHome = tempHome();
   const dir = project({ inspector: false });
   const branch = defaultBranchOf(dir);
@@ -81,14 +82,22 @@ test("register: writes the two files, runs the check in the image, pushes a bran
   assert.equal(result.branch, REGISTER_BRANCH);
   assert.equal(result.pullRequestUrl, "https://github.com/fake/repo/pull/1");
   assert.equal(result.check, RECORDED_CHECK);
+  assert.equal(result.dockerfile, "written");
 
-  // The branch really is on origin, with both files on it.
+  // The branch really is on origin, with all three files on it.
   assert.equal(originHasBranch(dir, REGISTER_BRANCH), true);
   const config = JSON.parse(fileOnOriginBranch(dir, REGISTER_BRANCH, INSPECTOR_CONFIG));
   assert.equal(config.check, RECORDED_CHECK);
-  assert.equal(config.image, "cimg/node:24.18.0");
-  assert.deepEqual(config.protectedPaths, [CHECK_SCRIPT, INSPECTOR_CONFIG, "*.test.ts"]);
+  assert.deepEqual(config.protectedPaths, [CHECK_SCRIPT, INSPECTOR_CONFIG, DOCKERFILE_INSPECTOR, "*.test.ts"]);
   assert.ok(fileOnOriginBranch(dir, REGISTER_BRANCH, CHECK_SCRIPT).endsWith("exit 0\n"));
+  // The image is on the Dockerfile's FROM line now, not in the config:
+  // inspector#47 retired that key, with any value.
+  assert.equal(Object.hasOwn(config, "image"), false, "the image key is retired");
+  assert.equal(Object.hasOwn(config, "network"), false, "and so is the network key");
+  assert.ok(
+    fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR).includes("FROM cimg/node:24.18.0"),
+    "the check box is built from Dockerfile.inspector"
+  );
 
   // projects.toml gained exactly the entry it reports.
   assert.equal(loadConfig(recordHome).projects[result.name].path, dir);
@@ -96,10 +105,10 @@ test("register: writes the two files, runs the check in the image, pushes a bran
   assert.ok(readFileSync(projectsTomlPath(recordHome), "utf8").includes(result.tomlEntry.trim()));
 });
 
-// The two knobs describe the box Inspector will use later, so they have
-// to reach the committed file - and nothing else may appear in it when
-// they are left out.
-test("register: --network and --timeout land in the pushed .inspector.json, and nothing does without them", async () => {
+// --timeout describes the box Inspector will use later, so it has to
+// reach the committed file - and nothing else may appear in it when it is
+// left out.
+test("register: --timeout lands in the pushed .inspector.json, and nothing does without it", async () => {
   const recordHome = tempHome();
   const withFlags = project({ inspector: false });
   const tools = fakeRegisterTools();
@@ -110,7 +119,6 @@ test("register: --network and --timeout land in the pushed .inspector.json, and 
       path: withFlags,
       check: "exit 0",
       image: "cimg/node:24.18.0",
-      network: true,
       timeoutSeconds: 1200,
       name: "with-flags",
     },
@@ -118,11 +126,9 @@ test("register: --network and --timeout land in the pushed .inspector.json, and 
   );
 
   const config = JSON.parse(fileOnOriginBranch(withFlags, REGISTER_BRANCH, INSPECTOR_CONFIG));
-  assert.equal(config.network, true);
   assert.equal(config.timeoutSeconds, 1200);
   const [pr] = tools.pullRequestCalls;
-  assert.ok(pr.body.includes("network access"), "the reviewer should read it, not only diff it");
-  assert.ok(pr.body.includes("1200 seconds"));
+  assert.ok(pr.body.includes("1200 seconds"), "the reviewer should read it, not only diff it");
 
   const plain = project({ inspector: false });
   await registerProject(
@@ -130,8 +136,95 @@ test("register: --network and --timeout land in the pushed .inspector.json, and 
     { tools: fakeRegisterTools() }
   );
   const plainConfig = JSON.parse(fileOnOriginBranch(plain, REGISTER_BRANCH, INSPECTOR_CONFIG));
-  assert.equal(Object.hasOwn(plainConfig, "network"), false, "off is the absence of the key");
-  assert.equal(Object.hasOwn(plainConfig, "timeoutSeconds"), false);
+  assert.equal(Object.hasOwn(plainConfig, "timeoutSeconds"), false, "off is the absence of the key");
+});
+
+// Issue #303: the check box has no network, so a project's dependencies
+// are installed in the Dockerfile at build time - and check.sh gets the
+// other half of that mechanism, since a node_modules nothing links in is
+// a node_modules that is never there.
+test("register: a package-lock.json project gets an install step and a check.sh that links it in", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  writeFileSync(join(dir, "package-lock.json"), "{}\n");
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-qm", "add lockfile"]);
+  git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
+  const tools = fakeRegisterTools();
+
+  await registerProject({ recordHome, path: dir, check: "exit 0", image: "cimg/node:24.18.0" }, { tools });
+
+  const dockerfile = fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR);
+  assert.ok(dockerfile.includes("npm ci"), dockerfile);
+  assert.ok(dockerfile.includes("/deps"), dockerfile);
+  const script = fileOnOriginBranch(dir, REGISTER_BRANCH, CHECK_SCRIPT);
+  assert.ok(script.includes("ln -s /deps/node_modules node_modules"), script);
+  const [pr] = tools.pullRequestCalls;
+  assert.ok(pr.body.includes("npm ci"), "the reviewer should read what the image bakes");
+});
+
+// Nothing is invented for a shape it does not recognize: the file says
+// so where the install step would have gone.
+test("register: a project with no lockfile gets a Dockerfile that says so, not a guessed install", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+
+  await registerProject(
+    { recordHome, path: dir, check: "exit 0", image: "node:24" },
+    { tools: fakeRegisterTools() }
+  );
+
+  const dockerfile = fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR);
+  assert.ok(!dockerfile.includes("RUN "), dockerfile);
+  assert.ok(dockerfile.includes("Add what ./check.sh needs here"), dockerfile);
+});
+
+// Clarification 2 (Client ruling): register never overwrites a committed
+// file. A repository that already has a Dockerfile.inspector keeps it,
+// exactly as it is, and is told so.
+test("register: a committed Dockerfile.inspector is left untouched, and said so", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  const theirs = "FROM their/own:image\n# hand-written, and not ours to rewrite\n";
+  writeFileSync(join(dir, DOCKERFILE_INSPECTOR), theirs);
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-qm", "add our own check image"]);
+  git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
+  const tools = fakeRegisterTools();
+  const notes: string[] = [];
+
+  const result = await registerProject(
+    { recordHome, path: dir, check: "exit 0", image: "node:24" },
+    { tools, notify: (line) => notes.push(line) }
+  );
+
+  assert.equal(result.dockerfile, "already-committed");
+  assert.equal(fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR), theirs, "byte for byte");
+  assert.ok(notes.some((line) => line.includes("leaving it exactly as it is")), notes.join("\n"));
+  const [pr] = tools.pullRequestCalls;
+  assert.ok(pr.body.includes("never overwrites a committed file"), pr.body);
+});
+
+// A check that installs its own dependencies cannot, in a box with no
+// network - named before the merge rather than left to a red first task.
+test("register: a check command that fetches is warned about, on the result and in the pull request", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  writeFileSync(join(dir, "package-lock.json"), "{}\n");
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-qm", "add lockfile"]);
+  git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
+  const tools = fakeRegisterTools({ check: () => ({ ran: true, exitCode: 0, output: "" }) });
+
+  const result = await registerProject(
+    { recordHome, path: dir, check: "npm ci && npm test", image: "cimg/node:24.18.0" },
+    { tools }
+  );
+
+  assert.equal(result.warnings?.length, 1, JSON.stringify(result.warnings));
+  assert.ok(result.warnings?.[0].includes("`npm ci`"), result.warnings?.[0]);
+  const [pr] = tools.pullRequestCalls;
+  assert.ok(pr.body.includes("Worth a look before merging"), pr.body);
 });
 
 test("register: the name defaults to origin's repository name, and --name overrides it", async () => {

@@ -10,7 +10,13 @@
 // goes to stderr, one line per field, because JSON has nowhere to put a
 // comment (Client ruling, issue #114's clarification).
 //
-// Deterministic parsing only, no machine (same ruling). Three signals,
+// Since inspector#47 the proposal is two files, not one: the config no
+// longer names an image or a network, so the `Dockerfile.inspector` the
+// check box is built from is proposed alongside it (dockerfile.ts). It
+// rides on stderr with the reasoning rather than on stdout, which stays
+// the single document the redirect writes.
+//
+// Deterministic parsing only, no machine (same ruling). The signals are
 // read from **origin's default branch** rather than the Client's working
 // tree - the same ref the "does this repository have .inspector.json"
 // question was just asked against, and the ref a task's base commit is
@@ -19,28 +25,45 @@
 //   - an existing `check.sh`, which wins every disagreement
 //   - `package.json`'s `scripts`, `engines` and declared dependencies
 //   - `go.mod`
+//   - whether `package-lock.json` or `go.sum` is there, which decides
+//     the install step the Dockerfile gets
 //
-// Reading is one function; deriving is a pure one over the strings it
-// read, so every rule below is testable with no git and no repository.
+// Reading is one function; deriving is a pure one over what it read, so
+// every rule below is testable with no git and no repository.
 
-import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, readFileOnRef } from "./origin.ts";
+import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, fileExistsOnRef, readFileOnRef } from "./origin.ts";
 import { inspectorConfigJson } from "./scaffold.ts";
+import {
+  DOCKERFILE_INSPECTOR,
+  GO_MOD,
+  GO_SUM,
+  PACKAGE_JSON,
+  PACKAGE_LOCK,
+  dependencyInstallerIn,
+  dependencyShapeFrom,
+  inspectorDockerfile,
+  type DependencyShape,
+} from "./dockerfile.ts";
 
-export const PACKAGE_JSON = "package.json";
-export const GO_MOD = "go.mod";
+// Re-exported rather than declared again: the filenames a proposal reads
+// and the filenames the Dockerfile writer copies have to be the same
+// strings, by construction.
+export { GO_MOD, PACKAGE_JSON };
 
 /**
  * A marker value, never a guess. Uppercase on purpose: a Docker
  * repository name must be lowercase, so this is an *invalid* reference -
- * a proposal committed without being read fails loudly on the first pull
- * instead of silently resolving to something plausible. (`register`'s own
- * proving run pulls the image and refuses on a bad one, which is the
- * backstop either way.)
+ * a proposal committed without being read fails loudly on the first
+ * build instead of silently resolving to something plausible.
+ * (`register`'s own proving run pulls the image `--image` names and
+ * refuses on a bad one, which is the backstop on that route.)
  */
 export const IMAGE_PLACEHOLDER_PREFIX = "REPLACE-ME-with-";
 
-/** The three things a repository is read for. `null` means the file
- * isn't on the branch at all. */
+/** The things a repository is read for. `null` means the file isn't on
+ * the branch at all; the two lockfiles are read as presence alone, since
+ * nothing here cares what is inside one (and one of them is routinely a
+ * megabyte). */
 export interface ProposalSignals {
   /** `check.sh` at the repository root. */
   checkScript: string | null;
@@ -48,6 +71,10 @@ export interface ProposalSignals {
   packageJson: string | null;
   /** `go.mod` at the repository root. */
   goMod: string | null;
+  /** Whether `package-lock.json` is at the repository root. */
+  packageLock: boolean;
+  /** Whether `go.sum` is at the repository root. */
+  goSum: boolean;
 }
 
 /** What `fabrica register` prints when a repository has no
@@ -61,18 +88,30 @@ export interface InspectorProposal {
    */
   json: string;
   /**
+   * The `Dockerfile.inspector` to commit next to it, since inspector#47:
+   * the check box is built from that file and `.inspector.json` names no
+   * image at all any more. It is deliberately **not** on stdout - that
+   * stream is the one document the redirect in the notes writes, and a
+   * second file there would corrupt it. It appears in `notes` instead,
+   * for the Client to copy.
+   */
+  dockerfile: string;
+  /**
    * stderr, in order: what happened, one line per field, any
-   * disagreement between signals, and what to do next.
+   * disagreement between signals, the Dockerfile itself, and what to do
+   * next.
    */
   notes: string[];
 }
 
-/** Reads the three signals off `ref` - never off the working tree. */
+/** Reads the signals off `ref` - never off the working tree. */
 export function readProposalSignals(project: string, ref: string): ProposalSignals {
   return {
     checkScript: readFileOnRef(project, ref, CHECK_SCRIPT),
     packageJson: readFileOnRef(project, ref, PACKAGE_JSON),
     goMod: readFileOnRef(project, ref, GO_MOD),
+    packageLock: fileExistsOnRef(project, ref, PACKAGE_LOCK),
+    goSum: fileExistsOnRef(project, ref, GO_SUM),
   };
 }
 
@@ -124,39 +163,6 @@ function checkScriptBody(text: string): string {
     .join("; ");
 }
 
-/**
- * Commands that fetch a project's dependencies, and so are the one thing
- * `network: true` actually buys. Matched against the check's own text:
- * a check that names none of these needs no network, whatever the
- * repository declares.
- */
-const DEPENDENCY_INSTALLERS: readonly RegExp[] = [
-  /\bnpm\s+ci\b/,
-  /\bnpm\s+(?:install|i)\b/,
-  /\byarn\s+install\b/,
-  /\bpnpm\s+(?:install|i)\b/,
-  /\bpip3?\s+install\b/,
-  /\bpoetry\s+install\b/,
-  /\buv\s+sync\b/,
-  /\bbundle\s+install\b/,
-  /\bgo\s+mod\s+(?:download|tidy)\b/,
-  /\bcargo\s+fetch\b/,
-  /\bcomposer\s+install\b/,
-  /\bmix\s+deps\.get\b/,
-];
-
-/** The installing command `text` actually names, spelled as the check
- * itself spells it - quoting a label back at the Client ("npm install"
- * for a check that says `npm i`) would be describing something his
- * repository does not say. */
-function dependencyInstallerIn(text: string): string | null {
-  for (const pattern of DEPENDENCY_INSTALLERS) {
-    const match = pattern.exec(text);
-    if (match !== null) return match[0].replace(/\s+/g, " ");
-  }
-  return null;
-}
-
 interface CheckField {
   /** What goes in `.inspector.json`'s `check`. */
   command: string;
@@ -197,7 +203,7 @@ function proposeCheck(signals: ProposalSignals, pkg: Record<string, unknown> | n
       file: null,
       // The script's own body too, not just the `npm test` that invokes
       // it: a "test" script that starts with its own `npm ci` is a check
-      // that fetches, and the network field has to see that.
+      // that fetches, and the warning about that has to see it.
       text: `npm test\n${testScript}`,
       reason: `${PACKAGE_JSON}'s "test" script is the only command the repository names (${testScript})`,
     };
@@ -258,12 +264,15 @@ interface ImageField {
 }
 
 /**
- * `image`. The one declaration-to-image pairing there is live evidence
- * for is `engines.node` pinned exactly against `cimg/node:<version>` -
- * this repository's own `.inspector.json`, a config the real Inspector
- * acts on. Everything else is a placeholder rather than a guess: a
- * version *range* names no single tag, and `go.mod`'s toolchain version
- * has no in-repo precedent for a Go image at all.
+ * `Dockerfile.inspector`'s `FROM` - since inspector#47 this is a line in
+ * a file register writes, not an `image` key in `.inspector.json`.
+ *
+ * The one declaration-to-image pairing there is live evidence for is
+ * `engines.node` pinned exactly against `cimg/node:<version>` - this
+ * repository's own Dockerfile.inspector, which the real Inspector builds
+ * the check box from. Everything else is a placeholder rather than a
+ * guess: a version *range* names no single tag, and `go.mod`'s toolchain
+ * version has no in-repo precedent for a Go image at all.
  */
 function proposeImage(signals: ProposalSignals, pkg: Record<string, unknown> | null): ImageField {
   const node = stringField(pkg, "engines", "node");
@@ -274,8 +283,9 @@ function proposeImage(signals: ProposalSignals, pkg: Record<string, unknown> | n
         value: `cimg/node:${exact[1]}`,
         reason:
           `${PACKAGE_JSON}'s engines.node pins node ${exact[1]} exactly, and cimg/node:<version> is the one ` +
-          `declaration-to-image pairing Fabrica has a live, working config for. \`fabrica register\` pulls ` +
-          `this image and refuses if the tag does not exist, so a wrong guess here cannot pass quietly`,
+          `declaration-to-image pairing Fabrica has a live, working ${DOCKERFILE_INSPECTOR} for. Passing ` +
+          `--image instead has \`fabrica register\` pull the tag and refuse if it does not exist, so a wrong ` +
+          `guess cannot pass quietly that way`,
       };
     }
     return {
@@ -301,66 +311,99 @@ function proposeImage(signals: ProposalSignals, pkg: Record<string, unknown> | n
   return {
     value: `${IMAGE_PLACEHOLDER_PREFIX}the-image-this-check-runs-in`,
     reason:
-      `nothing in the repository says what the check runs inside, and this is the one field no signal can ` +
-      `supply - name an image that already ships everything the check needs, since nothing can be installed ` +
-      `inside a check box (it runs as you, with no write access outside the project). This value is ` +
-      `deliberately not a valid Docker reference, so it cannot be committed by accident`,
+      `nothing in the repository says what the check runs inside, and this is the one line no signal can ` +
+      `supply - name an image that already ships the toolchain the check needs. Anything this project's own ` +
+      `check installs goes below the FROM line instead, at build time, since the check box has no network. ` +
+      `This value is deliberately not a valid Docker reference, so it cannot be committed by accident`,
   };
 }
 
-interface NetworkField {
-  on: boolean;
+interface DependencyField {
+  /** The install step the Dockerfile gets, or `null` for a shape nothing
+   * here recognizes - which becomes a comment in the file, never a
+   * silent gap. */
+  shape: DependencyShape | null;
+  /** What goes on the `Dockerfile.inspector dependencies:` note line. */
+  summary: string;
   reason: string;
 }
 
 /**
- * `network`. Off unless the check itself fetches something, which is the
- * only thing network access actually buys: a check that names no
- * installer gains nothing from it, and a `npm test` with no `npm ci` in
- * front of it fails in a fresh box for want of `node_modules` whether
- * the network is there or not. That trap is named rather than papered
- * over with a `true` that would not fix it.
+ * The install step `Dockerfile.inspector` gets - what the retired
+ * `network: true` used to stand in for. The check box has no network, so
+ * fetching at check time is no longer something a key can buy: a
+ * recognized lockfile becomes a real install step at build time, and
+ * anything else is named in the file rather than papered over.
  */
-function proposeNetwork(
+function proposeDependencies(
   signals: ProposalSignals,
-  pkg: Record<string, unknown> | null,
-  check: CheckField
-): NetworkField {
-  const installer = dependencyInstallerIn(check.text);
-  if (installer !== null) {
+  pkg: Record<string, unknown> | null
+): DependencyField {
+  const shape = dependencyShapeFrom({ packageLock: signals.packageLock, goSum: signals.goSum });
+  if (shape !== null) {
     return {
-      on: true,
-      reason:
-        `the check runs \`${installer}\`, which fetches this project's dependencies, and a check box has no ` +
-        `network unless this says so`,
+      shape,
+      summary: `${shape.install} from ${shape.lockfile}`,
+      reason: shape.note,
     };
   }
 
   const declared = dependencyCount(pkg);
   if (declared > 0) {
     return {
-      on: false,
+      shape: null,
+      summary: "none - a comment naming what is missing",
       reason:
-        `the check names no command that fetches anything. Worth a second look though: ` +
-        `${PACKAGE_JSON} declares ${declared} ` +
-        `${declared === 1 ? "dependency" : "dependencies"}, and a check box starts with none of them ` +
-        `installed, so a check that is to pass there has to install them itself (\`npm ci && ...\`) - and ` +
-        `then this needs to be true`,
+        `${PACKAGE_JSON} declares ${declared} ${declared === 1 ? "dependency" : "dependencies"} but there is no ` +
+        `${PACKAGE_LOCK} at the root, so there is no lockfile to install exactly. The check box has no network, ` +
+        `so install them in ${DOCKERFILE_INSPECTOR} yourself (or commit the lockfile and run this again) - the ` +
+        `file says so where the step would have gone`,
     };
   }
   if (signals.goMod !== null && /^\s*require\b/m.test(signals.goMod)) {
     return {
-      on: false,
+      shape: null,
+      summary: "none - a comment naming what is missing",
       reason:
-        `the check names no command that fetches anything. Worth a second look though: ` +
-        `${GO_MOD} has \`require\` entries, and a check box starts with an empty module cache, so a check ` +
-        `that is to pass there has to run \`go mod download\` itself - and then this needs to be true`,
+        `${GO_MOD} has \`require\` entries but there is no ${GO_SUM} at the root, so there is no lockfile to ` +
+        `fill the module cache from. The check box has no network and starts with an empty cache, so fill it ` +
+        `in ${DOCKERFILE_INSPECTOR} yourself (or commit ${GO_SUM} and run this again) - the file says so where ` +
+        `the step would have gone`,
     };
   }
   return {
-    on: false,
-    reason: `nothing the check runs fetches anything, and nothing in the repository declares a dependency it would have to`,
+    shape: null,
+    summary: "none",
+    reason:
+      `nothing in the repository declares a dependency to install - no ${PACKAGE_LOCK}, no ${GO_SUM}, and ` +
+      `nothing in ${PACKAGE_JSON} or ${GO_MOD} naming one. The file says so where an install step would have ` +
+      `gone, since the check box has no network to get one later`,
   };
+}
+
+/**
+ * The one trap this change creates, named rather than left to a red
+ * first task: a check that installs its own dependencies cannot, in a
+ * box with no network. It is a `warning:` line rather than a field's
+ * reason because it is about the check itself, not about anything the
+ * proposal writes.
+ */
+function fetchingCheckWarning(check: CheckField, dependencies: DependencyField): string | null {
+  const installer = dependencyInstallerIn(check.text);
+  if (installer === null) return null;
+  return (
+    `  warning: the check runs \`${installer}\`, which fetches this project's dependencies - and the check box ` +
+    `has no network at all, so that step cannot succeed there. ` +
+    (dependencies.shape === null
+      ? `Install them in ${DOCKERFILE_INSPECTOR} at build time instead, and have ${CHECK_SCRIPT} use what is ` +
+        `already there rather than fetching.`
+      : `${DOCKERFILE_INSPECTOR} installs them at build time instead${
+          dependencies.shape.linksNodeModules
+            ? ` - link them in the way this repository's own ${CHECK_SCRIPT} does (\`[ -d /deps/node_modules ] ` +
+              `&& ln -s /deps/node_modules node_modules\`) rather than fetching`
+            : ``
+        }.`)
+  );
 }
 
 interface ProtectedPathsField {
@@ -413,23 +456,27 @@ export function proposeInspectorConfig(
   const pkg = parsedPackageJson(signals.packageJson);
   const check = proposeCheck(signals, pkg);
   const image = proposeImage(signals, pkg);
-  const network = proposeNetwork(signals, pkg, check);
+  const dependencies = proposeDependencies(signals, pkg);
   const protectedPaths = proposeProtectedPaths(check);
 
   const json = inspectorConfigJson({
     check: check.command,
-    image: image.value,
-    ...(network.on ? { network: true } : {}),
     ...(protectedPaths.paths !== undefined ? { protectedPaths: protectedPaths.paths } : {}),
   }).trimEnd();
 
+  const dockerfile = inspectorDockerfile({
+    from: image.value,
+    reason: image.reason,
+    shape: dependencies.shape,
+  });
+
+  const warning = fetchingCheckWarning(check, dependencies);
+
   const notes = [
     `fabrica register: ${ctx.projectPath} has no ${INSPECTOR_CONFIG} on origin/${ctx.defaultBranch}, so it ` +
-      `needs setting up. Nothing was written and nothing was registered - what follows is a proposal, derived ` +
-      `from what the repository already says, for you to read and commit yourself.`,
+      `needs setting up. Nothing was written and nothing was registered - what follows is a proposal of two ` +
+      `files, derived from what the repository already says, for you to read and commit yourself.`,
     `  check: ${check.command} - ${check.reason}.`,
-    `  image: ${image.value} - ${image.reason}.`,
-    `  network: ${network.on ? "true" : "omitted"} - ${network.reason}.`,
     // Always omitted, and the one field where that is the whole answer:
     // nothing in a package.json, a go.mod or a check.sh says how long a
     // check takes, and an invented number is the number that would
@@ -438,14 +485,24 @@ export function proposeInspectorConfig(
       `default stands. Set it once you have watched the check run.`,
     `  protectedPaths: ${protectedPaths.paths === undefined ? "omitted" : protectedPaths.paths.join(", ")} - ` +
       `${protectedPaths.reason}.`,
+    // The check box is built from Dockerfile.inspector since
+    // inspector#47, so these two are fields of that file rather than
+    // keys of a config - there is no `image` key and no `network` key to
+    // write any more, with any value.
+    `  ${DOCKERFILE_INSPECTOR} FROM: ${image.value} - ${image.reason}.`,
+    `  ${DOCKERFILE_INSPECTOR} dependencies: ${dependencies.summary} - ${dependencies.reason}.`,
     ...checkDisagreements(signals, pkg),
-    `The document itself is on stdout, alone: \`fabrica register ${ctx.projectPath} > ` +
-      `${ctx.projectPath}/${INSPECTOR_CONFIG}\` writes exactly it and nothing else. Read it, replace anything ` +
-      `marked ${IMAGE_PLACEHOLDER_PREFIX}..., commit it onto ${ctx.defaultBranch}, then run ` +
-      `\`fabrica register ${ctx.projectPath}\` again. Or pass --check "<command>" --image <docker image> and ` +
-      `register will write ${INSPECTOR_CONFIG} and ${CHECK_SCRIPT} for you, on a branch, in a pull request you ` +
-      `review before it merges.`,
+    ...(warning === null ? [] : [warning]),
+    `${INSPECTOR_CONFIG} is on stdout, alone: \`fabrica register ${ctx.projectPath} > ` +
+      `${ctx.projectPath}/${INSPECTOR_CONFIG}\` writes exactly it and nothing else. ${DOCKERFILE_INSPECTOR} ` +
+      `goes next to it, and is this - it is deliberately not on stdout, since that stream is the one file ` +
+      `the redirect above writes:\n\n${dockerfile.trimEnd()}\n`,
+    `Read both, replace anything marked ${IMAGE_PLACEHOLDER_PREFIX}..., commit them onto ` +
+      `${ctx.defaultBranch}, then run \`fabrica register ${ctx.projectPath}\` again. Or pass ` +
+      `--check "<command>" --image <docker image> and register will write ${INSPECTOR_CONFIG}, ` +
+      `${CHECK_SCRIPT} and ${DOCKERFILE_INSPECTOR} for you, on a branch, in a pull request you review before ` +
+      `it merges.`,
   ];
 
-  return { json, notes };
+  return { json, dockerfile, notes };
 }

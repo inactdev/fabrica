@@ -78,19 +78,27 @@ test("parseRegisterArgs: an unknown flag refuses, naming it", () => {
   );
 });
 
-test("parseRegisterArgs: --network is off unless passed, and is a bare flag when it is", () => {
-  assert.equal(parseRegisterArgs(["/repo"]).network, undefined, "absent means off - there is no `false` to write");
-  assert.equal(parseRegisterArgs(["/repo", "--network"]).network, true);
-  assert.equal(parseRegisterArgs(["--network", "/repo"]).network, true);
+// inspector#47 retired the key --network wrote, so the flag is gone
+// outright (issue #303, Client ruling): an unknown-flag refusal whose
+// message says where dependencies go now, since "unknown flag" alone
+// would read as a typo in a flag that used to work.
+test("parseRegisterArgs: --network is gone, and the refusal says what replaced it", () => {
+  for (const spelling of ["--network", "--network=true", "--network=false"]) {
+    assert.throws(
+      () => parseRegisterArgs(["/repo", spelling]),
+      (err: unknown) =>
+        err instanceof CliError &&
+        err.code === "bad-usage" &&
+        err.message.includes(`unknown flag "--network"`) &&
+        err.message.includes("no network") &&
+        err.message.includes("Dockerfile.inspector"),
+      `${spelling} should refuse, naming Dockerfile.inspector`
+    );
+  }
 });
 
-// --network=true is a reasonable guess at a flag that takes no value, so
-// it gets its own message rather than "unknown flag --network=true".
-test("parseRegisterArgs: --network with a value refuses, saying it takes none", () => {
-  assert.throws(
-    () => parseRegisterArgs(["/repo", "--network=true"]),
-    (err: unknown) => err instanceof CliError && err.message.includes("--network takes no value")
-  );
+test("parseRegisterArgs: the usage line no longer offers --network", () => {
+  assert.ok(!REGISTER_USAGE.includes("--network"), REGISTER_USAGE);
 });
 
 test("parseRegisterArgs: --timeout takes a whole number of seconds", () => {

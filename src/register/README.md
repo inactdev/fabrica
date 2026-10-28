@@ -13,7 +13,7 @@ reach a remote until something independent has judged it.
 This command is not an exception to that rule; it falls outside it. It
 runs as the Client, on the Client's own machine, with his own git
 credentials, and nothing a Worker produced passes through it at all —
-the two files it commits are generated here from his own `--check` and
+the three files it commits are generated here from his own `--check` and
 `--image`. The only thing it ever puts on origin is one new branch,
 `fabrica/register`, for him to merge:
 
@@ -46,8 +46,10 @@ there every failure path unwinds what it made:
    the repository side is done — skip to step 11.
 8. A temporary worktree of origin's default branch, on
    `fabrica/register`.
-9. Write `.inspector.json` and `check.sh`; run `./check.sh` inside
-   `--image`. A failure refuses here, with the check's own output.
+9. Write `.inspector.json`, `check.sh` and `Dockerfile.inspector` —
+   never over a committed `Dockerfile.inspector`, which is left exactly
+   as it is; run `./check.sh` inside `--image`. A failure refuses here,
+   with the check's own output.
 10. Commit, push, `gh pr create`.
 11. Append `[projects.<name>]` to `projects.toml`.
 
@@ -97,13 +99,18 @@ where the old "that needs `--check` and `--image`" refusal used to be:
 
     fabrica register <path> > <path>/.inspector.json
 
-`src/register/propose.ts` derives it from three signals, read off
+`src/register/propose.ts` derives it from the signals it can read off
 **origin's default branch** (never the working tree — the same ref step 7
 just asked the `.inspector.json` question against, and the ref a task's
 base commit is cut from): an existing `check.sh`, `package.json`'s
-`scripts`/`engines`/dependencies, and `go.mod`. Reading is one function,
-deriving is a pure one over the three strings it read, so every rule
-below is tested with no repository at all.
+`scripts`/`engines`/dependencies, `go.mod`, and whether a
+`package-lock.json` or a `go.sum` is there. Reading is one function,
+deriving is a pure one over what it read, so every rule below is tested
+with no repository at all.
+
+Since inspector#47 (issue #303) the proposal is **two files**: the config
+names no image and no network any more, so the `Dockerfile.inspector` the
+check box is built from is proposed alongside it.
 
 It **prints the proposal and never writes it** — the issue's own words. A
 tool that quietly writes the file defining how its own work is judged is
@@ -113,9 +120,11 @@ clarification):
 
 - **stdout: the JSON document, alone.** One `console.log`, so the
   redirect above yields a file ending in exactly one newline.
-- **stderr: every field's reasoning, one line per field** — including
-  `network`'s, which JSON itself has nowhere to put — plus any
-  disagreement between two signals.
+- **stderr: every field's reasoning, one line per field** — plus any
+  disagreement between two signals, the one warning below, and the
+  proposed `Dockerfile.inspector` itself. That file is deliberately
+  **not** on stdout: a second document there would corrupt the one the
+  redirect writes.
 
 It is still a **refusal**: exit 1, nothing written, nothing registered,
 nothing pushed (`RegisterProposalError`, the one refusal carrying data
@@ -129,22 +138,25 @@ cannot read a proposal as a successful registration.
   Client's ruling on question 3). Otherwise `package.json`'s `test`
   script makes it `npm test`, a `go.mod` makes it `go test ./...`, and a
   repository naming no command at all is told to write `check.sh`.
-- **`image`** — the only declaration-to-image pairing there is live
-  evidence for is an exactly-pinned `engines.node` against
-  `cimg/node:<version>`, which is this repository's own `.inspector.json`.
-  Everything else gets `REPLACE-ME-with-...`, not a guess: a version
-  *range* names no single tag, and `go.mod`'s toolchain version has no
-  in-repo precedent for a Go image. The placeholder carries uppercase on
-  purpose — a Docker repository name must be lowercase, so it is an
-  *invalid* reference and fails loudly on the first pull instead of
-  resolving to something plausible.
-- **`network`** — on only when the check's own text names a dependency
-  installer (`npm ci`, `pip install`, `go mod download`, ...), since
-  fetching is the only thing network access buys. Declared dependencies
-  with *no* install step are named on stderr instead of answered with a
-  `true` that would not help: `npm test` with no `npm ci` in front of it
-  fails in a fresh box for want of `node_modules` whether the network is
-  there or not.
+- **`Dockerfile.inspector`'s `FROM`** — the only declaration-to-image
+  pairing there is live evidence for is an exactly-pinned `engines.node`
+  against `cimg/node:<version>`, which is this repository's own
+  `Dockerfile.inspector`. Everything else gets `REPLACE-ME-with-...`, not
+  a guess: a version *range* names no single tag, and `go.mod`'s
+  toolchain version has no in-repo precedent for a Go image. The
+  placeholder carries uppercase on purpose — a Docker repository name
+  must be lowercase, so it is an *invalid* reference and fails loudly on
+  the first build instead of resolving to something plausible.
+- **`Dockerfile.inspector`'s install step** — what the retired `network`
+  key used to stand in for. A `package-lock.json` becomes `npm ci`, a
+  `go.sum` becomes `go mod download`, and anything else becomes a
+  **comment in the file** naming what still has to be installed there:
+  declared dependencies with no lockfile, or a shape nothing here knows,
+  are said out loud rather than answered with an invented install step.
+  A check whose own text names an installer (`npm ci`, `pip install`,
+  ...) additionally gets a `warning:` line, because that step cannot
+  succeed at all in a box with no network — it is about the check, not
+  about anything the proposal writes.
 - **`timeoutSeconds`** — always omitted, and the line says why. Nothing
   in a `package.json`, a `go.mod` or a `check.sh` says how long a check
   takes, and the invented number would be the one deciding whether a real
@@ -160,9 +172,10 @@ cannot read a proposal as a successful registration.
   listed: the gate protects those on its own.
 
 That last point is a deliberate disagreement with `protectedPathsFor`
-below, which always lists `.inspector.json` next to `check.sh`. Two
-different authorities, not a bug in either — if they should ever agree,
-`protectedPathsFor` is the one to change, under a ruling.
+below, which always lists `.inspector.json` and `Dockerfile.inspector`
+next to `check.sh`. Two different authorities, not a bug in either — if
+they should ever agree, `protectedPathsFor` is the one to change, under a
+ruling.
 
 ### Why the proposal lands where it does
 
@@ -174,63 +187,107 @@ use. Refusals first, proposal last.
 
 ## `.inspector.json`'s schema, and where it came from
 
-Up to five keys: `check` (always `./check.sh`), `image`,
-`protectedPaths`, and — only when asked for — `network` and
-`timeoutSeconds`.
+Up to three keys: `check` (always `./check.sh`), `protectedPaths`, and —
+only when asked for — `timeoutSeconds`.
+
+There used to be two more, `image` and `network`. **inspector#47
+(inspector PR #64) retired both, with any value**: the check box is
+built from a `Dockerfile.inspector` committed at the repository root,
+and that box has no network at all. `register` wrote them until issue
+#303, which meant every project registered in between was refused on its
+first task.
 
 Inspector's own documentation was **not reachable** when this was
-written, so the schema was taken from the only authoritative evidence
-in reach: this repository's own `/.inspector.json`, a live config the
-real Inspector acts on in this repo's CI, plus
-`contract/helpers/fixture.ts`'s `FIXTURE_INSPECTOR_CONFIG`, which
-proves the minimal `check` + `image` form is valid.
-`scaffold.test.ts` pins that provenance — it fails if a key is written
-that this repository's own config doesn't use. A sixth key should not
-be added here on a guess; read Inspector's docs first.
+written, so the schema was taken from the only authoritative evidence in
+reach: this repository's own `/.inspector.json`, a live config the real
+Inspector acts on in this repo's CI. `scaffold.test.ts` pins that
+provenance — it fails if a key is written that this repository's own
+config doesn't use, which is exactly how the two retired keys were
+caught. A fourth key should not be added here on a guess; read
+Inspector's docs first. (`contract/helpers/fixture.ts`'s
+`FIXTURE_INSPECTOR_CONFIG` still carries an `image` key. It is a fixture
+no real Inspector ever reads — every test faking the check box or
+Inspector supplies its own answer — so it is evidence of nothing about
+the schema any more.)
 
-`check.sh` and `.inspector.json` are **always** in `protectedPaths`,
-with `--protected` adding to them rather than replacing them: a setup
-that protected the check but not the file naming the check would
-protect nothing, which is CONTRACT rule 9's whole subject.
+`check.sh`, `.inspector.json` and `Dockerfile.inspector` are **always**
+in `protectedPaths`, with `--protected` adding to them rather than
+replacing them: a setup that protected the check but not the file naming
+the check, or not the image the check runs in, would protect nothing,
+which is CONTRACT rule 9's whole subject. (`Dockerfile.inspector` joined
+that list with issue #303's clarification, matching what this
+repository's own config now protects.)
 
-## `--network` and `--timeout`
+## `Dockerfile.inspector`, and why `/deps`
 
-Both describe the box **Inspector** will run the check in later, and
-both only ever land in `.inspector.json`:
+`dockerfile.ts` writes it. `--image` goes on the `FROM` line, with
+where that image came from as the file's own comment — a Dockerfile has
+somewhere to put reasoning, which is the one thing `.inspector.json`
+never had.
 
-- `--network` writes `network: true`. A check that fetches anything —
-  `npm ci` against the registry, `pip install` into a virtualenv — cannot
-  pass in a box with no network, and that is a common enough shape to
-  need a flag rather than a hand-edit after the fact. (A check that
-  installs a *system* package is a different problem, and this flag is
-  not its answer: see the testing section below.)
-- `--timeout <seconds>` writes `timeoutSeconds`.
+**The check container has no network**, so a project's own dependencies
+are installed in this file, at build time. Two shapes are recognized,
+both named by issue #303 itself: a `package-lock.json` (`npm ci`) and a
+`go.sum` (`go mod download`). Anything else — declared dependencies with
+no lockfile, a `requirements.txt`, a system package — gets a **comment
+in the file** naming what still has to be installed there. Never a
+silent gap, and never an invented install step.
 
-"Off" is the **absence** of the key, not `network: false` or
-`timeoutSeconds: 0`. Neither of those spellings appears in any live
+They go in `/deps`, not beside the checkout, because **Inspector puts
+the repository's own files in place when it runs the check**: anything
+installed at the checkout's path at build time is shadowed by them. So
+the npm shape has a second half, in `check.sh`: link
+`/deps/node_modules` in when it is there, and install for real when it
+is not (a laptop, a worker's own box, `register`'s own proving run). That
+pair — the `/deps` install and the link — is this repository's own
+`Dockerfile.inspector` and `check.sh` (PR #302), the only live evidence
+of a check image that actually builds and passes. A Go module needs no
+link: its module cache lives in the image, outside the checkout, where
+`go test` already looks.
+
+A `cimg/*` image does **not** run as root (its user is `circleci`), so
+`/deps` is handed to that user before anything installs into it — again
+copied from this repository's own file, which is the evidence for it.
+`knownNonRootUser` knows that one family and nothing else: any other
+image gets the plain root-default form plus a comment naming exactly
+which three lines to add if it runs as someone else. Guessing a user name
+would turn a legible instruction into a confusing build failure.
+
+**A committed `Dockerfile.inspector` is never overwritten** (Client
+ruling, issue #303's clarification 2). A repository that already carries
+one keeps it, byte for byte; the summary, the commit message and the
+pull request body all say so, and say that the proving run used
+`--image` while the box Inspector builds is the one that file describes.
+
+## `--timeout`, and the one proving run
+
+`--timeout <seconds>` writes `timeoutSeconds`, and describes the box
+**Inspector** will run the check in later. "Off" is the **absence** of
+the key, not `timeoutSeconds: 0`: that spelling appears in no live
 config in reach, and the rule above — only write keys and values some
 working config actually shows — applies to values as much as to names.
-Leaving a key out leaves Inspector's own default in place, which is
-what "default off" means here.
 
-Neither flag changes the one proving run `register` itself does.
-`tools.ts`'s `realRunCheck` has always passed `network: "allowed"`, for
-the same reason a worker's own check box does: a real check installs its
-project-local dependencies (`npm ci`, a virtualenv), which it can,
-because those land in the bind-mounted workdir it owns. Gating that run behind `--network` would make a check
-that is about to be green on Inspector refuse here as **red**, which is
-the one outcome this command must never produce. `--timeout` has
-nothing to bind to on this side at all — `RunContainedOptions` has no
-timeout.
+It changes nothing about the one proving run `register` itself does, and
+has nothing to bind to on this side at all — `RunContainedOptions` has
+no timeout.
 
-The honest cost of that choice, stated rather than hidden: a check that
-needs the network and was registered *without* `--network` passes here
-and fails later, under Inspector. The alternative trade — refusing a
-good check because this run denied it something Inspector would have
-allowed — is worse, since it blocks setup outright instead of producing
-a red first task with a legible reason. HANDBOOK.md's case 8 tells the
-chat agent to pass `--network` whenever the CI check it copied installs
-anything of its own, which is where the choice is actually made.
+That proving run is `./check.sh` inside `--image`, with
+`network: "allowed"` (`tools.ts`'s `realRunCheck`), which is the one
+place this command's box deliberately differs from Inspector's: a check
+about to be green must not read as **red** here, and a check whose
+dependencies the Dockerfile bakes has no `/deps` in the raw `FROM`
+image, so its `check.sh` falls through to installing them for real. It
+also still pulls the tag, which is what proves the `FROM` line resolves
+before anything is pushed.
+
+The honest cost, stated rather than hidden: a check that cannot run in a
+networkless box still passes here and fails later, under Inspector. The
+alternative trade — denying that run a network Inspector's build step
+does have — is worse, since it blocks setup outright instead of
+producing a red first task with a legible reason. The shape that trap
+most often takes is a check command that installs its own dependencies,
+so `registerWarnings` names that one on the result and in the pull
+request body, before the merge.
 
 ## One source of truth for the check
 
@@ -327,8 +384,10 @@ assertion doubles as proof of that path.
 
 That last fact has a consequence for the Client, not just for this
 test: a check that installs a system package (`apt-get install
-shellcheck`) cannot pass `register`'s proving run either, network or
-no network, and `register` will refuse with the check's own output.
-Name an `--image` that already ships what the check needs — which is
-also what stops the later Inspector run depending on a package
-repository being up.
+shellcheck`) cannot pass `register`'s proving run, and `register` will
+refuse with the check's own output. The answer is to put that package in
+`Dockerfile.inspector` — a build step runs as the image's own user, with
+a network, which is exactly why the install moved there — or to name an
+`--image` that already ships it. What must not happen is the check
+installing it while it runs: that fails in the proving run here and in
+Inspector's networkless box alike.

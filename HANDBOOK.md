@@ -268,15 +268,18 @@ project uses - rather than inventing either one:
   `container:` image if it names one, otherwise the one implied by its
   language-version step (`actions/setup-node` with `node-version: 24`
   means a Node 24 image). Pin a version; never leave it floating on
-  `latest`.
-- Add **`--network`** if that check installs anything of its own into
-  the project - `npm ci` against the registry, `pip install` into a
-  virtualenv. Without it the check later runs in a box with no network
-  and fails on the install step, not on the project. A check that
-  installs a *system* package (`apt-get install shellcheck`) is a
-  different matter: no network flag helps, because the box runs as your
-  own user and cannot write outside the project. Pick an `--image` that
-  already ships that tool instead.
+  `latest`. It goes on the `FROM` line of a `Dockerfile.inspector` the
+  command writes at the repository root - the file Inspector builds the
+  check box from.
+- **The check box has no network, and no flag can give it one.**
+  Anything that check installs has to be installed in that Dockerfile,
+  at build time, or already ship in the image. `fabrica register` does
+  that itself for a project with a `package-lock.json` (`npm ci`) or a
+  `go.sum` (`go mod download`); for anything else - `pip install`, a
+  system package, a toolchain - it writes a comment in the file naming
+  what still has to be installed there. Relay that comment to the
+  Client: it is his file, and the one thing between it and a check box
+  that works.
 - A check that installs its own dependencies also needs the *Worker's*
   box to reach wherever they come from, which is a separate list: a
   `hosts = ["registry.npmjs.org"]` line in that project's own
@@ -307,10 +310,12 @@ for every future task on that project. Run it with no flags instead,
 
 which writes nothing, registers nothing, exits non-zero, and prints a
 proposed `.inspector.json` on stdout with one line of reasoning per
-field on stderr, derived from what the repository itself says. Show him
-both halves and ask him to confirm or correct the check and the image.
-The `REPLACE-ME-with-...` image placeholder means no signal named one -
-that is the field to ask about first.
+field on stderr - plus a proposed `Dockerfile.inspector` there too,
+since the config says nothing about the image - all derived from what
+the repository itself says. Show him both halves and ask him to confirm
+or correct the check and the image. The `REPLACE-ME-with-...` image
+placeholder means no signal named one - that is the field to ask about
+first.
 
 **On no**, that's the end of it. Don't run `fabrica register`, and don't
 retry the `fabrica do`.
