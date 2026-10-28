@@ -653,7 +653,12 @@ for a live view this run found already running on this commit.
 `fabrica up` is also the only command that opens one at all: nothing
 else passes `refreshStaleLiveView` a ready-callback, which is why the
 `fabrica update` immediately before a `fabrica up --continue` costs no
-second tab; (3) launches the chat harness in the foreground, in
+second tab. That last part is a fact about *who calls* that function,
+which no test can see from outside the commands it runs, so
+`up-command.test.ts` pins the complete caller set by reading the source
+of everything under `src/` and `integrations/`: a third caller fails it,
+and whoever adds one decides whether it owes the Client a tab on purpose
+instead of inheriting "no tab" silently from the default; (3) launches the chat harness in the foreground, in
 the current folder, with
 HANDBOOK.md's contents appended to its system prompt and this harness's
 own `settings.json` loaded, both through the harness's own documented
@@ -853,8 +858,12 @@ installed copy with no readable `build-info.json`, so the
 `/api/version` comparison is inconclusive and *both* commands restart
 the live view on purpose), two every single time. The staleness rule
 itself is unchanged; only who may open a tab is. Counted across the
-whole sequence in `up-command.test.ts`, with the "no callback to open
-one with" tripwire in `update-command.test.ts`.
+whole sequence in `up-command.test.ts`, and guarded from two sides:
+`update-command.test.ts` reads this file's own source and fails on any
+route a tab could come back through (a ready-callback, a re-added
+browser-opener option, a direct spawn of the OS opener behind both their
+backs), and `up-command.test.ts` pins the full set of
+`refreshStaleLiveView` callers this command is one of.
 
 Unlike `fabrica up`, which prints a line per step, `fabrica update`
 prints exactly one summary line: the commit before and after, the

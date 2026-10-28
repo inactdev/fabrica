@@ -45,8 +45,9 @@ open a tab.
 
 `fabrica up` is the only command that ever opens a browser tab, at most
 once per run, and only for a live view that run itself started or
-restarted. `refreshStaleLiveView`'s `openBrowser` option therefore
-defaults to "never open" rather than to the real opener, and
+restarted. `refreshStaleLiveView`'s ready-callback
+(`onLiveViewReady`) therefore defaults to "never open" rather than to
+the real opener, and
 `fabrica update` passes none at all - it has no opener in scope to
 pass, which is what keeps it from growing a tab again. `fabrica update`
 runs mid-session, when the page is already open in a tab that
@@ -58,3 +59,30 @@ live view at all starts one silently, and the `fabrica up --continue`
 that follows finds it current and only prints its address. That is
 "none when a live view on the current commit is already running",
 ruled on 2026-10-28, not an oversight.
+
+## What guards it, and why reading source is the only way
+
+"At most one tab per sequence" is partly a fact about *who calls*
+`refreshStaleLiveView`, not about what any one command does, and no
+seam can observe a call that has nowhere to come from. Two source-reading
+tripwires cover what the counting tests cannot, the same way
+`inspector-stamp-workflow.test.ts` checks a fact with no code of its own:
+
+- `update-command.test.ts` fails if `update-command.ts` so much as names
+  a route to a tab - a ready-callback, a browser-opener option of its
+  own, or a direct `open`/`xdg-open`/`start` spawn behind both their
+  backs.
+- `up-command.test.ts` pins the complete set of `refreshStaleLiveView`
+  callers (every non-test `.ts` under `src/` and `integrations/`) to
+  exactly `up-command.ts` and `update-command.ts`. The callback defaults
+  to opening nothing, which is right for a caller that says nothing but
+  also means a third caller would inherit "no tab" in silence; failing
+  on its arrival is what makes that a decision rather than an accident.
+
+The counting tests' own fixture models a live view the way a command
+sees one from outside (a bound port plus the commit that process
+captured at startup). Each fact it models is separately proven against
+the real component - `integrations/live-view/server.test.ts` for
+`/api/version` reporting the startup commit and for its null answer,
+`doctor-command.test.ts` for `runningCopyCommit` - so the fixture is
+checkable rather than taken on trust.
