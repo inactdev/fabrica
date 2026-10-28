@@ -99,7 +99,7 @@ export function chooseCheckMode(
   reviewer?: ResolvedReviewer,
   /** Where the real adapter's publishing token is minted from (issue
    * #187): this task's repository alone, `contents: write` plus
-   * `pull_requests: write`, one token per handoff. A caller-supplied
+   * `pull_requests: write` and `statuses: write`, one token per handoff. A caller-supplied
    * Inspector (a test's fake) needs none - it publishes nothing. */
   token?: ScopedToken
 ): CheckMode {

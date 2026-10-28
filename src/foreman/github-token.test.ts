@@ -75,7 +75,7 @@ test("every mint lands one `token-minted` event on the task, and the token is ne
     purpose: "publish",
     repo: "acme/widgets",
     installationId: 42,
-    permissions: "contents: write, pull_requests: write",
+    permissions: "contents: write, pull_requests: write, statuses: write",
     expiresAt: "2026-01-01T01:00:00Z",
     repositorySelection: "selected",
   });
@@ -109,7 +109,7 @@ test("the publishing token refuses a project with no GitHub repository, before i
   assert.equal(minter.calls.length, 0);
 });
 
-test("the publishing token mints for the project's own repository, with only the two publish permissions", async () => {
+test("the publishing token mints for the project's own repository, with only the three publish permissions", async () => {
   const recordHome = home();
   const minter = fakeMinter();
   const token = publishToken(recordHome, "task-1", projectOn("https://github.com/acme/widgets.git"), minter);

@@ -197,7 +197,7 @@ export interface CopyInfo {
   commitUnknownReason?: string;
 }
 
-/** The Node version the check box runs - .inspector.json's image tag - is
+/** The Node version the check box runs - Dockerfile.inspector's FROM tag - is
  * the one this suite is known to pass on. */
 export function nodeCheck(actual: string, expected: string | null): DoctorCheck {
   const label = "node";
@@ -397,16 +397,19 @@ export function inspectNpmLinkSite(site: { prefix: string; npmDefault: boolean }
   }
 }
 
-/** The exact Node version .inspector.json's image tag names, or `null`
- * if that file is unreadable or its tag carries no version. Exported
- * for the same reason `short` and `git` are: node-version-pins.test.ts
- * proves this repo's four Node declarations agree, and it has to read
- * .inspector.json's tag through the one reader doctor itself refuses
- * on, not a second regex that could be right while doctor is wrong. */
+/** The exact Node version Dockerfile.inspector's FROM line names, or
+ * `null` when there is no such file or its base image is not a node tag.
+ * Read from Dockerfile.inspector rather than .inspector.json since
+ * inspector#47: the check box is built from that file, and the config no
+ * longer names an image at all. Exported for the same reason `short` and
+ * `git` are: node-version-pins.test.ts proves this repo's four Node
+ * declarations agree, and it has to read the FROM tag through the one
+ * reader doctor itself refuses on, not a second regex that could be
+ * right while doctor is wrong. */
 export function pinnedNodeVersion(): string | null {
   try {
-    const image = (JSON.parse(readFileSync(join(CHECKOUT, ".inspector.json"), "utf8")) as { image?: string }).image ?? "";
-    return /node:(\d+\.\d+\.\d+)/.exec(image)?.[1] ?? null;
+    const dockerfile = readFileSync(join(CHECKOUT, "Dockerfile.inspector"), "utf8");
+    return /^FROM\s+\S*node:(\d+\.\d+\.\d+)/m.exec(dockerfile)?.[1] ?? null;
   } catch {
     return null;
   }
