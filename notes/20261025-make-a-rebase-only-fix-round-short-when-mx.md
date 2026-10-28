@@ -124,14 +124,17 @@ hoping the result compiles.
 ## Inspector retired `image` and `network`, and no task can migrate them
 
 Found when a later round of this task was refused with `.inspector.json
-still names an "image"`. Inspector's own README (read 2026-10-27) is the
-authority; the short version, because this refuses every task in every
-project until the Client acts:
+still names an "image"`. This repository has since migrated (master's
+own commits for inspector#47: the two keys dropped, a root
+`Dockerfile.inspector` committed with dependencies baked into `/deps`,
+and `check.sh` linking those in when it finds no `node_modules` and no
+network). Inspector's own README (read 2026-10-27) is the authority for
+the rules themselves, which are worth keeping here because any other
+project Fabrica is pointed at meets them for the first time:
 
 - `"image"` and `"network"` are **retired keys**, and a config that
   still carries either is refused by name, with any value — never
-  silently dropped. This repository's own `.inspector.json` carries
-  both.
+  silently dropped.
 - The check environment is now whatever a committed
   **`Dockerfile.inspector`** at the repository root builds. The path is
   fixed and there is no config key for it; a project that commits none
@@ -158,13 +161,16 @@ workflow file, or `check.sh` — so neither file can reach master through
 a task branch at all. Both are the Client's own commits, on master, and
 a round that hits this refusal should say so and change nothing.
 
-Everything in this repository that still writes the retired keys, none
-of it touched by this task: `src/register/scaffold.ts`'s
-`inspectorConfigJson` (`image` is a required parameter; `--network`
-writes `network: true`), `src/register/propose.ts`'s
-`proposeImage`/`proposeNetwork` and the two lines of its proposal note,
-`src/register/tools.ts`'s registration check (runs in `--image`),
-`src/register/README.md`'s description of the schema, and
-`contract/helpers/fixture.ts`'s `FIXTURE_INSPECTOR_CONFIG` plus the
-fixture configs in a dozen test files. So `fabrica register` currently
-proposes and writes a config today's Inspector refuses.
+Still open after that migration, and none of it touched by this task:
+`fabrica register` goes on writing both retired keys and scaffolds no
+`Dockerfile.inspector`, so a project registered today gets a config
+Inspector refuses — `src/register/scaffold.ts`'s `inspectorConfigJson`
+(its `image` parameter is required; `--network` writes `network: true`),
+`src/register/propose.ts`'s `proposeImage`/`proposeNetwork` and the two
+lines of its proposal note, `src/register/tools.ts`'s registration check
+(runs in `--image`), `src/register/README.md`'s description of the
+schema, and `contract/helpers/fixture.ts`'s `FIXTURE_INSPECTOR_CONFIG`
+plus the fixture configs in a dozen test files. The three
+`src/register/` tests that asserted register writes only keys this
+repository's own config uses are skipped by name on master until that
+lands, which is where to look for the state of it.
