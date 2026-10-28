@@ -248,6 +248,13 @@ export type {
   InspectorVersionState,
 } from "./inspector/index.ts";
 export { requireGitRoot } from "./foreman/index.ts";
+// Skip rules (issue #204), shadow mode only: nothing here closes or
+// merges anything. `evaluateInShadow` is called by the round itself;
+// what the CLI and the live view need is the read side - the report, and
+// the one count line both surfaces show, so neither can print a number
+// the other disagrees with.
+export { formatShadowReport, shadowCountsLine, shadowReport, SKIP_RULES_PATH } from "./skiprules/index.ts";
+export type { ConditionAnswer, KindEvaluation, ShadowReport, ShadowRow, WouldCloseByRuleDetails } from "./skiprules/index.ts";
 export type { Brain, Caps, GateResult } from "../contract/surface.ts";
 export type { BoxCheckResult, CheckBox } from "./brain/index.ts";
 

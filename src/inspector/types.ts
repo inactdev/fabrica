@@ -311,6 +311,22 @@ export type FabricaEventName =
    * move its attempt numbering - the same reason the clarifying step has
    * `"ask-cost-recorded"` instead of one. */
   | "quiz-recheck-cost-recorded"
+  /** Shadow mode for skip rules (issue #204, Client ruling 2026-10-25):
+   * what this project's committed rules file WOULD have done with this
+   * delivery, had live mode existed. Details:
+   * `src/skiprules/types.ts`'s `WouldCloseByRuleDetails` - every kind,
+   * every condition, every answer, the rule-file version and the
+   * change's patch-id fingerprint. Appended once per delivery, and only
+   * for a project that has a rules file at the task's base commit.
+   *
+   * Nothing reads this to make a decision, and nothing closes from it:
+   * every task still waits on the Client's own verdict (CONTRACT rule
+   * 6, which is his to amend before live mode is built). Here rather
+   * than in the contract for the same reason as the names above it - an
+   * evaluation that closes nothing is Fabrica's own bookkeeping, not a
+   * new promise to the Client about a seam, and
+   * `contract/surface.ts` is a path `rule9-gate.yml` protects. */
+  | "would-close-by-rule"
   /** The whole read of a pull request's checks ended - every check
    * concluded, the bounded wait expired, or the API could not be read
    * (issue #267). Details: `src/ci/watch.ts`'s `CiChecksFinishedDetails`

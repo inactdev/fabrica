@@ -28,6 +28,7 @@ import { mergeGateDeclarations } from "./gate-declarations.ts";
 import { reportForRound } from "./test-map.ts";
 import type { TestMapEntry } from "../testmap/index.ts";
 import { recordMeterPause } from "./meters.ts";
+import { evaluateInShadow } from "../skiprules/index.ts";
 import { deliverRebaseConflict } from "./fix-rebase.ts";
 import { stampFor } from "./fingerprint.ts";
 import { eventsOf, priorPassFingerprints } from "./queries.ts";
@@ -48,59 +49,111 @@ export type RoundRecordResult =
  * resolved: interpret the last judgement, commit whatever is left
  * uncommitted, decide the delivery outcome (including a fix round's
  * "nothing changed" short-circuit), build and validate the `Delivery`,
- * and write both `delivery.md` and the `"delivered"` event. Runs for
- * every outcome uniformly - see `src/foreman/README.md`'s "Rule 9:
- * blocked by CI, not by Fabrica's own mark" for why a declared or
- * undeclared gate change is never a special case here.
+ * write both `delivery.md` and the `"delivered"` event - all of which is
+ * `writeRoundResult` below - and then, once that delivery is on the
+ * record, evaluate it against the project's skip rules in shadow mode
+ * (issue #204), which decides nothing. Runs for every outcome uniformly
+ * - see `src/foreman/README.md`'s "Rule 9: blocked by CI, not by
+ * Fabrica's own mark" for why a declared or undeclared gate change is
+ * never a special case here.
  */
 export function recordRoundResult(
   recordHome: string,
   taskId: string,
   line: ProductionLine,
-  ctx: {
-    baseCommit: string;
-    taskText: string;
-    totalAttempts: number | undefined;
-    mode: CheckMode;
-    caps?: Caps;
-    /** Every receipt the task's EARLIER rounds produced, read back off
-     * the record (`queries.ts`'s `receiptsOf`), so the delivery's attempt
-     * count stays cumulative across the whole task. Omitted for a
-     * first-ever or resumed-from-questions round, which has none. Not
-     * stored on this round's event: issue #68 - each "delivered" event
-     * carries its own round's receipts only, and the cumulative view is
-     * reconstructed on read. */
-    priorReceipts?: Receipt[];
-    /** THIS round's own earlier worker passes' receipts, in order - a fix
-     * round that hands its worker more than one stopped rebase (issue
-     * #235) calls `runAttempts` once per pass, and every one of them is
-     * this round's. They go on this round's event with the last pass's. */
-    roundReceipts?: Receipt[];
-    /** Every gate declaration the task's EARLIER rounds made, oldest
-     * first (`queries.ts`'s `gateDeclarationsOf`) - see
-     * `gate-declarations.ts` for how they are merged into the one the
-     * delivery reports. */
-    priorGateDeclarations?: string[];
-    /** This round's own earlier worker passes' declarations, in order: a
-     * fix round that hands its worker more than one stopped rebase
-     * (issue #235) calls the worker more than once, and each pass's
-     * declaration is this round's as much as the last pass's is. */
-    roundGateDeclarations?: string[];
-    /** The project's committed test map, read by the caller before its
-     * ProductionLine was cut (`test-map.ts`'s `testMapFor`). Null or
-     * omitted for a project that commits none, and then no delivery
-     * this round builds carries a `tests` field at all - an empty
-     * report would read as "nothing was mapped" when the truth is
-     * "nothing here maps anything". */
-    testMap?: TestMapEntry[] | null;
-    /** The code reader's read of this task's diff (inspector issue #34),
-     * when this round is the one that reached it - built by
-     * `reader-round.ts` before this is called. Put onto the delivery and
-     * onto the `"delivered"` event, and read by nothing here: a flagger
-     * never moves an outcome, so it is attached to a finished delivery
-     * rather than passed to any builder as an input. */
-    reader?: ReaderOnDelivery;
-  },
+  ctx: RoundContext,
+  attempts: AttemptLoopResult
+): RoundRecordResult {
+  const result = writeRoundResult(recordHome, taskId, line, ctx, attempts);
+
+  // Issue #204, shadow mode only (Client ruling 2026-10-25): with a
+  // delivery now on the record, ask this project's committed skip rules
+  // what they WOULD have done with it, and write the answer down.
+  // Nothing closes, nothing merges, and this task still waits on the
+  // Client exactly as it did before - `evaluateInShadow` appends one
+  // event and returns (and appends nothing at all for a project with no
+  // rules file). Run here, in the one shared tail, so every delivery is
+  // evaluated - including the meter pause, rebase conflict, unchanged
+  // and commit-failure shapes `writeRoundResult` handles, every one of
+  // which the code floor
+  // in `src/skiprules/evaluate.ts` answers unsafe on sight.
+  //
+  // Only for a delivery: an Inspector refusal recorded nothing to
+  // evaluate, and the conditions are questions about a delivery.
+  if (result.kind === "recorded") {
+    evaluateInShadow({
+      recordHome,
+      taskId,
+      // The Client's own checkout, never `line.workdir` - the caller
+      // destroys that worktree the moment this returns, and its copy of
+      // the rules file is one this round's worker could have written.
+      project: line.project,
+      baseCommit: ctx.baseCommit,
+      branch: line.branch,
+    });
+  }
+
+  return result;
+}
+
+interface RoundContext {
+  baseCommit: string;
+  taskText: string;
+  totalAttempts: number | undefined;
+  mode: CheckMode;
+  caps?: Caps;
+  /** Every receipt the task's EARLIER rounds produced, read back off
+   * the record (`queries.ts`'s `receiptsOf`), so the delivery's attempt
+   * count stays cumulative across the whole task. Omitted for a
+   * first-ever or resumed-from-questions round, which has none. Not
+   * stored on this round's event: issue #68 - each "delivered" event
+   * carries its own round's receipts only, and the cumulative view is
+   * reconstructed on read. */
+  priorReceipts?: Receipt[];
+  /** THIS round's own earlier worker passes' receipts, in order - a fix
+   * round that hands its worker more than one stopped rebase (issue
+   * #235) calls `runAttempts` once per pass, and every one of them is
+   * this round's. They go on this round's event with the last pass's. */
+  roundReceipts?: Receipt[];
+  /** Every gate declaration the task's EARLIER rounds made, oldest
+   * first (`queries.ts`'s `gateDeclarationsOf`) - see
+   * `gate-declarations.ts` for how they are merged into the one the
+   * delivery reports. */
+  priorGateDeclarations?: string[];
+  /** This round's own earlier worker passes' declarations, in order: a
+   * fix round that hands its worker more than one stopped rebase
+   * (issue #235) calls the worker more than once, and each pass's
+   * declaration is this round's as much as the last pass's is. */
+  roundGateDeclarations?: string[];
+  /** The project's committed test map, read by the caller before its
+   * ProductionLine was cut (`test-map.ts`'s `testMapFor`). Null or
+   * omitted for a project that commits none, and then no delivery
+   * this round builds carries a `tests` field at all - an empty
+   * report would read as "nothing was mapped" when the truth is
+   * "nothing here maps anything". */
+  testMap?: TestMapEntry[] | null;
+  /** The code reader's read of this task's diff (inspector issue #34),
+   * when this round is the one that reached it - built by
+   * `reader-round.ts` before this is called. Put onto the delivery and
+   * onto the `"delivered"` event, and read by nothing here: a flagger
+   * never moves an outcome, so it is attached to a finished delivery
+   * rather than passed to any builder as an input. */
+  reader?: ReaderOnDelivery;
+}
+
+/**
+ * The delivery half, exactly as it always was: interpret the last
+ * judgement, commit whatever is left uncommitted, decide the outcome,
+ * build and validate the `Delivery`, then write `delivery.md` and the
+ * `"delivered"` event. Split out from `recordRoundResult` above only so
+ * the shadow evaluation can run once, after whichever of the five
+ * delivery shapes below actually landed.
+ */
+function writeRoundResult(
+  recordHome: string,
+  taskId: string,
+  line: ProductionLine,
+  ctx: RoundContext,
   attempts: AttemptLoopResult
 ): RoundRecordResult {
   const {

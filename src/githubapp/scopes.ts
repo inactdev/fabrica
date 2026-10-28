@@ -11,11 +11,14 @@
 
 import type { AppPermission } from "./types.ts";
 
-/** Inspector's handoff: push the task branch and open or update its
- * pull request. The issue's own wording - "only `contents: write` and
- * `pull_requests: write`". This is the one token that crosses a process
+/** Inspector's handoff: push the task branch, open or update its pull
+ * request, and post the `inspector` commit status on its head commit -
+ * which is what `statuses: write` is for, added after a real handoff
+ * answered 403 "Resource not accessible by integration" on that last
+ * call with only the issue's own two ("only `contents: write` and
+ * `pull_requests: write`"). This is the one token that crosses a process
  * boundary (into the inspector child's environment), which is why it is
- * kept to the two permissions that call genuinely needs rather than
+ * kept to the three permissions that call genuinely needs rather than
  * sharing a wider set with the read-only calls below. */
 export const PUBLISH_PERMISSIONS: Readonly<Record<string, AppPermission>> = Object.freeze({
   contents: "write",

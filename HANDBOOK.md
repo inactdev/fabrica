@@ -163,6 +163,16 @@ it. A row marked "PAUSED BY THE SUBSCRIPTION METER" is not a failure —
 the work so far is committed and it is waiting on his `fix` verdict,
 exactly like any delivery. Nothing restarts by itself.
 
+A line beginning "skip rules (shadow, nothing closes)" is a *recording*,
+not a thing that happened: it counts how many finished tasks one of his
+projects' committed skip rules would have closed without him, how many
+of those he then accepted, and how many he didn't. **No task has ever
+closed by rule** — skip rules are shadow-only until he amends CONTRACT
+rule 6 — so never report it as work that bypassed him, and never suggest
+one of those tasks needs nothing from him. Mention it only if he asks,
+or if the line says a rules file could not be read; `fabrica shadow-report`
+is the per-project, per-kind breakdown and is free to run.
+
 ### 3. A worker asks a question
 
 A task that's materially ambiguous stops before any work starts and

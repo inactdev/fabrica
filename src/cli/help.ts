@@ -14,6 +14,7 @@ export const COMMANDS = [
   "log",
   "watch",
   "await",
+  "shadow-report",
   "deny-and-log-edit",
   "verify-hook",
   "up",
@@ -62,6 +63,11 @@ Commands:
   await <taskId>
       Wait until the task needs you - delivered, asking a question, or
       failed - then exit with exactly one line naming which.
+  shadow-report
+      What your projects' skip rules would have done, per project and
+      kind: would-close count, accepted, disagreed, days running.
+      Shadow mode only - nothing closes by rule, every task still waits
+      on your verdict.
   verify-hook
       Prove whether this directory's session config actually blocks and
       logs an edit, instead of assuming it does.

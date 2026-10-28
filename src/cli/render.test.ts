@@ -1233,3 +1233,61 @@ test("formatStatusLine carries the test-map note in the fact columns, and omits 
   );
   assert.ok(!quiet.includes("tests.map"));
 });
+
+// Issue #204: `would-close-by-rule` carries by far the largest `details`
+// of any event - every kind, every condition, every answer - so `fabrica
+// log` renders it as prose rather than letting the JSON fallback bury the
+// task's own history under one event.
+test("formatEventLine: a shadow evaluation that would have closed says so, and says nothing closed", () => {
+  const line = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "would-close-by-rule",
+    details: {
+      wouldClose: true,
+      closedByKind: "docs-only",
+      rulesVersion: "1@abcdef012345",
+      kinds: [{ kind: "docs-only", safe: true, answers: [{ condition: "maxFiles", answer: "safe", detail: "1 file(s) changed, limit 5" }] }],
+    },
+  });
+  assert.match(line, /"docs-only" would have closed this task/);
+  assert.match(line, /nothing closed, it still waits on your verdict/);
+  assert.match(line, /rules 1@abcdef012345/);
+  assert.doesNotMatch(line, /\{"/, "the JSON fallback rendered this event instead of its own prose");
+});
+
+test("formatEventLine: a shadow evaluation that would NOT have closed names only what answered unsafe", () => {
+  const line = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "would-close-by-rule",
+    details: {
+      wouldClose: false,
+      closedByKind: null,
+      rulesVersion: "1@abcdef012345",
+      kinds: [
+        {
+          kind: "docs-only",
+          safe: false,
+          answers: [
+            { condition: "maxFiles", answer: "safe", detail: "1 file(s) changed, limit 5" },
+            { condition: "noTestFiles", answer: "unsafe", detail: "test file(s) touched: src/a.test.ts" },
+          ],
+        },
+      ],
+    },
+  });
+  assert.match(line, /no skip rule would have closed this task/);
+  assert.match(line, /noTestFiles unsafe: test file\(s\) touched: src\/a\.test\.ts/);
+  assert.doesNotMatch(line, /maxFiles/, "a condition that answered safe does not belong in a miss list");
+});
+
+test("formatEventLine: a shadow evaluation that could not run shows its own problem, not an empty reading", () => {
+  const line = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "would-close-by-rule",
+    details: { wouldClose: false, closedByKind: null, rulesVersion: null, kinds: [], problem: 'mode = "live": CONTRACT rule 6 has not been amended' },
+  });
+  assert.match(line, /skip rules could not be evaluated: mode = "live": CONTRACT rule 6/);
+});
