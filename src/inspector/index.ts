@@ -26,6 +26,19 @@ export {
   INSPECTOR_REPO_URL,
 } from "./doctor-checks.ts";
 export type { InspectorBuild, InspectorVersionState } from "./doctor-checks.ts";
+// Issue #306: a project's `.inspector.json` and committed
+// `Dockerfile.inspector` measured against what the installed Inspector
+// refuses, so a round is never spent on a configuration already known to
+// be turned away. One answer, two readers - the round's own gate
+// (src/foreman/inspector-config.ts) and `fabrica doctor`'s per-project
+// line.
+export {
+  inspectorConfigProblem,
+  inspectorConfigProblemIn,
+  readInspectorConfigFacts,
+  INSPECTOR_DOCKERFILE,
+} from "./config-check.ts";
+export type { DockerfileState, InspectorConfigFacts, InspectorConfigProblem, InspectorConfigRefusal } from "./config-check.ts";
 export { commitAncestry } from "./ancestry.ts";
 export type { CommitAncestry } from "./ancestry.ts";
 export { goInstallInspector, realInspectorVersionProbes } from "./version.ts";

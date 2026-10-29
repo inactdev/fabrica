@@ -15,6 +15,7 @@ import {
   githubAppStatus,
   githubRepoOf,
   inspectorBranchStatus,
+  inspectorConfigProblem,
   listWorkerNetworks,
   loadConfigOrProblem,
   NETWORK_PRUNE_COMMAND,
@@ -66,6 +67,13 @@ at, a stale binary being a FAIL carrying the exact \`go install\` that
 replaces it - every registered project, the caps, and any SPEND UNKNOWN
 block. One line per check - OK, or FAIL with the exact fix. Exits
 non-zero if anything fails.
+
+Each registered project's line also measures its own .inspector.json
+against what the installed Inspector refuses - a retired "image" or
+"network" key, or no committed Dockerfile.inspector - and FAILs naming
+the key or the file, so a config Inspector would turn away is found
+here rather than after a round has been spent on it. Fabrica never
+edits either file; the fix is always a hand change.
 
 The github app line also warns, without failing, while a personal
 GITHUB_TOKEN is still set in the environment or sitting in brain.env:
@@ -684,7 +692,35 @@ function projectCheck(name: string, path: string): DoctorCheck {
       fix: `git -C ${path} remote add origin <url>`,
     };
   }
-  return { ok: true, label, detail: `${path}: git root, has a check, has origin` };
+  // Issue #306: the same answer the round's own start gate reads
+  // (src/foreman/inspector-config.ts), asked of the checkout in front of
+  // the Client rather than of a task's base commit. A project whose
+  // config Inspector is known to refuse fails here, with the key or the
+  // file named, instead of after a round has been spent on it.
+  //
+  // Reported whatever this machine has installed: the finding is about
+  // the project, not about the binary, and doctor's own inspector line
+  // above already covers a missing one. Asked last of the four, because
+  // the three above are about whether this project can be worked at all
+  // - a path that is not a repository has no config to read.
+  const configProblem = inspectorConfigProblem(path);
+  if (configProblem !== null) {
+    return {
+      ok: false,
+      label,
+      detail: `${path}: Inspector would refuse it - ${configProblem.detail}`,
+      fix: configProblem.fix,
+    };
+  }
+  // "Known to refuse", not "would accept": the refusals checked above
+  // are the ones Inspector documents today, not the whole of its own
+  // validation, and a config that would not even parse has its key
+  // checks skipped (config-check.ts). Claiming more than was looked at
+  // would be the one thing this line must not do.
+  const inspected = existsSync(join(path, ".inspector.json"))
+    ? ", nothing Inspector is known to refuse"
+    : "";
+  return { ok: true, label, detail: `${path}: git root, has a check, has origin${inspected}` };
 }
 
 function parseDoctorArgs(argv: string[]): { live: boolean } {

@@ -223,9 +223,14 @@ src/foreman/github-token.test.ts: src/foreman/github-token.test.ts
 src/foreman/github-token.ts: src/foreman/github-token.test.ts, src/foreman/inspector-github-app.test.ts
 src/foreman/inspection.test.ts: src/foreman/inspection.test.ts
 src/foreman/inspection.ts: src/foreman/inspection.test.ts
+src/foreman/inspector-config.test.ts: src/foreman/inspector-config.test.ts
+src/foreman/inspector-config.ts: src/foreman/inspector-config.test.ts
 src/foreman/inspector-github-app.test.ts: src/foreman/inspector-github-app.test.ts
 src/foreman/inspector-presence.test.ts: src/foreman/inspector-presence.test.ts
 src/foreman/inspector-stamp-workflow.test.ts: src/foreman/inspector-stamp-workflow.test.ts
+# Hand-added: judge.ts has no colocated test of its own, so the generator
+# left it out - these three are what actually drive it.
+src/foreman/judge.ts: src/foreman/do.test.ts, src/foreman/round.test.ts, src/foreman/inspector-config.test.ts
 src/foreman/meter-pause-round.test.ts: src/foreman/meter-pause-round.test.ts
 src/foreman/meters.test.ts: src/foreman/meters.test.ts
 src/foreman/meters.ts: src/foreman/meters.test.ts
@@ -290,6 +295,8 @@ src/githubapp/publish-permissions.ts: src/githubapp/publish-permissions.test.ts,
 src/githubapp/scopes.ts: src/githubapp/mint.test.ts, src/githubapp/granted.test.ts
 src/inspector/ancestry.test.ts: src/inspector/ancestry.test.ts
 src/inspector/ancestry.ts: src/inspector/ancestry.test.ts
+src/inspector/config-check.test.ts: src/inspector/config-check.test.ts
+src/inspector/config-check.ts: src/inspector/config-check.test.ts
 src/inspector/contract-sync-workflow.test.ts: src/inspector/contract-sync-workflow.test.ts
 src/inspector/doctor-checks.test.ts: src/inspector/doctor-checks.test.ts
 src/inspector/doctor-checks.ts: src/inspector/doctor-checks.test.ts

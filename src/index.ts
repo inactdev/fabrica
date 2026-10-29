@@ -182,6 +182,14 @@ export { CHECKS_LABEL } from "./ci/index.ts";
 export type { ChecksVerdict } from "./ci/index.ts";
 export type { CiCheckConcludedDetails, CiChecksFinishedDetails } from "./foreman/index.ts";
 export { inspectorBranchStatus } from "./inspector/index.ts";
+// Issue #306: what the installed Inspector is known to refuse about a
+// project's own `.inspector.json` and its committed
+// `Dockerfile.inspector`. `fabrica doctor`'s per-project line reads the
+// same answer the round's own start gate does
+// (src/foreman/inspector-config.ts), so a task that will be turned away
+// and the line that should have said so can never disagree.
+export { inspectorConfigProblem } from "./inspector/index.ts";
+export type { InspectorConfigProblem, InspectorConfigRefusal } from "./inspector/index.ts";
 // Issue #187: every GitHub call Fabrica makes - Inspector's push and
 // pull request, the issue a task names, the checks on its pull request -
 // uses a GitHub App token minted for one repository, with only that
