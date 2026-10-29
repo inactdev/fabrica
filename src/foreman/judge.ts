@@ -31,6 +31,7 @@ import { requireCheckCommand, resolveCheckCommand } from "./resolve-check.ts";
 import { readerForRound } from "./reader.ts";
 import type { RoundReader } from "./reader.ts";
 import { requireReviewer } from "./reviewer.ts";
+import { requireInspectorConfig } from "./inspector-config.ts";
 import { ForemanError } from "./errors.ts";
 import { handToInspector } from "./inspection.ts";
 import { withClosesLine } from "./pr-body.ts";
@@ -307,6 +308,14 @@ export function prepareRound(
     requireCheckCommand(line.workdir, check);
     appendEvent(recordHome, { taskId, name: "inspection-skipped", details: { reason: mode.reason } });
   } else {
+    // Issue #306: what Inspector is known to refuse about this project's
+    // own configuration, asked of the commit this task was cut from,
+    // before any worker starts. Only when the Inspector that will judge
+    // the round is the one installed on this machine - a caller-supplied
+    // Inspector is a different implementation (in practice a test's
+    // fake), and the claim being made here is specifically that the
+    // *installed* Inspector would turn this config away.
+    if (opts.inspector === undefined) requireInspectorConfig(line.workdir, baseCommit);
     // Anything Inspector can tell is missing up front (its GitHub token,
     // issue #103) refuses here, before any worker starts.
     try {

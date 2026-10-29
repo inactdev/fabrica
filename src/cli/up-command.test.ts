@@ -60,6 +60,17 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
 function healthyRecordHome(): string {
   const project = makeFixtureRepo("exit 0", { origin: false });
   execFileSync("git", ["remote", "add", "origin", "https://example.invalid/demo.git"], { cwd: project });
+  // Issue #306: a project line now reports a config the installed
+  // Inspector would refuse, and the shared fixture still writes the
+  // retired `image` key with no Dockerfile.inspector beside it - so a
+  // project meant to pass has to say so, the same way
+  // doctor-command.test.ts's own healthyProject() does.
+  writeFileSync(join(project, ".inspector.json"), '{"check":"./check.sh"}\n');
+  writeFileSync(join(project, "Dockerfile.inspector"), "FROM alpine\n");
+  execFileSync("git", ["add", "-A"], { cwd: project });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "a box Inspector can build"], {
+    cwd: project,
+  });
   const home = tempRecordHome();
   writeFileSync(
     join(home, "projects.toml"),

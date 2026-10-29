@@ -472,7 +472,14 @@ asks GitHub about are resolved here, by `registeredProjectRepos`, since
 not behind its own `origin main` (see "The inspector line" below, and
 `src/inspector/README.md` for which builds fail and which only report),
 every registered project (exists, git root, a check, an `origin`
-remote), the caps, and any SPEND UNKNOWN block. `--live` adds one
+remote, and - issue #306 - an `.inspector.json` the installed Inspector
+would not refuse: no retired `"image"`/`"network"` key, a committed
+`Dockerfile.inspector`, with the key or the file named as the fix, which
+is always a hand change since Fabrica never edits either file; the same
+answer the round's own start gate reads, `src/inspector/config-check.ts`
+via `src/foreman/inspector-config.ts`, so a task that will be turned
+away and the line that should have said so cannot disagree), the caps,
+and any SPEND UNKNOWN block. `--live` adds one
 minimal real call with the worker token (a few cents) and reports it
 alive or dead. No check prints a token. The adapter-, relay-, App- and
 Inspector-specific checks live beside those modules

@@ -46,7 +46,24 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
 function healthyProject(): string {
   const project = makeFixtureRepo("exit 0", { origin: false });
   execFileSync("git", ["remote", "add", "origin", "https://example.invalid/demo.git"], { cwd: project });
+  acceptToInspector(project);
   return project;
+}
+
+/** A fixture project's `.inspector.json` brought up to what the
+ * installed Inspector accepts (issue #306): no retired `image` key, and
+ * a committed `Dockerfile.inspector` for the check box. The shared
+ * fixture still writes the retired key - see
+ * notes/20261028-do-fabrica-issue-303-as-written-never-ed-ie.md - and a
+ * project line now reports it, so a project meant to be healthy has to
+ * say so here. */
+function acceptToInspector(project: string): void {
+  writeFileSync(join(project, ".inspector.json"), '{"check":"./check.sh"}\n');
+  writeFileSync(join(project, "Dockerfile.inspector"), "FROM alpine\n");
+  execFileSync("git", ["add", "-A"], { cwd: project });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "a box Inspector can build"], {
+    cwd: project,
+  });
 }
 
 function recordHome(projectsToml: string): string {
@@ -133,6 +150,58 @@ test("fabrica doctor: each registered project is checked - path, git root, a che
   assert.match(text, /FAIL project notgit: .*not a git repository/);
   assert.match(text, /FAIL project nocheck: .*neither \.inspector\.json nor check\.sh/);
   assert.match(text, /FAIL project noorigin: .*no origin remote.*git -C \S+ remote add origin/);
+});
+
+// Issue #306. The 2026-10-27 migration: Inspector retired the `image`
+// key, and every project still carrying it burned a full round before
+// finding out. doctor is where the Client sees it first now.
+test("fabrica doctor: a project whose .inspector.json Inspector would refuse FAILs, naming the key", async () => {
+  const project = healthyProject();
+  writeFileSync(join(project, ".inspector.json"), '{"check":"./check.sh","image":"alpine"}\n');
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "name an image"], {
+    cwd: project,
+  });
+  const home = recordHome(`[caps]\nperDayUsd = 25\n\n[projects.retired]\npath = "${project}"\ncheck = "./check.sh"\n`);
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  assert.equal(code, 1);
+  assert.match(text, /FAIL project retired: .*Inspector would refuse it - .*still names an "image"/);
+  // The fix is the Client's own hand change, named exactly - Fabrica
+  // never edits .inspector.json.
+  assert.match(text, /fix: remove the "image" field/);
+});
+
+test("fabrica doctor: a project committing no Dockerfile.inspector FAILs, naming the file", async () => {
+  const project = healthyProject();
+  rmSync(join(project, "Dockerfile.inspector"));
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "drop the box"], { cwd: project });
+  const home = recordHome(`[caps]\nperDayUsd = 25\n\n[projects.nobox]\npath = "${project}"\ncheck = "./check.sh"\n`);
+
+  const { code, lines } = await doctor(home, okProbes());
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /FAIL project nobox: .*commits no Dockerfile\.inspector/);
+});
+
+// A project with no .inspector.json is self-tested: nothing is ever
+// handed to Inspector, so there is nothing for it to refuse and this
+// check must not invent a reason to stop the project.
+test("fabrica doctor: a self-tested project is never failed for Inspector's config rules", async () => {
+  const project = makeFixtureRepo("exit 0", { inspector: false, origin: false });
+  execFileSync("git", ["remote", "add", "origin", "https://example.invalid/demo.git"], { cwd: project });
+  const home = recordHome(`[caps]\nperDayUsd = 25\n\n[projects.selftested]\npath = "${project}"\ncheck = "./check.sh"\n`);
+
+  const { code, lines } = await doctor(home, okProbes());
+  assert.equal(code, 0, lines.join("\n"));
+  assert.match(lines.join("\n"), /OK {3}project selftested: /);
+});
+
+// The OK line says what was actually looked at, rather than claiming
+// Inspector would accept the project outright - the refusals checked are
+// the ones Inspector documents, not the whole of its own validation.
+test("fabrica doctor: a passing project line says the config was checked, and claims no more", async () => {
+  const { lines } = await doctor(healthyHome(), okProbes());
+  assert.match(lines.join("\n"), /OK {3}project demo: .*nothing Inspector is known to refuse/);
 });
 
 // Client ruling: doctor fails non-zero with the parse error as a FAIL

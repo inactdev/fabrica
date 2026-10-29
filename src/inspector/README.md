@@ -42,6 +42,55 @@ Three consequences worth knowing:
 
 See `src/githubapp/README.md` for the App itself, and `README.md`'s "The GitHub App" for the one-time setup the Client does by hand.
 
+## The project's own config, checked before a round is spent (issue #306)
+
+On 2026-10-27 the installed Inspector began refusing every project whose
+`.inspector.json` still named an `image` (inspector#47). Fabrica learned
+it one task at a time, each after a full round: the machine worked, the
+round reached Inspector, Inspector refused, and the task sat as
+"refused" with the reason three screens down in `fabrica log`. The
+config was readable the whole time and nothing had looked at it.
+
+`config-check.ts` is what looks at it now, and it is a **stand-in**. The
+real answer is Inspector's own - a command that validates the config and
+names the `Dockerfile.inspector` it would build, running nothing - which
+does not exist yet. `config-check-issue.md` is the issue to file for it,
+with the exact command shape Fabrica wants; delete this module in favour
+of one call to it the day it lands. Until then this is Fabrica's own copy
+of three refusals Inspector documents today, taken from Inspector's own
+source rather than from prose about it, and quoting its words:
+
+- `"image"` and `"network"` are retired keys, refused on the key's
+  **presence** whatever the value - Inspector decodes both into a
+  `json.RawMessage` precisely so `"network": false` is a refusal rather
+  than a setting that quietly does nothing.
+- the check box is built from a `Dockerfile.inspector` **committed** at
+  the repository root; none at all, and one on disk that git does not
+  track, are two refusals with two different messages.
+
+One answer, two readers, so a task that will be turned away and the line
+that should have said so can never disagree:
+
+- **the round's own gate** (`src/foreman/inspector-config.ts`, from
+  `judge.ts`'s `prepareRound`) refuses with
+  `ForemanError("inspector-config-refused")` before any worker starts,
+  reading the config at the task's **base commit** - a Worker must not
+  be able to clear its own refusal, the same rule and the same reason
+  `requireReviewer` reads `testPaths` there. It runs only when the
+  Inspector that will judge the round is the installed one: a
+  caller-supplied Inspector is a different implementation, and the claim
+  being made is specifically about the installed binary's refusals.
+- **`fabrica doctor`'s per-project line** asks the same question of the
+  checkout in front of the Client, which is what it reports on
+  everywhere else.
+
+Fabrica never edits `.inspector.json` or `Dockerfile.inspector`; every
+refusal carries the Client's own hand change instead, naming the key or
+the file. Two refusals Inspector also documents are deliberately not
+reproduced - an empty `check`, and a config that will not parse - see
+`notes/20261029-do-fabrica-issue-306-as-written-y5.md` for why, and for
+the fixtures that still carry the retired key on purpose.
+
 ## Which build of Inspector is installed
 
 Fabrica and Inspector keep a ratified, hand-synced agreement about the call between them (`consumer-contract.json`), so updating one and leaving the other behind is how that agreement breaks. `doctor-checks.ts` is the one place that knows how the installed Inspector stands against its own `main`, and both callers reach that one answer - `inspectorVersionCheck`, which returns a `state` alongside the line it prints:

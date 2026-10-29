@@ -44,6 +44,15 @@ export type ForemanErrorCode =
    * src/foreman/publish-permissions.ts. */
   | "publish-not-permitted"
   | "inspector-not-ready"
+  /** The installed Inspector is known to refuse this project's
+   * configuration (issue #306): `.inspector.json` still carries a
+   * retired `image` or `network` key, or no `Dockerfile.inspector` is
+   * committed for the check box to be built from. Raised before any
+   * machine runs, from the config as it stands at the task's own base
+   * commit, and carries Inspector's own words plus the Client's hand
+   * fix - Fabrica never edits either file. See
+   * src/foreman/inspector-config.ts. */
+  | "inspector-config-refused"
   /** No reviewer could be settled for a project whose test changes need
    * one judged - see src/reviewer/resolve.ts for the three grounds. */
   | "reviewer-not-ready"
