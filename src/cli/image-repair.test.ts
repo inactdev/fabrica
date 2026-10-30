@@ -321,7 +321,14 @@ test("a `docker` that cannot be spawned at all is an outcome, not a thrown error
 
   assert.equal(outcomes.length, 1);
   assert.equal(outcomes[0].ok, false);
-  assert.match(outcomes[0].detail, /ENOENT/);
+  // The detail is the spawn error's own message, naming the command
+  // that could not be run. Deliberately not asserted down to the errno:
+  // which one the operating system picks for "cannot run this" depends
+  // on the machine (a PATH entry or working directory that is not
+  // searchable answers EACCES where a plain missing command answers
+  // ENOENT), and this test is about the failure arriving as a reported
+  // outcome rather than a thrown error.
+  assert.match(outcomes[0].detail, /spawn fabrica-no-such-docker/);
   assert.ok(io.err.some((line) => line.includes("could not be built")), io.err.join("\n"));
 });
 

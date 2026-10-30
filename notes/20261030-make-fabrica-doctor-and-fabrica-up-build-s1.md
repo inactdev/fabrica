@@ -93,6 +93,16 @@ project. Two things about it worth knowing:
   then passes it, because the build genuinely carried the Dockerfile's
   own hash through. A rename of that LABEL shows up as the fixture no
   longer failing, never as a silent pass.
+- A test that proves "this command could not be spawned at all" must
+  not assert the errno. The first version of
+  `image-repair.test.ts`'s unspawnable-`docker` test matched `/ENOENT/`
+  and passed here but came back red from the independent check, which
+  answered `EACCES` for the same missing command - the operating system
+  picks the code, and a PATH entry or working directory that is not
+  searchable gives a different one than a plain missing file. Assert
+  Node's own stable `spawn <command>` prefix instead. Widening it to
+  `/ENOENT|EACCES/` is the wrong fix: it encodes a guess about which
+  spellings exist rather than the property being proven.
 - `image inspect --format` understands exactly one Go template -
   `{{index .Config.Labels "KEY"}}`, the one the adapter's stamp read
   asks for - and fails loudly on any other rather than inventing an
