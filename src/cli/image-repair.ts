@@ -62,7 +62,8 @@ export interface ImageRepairOutcome {
  * catch. Every line the command writes (stdout or stderr - docker's own
  * build progress goes to stderr) is handed to `onOutput` the moment its
  * newline lands: a build takes minutes, and a terminal that says
- * nothing for minutes is indistinguishable from a hang. */
+ * nothing for minutes is indistinguishable from a hang. A final line
+ * with no newline after it is forwarded too, when the stream ends. */
 export function runImageCommand(
   cmd: ImageCommand,
   onOutput: (line: string) => void
@@ -81,23 +82,43 @@ export function runImageCommand(
     // own final line is the error, and a doctor/up outcome line is one
     // line.
     let lastSaid = "";
-    const feed = (): ((chunk: string) => void) => {
+    const feed = (): { chunk: (chunk: string) => void; end: () => void } => {
       let pending = "";
-      return (chunk: string) => {
-        pending += chunk;
-        for (;;) {
-          const at = pending.indexOf("\n");
-          if (at === -1) break;
-          const line = pending.slice(0, at).replace(/\r$/, "");
-          pending = pending.slice(at + 1);
-          if (line.trim() !== "") lastSaid = line;
-          onOutput(line);
-        }
+      const say = (line: string): void => {
+        if (line.trim() !== "") lastSaid = line;
+        onOutput(line);
+      };
+      return {
+        chunk: (chunk: string) => {
+          pending += chunk;
+          for (;;) {
+            const at = pending.indexOf("\n");
+            if (at === -1) break;
+            const line = pending.slice(0, at).replace(/\r$/, "");
+            pending = pending.slice(at + 1);
+            say(line);
+          }
+        },
+        // A command's last line need not end in a newline. Docker's own
+        // do, but anything else that ends up here might not, and the
+        // last thing a failing command said is exactly what gets
+        // reported - dropping it would replace the real reason with
+        // this module's generic one. Node closes both streams before it
+        // emits the process's own close, so this always runs first.
+        end: () => {
+          if (pending === "") return;
+          const line = pending.replace(/\r$/, "");
+          pending = "";
+          say(line);
+        },
       };
     };
     for (const stream of [child.stdout, child.stderr]) {
-      stream?.setEncoding("utf8");
-      stream?.on("data", feed());
+      if (!stream) continue;
+      stream.setEncoding("utf8");
+      const lines = feed();
+      stream.on("data", lines.chunk);
+      stream.on("end", lines.end);
     }
 
     child.once("error", (err) => resolve({ ok: false, detail: err.message }));

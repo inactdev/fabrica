@@ -596,20 +596,26 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   // `fabrica doctor` needs --fix for the same step; `fabrica up` is
   // about to run tasks, so it does it unasked (Client ruling
   // 2026-10-30).
+  // Resolved once and handed to both, so the findings a repair reads,
+  // the findings it re-asks, and the blockers below are all one
+  // machine's answers rather than two sources that could disagree.
+  const doctorProbes = opts.doctorProbes ?? realProbes;
   const checks = await collectDoctorChecks({
     recordHome,
-    probes: opts.doctorProbes,
+    probes: doctorProbes,
     repair: async (collected) =>
       (
         await repairImages({
           checks: collected,
-          probes: opts.doctorProbes ?? realProbes,
+          probes: doctorProbes,
           runImageCommand: opts.runImageCommand,
           stdout,
           stderr,
         })
       ).checks,
   });
+  // Read after the repair, never before: a finding this command could
+  // supply itself is not a reason to refuse a session.
   const blockers = checks.filter(stopsATask);
   if (blockers.length > 0) {
     // The whole report, exactly as doctor renders it - including any

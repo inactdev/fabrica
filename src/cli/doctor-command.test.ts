@@ -16,7 +16,7 @@ import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { fakeInspector } from "../../contract/helpers/fake-inspector.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { main } from "./main.ts";
-import { runDoctorCommand, type CopyInfo, type DoctorCheck, type DoctorProbes } from "./doctor-command.ts";
+import { collectDoctorChecks, runDoctorCommand, type CopyInfo, type DoctorCheck, type DoctorProbes } from "./doctor-command.ts";
 
 const ok = (label: string): DoctorCheck => ({ ok: true, label, detail: "fine" });
 
@@ -410,6 +410,45 @@ test("fabrica doctor --fix --live: the live call is made after the repair, never
 
   assert.equal(code, 0, io.out.concat(io.err).join("\n"));
   assert.deepEqual(order, ["build", "live"]);
+});
+
+test("collectDoctorChecks: the repair hook runs exactly once, after every other check and before the live one", async () => {
+  // Both commands hand their repair step to this one hook rather than
+  // wrapping this function themselves, so this is where "once, and
+  // before anything spends money on the image it may replace" is
+  // actually guaranteed - for every caller at once, present and future.
+  const order: string[] = [];
+  const probes = okProbes({
+    live: async () => {
+      order.push("live");
+      return ok("worker token (live)");
+    },
+  });
+  const seen: DoctorCheck[][] = [];
+  const checks = await collectDoctorChecks({
+    recordHome: healthyHome(),
+    probes,
+    live: true,
+    repair: async (collected) => {
+      order.push("repair");
+      seen.push(collected);
+      return collected.concat([{ ok: true, label: "repaired", detail: "this run's own line" }]);
+    },
+  });
+
+  // One entry each, in this order: the hook ran once, and the probe
+  // that spends against the worker image ran after it.
+  assert.deepEqual(order, ["repair", "live"]);
+  // What it was handed: every machine and config check already answered,
+  // and no live line yet - a repair decides what to do from the same
+  // findings doctor would have printed.
+  assert.ok(seen[0].some((c) => c.label === "worker image"), "the image lines it reads");
+  assert.ok(seen[0].some((c) => c.label === "caps"), "and the config checks, already run");
+  assert.equal(seen[0].some((c) => c.label === "worker token (live)"), false);
+  // And what it hands back is what the caller goes on to print and
+  // judge, with the live line appended after it.
+  assert.equal(checks.at(-1)?.label, "worker token (live)");
+  assert.ok(checks.some((c) => c.label === "repaired"));
 });
 
 test("fabrica doctor --fix: a build that fails leaves the FAIL, its fix, and the non-zero exit exactly as before", async () => {

@@ -61,6 +61,34 @@ is what keeps that cycle from existing; keep it that way.
   BuildKit writes every progress line to stderr, so a step reading only
   stdout looks like a silent hang for the minutes a build takes.
 
+## Three small rules this step is built on, worth keeping
+
+- **A streamed command's last line need not end in a newline.** The
+  reported detail of a failure is the last thing the command said, so
+  `runImageCommand` flushes whatever is still buffered when a stream
+  ends, not only on a newline. Without that flush, a command that dies
+  mid-line has its real reason replaced by the generic "exited 1". Node
+  closes both stdio streams before it emits the child's own `close`, so
+  the flush always lands before the outcome is resolved.
+- **Never write the stamp label's name down twice.** Both the fake
+  docker's `build` and `image-repair.test.ts`'s stale-image fixture
+  derive it (and the `--build-arg` it resolves from) by reading the
+  Dockerfile the build command itself names. A rename in the Dockerfile
+  then fails loudly at the derivation, instead of leaving a fixture
+  seeding a label nothing reads.
+- **One resolved probe set per command invocation.** `fabrica doctor`
+  and `fabrica up` each resolve `probes ?? realProbes` once and hand
+  the same object to `collectDoctorChecks` and to `repairImages`, so
+  the findings a repair reads, the findings it re-asks, and the
+  blockers read afterwards are one machine's answers. Two spellings of
+  the same default is how a report and an exit code start describing
+  different machines.
+
+The ordering contract itself (the hook runs once, after every other
+check, before the live one) is pinned on `collectDoctorChecks` directly
+in `doctor-command.test.ts`, not only through either command's wiring -
+a future third caller inherits it rather than having to re-earn it.
+
 ## No settings change was needed, and why
 
 `skill/claude-code/settings.json`'s allow list already carries the

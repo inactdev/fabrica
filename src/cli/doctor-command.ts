@@ -966,16 +966,20 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
   // the report below describes the machine as it is afterwards, so the
   // exit code answers "is this machine ready now", not "was it ready
   // when I started".
+  // Resolved once and handed to both: the lines a repair reads and the
+  // lines it re-asks afterwards must come from the same probes, or the
+  // report could describe one machine and the exit code another.
+  const probes = opts.probes ?? realProbes;
   const checks = await collectDoctorChecks({
     recordHome,
-    probes: opts.probes,
+    probes,
     live,
     repair: fix
       ? async (collected) =>
           (
             await repairImages({
               checks: collected,
-              probes: opts.probes ?? realProbes,
+              probes,
               runImageCommand: opts.runImageCommand,
               stdout,
               stderr,

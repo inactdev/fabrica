@@ -12,6 +12,8 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { installFakeDocker } from "../containment/helpers/install-fake-docker.ts";
 import type { FakeDockerConfig } from "../containment/helpers/install-fake-docker.ts";
 import {
@@ -27,13 +29,29 @@ import { DOCKER_LABEL } from "./docker-daemon.ts";
 import { repairImages, runImageCommand } from "./image-repair.ts";
 import type { DoctorCheck, DoctorProbes } from "./doctor-command.ts";
 
-/** The stamp label the worker image's Dockerfile writes
- * (`LABEL <name>=$DOCKERFILE_SHA256`), needed only to seed an image
- * that was built from an *older* Dockerfile. The fake never takes this
- * name from here when it builds - it re-reads the Dockerfile the build
- * names - so a rename there shows up as this fixture no longer making
- * the check fail, rather than as a silent pass. */
-const STAMP_LABEL = "fabrica.dockerfile-sha256";
+/** The name of the stamp label the worker image carries, needed only to
+ * seed an image that was built from an *older* Dockerfile. Read out of
+ * the very Dockerfile the build command names, never written down here:
+ * the label's name lives in one place (that Dockerfile), the fake
+ * docker resolves it the same way when it builds, and a rename there
+ * can therefore never leave this fixture seeding a name nothing reads.
+ * The build argument it resolves from is checked against the build's
+ * own argv for the same reason - the two halves of the pin have to
+ * agree or this fixture would stamp an empty label. Anything missing is
+ * a loud failure here, not a quiet one later. */
+function stampLabelFromDockerfile(): string {
+  const build = workerImageBuild();
+  const named = build.args.indexOf("-f");
+  assert.notEqual(named, -1, "the worker image build should name its Dockerfile with -f");
+  const dockerfile = resolve(build.cwd ?? ".", build.args[named + 1]);
+  const line = /^[ \t]*LABEL[ \t]+([^\s=]+)=\$(\S+)[ \t]*$/m.exec(readFileSync(dockerfile, "utf8"));
+  assert.ok(line, `no LABEL <name>=$<ARG> line in ${dockerfile} to stamp an image with`);
+  assert.ok(
+    build.args.some((arg) => arg.startsWith(`${line[2]}=`)),
+    `${dockerfile} stamps its label from $${line[2]}, which the build command does not pass as a --build-arg`
+  );
+  return line[1];
+}
 
 const ok = (label: string): DoctorCheck => ({ ok: true, label, detail: "fine" });
 
@@ -161,7 +179,7 @@ test("a worker image built from an older Dockerfile is rebuilt, and the pin it w
   const build = workerImageBuild();
   const { docker } = setUp(t, {
     images: [
-      { Name: build.image, Labels: { [STAMP_LABEL]: "0".repeat(64) } },
+      { Name: build.image, Labels: { [stampLabelFromDockerfile()]: "0".repeat(64) } },
       { Name: relayImagePull().image, Labels: {} },
     ],
   });
@@ -330,6 +348,28 @@ test("a `docker` that cannot be spawned at all is an outcome, not a thrown error
   // outcome rather than a thrown error.
   assert.match(outcomes[0].detail, /spawn fabrica-no-such-docker/);
   assert.ok(io.err.some((line) => line.includes("could not be built")), io.err.join("\n"));
+});
+
+test("a failing command's last word is reported even with no newline after it", async () => {
+  // Docker's own output ends every line, but the reported detail is
+  // whatever the command said last, and a line still sitting in the
+  // buffer when the stream ends is the whole reason a failure is worth
+  // reporting at all. Driven against a command that genuinely ends
+  // mid-line, since the shared fake docker always terminates its own.
+  const said: string[] = [];
+  const result = await runImageCommand(
+    {
+      command: process.execPath,
+      args: ["-e", 'process.stderr.write("ended 1.2s\\nno space left on device"); process.exit(1)'],
+      image: "irrelevant",
+      shell: "irrelevant",
+    },
+    (line) => said.push(line)
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.detail, "no space left on device");
+  assert.deepEqual(said, ["ended 1.2s", "no space left on device"]);
 });
 
 test("the fix lines the checks print and the commands the repair runs are the same command, not two spellings", () => {
