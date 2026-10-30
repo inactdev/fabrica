@@ -14,6 +14,8 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
+import { installFakeDocker } from "../containment/helpers/install-fake-docker.ts";
+import { relayImagePull, relayImageStatus, workerImageBuild, workerImageStatus } from "../index.ts";
 import type { DoctorCheck, DoctorProbes } from "./doctor-command.ts";
 import { openAtMostOnce, runUpCommand } from "./up-command.ts";
 import { runUpdateCommand, type UpdateProbes } from "./update-command.ts";
@@ -298,7 +300,10 @@ test("runUpCommand: one blocking finding still refuses even alongside findings t
     cwd: tempCwd(),
     doctorProbes: okProbes({
       checkout: () => ({ ok: false, blocking: false, label: "checkout", detail: "no build-info.json" }),
-      workerImage: () => ({ ok: false, label: "worker image", detail: "not built", fix: "build it" }),
+      // A blocker nothing above could have supplied - deliberately not
+      // the worker image, which `up` now builds itself rather than
+      // refusing over (src/cli/image-repair.ts).
+      workerToken: () => ({ ok: false, label: "worker token", detail: "not usable", fix: "put a token in brain.env" }),
     }),
     isLiveViewListening: async () => {
       throw new Error("must stop before the live view");
@@ -311,11 +316,107 @@ test("runUpCommand: one blocking finding still refuses even alongside findings t
   assert.equal(code, 1);
   // The whole doctor report, rendered exactly as doctor renders it -
   // both failures included, the advisory one as the FAIL it still is.
-  assert.match(io.out.join("\n"), /FAIL worker image: not built - fix: build it/);
+  assert.match(io.out.join("\n"), /FAIL worker token: not usable - fix: put a token in brain\.env/);
   assert.match(io.out.join("\n"), /FAIL checkout: no build-info\.json/);
   // And the refusal names which of those two lines is actually in the way.
-  assert.match(io.err.join("\n"), /doctor checks failed - worker image must be fixed/);
+  assert.match(io.err.join("\n"), /doctor checks failed - worker token must be fixed/);
   assert.doesNotMatch(io.err.join("\n"), /checkout must be fixed/);
+});
+
+// The images a task needs are supplied by `fabrica up` itself rather
+// than reported for the Client to go and fix (Client ruling
+// 2026-10-30). Driven against the shared fake docker on PATH, with the
+// two image probes answered for real through it - so these prove the
+// wiring end to end without a daemon anywhere. The repair step's own
+// behaviour is proven in src/cli/image-repair.test.ts.
+test("runUpCommand: a missing worker image and relay image are built and pulled here, and the session starts", async (t) => {
+  const docker = installFakeDocker(t, {});
+  const build = workerImageBuild();
+  const pull = relayImagePull();
+  const io = captureIo();
+  let launched = false;
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes({ workerImage: () => workerImageStatus(), relayImage: () => relayImageStatus() }),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async () => {
+        launched = true;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.out.concat(io.err).join("\n"));
+  assert.ok(launched, "a session must start - both images are things `up` can supply");
+  assert.deepEqual(
+    docker.calls().filter((call) => call[0] === "build" || call[0] === "pull"),
+    [build.args, pull.args]
+  );
+  // Reported, so the Client knows what the wait was for.
+  assert.ok(io.out.includes(`worker image: built ${build.image}.`), io.out.join("\n"));
+  assert.ok(io.out.includes(`relay image: pulled ${pull.image}.`), io.out.join("\n"));
+  // And the report afterwards is the machine as it is now, so nothing
+  // is warned about either.
+  assert.doesNotMatch(io.err.join("\n"), /worker image|relay image/);
+});
+
+test("runUpCommand: an image that genuinely could not be built still refuses the session", async (t) => {
+  installFakeDocker(t, { buildFailure: "no space left on device" });
+  const io = captureIo();
+  let launched = false;
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes({ workerImage: () => workerImageStatus() }),
+    isLiveViewListening: async () => {
+      throw new Error("must stop before the live view");
+    },
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async () => {
+        launched = true;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.equal(launched, false);
+  assert.match(io.err.join("\n"), /worker image: could not be built - .*no space left on device/);
+  assert.match(io.err.join("\n"), /doctor checks failed - worker image must be fixed/);
+  assert.match(io.out.join("\n"), /FAIL worker image: /);
+});
+
+test("runUpCommand: nothing is built when both image lines already pass", async (t) => {
+  const docker = installFakeDocker(t, {});
+  const io = captureIo();
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    launcher: { harnessAvailable: () => true, launch: async () => ({ exitCode: 0 }) },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.deepEqual(docker.calls(), [], "a healthy machine must not be touched at all");
 });
 
 test("runUpCommand: Docker is started before anything asks whether it is reachable", async () => {

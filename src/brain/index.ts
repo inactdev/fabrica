@@ -51,5 +51,14 @@ export { pauseWorker, readMeters, registerMeterSource } from "./meters.ts";
 export type { MeterReading, MeterSource } from "./meters.ts";
 export { currentTaskNetwork, withTaskNetwork } from "./task-network.ts";
 export type { TaskNetworkPolicy } from "./task-network.ts";
-export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerTokenStatus } from "./adapters/doctor-checks.ts";
+export {
+  probeWorkerToken,
+  workerCliVersionStatus,
+  workerImageBuild,
+  workerImageStatus,
+  workerTokenStatus,
+  WORKER_CLI_LABEL,
+  WORKER_IMAGE_LABEL,
+} from "./adapters/doctor-checks.ts";
+export type { ImageCommand } from "./adapters/doctor-checks.ts";
 export type { BoxCheckResult, CheckBox } from "./check-box.ts";

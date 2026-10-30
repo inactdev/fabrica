@@ -117,6 +117,8 @@ src/cli/docker-daemon.ts: src/cli/docker-daemon.test.ts
 src/cli/doctor-command.test.ts: src/cli/doctor-command.test.ts
 src/cli/doctor-command.ts: src/cli/doctor-command.test.ts
 src/cli/global-reinstall.test.ts: src/cli/global-reinstall.test.ts
+src/cli/image-repair.test.ts: src/cli/image-repair.test.ts
+src/cli/image-repair.ts: src/cli/image-repair.test.ts, src/cli/doctor-command.test.ts, src/cli/up-command.test.ts
 src/cli/global-reinstall.ts: src/cli/global-reinstall.test.ts
 src/cli/installed-commit.test.ts: src/cli/installed-commit.test.ts
 src/cli/live-view-process.test.ts: src/cli/live-view-process.test.ts
@@ -186,6 +188,12 @@ src/containment/docker-args.test.ts: src/containment/docker-args.test.ts
 src/containment/docker-args.ts: src/containment/docker-args.test.ts
 src/containment/docker-tests-workflow.test.ts: src/containment/docker-tests-workflow.test.ts
 src/containment/egress-network.test.ts: src/containment/egress-network.test.ts
+# Hand-added: the shared `docker` CLI stand-in has no colocated test of
+# its own, so the generator left both files out. These are every suite
+# that drives production code through it - a change to the fake that
+# drifts from the real CLI shows up in one of them.
+src/containment/helpers/fake-docker.mjs: src/containment/task-networks.test.ts, src/containment/isolated-network.test.ts, src/containment/egress-network.test.ts, src/foreman/task-networks.test.ts, src/cli/image-repair.test.ts, src/cli/up-command.test.ts
+src/containment/helpers/install-fake-docker.ts: src/containment/task-networks.test.ts, src/containment/isolated-network.test.ts, src/containment/egress-network.test.ts, src/foreman/task-networks.test.ts, src/cli/image-repair.test.ts, src/cli/up-command.test.ts
 src/containment/egress-network.ts: src/containment/egress-network.test.ts
 src/containment/isolated-network.test.ts: src/containment/isolated-network.test.ts
 src/containment/isolated-network.ts: src/containment/isolated-network.test.ts

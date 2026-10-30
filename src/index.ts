@@ -165,8 +165,17 @@ export type { DeliveryErrorCode } from "./delivery/index.ts";
 // 8) - it asks for whichever one v1 wires in by default.
 export { defaultBrainAdapter } from "./brain/index.ts";
 // `fabrica doctor`'s machine checks (src/cli/doctor-command.ts).
-export { probeWorkerToken, workerCliVersionStatus, workerImageStatus, workerTokenStatus } from "./brain/index.ts";
-export { relayImageStatus } from "./relay/index.ts";
+export {
+  probeWorkerToken,
+  workerCliVersionStatus,
+  workerImageBuild,
+  workerImageStatus,
+  workerTokenStatus,
+  WORKER_CLI_LABEL,
+  WORKER_IMAGE_LABEL,
+} from "./brain/index.ts";
+export type { ImageCommand } from "./brain/index.ts";
+export { relayImagePull, relayImageStatus, RELAY_IMAGE_LABEL } from "./relay/index.ts";
 // The Docker networks tasks run on: what is still open
 // (`fabrica doctor`'s leftover count) and the one command that clears
 // the unused ones, named identically wherever the Client is told about
