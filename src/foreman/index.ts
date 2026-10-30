@@ -23,6 +23,10 @@ export type { LastWorkerActivity, StoppedByOwnerDetails } from "./stop.ts";
 export { DEFAULT_CHECK_COMMAND } from "./resolve-check.ts";
 export { finalMessageFor } from "./pr-body.ts";
 export type { ClosesIssue, FinalMessageForCommit } from "./pr-body.ts";
+// Issue #316: a project whose pull request body is its repository's own
+// template. `fabrica doctor` reads the template too, to say on that
+// project's line whether there is one to render into.
+export { readPullRequestTemplate, renderIntoTemplate, PULL_REQUEST_TEMPLATE_PATH } from "./pr-template.ts";
 // A rebase-only fix round appends its one section to the pull request's
 // existing body instead of replacing it (rebase-only.ts), so what the
 // pull request says is not always a render of the latest write-up.

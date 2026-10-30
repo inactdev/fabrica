@@ -283,6 +283,9 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     maxRequestBytes,
     maxCallsPerTask,
     githubTokenVar,
+    terms,
+    noStamp,
+    pullRequestTemplate,
     reviewer,
     reader,
     knowledge,
@@ -294,8 +297,8 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, githubTokenVar, reviewer, reader, ` +
-        `knowledge and onlyTouchedTests are recognized.`
+        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, githubTokenVar, terms, noStamp, ` +
+        `pullRequestTemplate, reviewer, reader, knowledge and onlyTouchedTests are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -323,18 +326,28 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   // rather than something each entry has to carry. An entry written
   // before this existed is therefore governed by it too; only an
   // explicit `onlyTouchedTests = false` turns it off.
-  if (onlyTouchedTests !== undefined && typeof onlyTouchedTests !== "boolean") {
-    throw new ConfigError(
-      "malformed",
-      `${path}: [projects.${name}].onlyTouchedTests must be true or false, not ${String(onlyTouchedTests)}.`
-    );
-  }
   const project: ProjectConfig = {
     path: expandLeadingTilde(projectPath),
-    onlyTouchedTests: onlyTouchedTests ?? true,
+    onlyTouchedTests:
+      onlyTouchedTests === undefined
+        ? true
+        : requireFlag(onlyTouchedTests, `${path}: [projects.${name}].onlyTouchedTests`),
   };
   if (githubTokenVar !== undefined) {
     project.githubTokenVar = requireEnvVarName(githubTokenVar, `${path}: [projects.${name}].githubTokenVar`);
+  }
+  // Issue #316, work mode. Only the shape is checked here; whether the
+  // folder exists, is a directory and holds the two files Inspector
+  // needs is a question about the disk, and a task is refused on it
+  // (src/inspector/terms.ts) - a folder on an unmounted volume this
+  // minute must not make the whole registry unreadable for `fabrica
+  // status`.
+  if (terms !== undefined) {
+    project.terms = requireTermsPath(terms, path, `${path}: [projects.${name}].terms`);
+  }
+  if (noStamp !== undefined) project.noStamp = requireFlag(noStamp, `${path}: [projects.${name}].noStamp`);
+  if (pullRequestTemplate !== undefined) {
+    project.pullRequestTemplate = requireFlag(pullRequestTemplate, `${path}: [projects.${name}].pullRequestTemplate`);
   }
   if (check !== undefined) project.check = check;
   if (model !== undefined) project.model = (model as string).trim();
@@ -528,6 +541,39 @@ function requireEnvVarName(value: unknown, label: string): string {
     );
   }
   return value.trim();
+}
+
+/**
+ * A project's terms folder (issue #316), absolute by the time any
+ * reader sees it. Resolved against the directory `projects.toml` sits
+ * in for the same reason `knowledge.path` is: "relative to
+ * projects.toml" is what a relative path there means, and resolving it
+ * once here means nobody downstream has to re-derive what it was
+ * relative to. Inspector is handed this path as a `-terms` argument and
+ * resolves a relative one against its OWN working directory - the
+ * task's worktree - so an unresolved path would name a different folder
+ * there than it does here.
+ */
+function requireTermsPath(value: unknown, tomlPath: string, label: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ConfigError(
+      "malformed",
+      `${label} must be the folder holding this project's .inspector.json, Dockerfile.inspector and check ` +
+        `script, as a non-empty string (for example terms = "~/fabrica-terms/widgets") - or be left out ` +
+        `entirely for a project that commits those files itself.`
+    );
+  }
+  return resolve(dirname(tomlPath), expandLeadingTilde(value.trim()));
+}
+
+/** A plain on/off project setting. Refused rather than coerced: a
+ * `noStamp = "true"` that quietly read as off would mean a commit status
+ * posted on a repository whose CI nothing of ours may touch. */
+function requireFlag(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new ConfigError("malformed", `${label} must be true or false, not ${String(value)}.`);
+  }
+  return value;
 }
 
 function requirePositiveInteger(value: unknown, label: string): number {

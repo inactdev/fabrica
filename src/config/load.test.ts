@@ -969,3 +969,106 @@ test("loadConfig: an unknown field in [reader] is refused", () => {
     }
   );
 });
+
+// Work mode (issue #316): a project whose repository nothing may be
+// added to - its terms in a folder of their own, no commit status, and
+// its own pull request template.
+
+test("loadConfig: a project may name a terms folder, with no stamp and its own pull request template", () => {
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    terms = "~/fabrica-terms/widgets"
+    noStamp = true
+    pullRequestTemplate = true
+  `);
+
+  assert.deepEqual(loadConfig(recordHome).projects["dayjob"], {
+    path: join(homedir(), "work/widgets"),
+    terms: join(homedir(), "fabrica-terms/widgets"),
+    noStamp: true,
+    pullRequestTemplate: true,
+    onlyTouchedTests: true,
+  });
+});
+
+test("loadConfig: a relative terms folder is resolved against projects.toml, like a knowledge path", () => {
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    terms = "terms/widgets"
+  `);
+
+  assert.equal(loadConfig(recordHome).projects["dayjob"].terms, resolve(recordHome, "terms/widgets"));
+});
+
+test("loadConfig: a project carrying none of work mode's settings reads as none of them", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/inkling-umbrella/spending-app"
+  `);
+
+  const project = loadConfig(recordHome).projects["spending-app"];
+  assert.equal(project.terms, undefined);
+  assert.equal(project.noStamp, undefined);
+  assert.equal(project.pullRequestTemplate, undefined);
+});
+
+test("loadConfig: terms must be a non-empty folder name", () => {
+  for (const value of [`""`, `"   "`, `42`, `true`]) {
+    const recordHome = makeTestHome(`
+      [projects.dayjob]
+      path = "~/work/widgets"
+      terms = ${value}
+    `);
+
+    assert.throws(
+      () => loadConfig(recordHome),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /terms must be the folder holding/);
+        return true;
+      },
+      `terms = ${value} should have been refused`
+    );
+  }
+});
+
+test("loadConfig: noStamp and pullRequestTemplate are refused unless they are true or false", () => {
+  for (const field of ["noStamp", "pullRequestTemplate"]) {
+    const recordHome = makeTestHome(`
+      [projects.dayjob]
+      path = "~/work/widgets"
+      ${field} = "true"
+    `);
+
+    assert.throws(
+      () => loadConfig(recordHome),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.match(err.message, new RegExp(`${field} must be true or false, not true\\.`));
+        return true;
+      },
+      `${field} = "true" should have been refused`
+    );
+  }
+});
+
+test("loadConfig: the unknown-field refusal names work mode's three settings among what is recognized", () => {
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    termsFolder = "~/fabrica-terms/widgets"
+  `);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /unknown field\(s\): termsFolder\./);
+      for (const field of ["terms", "noStamp", "pullRequestTemplate"]) assert.match(err.message, new RegExp(field));
+      return true;
+    }
+  );
+});

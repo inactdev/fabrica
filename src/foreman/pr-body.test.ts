@@ -283,3 +283,16 @@ test("withClosesLine names an issue in another repository in full", () => {
     `Closes inactdev/inspector#45\n\n${BODY}`
   );
 });
+
+// Issue #316: a project whose pull request body is its repository's own
+// template renders the same fields under different headings, so the
+// write-up the message came from rides along with it - never the body
+// parsed back apart (`pr-template.ts`).
+test("finalMessageFor carries the write-up it rendered, for a body that needs a different shape", () => {
+  assert.equal(finalMessageFor(WRITEUP, "fabrica: task-1").writeup, WRITEUP);
+});
+
+test("finalMessageFor carries no write-up when there was no usable one", () => {
+  assert.equal(finalMessageFor(undefined, "fabrica: task-1").writeup, undefined);
+  assert.equal(finalMessageFor({ ...WRITEUP, why: " " }, "fabrica: task-1").writeup, undefined);
+});

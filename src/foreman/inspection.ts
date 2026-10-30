@@ -39,6 +39,15 @@ interface InspectionOptions {
    * (inspector#53). Absent means Inspector publishes exactly as it
    * always has. */
   publishLease?: PublishLease;
+  /** True for a project whose terms live in a folder outside its
+   * repository (issue #316, work mode). The three reads below are all
+   * about `.inspector.json` *in the repository*, and such a project has
+   * none there by design - the file is in the terms folder, which is
+   * never mounted into a worker's box and so is not a thing an attempt
+   * could have removed or changed. Those reads are skipped rather than
+   * answered wrongly: asked of a work-mode project they would skip the
+   * inspection entirely, every time. */
+  outsideTerms?: boolean;
 }
 
 const INSPECTOR_DIR = ".inspector";
@@ -68,6 +77,59 @@ function copyInspectorReportFiles(recordHome: string, taskId: string, workdir: s
   if (existsSync(runPath)) copyTaskFile(recordHome, taskId, "inspector-run.json", runPath);
 }
 
+/** The handoff itself: the one place `"inspector-called"` is appended
+ * and the adapter is actually run, reached once every pre-check above
+ * has had its say. Its own function because a project whose terms live
+ * outside its repository (issue #316) has none of those pre-checks to
+ * make and must still make exactly this call. */
+async function callInspector(
+  recordHome: string,
+  taskId: string,
+  line: ProductionLine,
+  inspector: Inspector | undefined,
+  options: InspectionOptions
+): Promise<Inspection> {
+  const lease = options.publishLease;
+  appendEvent(recordHome, {
+    taskId,
+    name: "inspector-called",
+    details: {
+      branch: line.branch,
+      // What this handoff asked of Inspector that is not the default
+      // (issue #316): where this project's terms came from, and that no
+      // commit status was to be posted. On the record because "why does
+      // this pull request carry no inspector stamp" has to be answerable
+      // from the task's own history.
+      ...(options.outsideTerms ? { outsideTerms: true } : {}),
+      // Both tips when they disagreed, not just the one leased against
+      // (Client ruling) - the record is where anyone asking "why did
+      // that publish refuse" has to be able to see what was expected.
+      ...(lease
+        ? { expectedTip: lease.expectedTip, ...(lease.localTip ? { localTipBeforeRebase: lease.localTip } : {}) }
+        : {}),
+    },
+  });
+  try {
+    return await withHeartbeat(
+      () => appendEvent(recordHome, { taskId, name: "heartbeat", details: { phase: "inspection" } }),
+      options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+      () =>
+        (inspector ?? defaultInspector()).inspect({
+          branch: line.branch,
+          workdir: line.workdir,
+          prTitle: options.prTitle,
+          prBody: options.prBody,
+          ...(lease ? { expectedTip: lease.expectedTip } : {}),
+        })
+    );
+  } catch (err) {
+    return {
+      verdict: "refused",
+      report: `Inspector could not run: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export async function handToInspector(
   recordHome: string,
   taskId: string,
@@ -76,7 +138,8 @@ export async function handToInspector(
   inspector: Inspector | undefined,
   options: InspectionOptions = {}
 ): Promise<Inspection | undefined> {
-  if (!inspectorIsConfigured(line.workdir, baseCommit)) {
+  const outsideTerms = options.outsideTerms === true;
+  if (!outsideTerms && !inspectorIsConfigured(line.workdir, baseCommit)) {
     appendEvent(recordHome, {
       taskId,
       name: "inspection-skipped",
@@ -86,7 +149,9 @@ export async function handToInspector(
   }
 
   let inspection: Inspection;
-  if (!inspectorIsConfigured(line.workdir)) {
+  if (outsideTerms) {
+    inspection = await callInspector(recordHome, taskId, line, inspector, options);
+  } else if (!inspectorIsConfigured(line.workdir)) {
     inspection = {
       verdict: "refused",
       report: "Inspector could not run: .inspector.json was removed from the ProductionLine",
@@ -97,39 +162,7 @@ export async function handToInspector(
       report: "Inspector could not run: .inspector.json differs from the task base commit",
     };
   } else {
-    const lease = options.publishLease;
-    appendEvent(recordHome, {
-      taskId,
-      name: "inspector-called",
-      details: {
-        branch: line.branch,
-        // Both tips when they disagreed, not just the one leased against
-        // (Client ruling) - the record is where anyone asking "why did
-        // that publish refuse" has to be able to see what was expected.
-        ...(lease
-          ? { expectedTip: lease.expectedTip, ...(lease.localTip ? { localTipBeforeRebase: lease.localTip } : {}) }
-          : {}),
-      },
-    });
-    try {
-      inspection = await withHeartbeat(
-        () => appendEvent(recordHome, { taskId, name: "heartbeat", details: { phase: "inspection" } }),
-        options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
-        () =>
-          (inspector ?? defaultInspector()).inspect({
-            branch: line.branch,
-            workdir: line.workdir,
-            prTitle: options.prTitle,
-            prBody: options.prBody,
-            ...(lease ? { expectedTip: lease.expectedTip } : {}),
-          })
-      );
-    } catch (err) {
-      inspection = {
-        verdict: "refused",
-        report: `Inspector could not run: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
+    inspection = await callInspector(recordHome, taskId, line, inspector, options);
   }
   inspection = { ...inspection, report: reportForRecord(inspection.report) };
 

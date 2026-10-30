@@ -60,7 +60,23 @@ export type InspectorConfigRefusal =
   /** One on disk that git does not track - gitignored, or never added.
    * Reachable only from a working-tree read: a commit either holds the
    * file or does not. */
-  | "uncommitted-dockerfile";
+  | "uncommitted-dockerfile"
+  // The five below are a project whose terms live in a folder outside
+  // its repository (issue #316) - `terms.ts`'s own answers, in this
+  // union because both lists are read by the same two callers and a
+  // project has one kind of terms or the other, never both.
+  /** The folder a project's `terms` names is not there. */
+  | "terms-missing"
+  /** It is there but is not a directory. */
+  | "terms-not-a-directory"
+  /** Its path holds a colon, which Docker's mount syntax splits on. */
+  | "terms-unmountable"
+  /** It is inside the repository under check, which is in-repo terms. */
+  | "terms-inside-repo"
+  /** It contains the repository under check. */
+  | "terms-contains-repo"
+  /** It is missing one of the files Inspector reads out of it. */
+  | "terms-incomplete";
 
 export interface InspectorConfigProblem {
   refusal: InspectorConfigRefusal;

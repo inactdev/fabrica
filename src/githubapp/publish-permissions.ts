@@ -17,7 +17,7 @@
 import { missingPermissions, describeMissingPermissions, grantPermissionsFix } from "./granted.ts";
 import type { MissingPermission } from "./granted.ts";
 import { PUBLISH_PERMISSIONS } from "./scopes.ts";
-import type { TokenMinter } from "./types.ts";
+import type { AppPermission, TokenMinter } from "./types.ts";
 
 /** A publish token GitHub would hand over short of what publishing
  * needs. Both strings are the shared wording: `detail` is one sentence
@@ -46,10 +46,16 @@ export interface PublishPermissionGap {
 export async function publishPermissionGap(
   minter: TokenMinter,
   owner: string,
-  repo: string
+  repo: string,
+  /** What this project's handoff will actually ask for - narrower for a
+   * project Inspector posts no commit status for (issue #316's
+   * `noStamp`, via `publishPermissionsFor`). Deliberately the very set
+   * being checked, never a wider "preflight" one: a gap reported here
+   * has to be a gap the handoff would really hit. */
+  permissions: Readonly<Record<string, AppPermission>> = PUBLISH_PERMISSIONS
 ): Promise<PublishPermissionGap | null> {
-  const minted = await minter.mint("publish", { owner, repo, permissions: PUBLISH_PERMISSIONS });
-  const missing = missingPermissions(PUBLISH_PERMISSIONS, minted.permissions);
+  const minted = await minter.mint("publish", { owner, repo, permissions });
+  const missing = missingPermissions(permissions, minted.permissions);
   if (missing.length === 0) return null;
   return {
     owner,

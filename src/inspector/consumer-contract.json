@@ -1,6 +1,14 @@
 {
   "flags": [
     { "name": "repo", "description": "path to the repository to inspect" },
+    {
+      "name": "terms",
+      "description": "absolute path to the folder holding this project's .inspector.json, Dockerfile.inspector and check script, for a repository none of the three may be committed to; omitted when the repository carries them itself"
+    },
+    {
+      "name": "no-stamp",
+      "description": "takes no value; publish a green result as usual but post no commit status at all, for a repository whose CI must not be touched"
+    },
     { "name": "branch", "description": "pull request branch to publish after a green result", "required": true },
     {
       "name": "expected-tip",

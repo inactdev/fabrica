@@ -37,7 +37,9 @@ export type { PublishPermissionGap } from "./publish-permissions.ts";
 export { defaultTokenMinter, scopedToken } from "./minter.ts";
 export type { ScopedToken, TokenMinterOptions } from "./minter.ts";
 export {
+  publishPermissionsFor,
   PUBLISH_PERMISSIONS,
+  PUBLISH_WITHOUT_STAMP_PERMISSIONS,
   READ_CHECKS_PERMISSIONS,
   READ_ISSUE_PERMISSIONS,
 } from "./scopes.ts";

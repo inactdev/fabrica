@@ -847,3 +847,96 @@ test("fabrica doctor: liveTaskIds counts a task that is working, and not one tha
   assert.ok(live.has("running-1"));
   assert.ok(!live.has("done-1"));
 });
+
+// Work mode (issue #316): a repository none of Inspector's three files
+// may be committed to. `fabrica up` stops on any blocking FAIL, so a
+// project line that failed such a project for being exactly what it is
+// would make Fabrica unusable on the machine this setting exists for -
+// the same trap issue #314's github-app line had to be rescued from.
+
+/** The company repository: a git root with an origin, and nothing of
+ * Fabrica's in it - no .inspector.json, no check.sh, no Dockerfile. */
+function companyProject(): string {
+  const project = makeFixtureRepo("exit 0", { inspector: false, origin: false });
+  rmSync(join(project, "check.sh"));
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "nothing of ours"], {
+    cwd: project,
+  });
+  execFileSync("git", ["remote", "add", "origin", "https://example.invalid/widgets.git"], { cwd: project });
+  return project;
+}
+
+function termsFolder(): string {
+  const terms = mkdtempSync(join(tmpdir(), "fabrica-doctor-terms-"));
+  writeFileSync(join(terms, ".inspector.json"), '{"check":"./check.sh"}\n');
+  writeFileSync(join(terms, "Dockerfile.inspector"), "FROM alpine\n");
+  writeFileSync(join(terms, "check.sh"), "#!/bin/sh\nexit 0\n");
+  return terms;
+}
+
+test("fabrica doctor: a project whose terms live outside its repository passes, naming the folder", async () => {
+  const terms = termsFolder();
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${companyProject()}"\n` +
+      `check = "bin/ci"\nterms = "${terms}"\nnoStamp = true\n`
+  );
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  assert.equal(code, 0, text);
+  assert.match(text, new RegExp(`OK {3}project dayjob: .*terms in ${terms}`));
+  assert.match(text, /no Inspector stamp/);
+});
+
+test("fabrica doctor: the same repository with no terms setting still FAILs for having no check at all", async () => {
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${companyProject()}"\ncheck = "bin/ci"\n`
+  );
+
+  const { code, lines } = await doctor(home, okProbes());
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /FAIL project dayjob: .*neither \.inspector\.json nor check\.sh/);
+});
+
+test("fabrica doctor: a terms folder Inspector would refuse FAILs that project's line, with the fix", async () => {
+  const terms = termsFolder();
+  rmSync(join(terms, "Dockerfile.inspector"));
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${companyProject()}"\ncheck = "bin/ci"\nterms = "${terms}"\n`
+  );
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  assert.equal(code, 1);
+  assert.match(text, /FAIL project dayjob: .*Inspector would refuse it - .*holds no Dockerfile\.inspector/);
+  assert.match(text, new RegExp(`fix: add Dockerfile\\.inspector to ${terms}`));
+});
+
+test("fabrica doctor: a project asking for its repository's pull request template is told when there is none", async () => {
+  const project = companyProject();
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${project}"\n` +
+      `check = "bin/ci"\nterms = "${termsFolder()}"\npullRequestTemplate = true\n`
+  );
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  // Not a FAIL: such a project still works, it just publishes
+  // Fabrica's own body - but this line is the one place the Client
+  // would look, so it says so rather than staying silent.
+  assert.equal(code, 0, text);
+  assert.match(text, /no \.github\/PULL_REQUEST_TEMPLATE\.md to render the pull request body into/);
+
+  mkdirSync(join(project, ".github"), { recursive: true });
+  writeFileSync(join(project, ".github", "PULL_REQUEST_TEMPLATE.md"), "## Description\n");
+  const withTemplate = await doctor(home, okProbes());
+  assert.match(withTemplate.lines.join("\n"), /pull request body from \.github\/PULL_REQUEST_TEMPLATE\.md/);
+});
+
+test("fabrica doctor: a project in no work mode says nothing about any of it", async () => {
+  const { lines } = await doctor(healthyHome(), okProbes());
+  const line = lines.find((l) => l.includes("project demo"))!;
+  for (const word of ["terms in", "no Inspector stamp", "PULL_REQUEST_TEMPLATE"]) {
+    assert.ok(!line.includes(word), `the line mentioned ${word}: ${line}`);
+  }
+});

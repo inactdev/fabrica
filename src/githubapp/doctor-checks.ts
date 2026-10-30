@@ -45,6 +45,7 @@ import { appIdentity } from "./mint.ts";
 import { defaultTokenMinter } from "./minter.ts";
 import { publishPermissionGap } from "./publish-permissions.ts";
 import type { PublishPermissionGap } from "./publish-permissions.ts";
+import { publishPermissionsFor } from "./scopes.ts";
 import type { AppFetch } from "./types.ts";
 
 /** One `fabrica doctor` line. The same shape
@@ -64,6 +65,12 @@ export interface ProjectRepo {
   name: string;
   owner: string;
   repo: string;
+  /** True for a project Inspector posts no commit status for (issue
+   * #316, work mode). Its publishing token asks for no `statuses:
+   * write`, so this line must not report the absence of that permission
+   * as a gap - what it checks is exactly what the handoff will ask
+   * GitHub for, and nothing wider. */
+  noStamp?: boolean;
 }
 
 /** A registered project that reaches GitHub with a token of its own
@@ -177,9 +184,9 @@ export async function githubAppStatus(
   const missing: string[] = [];
   const unanswered: string[] = [];
   const gaps: { name: string; gap: PublishPermissionGap }[] = [];
-  for (const { name, owner, repo } of repos) {
+  for (const { name, owner, repo, noStamp } of repos) {
     try {
-      const gap = await publishPermissionGap(minter, owner, repo);
+      const gap = await publishPermissionGap(minter, owner, repo, publishPermissionsFor(noStamp === true));
       if (gap !== null) gaps.push({ name, gap });
     } catch (err) {
       if (err instanceof GithubAppError && err.code === "app-not-installed") missing.push(`${name} (${owner}/${repo})`);

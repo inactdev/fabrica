@@ -1,6 +1,6 @@
 # Inspector handoff
 
-`src/inspector/` is Fabrica's adapter for the independently run `inspector` command. A task requires inspection when its base commit contains `.inspector.json`; Worker changes cannot opt out or weaken inspection by changing it. Any final config blob that differs from the base commit, including deletion, is an Inspector refusal rather than a skip. The adapter turns Inspector's exit codes into `green`, `red`, or `refused` without treating a refusal as a red verdict.
+`src/inspector/` is Fabrica's adapter for the independently run `inspector` command. A task requires inspection when its base commit contains `.inspector.json` - or when its project names a terms folder outside the repository, which is the same answer said in a different place (issue #316, below); Worker changes cannot opt out or weaken inspection by changing it. Any final config blob that differs from the base commit, including deletion, is an Inspector refusal rather than a skip. The adapter turns Inspector's exit codes into `green`, `red`, or `refused` without treating a refusal as a red verdict.
 
 The handoff is trigger-driven: after each attempt's work is committed, the Foreman invokes Inspector directly and waits for that process. Fabrica runs no check of its own (issue #64); Inspector's run is the verdict, and a red report becomes the next attempt's correction brief. The call is `inspector -repo <worktree> -branch fabrica/<taskId>`: Inspector requires `-branch`, the one branch it may publish to after a green result. Neither module polls for an Inspector result. Exit 0 is `green`, exit 1 is `red`, and exit 2 is `refused`; every unexpected exit is also a refusal, never a red verdict. The Foreman records the call and report in `events.jsonl`; this module only knows how to make the call. Streamed output is kept as a bounded tail while Inspector runs, and its stored report is capped at 16 KiB with the true total byte count, retaining the end where command-line tools normally print the diagnosis.
 
@@ -90,6 +90,42 @@ the file. Two refusals Inspector also documents are deliberately not
 reproduced - an empty `check`, and a config that will not parse - see
 `notes/20261029-do-fabrica-issue-306-as-written-y5.md` for why, and for
 the fixtures that still carry the retired key on purpose.
+
+## Terms outside the repository, and a run that posts no stamp (issue #316)
+
+Work mode: a company repository nothing of ours may be added to, and
+whose CI nothing of ours may touch. Two of Inspector's own flags carry
+it, both ratified in `consumer-contract.json` like every other flag
+here (read from Inspector's merged `main.go`, inspector#69 / its PR
+#71):
+
+- **`-terms <dir>`** names a folder holding this project's
+  `.inspector.json`, `Dockerfile.inspector` and check script.
+  Inspector resolves all three against that folder and mounts it
+  read-only into the check box; the repository stays mounted as the
+  working directory exactly as before. Fabrica always passes an
+  **absolute** path: Inspector resolves a relative one against its own
+  working directory, which is the task's worktree, not Fabrica's.
+- **`-no-stamp`** takes no value. A green run still pushes, opens or
+  updates the pull request and writes its own report - it just posts no
+  commit status at all.
+
+Which projects get them is `src/workmode/README.md`'s question, and what
+else changes about such a round (the in-repo config checks that are
+skipped, the publishing token that stops asking for `statuses: write`)
+is `src/foreman/README.md`'s "Work mode" section.
+
+`terms.ts` is the terms-folder half of the stand-in above: Fabrica's own
+copy of the six refusals Inspector's `ResolveTerms` makes - a path that
+does not resolve, one that is not a directory, one holding a colon
+(Docker's mount syntax splits on it), one inside the repository under
+check, one containing it, and a folder missing either file Inspector
+reads out of it by name - then the shared config-key list above for
+what is left. Same two readers, same reason: the round's own gate
+(`requireTermsFolder`) and `fabrica doctor`'s per-project line. A terms
+folder is never asked to be committed: Inspector requires a committed
+Dockerfile only for in-repo terms, and a folder outside the repository
+is not under git at all.
 
 ## Which build of Inspector is installed
 

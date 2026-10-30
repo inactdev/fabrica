@@ -108,6 +108,22 @@ export interface InspectorAdapterOptions {
    * handoff that silently published with some other credential would be
    * exactly the breadth the App exists to remove. */
   token?: ScopedToken;
+  /** The folder holding this project's `.inspector.json`,
+   * `Dockerfile.inspector` and check script, for a repository none of
+   * the three may be committed to (issue #316, work mode). Passed as
+   * Inspector's own `-terms`, which resolves `.inspector.json`, the
+   * Dockerfile and the check command against that folder and mounts it
+   * read-only into the check box. Absolute - a relative path would
+   * resolve against the inspector child's own working directory, which
+   * is the task's worktree, not Fabrica's. Omitted, Inspector reads all
+   * three out of the repository exactly as it always has. */
+  terms?: string;
+  /** True for a project whose CI nothing of ours may touch (issue #316):
+   * Inspector is handed `-no-stamp`, so a green run still pushes, opens
+   * or updates its pull request and writes its own report, but posts no
+   * commit status at all. Omitted, the stamp is posted, which is the
+   * default everywhere else. */
+  noStamp?: boolean;
 }
 
 /** The message a handoff refuses with when it was built with no token
@@ -146,7 +162,14 @@ export function inspectorAdapter(command: string = "inspector", opts: InspectorA
       } catch (err) {
         return { verdict: "refused", report: err instanceof Error ? err.message : String(err) };
       }
-      return runInspector(command, workdir, branch, env, prTitle, prBody, expectedTip, reviewer);
+      return runInspector(command, workdir, branch, env, {
+        ...(prTitle === undefined ? {} : { prTitle }),
+        ...(prBody === undefined ? {} : { prBody }),
+        ...(expectedTip === undefined ? {} : { expectedTip }),
+        ...(reviewer === undefined ? {} : { reviewer }),
+        ...(opts.terms === undefined ? {} : { terms: opts.terms }),
+        ...(opts.noStamp ? { noStamp: true } : {}),
+      });
     },
     installed() {
       return commandIsInstalled(command, baseEnv);
@@ -236,14 +259,26 @@ async function runInspector(
   workdir: string,
   branch: string,
   env: NodeJS.ProcessEnv,
-  prTitle?: string,
-  prBody?: string,
-  expectedTip?: string,
-  reviewer?: ResolvedReviewer
+  opts: {
+    prTitle?: string;
+    prBody?: string;
+    expectedTip?: string;
+    reviewer?: ResolvedReviewer;
+    terms?: string;
+    noStamp?: boolean;
+  }
 ): Promise<Inspection> {
+  const { prTitle, prBody, expectedTip, reviewer, terms, noStamp } = opts;
   // -branch is required by Inspector: the one branch it may publish to
   // after a green result. Without it, Inspector refuses every handoff.
   const args = ["-repo", workdir, "-branch", branch];
+  // Issue #316: where this project's terms are. Omitted, Inspector
+  // reads them out of the repository, which is every project today.
+  if (terms !== undefined) args.push("-terms", terms);
+  // A bare flag - it takes no value - so a project whose CI nothing of
+  // ours may touch gets its branch published with no commit status
+  // posted on it.
+  if (noStamp) args.push("-no-stamp");
   // Only when the caller has one: a publish with no lease is what
   // Inspector has always done, and a missing expected tip must never be
   // dressed up as an empty one, which would lease against "no branch".

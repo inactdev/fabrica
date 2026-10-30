@@ -366,3 +366,40 @@ test("GITHUB_TOKEN is not a leftover when a project names it as its own publish 
     await github.close();
   }
 });
+
+// Work mode (issue #316): a project Inspector posts no commit status
+// for asks GitHub for no `statuses: write`, so this line must check
+// exactly that narrower set - the same App that FAILs for the project
+// above passes for this one, because nothing it does needs the
+// permission it lacks.
+test("a no-stamp project is not failed for a missing statuses: write", async () => {
+  const github = await stub({
+    appPermissions: { contents: "write", pull_requests: "write" },
+    narrowSilently: true,
+  });
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [{ ...WIDGETS, noStamp: true }], {
+      apiRoot: github.baseUrl,
+    });
+
+    assert.equal(check.ok, true, check.detail);
+  } finally {
+    await github.close();
+  }
+});
+
+test("a no-stamp project is still failed when it could not push or open a pull request", async () => {
+  const github = await stub({ appPermissions: { contents: "write" }, narrowSilently: true });
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [{ ...WIDGETS, noStamp: true }], {
+      apiRoot: github.baseUrl,
+    });
+
+    assert.equal(check.ok, false);
+    assert.match(check.detail, /pull_requests: write/);
+  } finally {
+    await github.close();
+  }
+});

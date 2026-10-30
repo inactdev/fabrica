@@ -31,9 +31,10 @@
 
 import { githubRepoOf, taskTokenMinter } from "./github-token.ts";
 import { loadConfigOrProblem } from "../config/index.ts";
-import { publishPermissionGap } from "../githubapp/index.ts";
+import { publishPermissionGap, publishPermissionsFor } from "../githubapp/index.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
 import { resolveProjectToken } from "../projecttoken/index.ts";
+import { workModeFor } from "../workmode/index.ts";
 import { ForemanError } from "./errors.ts";
 
 /**
@@ -70,17 +71,24 @@ export async function requirePublishPermissions(
   // doctor`, which checks the token is configured at all. A token
   // missing entirely is refused before any worker starts, by
   // `publishToken`'s `check()` through `Inspector.prepare()`.
-  const resolution = resolveProjectToken({
-    recordHome,
-    config: loadConfigOrProblem(recordHome).config,
-    projectPath: project,
-    env,
-  });
+  const config = loadConfigOrProblem(recordHome).config;
+  const resolution = resolveProjectToken({ recordHome, config, projectPath: project, env });
   if (resolution.kind !== "app") return;
 
   let gap;
   try {
-    gap = await publishPermissionGap(taskTokenMinter(recordHome, taskId, minter), repo.owner, repo.repo);
+    gap = await publishPermissionGap(
+      taskTokenMinter(recordHome, taskId, minter),
+      repo.owner,
+      repo.repo,
+      // Issue #316: exactly what this project's handoff will ask for. A
+      // project Inspector posts no commit status for needs no
+      // `statuses: write`, so asking for it here would refuse a task
+      // over a permission nothing it does will use - and the mint the
+      // round itself makes (`github-token.ts`'s `publishToken`) reads
+      // the same answer, so the two can never disagree.
+      publishPermissionsFor(workModeFor(config, project).noStamp)
+    );
   } catch {
     // The check could not be taken. See this file's header for why that
     // is not a refusal, and where it is reported instead.

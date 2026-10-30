@@ -17,7 +17,7 @@ import { fixtureInspector } from "../../contract/helpers/fake-inspector.ts";
 import { createForeman, OTHER_OPTION } from "../index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { readEventsForTask, readTaskFile } from "../record/index.ts";
-import { addReaderToHome, READER_TOML } from "../reader/helpers/configured-home.ts";
+import { addReaderToHome, withReaderConfigured, READER_TOML } from "../reader/helpers/configured-home.ts";
 import { runDoCommand } from "./do-command.ts";
 
 const FAKE_ENTRY = fileURLToPath(new URL("./helpers/fake-run-task-entry.ts", import.meta.url));
@@ -650,4 +650,58 @@ test("runDoCommand: a project that declares no testPaths needs no reviewer at al
   assert.equal(code, 0);
   assert.equal(io.out.length, 1, "it got past the gate and registered a task");
   assert.doesNotMatch(io.err.join("\n"), /\[reviewer\]/);
+});
+
+// Work mode (issue #316): a project whose terms live in a folder outside
+// its repository is set up for Fabrica by that setting. Without this it
+// would be told, at every single task, to run `fabrica register` against
+// a repository nothing of ours may be added to.
+test("runDoCommand: a project whose terms live outside its repository is not told to register", async () => {
+  const recordHome = unconfiguredRecordHome();
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const terms = mkdtempSync(join(tmpdir(), "fabrica-cli-do-terms-"));
+  writeFileSync(join(terms, ".inspector.json"), '{"check":"./check.sh"}\n');
+  writeFileSync(join(terms, "Dockerfile.inspector"), "FROM alpine\n");
+  withReaderConfigured(
+    recordHome,
+    `[projects.dayjob]\npath = ${JSON.stringify(project)}\ncheck = "bin/ci"\nterms = ${JSON.stringify(terms)}\n`
+  );
+  const io = captureIo();
+
+  const code = await runDoCommand(["small change", "--project", "dayjob"], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.doesNotMatch(io.err.join("\n"), /isn't set up for Fabrica yet/);
+  assert.equal(io.out.length, 1, `it got as far as registering: ${io.err.join("\n")}`);
+  assert.equal(code, 0, io.err.join("\n"));
+});
+
+// The reviewer half of the same gate, read from the terms folder - the
+// one place such a project's `.inspector.json` actually is.
+test("runDoCommand: testPaths in the terms folder with no reviewer configured is refused before registration", async () => {
+  const recordHome = unconfiguredRecordHome();
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const terms = mkdtempSync(join(tmpdir(), "fabrica-cli-do-terms-reviewer-"));
+  writeFileSync(join(terms, ".inspector.json"), '{"check":"./check.sh","testPaths":["spec/"]}\n');
+  writeFileSync(join(terms, "Dockerfile.inspector"), "FROM alpine\n");
+  writeFileSync(
+    join(recordHome, "projects.toml"),
+    `${READER_TOML}\n[projects.dayjob]\npath = ${JSON.stringify(project)}\ncheck = "bin/ci"\nterms = ${JSON.stringify(terms)}\n`
+  );
+  const io = captureIo();
+
+  const code = await runDoCommand(["small change", "--project", "dayjob"], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, [], "nothing was registered");
+  assert.match(io.err.join("\n"), /reviewer/);
 });

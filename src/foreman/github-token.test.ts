@@ -25,7 +25,7 @@ import {
   taskGithubCredential,
 } from "./github-token.ts";
 import { fakeMinter } from "../githubapp/helpers/fake-minter.ts";
-import { PUBLISH_PERMISSIONS } from "../githubapp/index.ts";
+import { PUBLISH_PERMISSIONS, PUBLISH_WITHOUT_STAMP_PERMISSIONS } from "../githubapp/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { readEvents } from "../record/index.ts";
 import { brainEnvPath } from "../brain/index.ts";
@@ -304,4 +304,27 @@ test("a work-mode project asks nothing of the GitHub App's own configuration", (
   const minter = fakeMinter({ refuse: new Error("No GitHub App is configured") });
 
   publishToken(recordHome, "task-1", project, minter).check();
+});
+
+// Work mode (issue #316): a project Inspector posts no commit status
+// for. A handoff that will not stamp must not hold the permission to -
+// and on an App that was never granted it, asking anyway would make the
+// mint itself refuse.
+test("the publishing token drops statuses: write for a project Inspector posts no stamp for", async () => {
+  const recordHome = home();
+  const project = projectOn("https://github.com/acme/widgets.git");
+  writeFileSync(
+    join(recordHome, "projects.toml"),
+    `[projects.dayjob]\npath = ${JSON.stringify(project)}\ncheck = "bin/ci"\nnoStamp = true\n`
+  );
+  const minter = fakeMinter();
+
+  await publishToken(recordHome, "task-1", project, minter).mint();
+
+  assert.deepEqual(minter.calls, [
+    {
+      purpose: "publish",
+      scope: { owner: "acme", repo: "widgets", permissions: PUBLISH_WITHOUT_STAMP_PERMISSIONS },
+    },
+  ]);
 });

@@ -39,6 +39,9 @@ export {
   INSPECTOR_DOCKERFILE,
 } from "./config-check.ts";
 export type { DockerfileState, InspectorConfigFacts, InspectorConfigProblem, InspectorConfigRefusal } from "./config-check.ts";
+// Issue #316: the same question for a project whose terms live in a
+// folder outside its repository - one answer, the same two readers.
+export { termsProblem, termsSetup, TERMS_REQUIRED_FILES } from "./terms.ts";
 export { commitAncestry } from "./ancestry.ts";
 export type { CommitAncestry } from "./ancestry.ts";
 export { goInstallInspector, realInspectorVersionProbes } from "./version.ts";

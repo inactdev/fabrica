@@ -91,6 +91,33 @@ export interface ProjectConfig {
    * uses the App, and a machine with no App configured at all is not an
    * error for a project that names a token. See src/projecttoken/. */
   githubTokenVar?: string;
+  /** `terms = "<folder>"` — the folder on this machine holding this
+   * project's own `.inspector.json`, `Dockerfile.inspector` and check
+   * script, for a repository none of the three may be committed to
+   * (issue #316, work mode). Absolute by the time the loader is done
+   * with it: written relative, it is resolved against the directory
+   * `projects.toml` itself sits in, and a leading `~` is expanded like a
+   * project's own path.
+   *
+   * Set, Fabrica hands the folder to Inspector and stops looking for
+   * those files in the repository at all; absent - the default, and
+   * every project today - everything reads out of the repository exactly
+   * as before. Read-only to Fabrica: nothing ever writes into it. See
+   * src/workmode/. */
+  terms?: string;
+  /** `noStamp = true` — Inspector is asked not to post its commit
+   * status for this project, and Fabrica's own checks for one are
+   * skipped (issue #316, work mode). For a repository whose CI nothing
+   * of ours may touch. Absent means the stamp is posted, which is the
+   * default everywhere else. */
+  noStamp?: boolean;
+  /** `pullRequestTemplate = true` — this repository's own
+   * `.github/PULL_REQUEST_TEMPLATE.md` is the shape of the pull request
+   * body, with the write-up's words placed under its sections (issue
+   * #316, work mode). Absent means Fabrica's own four-section template,
+   * which is what every project today renders. The commit message is
+   * unchanged either way. */
+  pullRequestTemplate?: boolean;
   /** `[projects.<name>.reviewer]` — this project's own reviewer,
    * overriding the global `[reviewer]` table outright (not field by
    * field: a project that names one names both fields). */

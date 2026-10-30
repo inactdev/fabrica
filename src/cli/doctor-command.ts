@@ -22,17 +22,22 @@ import {
   NETWORK_PRUNE_COMMAND,
   probeWorkerToken,
   readEvents,
+  readPullRequestTemplate,
   requireGitRoot,
+  PULL_REQUEST_TEMPLATE_PATH,
   resolveProjectToken,
   stateOf,
+  termsProblem,
   unmeasuredSpend,
   relayImageStatus,
   workerCliVersionStatus,
   workerImageStatus,
   workerTokenStatus,
+  workModeFor,
+  NO_WORK_MODE,
   WORKER_NETWORK_PREFIX,
 } from "../index.ts";
-import type { ProjectOwnToken, ProjectRepo, ProjectTokenResolution, WorkerNetwork } from "../index.ts";
+import type { ProjectOwnToken, ProjectRepo, ProjectTokenResolution, WorkerNetwork, WorkMode } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { dockerDaemonUp } from "./docker-daemon.ts";
 import {
@@ -686,7 +691,12 @@ function registeredProjectRepos(recordHome: string): ProjectRepo[] {
   return Object.entries(config.projects).flatMap(([name, project]) => {
     if (project.githubTokenVar !== undefined) return [];
     const repo = githubRepoOf(project.path);
-    return repo === null ? [] : [{ name, ...repo }];
+    // `noStamp` rides along (issue #316) because what this line checks
+    // has to be exactly what the project's own handoff will ask GitHub
+    // for - a project Inspector posts no status for needs no
+    // `statuses: write`, and reporting its absence as a gap would FAIL
+    // a project that works.
+    return repo === null ? [] : [{ name, ...repo, ...(project.noStamp ? { noStamp: true } : {}) }];
   });
 }
 
@@ -707,7 +717,19 @@ function registeredOwnTokens(recordHome: string): ProjectOwnToken[] {
  * already holds the config, rather than read again here. */
 export type ProjectCredentialLine = ProjectTokenResolution;
 
-function projectCheck(name: string, path: string, credential: ProjectCredentialLine): DoctorCheck {
+function projectCheck(
+  name: string,
+  path: string,
+  credential: ProjectCredentialLine,
+  /** Issue #316: this project's own work-mode settings. A project whose
+   * terms live in a folder outside its repository is asked about that
+   * folder instead of about the repository's own files - which it may
+   * carry none of, by design - so this line does not FAIL a work-mode
+   * project for being exactly what it is. `fabrica up` stops on any
+   * blocking FAIL, so getting this wrong would make Fabrica unusable on
+   * the machine this setting exists for. */
+  workMode: WorkMode = NO_WORK_MODE
+): DoctorCheck {
   const label = `project ${name}`;
   try {
     requireGitRoot(path);
@@ -719,7 +741,11 @@ function projectCheck(name: string, path: string, credential: ProjectCredentialL
       ? { ok: false, label, detail: message }
       : { ok: false, label, detail: message.slice(0, cut), fix: message.slice(cut + 2) };
   }
-  if (!existsSync(join(path, ".inspector.json")) && !existsSync(join(path, "check.sh"))) {
+  // Issue #316: a project whose terms live outside its repository has
+  // them in that folder by design, so neither of the two questions
+  // below is asked of the repository at all - what is asked instead is
+  // whether that folder is one Inspector would accept.
+  if (workMode.terms === undefined && !existsSync(join(path, ".inspector.json")) && !existsSync(join(path, "check.sh"))) {
     return {
       ok: false,
       label,
@@ -746,7 +772,13 @@ function projectCheck(name: string, path: string, credential: ProjectCredentialL
   // above already covers a missing one. Asked last of the four, because
   // the three above are about whether this project can be worked at all
   // - a path that is not a repository has no config to read.
-  const configProblem = inspectorConfigProblem(path);
+  //
+  // Issue #316: for a project whose terms live outside its repository,
+  // the same question asked of the folder they are actually in - the
+  // repository has none of those files, so the in-repo read would
+  // report a problem that is the configuration working as intended.
+  const configProblem =
+    workMode.terms === undefined ? inspectorConfigProblem(path) : termsProblem(workMode.terms, path);
   if (configProblem !== null) {
     return {
       ok: false,
@@ -771,14 +803,40 @@ function projectCheck(name: string, path: string, credential: ProjectCredentialL
   // validation, and a config that would not even parse has its key
   // checks skipped (config-check.ts). Claiming more than was looked at
   // would be the one thing this line must not do.
-  const inspected = existsSync(join(path, ".inspector.json"))
-    ? ", nothing Inspector is known to refuse"
-    : "";
+  const inspected =
+    workMode.terms !== undefined || existsSync(join(path, ".inspector.json"))
+      ? ", nothing Inspector is known to refuse"
+      : "";
   return {
     ok: true,
     label,
-    detail: `${path}: git root, has a check, has origin${inspected}, ${describeProjectCredential(credential)}`,
+    detail:
+      `${path}: git root, has a check, has origin${inspected}, ${describeProjectCredential(credential)}` +
+      describeWorkMode(workMode, path),
   };
+}
+
+/** What work mode this project is in, for the tail of its own line
+ * (issue #316) - nothing at all for a project carrying none of the three
+ * settings, which is every project today.
+ *
+ * A project that asks for its repository's own pull request template and
+ * has none at the path GitHub reads is reported here rather than left
+ * silent: its pull requests will carry Fabrica's own body instead, which
+ * is a working outcome but not the one that was asked for, and this line
+ * is the one place the Client would look. */
+function describeWorkMode(workMode: WorkMode, path: string): string {
+  const parts: string[] = [];
+  if (workMode.terms !== undefined) parts.push(`terms in ${workMode.terms}`);
+  if (workMode.noStamp) parts.push("no Inspector stamp");
+  if (workMode.pullRequestTemplate) {
+    parts.push(
+      readPullRequestTemplate(path) === undefined
+        ? `no ${PULL_REQUEST_TEMPLATE_PATH} to render the pull request body into`
+        : `pull request body from ${PULL_REQUEST_TEMPLATE_PATH}`
+    );
+  }
+  return parts.length === 0 ? "" : `, ${parts.join(", ")}`;
 }
 
 /** A doctor line is one line. Every refusal Fabrica writes opens with
@@ -874,7 +932,11 @@ export async function collectDoctorChecks(opts: { recordHome: string; probes?: D
           // round's own start asks (src/foreman/github-token.ts) - so
           // what doctor says and what a task refuses on can never be
           // two different answers.
-          resolveProjectToken({ recordHome, config, projectPath: path, projectLabel: name, env: process.env })
+          resolveProjectToken({ recordHome, config, projectPath: path, projectLabel: name, env: process.env }),
+          // Issue #316: read off the same config, so what this line
+          // reports about a work-mode project and what a round actually
+          // does are one answer.
+          workModeFor(config, path)
         )
       );
     }

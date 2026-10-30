@@ -118,3 +118,33 @@ test("requireReviewer: adding testPaths in the worktree does not make a reviewer
 
   assert.equal(requireReviewer(recordHome, project, project, baseCommit), undefined);
 });
+
+// Work mode (issue #316): a project whose terms live in a folder outside
+// its repository. There is no commit to read `.inspector.json` at - the
+// file is not in any repository - so the folder is read as it stands,
+// which is safe for the reason the base-commit pinning exists at all:
+// the terms folder is never mounted into a worker's box, so no Worker
+// can reach it.
+test("requireReviewer: with no commit to pin to, testPaths is read from the folder as it stands", () => {
+  const terms = makeTestHome("");
+  writeFileSync(join(terms, ".inspector.json"), '{"check":"./check.sh","testPaths":"*.test.ts"}\n');
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const recordHome = makeTestHome("");
+
+  assert.throws(
+    () => requireReviewer(recordHome, terms, project),
+    (err: unknown) => {
+      assert.ok(err instanceof ForemanError);
+      assert.equal(err.code, "reviewer-not-ready");
+      return true;
+    }
+  );
+});
+
+test("requireReviewer: a terms folder declaring no testPaths needs no reviewer", () => {
+  const terms = makeTestHome("");
+  writeFileSync(join(terms, ".inspector.json"), '{"check":"./check.sh"}\n');
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+
+  assert.equal(requireReviewer(makeTestHome(""), terms, project), undefined);
+});
