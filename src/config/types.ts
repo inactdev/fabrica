@@ -31,7 +31,13 @@ export interface ReviewerConfig {
  * inside Inspector's own run, one reads the whole diff afterwards and
  * only flags), so the Client picks each one himself. A project with no
  * reader configured is refused at task start, naming the lines to add —
- * see src/reader/resolve.ts. */
+ * see src/reader/resolve.ts.
+ *
+ * `vendor` is the only field that decides anything beyond which model:
+ * most vendors are reached over the network and need their credential
+ * variables, while a vendor served by a command on the host (issue #315)
+ * needs none at all. Which is which is not this file's business and
+ * cannot be — see src/reader/README.md's "Two ways to reach one". */
 export interface ReaderConfig {
   vendor: string;
   model: string;

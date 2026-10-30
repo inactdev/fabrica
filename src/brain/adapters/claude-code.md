@@ -733,3 +733,70 @@ what to fix.
   if it ever happened there would be no session id or cost to recover,
   so this adapter refuses rather than returning a `BrainWorkResult`
   with silently-missing data.
+
+## Reading a diff through the host's own CLI (`cli-reader.ts`, issue #315)
+
+`cli-reader.ts` is a second, much smaller user of this same binary, and
+the only other file in this directory that drives it. It is **not** a
+`Brain`: it serves the code reader (`src/reader/`) for a Client whose
+only model access is this CLI on a subscription - no API key, no
+endpoint - by running one call that takes a diff as text and returns a
+findings list as text. It holds no session, mounts nothing, works on no
+repository, and runs **on the host**, not through
+`../../containment/`: there is nothing for a box to contain when the
+call edits nothing and has every tool switched off.
+
+The whole command line, and what each flag was verified to do on 2.1.222
+(2026-10-30, by running it):
+
+    <the prompt on stdin> | claude -p --output-format json \
+      --json-schema '<the findings schema>' --tools "" --model <model>
+
+- **`-p` with no prompt argument, the prompt on stdin.** Not a style
+  choice: Linux caps a *single* argv string at 128 KiB
+  (`MAX_ARG_STRLEN`), and a read is allowed up to 1 MB of diff
+  (`src/reader/read.ts`'s `MAX_DIFF_BYTES`), so `work()`'s `-p <brief>`
+  shape would die with `E2BIG` on a large change. Verified that
+  `printf '<prompt>' | claude -p ...` answers exactly as the argv form
+  does.
+- **`--output-format json`** prints one result object, which is all this
+  call needs - there is no transcript to stream here, so the reasoning
+  in "Why `--output-format stream-json --verbose`, not `json`" above
+  points the other way for this one caller. (`--verbose` is only
+  required alongside `stream-json`.)
+- **`--json-schema`** puts the answer on that object's
+  `structured_output`, already parsed - the same fact `writeup` depends
+  on, re-verified here for the single-object output format: a schema
+  asking for `{findings: [{file, finding}]}` came back as
+  `"structured_output":{"findings":[]}` with `"subtype":"success"`.
+  `error_max_structured_output_retries` is handled the same way `writeup`
+  handles it - as "no structured answer", with the model's own text
+  passed to the reader's own tolerant parser instead, never as a thrown
+  error.
+- **`--tools ""`** switches every tool off ("Use `""` to disable all
+  tools", per `claude --help`). A reader reads the diff it was handed;
+  it has no business opening files, running commands or reaching the
+  network. Verified that structured output still arrives with tools
+  disabled - it rides its own channel, not the tool set.
+- **`--model`** is the Client's own `[reader] model` from
+  `projects.toml`, exactly as for every other reader vendor.
+
+Three flags are deliberately absent, and the reasons are not the same as
+`work()`'s: no `--permission-mode bypassPermissions` (nothing is being
+edited, so there is nothing to unlock - the same reasoning as `ask()`),
+no `--resume` (a read is never continued), and no `--max-budget-usd` (a
+cap would turn a read into a trimmed one, which is the one dishonest
+answer available - see `src/reader/README.md` on why too much diff is
+refused rather than shortened).
+
+`--bare` was considered for the same reason `ask()` uses an empty
+scratch directory - it skips agent-memory discovery, hooks and plugin
+sync - and rejected on its own help text: under `--bare` authentication
+becomes API-key-only, which is precisely the thing this vendor exists to
+do without. The empty throwaway working directory per call does the same
+job without touching how the call authenticates.
+
+What is **not** covered by the fast tests, and is its own opt-in test
+(`FABRICA_TEST_REAL_READER=1`, with the loud `after()` banner this
+directory's README requires): that the real binary still answers in that
+shape. `helpers/fake-cli-reader.mjs` imitates it for everything else.

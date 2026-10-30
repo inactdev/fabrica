@@ -59,9 +59,12 @@ integrations/live-view/server.ts: integrations/live-view/server.test.ts
 integrations/live-view/state-agreement.test.ts: integrations/live-view/state-agreement.test.ts
 src/brain/adapters/claude-code.test.ts: src/brain/adapters/claude-code.test.ts
 src/brain/adapters/claude-code.ts: src/brain/adapters/claude-code.test.ts
+src/brain/adapters/cli-reader.test.ts: src/brain/adapters/cli-reader.test.ts
+src/brain/adapters/cli-reader.ts: src/brain/adapters/cli-reader.test.ts
 src/brain/adapters/doctor-checks.test.ts: src/brain/adapters/doctor-checks.test.ts
 src/brain/adapters/doctor-checks.ts: src/brain/adapters/doctor-checks.test.ts
 src/brain/adapters/helpers/fake-claude-cli.test.ts: src/brain/adapters/helpers/fake-claude-cli.test.ts
+src/brain/adapters/helpers/fake-cli-reader.mjs: src/brain/adapters/cli-reader.test.ts
 src/brain/adapters/index.test.ts: src/brain/adapters/index.test.ts
 src/brain/adapters/index.ts: src/brain/adapters/index.test.ts
 src/brain/adapters/openai-agent/client.test.ts: src/brain/adapters/openai-agent/client.test.ts
@@ -332,6 +335,20 @@ src/quiz/schedule.test.ts: src/quiz/schedule.test.ts
 src/quiz/schedule.ts: src/quiz/schedule.test.ts
 src/quiz/staleness.test.ts: src/quiz/staleness.test.ts
 src/quiz/staleness.ts: src/quiz/staleness.test.ts
+# Hand-added: src/reader/ was written after this file was last generated,
+# so none of it was listed. `call.ts` and `types.ts` have no colocated
+# test of their own, but read.test.ts drives both ways of reaching a
+# reader and resolve.test.ts drives both ways of settling one, which is
+# what actually covers them.
+src/reader/call.ts: src/reader/read.test.ts
+src/reader/correction.test.ts: src/reader/correction.test.ts
+src/reader/correction.ts: src/reader/correction.test.ts
+src/reader/read.test.ts: src/reader/read.test.ts
+src/reader/read.ts: src/reader/read.test.ts
+src/reader/resolve.test.ts: src/reader/resolve.test.ts
+src/reader/resolve.ts: src/reader/resolve.test.ts
+src/reader/types.ts: src/reader/read.test.ts, src/reader/resolve.test.ts
+
 src/record/append.test.ts: src/record/append.test.ts
 src/record/append.ts: src/record/append.test.ts
 src/record/ids.test.ts: src/record/ids.test.ts
