@@ -1,4 +1,9 @@
-// The one HTTP call this module makes: POST <baseUrl>/chat/completions.
+// How a reader is reached. Two ways, one answer shape: an HTTP POST to
+// <baseUrl>/chat/completions for a vendor with a key and an endpoint,
+// and - issue #315 - a command on this machine for a vendor that has
+// neither, which `askCommandReader` at the bottom of this file hands to
+// src/brain/adapters. Both return the model's answer as text, so
+// everything downstream of the answer is the same code.
 //
 // Written out here rather than imported from the direct-API brain
 // adapter's own client, which already makes the identical call, for a
@@ -20,10 +25,18 @@
 // Nothing here knows or names which vendor is on the other end: the
 // endpoint and the credential both arrive settled (resolve.ts) from the
 // Client's own `[reader]` table and his own `brain.env`.
+//
+// That scan is also why `askCommandReader` reaches the adapter directory
+// through `../brain/index.ts` rather than the adapter file itself: the
+// barrel's path names nobody, so importing it is allowed where importing
+// a vendor-named path would fail the test. Which is the same constraint
+// as the paragraph above, satisfied the other way round - there the
+// client had to be rewritten, here one re-export was enough.
 
 import * as http from "node:http";
 import * as https from "node:https";
-import type { ResolvedReader } from "./types.ts";
+import { cliReaderFor } from "../brain/index.ts";
+import type { ApiReader, CommandReader } from "./types.ts";
 
 /** Statuses that mean "not now" rather than "no": the provider's own
  * back-pressure and its own outages. Anything else - a 400, a 401 - is
@@ -48,7 +61,15 @@ export interface CallOptions {
    * opens a socket and nothing in the default `npm test` run depends on
    * a network or a credential. */
   post?: PostJson;
+  /** The same, for the other way a reader can be reached (issue #315):
+   * the command that stands in for it, so a test proves the dispatch
+   * without running anything real. */
+  command?: string;
 }
+
+/** The message array both ways of reaching a reader take - the
+ * instruction and then the diff, built once by `readDiff`. */
+export type ReaderMessages = { role: "system" | "user"; content: string }[];
 
 export type PostJson = (
   url: string,
@@ -105,8 +126,8 @@ export const postJson: PostJson = (url, headers, body, timeoutMs) =>
  * never the key.
  */
 export async function askReader(
-  reader: ResolvedReader,
-  messages: { role: "system" | "user"; content: string }[],
+  reader: ApiReader,
+  messages: ReaderMessages,
   opts: CallOptions = {}
 ): Promise<string> {
   const url = `${reader.baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -142,6 +163,50 @@ export async function askReader(
   }
 
   throw new Error(`${lastProblem} (gave up after ${RETRY_DELAYS_MS.length + 1} attempts)`);
+}
+
+/**
+ * The other way (issue #315): the same messages, asked of a command on
+ * this machine instead of an endpoint, and the same thing handed back -
+ * the model's answer as text, for `parseFindings` to read exactly as it
+ * reads an API-keyed vendor's.
+ *
+ * `schema` goes to the command as a JSON Schema, so the answer arrives
+ * already structured rather than parsed out of prose. The shape is the
+ * reader's own (src/reader/read.ts) - this function only carries it.
+ *
+ * No retry loop, deliberately, where the HTTP path above has one: a
+ * command on this machine is not somebody's rate limiter, its own client
+ * already handles a provider's back-pressure, and a second whole read is
+ * a second whole charge. A failure comes back as a failed read, which
+ * never blocks a delivery.
+ *
+ * Nothing here knows which command, or that there is a vendor behind it:
+ * `cliReaderFor` answers from src/brain/adapters, the only place allowed
+ * to know (CONTRACT rule 8). A reader that reached this function for a
+ * vendor no adapter serves is a resolution bug, not a model failure, and
+ * says so.
+ */
+export async function askCommandReader(
+  reader: CommandReader,
+  messages: ReaderMessages,
+  schema: unknown,
+  opts: CallOptions = {}
+): Promise<string> {
+  const vendor = cliReaderFor(reader.vendor);
+  if (vendor === undefined) {
+    throw new Error(
+      `the code reader "${reader.vendor}" was settled as one reached by running \`${reader.command}\`, but nothing ` +
+        `here knows how to run that vendor - this is a bug in Fabrica, not a problem with the read.`
+    );
+  }
+  return vendor.ask({
+    model: reader.model,
+    messages,
+    schema,
+    ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+    ...(opts.command === undefined ? {} : { command: opts.command }),
+  });
 }
 
 /** The assistant's text out of one answer body. A 200 carrying an error

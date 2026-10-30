@@ -9,8 +9,8 @@
 // one: a reader that answered "looks good to me" would be approving,
 // which is Inspector's job and the Client's, never this one's.
 
-import { askReader } from "./call.ts";
-import type { CallOptions } from "./call.ts";
+import { askCommandReader, askReader } from "./call.ts";
+import type { CallOptions, ReaderMessages } from "./call.ts";
 import type { ReaderFinding, ReaderReport, ResolvedReader } from "./types.ts";
 
 /** Past this much diff the read is refused rather than trimmed. A
@@ -46,6 +46,37 @@ const SYSTEM_PROMPT = [
   '{"findings": []} when there is nothing to flag.',
 ].join("\n");
 
+/** The same shape the prompt asks for, as a JSON Schema - for a reader
+ * reached by a command that can be handed one (issue #315), so its
+ * answer comes back already structured instead of fished out of prose.
+ * The prompt above still asks in words as well: the two must agree, and
+ * a vendor reached over HTTP is asked in words only, since this module
+ * sends no provider-specific response-format field (the one request
+ * shape it makes is the plain chat-completions one, nothing more).
+ *
+ * `findings` is required and `additionalProperties` closed, so an empty
+ * list is something the model said and never something a parser assumed
+ * - the same line `parseFindings` draws below. */
+export const FINDINGS_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["findings"],
+  properties: {
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["file", "finding"],
+        properties: {
+          file: { type: "string", minLength: 1 },
+          finding: { type: "string", minLength: 1 },
+        },
+      },
+    },
+  },
+};
+
 /**
  * Reads one diff. Resolves with the report - including a clean one -
  * and throws an Error, written for the Client, for every way a read can
@@ -73,14 +104,19 @@ export async function readDiff(
     );
   }
 
-  const answer = await askReader(
-    reader,
-    [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: `Here is the whole diff of the change.\n\n${diff}` },
-    ],
-    opts
-  );
+  const messages: ReaderMessages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: `Here is the whole diff of the change.\n\n${diff}` },
+  ];
+  // The one branch in this module about how the model is reached (issue
+  // #315). Everything after it - the parsing, the report, the findings
+  // that go to the machine, the delivery - is the same code either way,
+  // which is the point: a project on a work account whose only access is
+  // a command on the host gets the same read as one with a key.
+  const answer =
+    reader.via === "command"
+      ? await askCommandReader(reader, messages, FINDINGS_JSON_SCHEMA, opts)
+      : await askReader(reader, messages, opts);
 
   return { model: readerLabel(reader), findings: parseFindings(answer), diffBytes };
 }

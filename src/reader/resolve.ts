@@ -26,6 +26,14 @@
 //    under src/ outside adapters/, this file and this module's README
 //    included.
 //
+// Both credentials above are about a vendor reached over the network.
+// Issue #315 added a second way to reach a model - a command on this
+// machine, for a work account whose only access is a coding-agent CLI on
+// a subscription - and such a vendor wants neither variable: the one
+// thing that can be missing is the command itself. Which vendors those
+// are is asked of src/brain/adapters (`cliReaderFor`), the only place
+// allowed to know, so this module still names nothing.
+//
 // The credential's variable naming (`<VENDOR>_API_KEY` /
 // `<VENDOR>_BASE_URL`) is imported from src/reviewer rather than
 // re-derived here, deliberately: one vendor must resolve to one key
@@ -35,7 +43,12 @@
 // are this module's own.
 
 import { realpathSync } from "node:fs";
-import { brainEnvPath, brainEnvValue } from "../brain/index.ts";
+import { brainEnvPath, brainEnvValue, cliReaderFor } from "../brain/index.ts";
+// Type only, erased at compile time: what the lookup above answered, so
+// the refusal can name the real problem. The barrel's own path names
+// nobody, which is what makes importing it here allowed at all (see this
+// file's header).
+import type { CommandLookup } from "../brain/index.ts";
 import { projectsTomlPath } from "../config/index.ts";
 import type { FabricaConfig, ReaderConfig } from "../config/index.ts";
 import { apiKeyVarFor, baseUrlVarFor } from "../reviewer/index.ts";
@@ -92,6 +105,33 @@ export function resolveReader(opts: {
     return { kind: "refused", message: missingReaderMessage(recordHome, label) };
   }
 
+  // Issue #315's work mode, asked of the one directory allowed to know
+  // the answer: is this vendor reached by running something on this
+  // machine rather than by calling an endpoint with a key? If it is,
+  // there is no credential to look for at all - the installed, already
+  // signed-in command *is* the credential - and the one thing that can
+  // be wrong is that the command is not there. That is a refusal at task
+  // start naming it, which is this issue's own clarification and the
+  // same place the other three refusals land.
+  // Only a vendor the adapter directory actually serves takes this
+  // branch - matched on the whole name, so a vendor merely *spelled like*
+  // one of those is nobody's here and falls through to the ordinary key
+  // and endpoint below, exactly as every other vendor does.
+  const viaCommand = cliReaderFor(configured.vendor);
+  if (viaCommand !== undefined) {
+    const found = viaCommand.locate(env);
+    if (!found.found) {
+      return {
+        kind: "refused",
+        message: missingCommandMessage(label, configured.vendor, viaCommand.command, found),
+      };
+    }
+    return {
+      kind: "reader",
+      reader: { via: "command", vendor: configured.vendor, model: configured.model, command: viaCommand.command },
+    };
+  }
+
   const apiKeyVar = apiKeyVarFor(configured.vendor);
   const baseUrlVar = baseUrlVarFor(configured.vendor);
   let apiKey: string | undefined;
@@ -130,6 +170,7 @@ export function resolveReader(opts: {
   return {
     kind: "reader",
     reader: {
+      via: "api",
       vendor: configured.vendor,
       model: configured.model,
       apiKeyVar,
@@ -159,6 +200,37 @@ export function missingReaderMessage(recordHome: string, label: string): string 
     `[reader] is separate from [reviewer] on purpose and is never taken from it: the reviewer judges a ` +
     `change's test edits inside Inspector's own run, the reader reads the whole diff afterwards and only ` +
     `flags. Name each one yourself.`
+  );
+}
+
+/** The refusal for a vendor whose calls go through a command on this
+ * machine when that command cannot be run (issue #315). It names the
+ * command, because that is the whole of what is missing, and says out
+ * loud that no key is wanted here - otherwise the obvious reading of any
+ * reader refusal is "set a credential", which for this vendor would send
+ * the Client looking for one that does not exist.
+ *
+ * It also names the *real* problem rather than the likely one: a command
+ * sitting right there without the executable bit is a `chmod`, not an
+ * install, and a refusal that said "not on PATH" about it would send him
+ * to fix something that is already fine. Exported so a test asserts on
+ * one wording rather than its own copy of it. */
+export function missingCommandMessage(
+  label: string,
+  vendor: string,
+  command: string,
+  found: Extract<CommandLookup, { found: false }>
+): string {
+  const problem =
+    found.why === "not-executable"
+      ? `\`${command}\` is at ${found.path} but cannot be run - make it executable (\`chmod +x ${found.path}\`) ` +
+        `and run the task again`
+      : `\`${command}\` is not on PATH. Install it (or put it on PATH) and run the task again`;
+  return (
+    `the code reader configured for ${label} is "${vendor}", whose calls go through the \`${command}\` command ` +
+    `on this machine, but ${problem}. ` +
+    `This reader needs no API key and no endpoint - the signed-in \`${command}\` on this machine is how it reaches ` +
+    `a model; only its model name comes from the [reader] table.`
   );
 }
 

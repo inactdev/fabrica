@@ -1,16 +1,18 @@
-// No vendor is named by hand anywhere in this file - every vendor here
-// is a made-up string (CONTRACT rule 8's scan covers test files too).
+// No vendor is named by hand anywhere in this file (CONTRACT rule 8's
+// scan covers test files too): every vendor here is either a made-up
+// string, or - for the one reached by a command on this machine (issue
+// #315) - taken from the adapter directory that owns the name.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { brainEnvPath } from "../brain/index.ts";
+import { brainEnvPath, cliReaderFor, CLI_READER_VENDOR } from "../brain/index.ts";
 import { loadConfig } from "../config/index.ts";
 import { makeTestHome } from "../config/helpers/test-home.ts";
 import { apiKeyVarFor, baseUrlVarFor } from "../reviewer/index.ts";
-import { missingReaderMessage, readerFor, resolveReader } from "./resolve.ts";
+import { missingCommandMessage, missingReaderMessage, readerFor, resolveReader } from "./resolve.ts";
 
 const VENDOR = "close-reader";
 const KEY_VAR = apiKeyVarFor(VENDOR);
@@ -86,6 +88,7 @@ test("the global [reader] settles, with both credentials", () => {
   const resolution = resolve(recordHome, project, WORKING_ENV);
   assert.equal(resolution.kind, "reader");
   assert.deepEqual(resolution.kind === "reader" ? resolution.reader : undefined, {
+    via: "api",
     vendor: VENDOR,
     model: "reader-1",
     apiKeyVar: KEY_VAR,
@@ -168,8 +171,9 @@ test("both credentials are read from brain.env when the environment has neither"
 
   const resolution = resolve(recordHome, project);
   assert.equal(resolution.kind, "reader");
-  assert.equal(resolution.kind === "reader" ? resolution.reader.apiKey : "", "from-file");
-  assert.equal(resolution.kind === "reader" ? resolution.reader.baseUrl : "", ENDPOINT);
+  const reader = resolution.kind === "reader" && resolution.reader.via === "api" ? resolution.reader : undefined;
+  assert.equal(reader?.apiKey, "from-file");
+  assert.equal(reader?.baseUrl, ENDPOINT);
 });
 
 test("a brain.env other users can read is its own refusal, not 'no key'", () => {
@@ -204,4 +208,141 @@ test("a record home with no projects.toml still refuses, with the same lines", (
   });
   assert.equal(resolution.kind, "refused");
   assert.equal(resolution.kind === "refused" ? resolution.message : "", missingReaderMessage(recordHome, project));
+});
+
+// Issue #315's work mode: a vendor whose calls go through a command on
+// this machine instead of an endpoint and a key. The vendor's own name
+// comes from the adapter that owns it - this file names no vendor by
+// hand, and never could (CONTRACT rule 8's scan covers it).
+const COMMAND_VENDOR = CLI_READER_VENDOR;
+const COMMAND = cliReaderFor(COMMAND_VENDOR)!.command;
+
+/** A directory with that command in it, executable - so the PATH lookup
+ * finds one without this test depending on what the machine running it
+ * happens to have installed. */
+function dirWithCommand(): string {
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-reader-path-"));
+  const path = join(dir, COMMAND);
+  writeFileSync(path, "#!/bin/sh\nexit 0\n");
+  chmodSync(path, 0o755);
+  return dir;
+}
+
+function commandReaderHome(project: string): string {
+  return makeTestHome(`
+    [reader]
+    vendor = "${COMMAND_VENDOR}"
+    model = "reader-1"
+
+    [projects.app]
+    path = "${project}"
+  `);
+}
+
+test("a reader reached by a command settles with no key and no endpoint anywhere", () => {
+  const project = projectDir();
+  const recordHome = commandReaderHome(project);
+
+  // Nothing in the environment but a PATH: no credential exists for this
+  // vendor, and none is wanted.
+  const resolution = resolve(recordHome, project, { PATH: dirWithCommand() });
+
+  assert.equal(resolution.kind, "reader");
+  assert.deepEqual(resolution.kind === "reader" ? resolution.reader : undefined, {
+    via: "command",
+    vendor: COMMAND_VENDOR,
+    model: "reader-1",
+    command: COMMAND,
+  });
+});
+
+test("the model still comes from projects.toml, as it does for every vendor", () => {
+  const project = projectDir();
+  const recordHome = makeTestHome(`
+    [reader]
+    vendor = "${COMMAND_VENDOR}"
+    model = "global-1"
+
+    [projects.app]
+    path = "${project}"
+    [projects.app.reader]
+    vendor = "${COMMAND_VENDOR}"
+    model = "project-1"
+  `);
+
+  const resolution = resolve(recordHome, project, { PATH: dirWithCommand() });
+  assert.equal(resolution.kind === "reader" ? resolution.reader.model : "", "project-1");
+});
+
+test("a missing command is a refusal at task start, naming it and asking for no key", () => {
+  const project = projectDir();
+  const recordHome = commandReaderHome(project);
+
+  const resolution = resolve(recordHome, project, { PATH: join(mkdtempSync(join(tmpdir(), "empty-")), "nothing") });
+
+  assert.equal(resolution.kind, "refused");
+  const message = resolution.kind === "refused" ? resolution.message : "";
+  assert.equal(message, missingCommandMessage(project, COMMAND_VENDOR, COMMAND, { found: false, why: "missing" }));
+  assert.match(message, new RegExp(COMMAND));
+  assert.match(message, /not on PATH/);
+  assert.ok(!message.includes("_API_KEY"), `it asked for a key this vendor has none of: ${message}`);
+  assert.ok(!message.includes("_BASE_URL"), `it asked for an endpoint this vendor has none of: ${message}`);
+});
+
+test("a command that is there but not executable is refused as that, not as a missing one", () => {
+  const project = projectDir();
+  const recordHome = commandReaderHome(project);
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-reader-path-"));
+  const path = join(dir, COMMAND);
+  writeFileSync(path, "#!/bin/sh\nexit 0\n");
+  chmodSync(path, 0o644);
+
+  const resolution = resolve(recordHome, project, { PATH: dir });
+
+  assert.equal(resolution.kind, "refused");
+  const message = resolution.kind === "refused" ? resolution.message : "";
+  // The file it found, and the one thing to do about it - never "install
+  // it", which would send the Client to replace something already there.
+  assert.match(message, new RegExp(`chmod \\+x ${path}`));
+  assert.ok(!message.includes("not on PATH"), `a permissions problem reported as a missing command: ${message}`);
+  assert.ok(!message.includes("_API_KEY"), `it asked for a key this vendor has none of: ${message}`);
+});
+
+test("a vendor merely spelled like the command one is still reached the ordinary way", () => {
+  // Not served by any adapter here, however much its name looks like the
+  // one that is: it resolves with a key and an endpoint like every other
+  // vendor, and is never refused for a command it has nothing to do with.
+  const lookalike = `${COMMAND_VENDOR}-proxy`;
+  const project = projectDir();
+  const recordHome = makeTestHome(`
+    [reader]
+    vendor = "${lookalike}"
+    model = "reader-1"
+
+    [projects.app]
+    path = "${project}"
+  `);
+
+  const resolution = resolve(recordHome, project, {
+    [apiKeyVarFor(lookalike)]: "k",
+    [baseUrlVarFor(lookalike)]: ENDPOINT,
+    // Deliberately no PATH at all: the command lookup, if it were wrongly
+    // reached, would fail here.
+  });
+
+  assert.equal(resolution.kind, "reader");
+  assert.equal(resolution.kind === "reader" ? resolution.reader.via : "", "api");
+});
+
+test("this vendor is never refused for a brain.env it does not read", () => {
+  const project = projectDir();
+  const recordHome = commandReaderHome(project);
+  // World-readable, which is its own refusal for a vendor whose
+  // credential lives in there. This one's credential does not.
+  const path = brainEnvPath(recordHome);
+  writeFileSync(path, "SOMETHING_API_KEY=k\n");
+  chmodSync(path, 0o644);
+
+  const resolution = resolve(recordHome, project, { PATH: dirWithCommand() });
+  assert.equal(resolution.kind, "reader");
 });

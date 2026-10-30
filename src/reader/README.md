@@ -40,6 +40,32 @@ A project's own table wins **outright**, not field by field - the same
 rule `[reviewer]` follows, for the same reason: reading one entry always
 answers "who reads this project" without a second lookup.
 
+### Two ways to reach one
+
+Most vendors are reached over the network, with a credential - the two
+variables below. A few are reached by **running a command on this
+machine** instead (issue #315): a work account whose only model access is
+a coding-agent CLI on a subscription has no API key to configure and no
+endpoint to name, so a vendor like that wants neither variable, and the
+installed, already-signed-in command is the whole credential.
+
+Which vendors those are, and what command each needs, is adapter-only
+knowledge: `src/brain/adapters` is the one directory allowed to name a
+vendor, a model or a harness at all (CONTRACT rule 8), so this module
+asks it (`cliReaderFor`) and never learns the name it just matched. The
+answer rides on `ResolvedReader.via` - `"api"` or `"command"` - which is
+the only thing anything here branches on. `readDiff` is one branch wide;
+everything after the model's answer - the parsing, the report, the
+findings handed to the worker, the record, the delivery - is the same
+code either way, deliberately.
+
+For a command-reached vendor the one thing that can be wrong is that the
+command is not there, which is its own refusal naming it
+(`missingCommandMessage`), on the same "refuse at task start" footing as
+the three below.
+
+### A vendor reached over the network
+
 Two credentials, read from Fabrica's own environment first and then from
 `<recordHome>/brain.env` (mode 600), exactly the precedence the worker's
 own token has:
@@ -52,7 +78,7 @@ own token has:
   vendor-to-endpoint table. It holds the endpoint *root* - everything
   before `/chat/completions`.
 
-### The three refusals
+### The four refusals
 
 `resolveReader()` answers `reader` or `refused`. There is deliberately
 no third "none" answer, which is the one real asymmetry with the
@@ -62,7 +88,14 @@ reviewer's resolution. It refuses when:
 2. its `<VENDOR>_API_KEY` is nowhere to be found (or `brain.env` is
    readable by other users, which is its own refusal in its own words
    and never quietly read as "no key");
-3. its `<VENDOR>_BASE_URL` is nowhere to be found.
+3. its `<VENDOR>_BASE_URL` is nowhere to be found;
+4. or - for a vendor reached by a command rather than an endpoint - that
+   command cannot be run: nowhere on `PATH`, or sitting right there
+   without its executable bit, which is a different message naming the
+   file and the `chmod` rather than an install. Neither credential is
+   looked for in that case, and the refusal says so out loud: the
+   obvious reading of any reader refusal is "go and set a key", which
+   here would send the Client hunting for one that does not exist.
 
 **It never falls back to `[reviewer]`.** The two tables exist
 separately so the Client can give the two jobs to different models;
@@ -100,6 +133,21 @@ and is reported immediately. The credential goes into one header on one
 request and nowhere else: not into any environment, not into argv, and
 never into a message - every error names the endpoint, which came from
 config, and never the key.
+
+### The other call
+
+`askCommandReader` is the same question asked of a command on this
+machine (see "Two ways to reach one"), and hands back the same thing: the
+model's answer as text, for the one parser below. It passes the answer's
+shape over as a JSON Schema (`FINDINGS_JSON_SCHEMA`, the same shape the
+prompt asks for in words), so a command that can be asked for structured
+output answers in it rather than in prose.
+
+No retry loop on that side, where the HTTP call above has one: a command
+on this machine is not somebody's rate limiter, its own client already
+handles a provider's back-pressure, and a second whole read is a second
+whole charge. There is nothing to leak either - this call carries no
+credential at all.
 
 ## What a read says
 

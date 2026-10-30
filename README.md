@@ -688,6 +688,32 @@ Inspector, and it keeps no table of which vendor lives at which address.
 Either value may be set in the environment instead, which wins over the
 file.
 
+### A reader with no API key at all
+
+On a machine whose only model access is a coding-agent CLI on a
+subscription - a work laptop, typically, where there is no API key to be
+had and no account to put one on - name the harness as the vendor
+instead:
+
+    [reader]
+    vendor = "claude-code"
+    model  = "sonnet"
+
+That reader's calls go through the `claude` command already installed and
+signed in on the machine, so it needs **no `<VENDOR>_API_KEY` and no
+`<VENDOR>_BASE_URL`** - nothing in `brain.env` at all. The model name
+still comes from this table, exactly as for every other vendor, and
+everything downstream is identical: the same findings, handed back to the
+same worker as one more pass, on the same record and the same delivery.
+
+The one thing that can be missing is the command itself. `fabrica do`
+refuses up front, naming it, when `claude` is not on `PATH` - or when it
+is there but not executable, which gets its own message naming the file
+and the `chmod` instead of telling you to install what you already have.
+
+This is one more way to reach a model, never a default: a reader is only
+ever the vendor you named.
+
 One project can have a reader of its own, replacing the global one for
 that project:
 
@@ -701,8 +727,9 @@ other reads the whole diff afterwards and only flags - so you name each
 one yourself, and you can give them to different models.
 
 `fabrica do` refuses before anything is registered, and before a cent is
-spent, if a project has no reader, no key for it, or no endpoint to send
-the call to - printing the exact lines to add. (This is the one new
+spent, if a project has no reader, no key for it, no endpoint to send the
+call to, or - for a reader reached by a command - no such command on
+`PATH` - printing the exact lines to add. (This is the one new
 reason a `fabrica do` that used to work on a record home with no
 `projects.toml` at all now stops: the reader is named in that file.)
 

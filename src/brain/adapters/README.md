@@ -132,6 +132,21 @@ assumed to be handled.
   each wire detail came from, the cap's exact semantics, and the three
   things that still need the Client's own machine to verify.
 
+## One file here that is not an adapter
+
+- **`cli-reader.ts`** - the code reader (`src/reader/`) reached by
+  running a command on this machine instead of calling an endpoint with
+  a key (issue #315), for a work account whose only model access is a
+  coding-agent CLI on a subscription. It implements no `Brain`: a reader
+  holds no session, works on no repository and runs no tools. It lives
+  in this directory for the one reason anything does - it names a
+  vendor, a command and a harness, and this is the only directory under
+  `src/` allowed to (CONTRACT rule 8). Everything outside it asks
+  `cliReaderFor(vendor)` and never learns the name. Its own verified
+  command line is documented with the rest of that binary's behavior, in
+  [`claude-code.md`](./claude-code.md)'s "Reading a diff through the
+  host's own CLI".
+
 The drift guard above is written for the CLI family, where a fake binary
 can silently stop resembling a real one. A direct API adapter's
 equivalent exposure is the vendor's wire shape, so its own version of

@@ -1,15 +1,25 @@
-// Every test here replaces the transport wholesale, so nothing in the
-// default `npm test` run opens a socket, needs a credential, or waits
-// on a retry delay.
+// Every test here replaces the transport wholesale - the HTTP one with a
+// fake `post`, the command one with a stand-in script - so nothing in
+// the default `npm test` run opens a socket, needs a credential, runs a
+// real command, or waits on a retry delay.
+//
+// No vendor is named by hand anywhere in this file: the one vendor
+// reached by a command comes from the adapter that owns the name
+// (CONTRACT rule 8's scan covers test files too).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CLI_READER_VENDOR } from "../brain/index.ts";
 import { askReader } from "./call.ts";
 import type { PostJson } from "./call.ts";
 import { MAX_DIFF_BYTES, parseFindings, readDiff, readerLabel } from "./read.ts";
-import type { ResolvedReader } from "./types.ts";
+import type { ApiReader, CommandReader } from "./types.ts";
 
-const READER: ResolvedReader = {
+const READER: ApiReader = {
+  via: "api",
   vendor: "close-reader",
   model: "reader-1",
   apiKeyVar: "CLOSE_READER_API_KEY",
@@ -156,6 +166,65 @@ test("a diff past the ceiling is refused naming both numbers, and nothing is rea
 
 test("readerLabel names the vendor and the model in the Client's own spelling", () => {
   assert.equal(readerLabel(READER), "close-reader/reader-1");
+});
+
+// Issue #315: the other way a reader can be reached. A stand-in script
+// stands where the real command would, so these prove the dispatch and
+// the report without running anything real - the command's own argument
+// building and answer reading are proven where they live
+// (src/brain/adapters/cli-reader.test.ts).
+const COMMAND_READER: CommandReader = {
+  via: "command",
+  vendor: CLI_READER_VENDOR,
+  model: "reader-1",
+  command: "the-command",
+};
+
+/** A script that records the prompt it was handed and answers with one
+ * result object, the shape the command this vendor uses prints. */
+function standInCommand(structured: unknown): { command: string; prompt: () => string } {
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-reader-command-"));
+  const promptFile = join(dir, "prompt.txt");
+  const command = join(dir, "stand-in.sh");
+  writeFileSync(
+    command,
+    `#!/bin/sh\ncat > ${promptFile}\nprintf '%s\\n' '${JSON.stringify({
+      type: "result",
+      is_error: false,
+      result: JSON.stringify(structured),
+      structured_output: structured,
+    })}'\n`
+  );
+  chmodSync(command, 0o755);
+  return { command, prompt: () => readFileSync(promptFile, "utf8") };
+}
+
+test("a reader reached by a command produces the same report, with no endpoint and no key in sight", async () => {
+  const { command, prompt } = standInCommand({ findings: [{ file: "src/a.ts", finding: "the retry never ends" }] });
+  // A transport that would fail the test if the command path reached for
+  // it: this read must make no HTTP call at all.
+  const post: PostJson = async () => {
+    throw new Error("the command reader made an HTTP call");
+  };
+  const diff = "diff --git a/src/a.ts b/src/a.ts\n+x\n";
+
+  const report = await readDiff(COMMAND_READER, diff, { command, post, ...NO_WAIT });
+
+  assert.equal(report.model, `${CLI_READER_VENDOR}/reader-1`);
+  assert.deepEqual(report.findings, [{ file: "src/a.ts", finding: "the retry never ends" }]);
+  assert.equal(report.diffBytes, Buffer.byteLength(diff, "utf8"));
+  // The same instruction and the same diff an API-keyed vendor is sent.
+  assert.match(prompt(), /You are a code reader/);
+  assert.ok(prompt().includes(diff), "the whole diff never reached the command");
+});
+
+test("an empty diff never runs the command either", async () => {
+  const { command } = standInCommand({ findings: [{ file: "a.ts", finding: "never asked" }] });
+
+  const report = await readDiff(COMMAND_READER, "", { command, ...NO_WAIT });
+
+  assert.deepEqual(report.findings, [], "a command was asked about an empty diff");
+  assert.equal(report.diffBytes, 0);
 });
 
 test("fenced JSON with prose in front of it still parses", () => {

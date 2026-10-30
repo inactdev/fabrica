@@ -126,9 +126,11 @@ function refusalForUnsetUpProject(
 
   // Third: no code reader (inspector issue #34). This project's work
   // will be read, in full, the moment Inspector turns it green - every
-  // task's is - so a project with no `[reader]`, no key for it, or no
-  // endpoint to send the call to is refused here, with the exact lines
-  // to add. This is the Client's own ruling about where that refusal
+  // task's is - so a project with no `[reader]`, no key for it, no
+  // endpoint to send the call to, or (issue #315, for a reader reached
+  // by running something on this machine rather than by calling an
+  // endpoint) no such command on PATH is refused here, with the exact
+  // lines to add. This is the Client's own ruling about where that refusal
   // belongs: at task start, where it costs nothing and where the
   // message can be acted on, rather than three attempts later when the
   // read falls due.

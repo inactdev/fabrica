@@ -4,14 +4,21 @@
 // own written-down shape (ReaderConfig) lives with the rest of
 // projects.toml, in src/config.
 
-/** A reader settled enough to call: which model, where, and with what.
- * Unlike a reviewer - which is handed to Inspector as two flags for
- * Inspector to dial itself - Fabrica makes this call, so it needs the
- * endpoint too, and that is why `baseUrl` is required here and
- * optional there. */
-export interface ResolvedReader {
+/** Both arms below: which vendor and which model, in the Client's own
+ * spelling from projects.toml. The model is asked for the same way for
+ * every vendor, however the vendor is reached. */
+interface ReaderIdentity {
   vendor: string;
   model: string;
+}
+
+/** A reader reached over the network with a credential - the ordinary
+ * case. Unlike a reviewer - which is handed to Inspector as two flags
+ * for Inspector to dial itself - Fabrica makes this call, so it needs
+ * the endpoint too, and that is why `baseUrl` is required here and
+ * optional there. */
+export interface ApiReader extends ReaderIdentity {
+  via: "api";
   /** `<VENDOR>_API_KEY` and its value. Never printed and never put in
    * any environment: it goes into one request's `Authorization` header
    * and nowhere else. */
@@ -25,6 +32,26 @@ export interface ResolvedReader {
   baseUrlVar: string;
   baseUrl: string;
 }
+
+/** A reader reached by running a command on this machine - issue #315's
+ * work mode, where the only model access is a coding-agent CLI on a
+ * company subscription and there is no key to be had. There is
+ * deliberately **no credential of any kind on this arm**: the installed,
+ * already-signed-in command is the credential, which is the whole reason
+ * the vendor exists. Which vendors these are, and what command each
+ * needs, is adapter-only knowledge (CONTRACT rule 8) - this module only
+ * ever carries the answer. */
+export interface CommandReader extends ReaderIdentity {
+  via: "command";
+  /** The command that must be on PATH, as the adapter named it. Shown in
+   * a refusal; never composed with anything by this module. */
+  command: string;
+}
+
+/** A reader settled enough to call. The two arms are the two ways a
+ * model can be reached, and `via` is the one thing a caller branches
+ * on. */
+export type ResolvedReader = ApiReader | CommandReader;
 
 /** The two answers "who reads this project" can have. There is
  * deliberately no `none`: the reader is wired into every task, so a
