@@ -220,6 +220,54 @@ is still there.
 Then `fabrica doctor`'s **github app** line should read `OK` and name
 your App.
 
+### When the App cannot be installed: a project with its own token
+
+Some organizations will not let you install a GitHub App — a company
+account, typically, where the decision is not yours. Such a project can
+name its own token instead, and everything else about Fabrica is
+unchanged.
+
+**1. Make a fine-grained personal access token** on github.com, scoped
+to that **one repository**, with these repository permissions: Contents
+*Read and write*, Pull requests *Read and write*, Commit statuses *Read
+and write*, Issues *Read-only*, Checks *Read-only*, Actions *Read-only*
+— the same list the App is granted above, and for the same reasons.
+
+**2. Put it in `~/.fabrica/brain.env`**, the same 600-mode file every
+other credential on the machine lives in, under a name of your choosing:
+
+    DAYJOB_GITHUB_TOKEN=github_pat_...
+
+    chmod 600 ~/.fabrica/brain.env
+
+**3. Name the variable — not the token — in the project's entry** in
+`~/.fabrica/projects.toml`:
+
+    [projects.dayjob]
+    path           = "~/work/widgets"
+    check          = "./check.sh"
+    githubTokenVar = "DAYJOB_GITHUB_TOKEN"
+
+Every GitHub operation for that project then goes through that token:
+the push, the pull request, the issue a task names, and the checks on
+the pull request. No App token is minted for it, and **it is never a
+fallback in either direction** — a project either names a token or uses
+the App. A machine where every registered project names its own token
+needs no App configured at all, and `fabrica doctor` says so instead of
+failing.
+
+`fabrica doctor` reports which of the two each project uses on that
+project's own line, and FAILs if the variable it names holds nothing or
+if `brain.env` can be read by anyone else. It never prints the token.
+
+One thing the App gives you that a personal token cannot: `fabrica
+doctor` and `fabrica do` check an App token's *granted* permissions
+before a task starts, which is how a token that can push but not stamp
+is caught up front. GitHub exposes no equivalent for a personal token,
+so for a project using one, a permission you forgot shows up as a failed
+publish at the end of the round instead. Grant all six above and that
+does not arise.
+
 ### Paying per token instead (optional)
 
 The default Worker is the coding agent above, on the flat-rate
@@ -296,7 +344,15 @@ configured, if its key is at the wrong mode or GitHub rejects it, if the
 App is installed nowhere, or if it is not installed on a repository you
 have registered as a project — and it carries the fix for each. It
 warns, without failing, while a personal `GITHUB_TOKEN` is still in
-Fabrica's configuration.
+Fabrica's configuration. It asks nothing about a project that reaches
+GitHub with its own token, and when every registered project does, the
+line passes with no App configured at all.
+
+Each **project** line ends with which GitHub credential that project
+uses — the App, or its own token, named by the variable holding it. A
+named variable that holds nothing, or a `brain.env` anyone else can
+read, is a `FAIL` there: nothing that project works on could be
+published.
 
 Two of those lines are about the network a Worker gets. **relay image**
 fails if the image the relay container runs from isn't on the machine -

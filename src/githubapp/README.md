@@ -131,6 +131,18 @@ no App configured or a failed mint, refuse the push and the pull request
 with the exact setup step; no fallback"). The Client's personal token is
 gone from the configuration, and there is nothing else to reach for.
 
+One project may be out of this module's scope entirely — not fall back
+to something else, which is the distinction that matters. A project whose
+`projects.toml` entry names `githubTokenVar` (issue #314, work mode: a
+company organization the App cannot be installed on) reaches GitHub with
+its own token for **every** operation, and nothing here is reached for
+it: no mint, no `requireConfigured`, and no FAIL on its account from the
+doctor line below. That is still not a fallback — a project either names
+a token or uses the App, decided by its own entry and never by whether
+the other one happens to be configured. See `src/projecttoken/README.md`
+for the whole of it, including what issue #304's start gate cannot ask
+about such a project.
+
 Two things make that land early rather than mid-task:
 
 - `Inspector.prepare()` is still **synchronous and offline**. It checks

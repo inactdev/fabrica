@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -202,6 +202,58 @@ test("fabrica doctor: a self-tested project is never failed for Inspector's conf
 test("fabrica doctor: a passing project line says the config was checked, and claims no more", async () => {
   const { lines } = await doctor(healthyHome(), okProbes());
   assert.match(lines.join("\n"), /OK {3}project demo: .*nothing Inspector is known to refuse/);
+});
+
+// Issue #314: which GitHub credential each project uses is reported on
+// that project's own line, since that is the line a reader already looks
+// at per project.
+test("fabrica doctor: a project line says it reaches GitHub with the GitHub App", async () => {
+  const { lines } = await doctor(healthyHome(), okProbes());
+  assert.match(lines.join("\n"), /OK {3}project demo: .*reaches GitHub with the GitHub App/);
+});
+
+test("fabrica doctor: a project with its own token says so, naming the variable and never the token", async () => {
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${healthyProject()}"\n` +
+      `check = "./check.sh"\ngithubTokenVar = "DAYJOB_GITHUB_TOKEN"\n`
+  );
+  writeFileSync(join(home, "brain.env"), "DAYJOB_GITHUB_TOKEN=github_pat_secret_value\n");
+  chmodSync(join(home, "brain.env"), 0o600);
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  assert.equal(code, 0, text);
+  assert.match(text, /OK {3}project dayjob: .*reaches GitHub with its own token \(DAYJOB_GITHUB_TOKEN\)/);
+  assert.ok(!text.includes("github_pat_secret_value"), "doctor printed the token itself");
+});
+
+test("fabrica doctor: a named token that is set nowhere FAILs that project's line, with the line to add", async () => {
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${healthyProject()}"\n` +
+      `check = "./check.sh"\ngithubTokenVar = "DAYJOB_GITHUB_TOKEN"\n`
+  );
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  assert.equal(code, 1);
+  assert.match(text, /FAIL project dayjob: .*DAYJOB_GITHUB_TOKEN is not set/);
+  assert.match(text, /fix: add a line DAYJOB_GITHUB_TOKEN=<the token>/);
+  // One line, as every doctor line is - the whole refusal's reasoning
+  // belongs to the task that refuses, not beside a dozen checks.
+  assert.equal(text.split("\n").filter((l) => l.includes("project dayjob")).length, 1);
+});
+
+test("fabrica doctor: a brain.env other users can read FAILs that project's line too", async () => {
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${healthyProject()}"\n` +
+      `check = "./check.sh"\ngithubTokenVar = "DAYJOB_GITHUB_TOKEN"\n`
+  );
+  writeFileSync(join(home, "brain.env"), "DAYJOB_GITHUB_TOKEN=github_pat_fake\n");
+  chmodSync(join(home, "brain.env"), 0o644);
+
+  const { code, lines } = await doctor(home, okProbes());
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /FAIL project dayjob: .*can be read by other users.*fix: chmod 600/);
 });
 
 // Client ruling: doctor fails non-zero with the parse error as a FAIL

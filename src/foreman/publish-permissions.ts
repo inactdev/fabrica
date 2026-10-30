@@ -30,8 +30,10 @@
 // can act on them.
 
 import { githubRepoOf, taskTokenMinter } from "./github-token.ts";
+import { loadConfigOrProblem } from "../config/index.ts";
 import { publishPermissionGap } from "../githubapp/index.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
+import { resolveProjectToken } from "../projecttoken/index.ts";
 import { ForemanError } from "./errors.ts";
 
 /**
@@ -47,12 +49,34 @@ export async function requirePublishPermissions(
   project: string,
   /** Issue #187's seam - a test's fake minter. Omitted uses the real App
    * on this machine. */
-  minter?: TokenMinter
+  minter?: TokenMinter,
+  /** Fabrica's own environment, for reading this project's own token if
+   * it names one. */
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
   // No github.com repository behind this project means no App token is
   // involved in anything it does, so there is no grant to read.
   const repo = githubRepoOf(project);
   if (repo === null) return;
+
+  // Issue #314: a project that publishes with its own token mints no App
+  // token at all, so there is no grant to read for it either - and a
+  // fine-grained personal token's own scopes are not readable the way an
+  // installation token's granted permissions are (GitHub exposes them
+  // nowhere this check could ask). The gate this file exists to be is
+  // therefore not available for such a project, and is skipped rather
+  // than guessed at. What still catches a token that cannot publish: the
+  // push itself, reported as Inspector's own failure, and `fabrica
+  // doctor`, which checks the token is configured at all. A token
+  // missing entirely is refused before any worker starts, by
+  // `publishToken`'s `check()` through `Inspector.prepare()`.
+  const resolution = resolveProjectToken({
+    recordHome,
+    config: loadConfigOrProblem(recordHome).config,
+    projectPath: project,
+    env,
+  });
+  if (resolution.kind !== "app") return;
 
   let gap;
   try {

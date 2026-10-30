@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
@@ -170,4 +170,25 @@ test("fabrica do refuses at task start, before any machine runs", async () => {
   const failed = events.find((event) => event.name === "task-failed");
   assert.ok(failed !== undefined, "the refusal left no trace on the record");
   assert.match(String((failed.details as { message?: unknown }).message), /Commit statuses -> Read and write/);
+});
+
+test("a project that publishes with its own token is let through, and nothing is minted for it", async () => {
+  // Issue #314: no App token is minted for such a project, so there is
+  // no grant for this gate to read - and GitHub exposes a fine-grained
+  // personal token's own scopes nowhere this could ask. Skipped rather
+  // than guessed at; a token missing entirely is refused before any
+  // worker starts, by publishToken's check() through Inspector.prepare().
+  const recordHome = home();
+  const project = githubProject();
+  const { id: taskId } = registerTask(recordHome, "small change");
+  const minter = fakeMinter({ granted: WITHOUT_STATUSES });
+  writeFileSync(
+    join(recordHome, "projects.toml"),
+    `[projects.dayjob]\npath = "${project}"\ncheck = "./check.sh"\ngithubTokenVar = "DAYJOB_GITHUB_TOKEN"\n`
+  );
+
+  await requirePublishPermissions(recordHome, taskId, project, minter, { DAYJOB_GITHUB_TOKEN: "github_pat_fake" });
+
+  assert.equal(minter.calls.length, 0);
+  assert.deepEqual(readEvents(recordHome).filter((e) => e.name === "token-minted"), []);
 });

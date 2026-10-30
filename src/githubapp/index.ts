@@ -42,7 +42,7 @@ export {
   READ_ISSUE_PERMISSIONS,
 } from "./scopes.ts";
 export { githubAppStatus, GITHUB_APP_LABEL } from "./doctor-checks.ts";
-export type { GithubAppCheck, ProjectRepo } from "./doctor-checks.ts";
+export type { GithubAppCheck, ProjectOwnToken, ProjectRepo } from "./doctor-checks.ts";
 export type {
   AppFetch,
   AppIdentity,

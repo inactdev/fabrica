@@ -62,7 +62,11 @@ export interface ForemanOptions {
    * `src/githubapp/helpers/fake-minter.ts`'s fake so no suite needs a
    * registered App or the network. Every mint lands on the task's
    * record as `"token-minted"` either way - that half is Fabrica's own
-   * (`src/foreman/github-token.ts`), never the minter's. */
+   * (`src/foreman/github-token.ts`), never the minter's.
+   *
+   * Reached only for a project that uses the App. One whose
+   * projects.toml entry names its own GitHub token (issue #314) never
+   * mints at all, so nothing here is asked for it. */
   minter?: TokenMinter;
   /** Inspector issue #34: who reads the whole diff once Inspector has
    * turned it green. Omitted makes the real call to the model named by

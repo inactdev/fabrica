@@ -181,7 +181,14 @@ export function inspectorJudge(
     // pull request either.
     if (inspection.verdict !== "green" || !inspection.prUrl) return { kind: "verdict", gate, inspection };
 
-    const report = await handToPullRequestChecks(recordHome, taskId, inspection.prUrl, checksReader, minter);
+    const report = await handToPullRequestChecks(
+      recordHome,
+      taskId,
+      line.project,
+      inspection.prUrl,
+      checksReader,
+      minter
+    );
     // Nothing to read (not a GitHub pull request URL), or nothing red:
     // Inspector's own verdict stands, and the read is already on the
     // record either way. An unreadable API and a check that never

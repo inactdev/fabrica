@@ -71,15 +71,22 @@ export function defaultTokenMinter(opts: TokenMinterOptions): TokenMinter {
   };
 }
 
-/** A minter bound to one purpose and one scope, for a caller that has no
- * business knowing either - `src/inspector/run.ts` is handed one of
- * these so the adapter never learns which repository it publishes to or
- * which permissions that needs. */
+/** A credential bound to one purpose and one scope, for a caller that
+ * has no business knowing either - `src/inspector/run.ts` is handed one
+ * of these so the adapter never learns which repository it publishes to,
+ * which permissions that needs, or even whether an App was involved: a
+ * project may publish with a token of its own instead (issue #314).
+ *
+ * `mint()` answers the token and nothing else, deliberately - an
+ * installation id, a granted-permission map and an expiry are facts
+ * about an App token that a project's own token does not have, and this
+ * seam's one consumer never read them. Whoever needs them holds a
+ * `TokenMinter` instead. */
 export interface ScopedToken {
-  /** The sync, no-network half: refuses now if the App could not
+  /** The sync, no-network half: refuses now if the credential could not
    * possibly work (`Inspector.prepare()`). */
   check(): void;
-  mint(): Promise<MintedToken>;
+  mint(): Promise<{ token: string }>;
 }
 
 export function scopedToken(minter: TokenMinter, purpose: MintPurpose, scope: GithubScope): ScopedToken {

@@ -202,14 +202,23 @@ export type {
   GithubAppCheck,
   GithubAppErrorCode,
   MintPurpose,
+  ProjectOwnToken,
   ProjectRepo,
   TokenMinter,
 } from "./githubapp/index.ts";
+// Work mode (issue #314): a project the App cannot be installed on may
+// name, in projects.toml, the brain.env variable holding its own GitHub
+// token - and then every GitHub operation for that project goes through
+// it and none through the App. `fabrica doctor` reports which path each
+// project uses off the same resolution a round's own start reads, so the
+// two can never disagree.
+export { describeProjectCredential, resolveProjectToken } from "./projecttoken/index.ts";
+export type { ProjectToken, ProjectTokenResolution } from "./projecttoken/index.ts";
 // Which GitHub repository a registered project's pull requests go to,
 // for the one caller that reports on every project at once
 // (`fabrica doctor`) rather than minting for one.
 export { githubRepoOf } from "./foreman/index.ts";
-export type { TokenMintedDetails } from "./foreman/index.ts";
+export type { ProjectTokenUsedDetails, TokenMintedDetails } from "./foreman/index.ts";
 // Where `fabrica do --issue <N>` reads that issue from: the real GitHub
 // by default, a fake in tests (src/foreman/helpers/fake-issue-reader.ts).
 // src/cli/ only ever names the type - it never picks a source - and

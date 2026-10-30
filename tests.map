@@ -322,6 +322,8 @@ src/line/worktree-git.ts: src/line/worktree-git.test.ts
 src/offbooks/blocked-edit.test.ts: src/offbooks/blocked-edit.test.ts
 src/offbooks/blocked-edit.ts: src/offbooks/blocked-edit.test.ts
 src/offbooks/hook-settings.test.ts: src/offbooks/hook-settings.test.ts
+src/projecttoken/resolve.test.ts: src/projecttoken/resolve.test.ts
+src/projecttoken/resolve.ts: src/projecttoken/resolve.test.ts
 src/quiz/questions.test.ts: src/quiz/questions.test.ts
 src/quiz/questions.ts: src/quiz/questions.test.ts
 src/quiz/recheck.test.ts: src/quiz/recheck.test.ts
