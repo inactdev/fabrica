@@ -61,6 +61,40 @@ through that command on the host, needing neither `<VENDOR>_API_KEY` nor
   `src/inspector/run.ts`'s identical `commandIsInstalled`: a brain
   adapter has no business depending on the Inspector module.
 
+## The reader's own findings on this change, and what they changed
+
+Three things were flagged for the reviewer after the read. The plan,
+written before any of it was touched:
+
+1. **The refusal must name the real problem, not the likely one.** The
+   PATH lookup answered yes/no, so a `claude` that is right there but not
+   executable produced "not on PATH" - which sends the Client to install
+   something he already has. The lookup now reports *why*
+   (`CommandLookup`: found, missing, or there-but-not-executable, with
+   the path it found), the refusal names a `chmod` in that case, and a
+   failed spawn translates ENOENT and EACCES into words while keeping the
+   system's own code. Standing ruling: everything fails loudly, and a
+   failure naming the wrong cause is a quiet one.
+2. **The duplicated PATH lookup stays, but can no longer drift
+   unnoticed.** A parity test compares this adapter's answer against
+   `src/inspector/`'s `commandIsInstalled` over the same cases - the
+   project's own "guard a copy against drift from the real thing"
+   pattern, and a test-only import of another module, exactly as
+   `src/line/helpers/fixture.ts` imports `contract/helpers/`.
+3. **The vendor/route split is pinned by a test rather than argued
+   about.** Only the one exact spelling (trimmed, case-folded) routes
+   through the command; a vendor whose name merely *contains* that
+   spelling still resolves the ordinary way, key and endpoint and all, so
+   the branch cannot refuse a vendor it does not serve.
+
+Rejected alternative, for the record: hoisting the PATH lookup into a
+shared module (or importing Inspector's) so there is literally one copy.
+It would mean editing settled, heavily-tested Inspector code and the
+`src/register/` import that already depends on it - a real regression
+risk in code none of these findings touch - and a whole module for ten
+dependency-free lines. A parity test removes the only thing the
+duplication actually risks, at no blast radius.
+
 ## Where the same shape still is, deliberately
 
 `src/reviewer/` resolves a vendor the same way and still requires

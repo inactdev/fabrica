@@ -90,10 +90,12 @@ reviewer's resolution. It refuses when:
    and never quietly read as "no key");
 3. its `<VENDOR>_BASE_URL` is nowhere to be found;
 4. or - for a vendor reached by a command rather than an endpoint - that
-   command is not on `PATH`. Neither credential is looked for in that
-   case, and the refusal says so out loud: the obvious reading of any
-   reader refusal is "go and set a key", which here would send the
-   Client hunting for one that does not exist.
+   command cannot be run: nowhere on `PATH`, or sitting right there
+   without its executable bit, which is a different message naming the
+   file and the `chmod` rather than an install. Neither credential is
+   looked for in that case, and the refusal says so out loud: the
+   obvious reading of any reader refusal is "go and set a key", which
+   here would send the Client hunting for one that does not exist.
 
 **It never falls back to `[reviewer]`.** The two tables exist
 separately so the Client can give the two jobs to different models;

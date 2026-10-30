@@ -282,10 +282,56 @@ test("a missing command is a refusal at task start, naming it and asking for no 
 
   assert.equal(resolution.kind, "refused");
   const message = resolution.kind === "refused" ? resolution.message : "";
-  assert.equal(message, missingCommandMessage(project, COMMAND_VENDOR, COMMAND));
+  assert.equal(message, missingCommandMessage(project, COMMAND_VENDOR, COMMAND, { found: false, why: "missing" }));
   assert.match(message, new RegExp(COMMAND));
+  assert.match(message, /not on PATH/);
   assert.ok(!message.includes("_API_KEY"), `it asked for a key this vendor has none of: ${message}`);
   assert.ok(!message.includes("_BASE_URL"), `it asked for an endpoint this vendor has none of: ${message}`);
+});
+
+test("a command that is there but not executable is refused as that, not as a missing one", () => {
+  const project = projectDir();
+  const recordHome = commandReaderHome(project);
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-reader-path-"));
+  const path = join(dir, COMMAND);
+  writeFileSync(path, "#!/bin/sh\nexit 0\n");
+  chmodSync(path, 0o644);
+
+  const resolution = resolve(recordHome, project, { PATH: dir });
+
+  assert.equal(resolution.kind, "refused");
+  const message = resolution.kind === "refused" ? resolution.message : "";
+  // The file it found, and the one thing to do about it - never "install
+  // it", which would send the Client to replace something already there.
+  assert.match(message, new RegExp(`chmod \\+x ${path}`));
+  assert.ok(!message.includes("not on PATH"), `a permissions problem reported as a missing command: ${message}`);
+  assert.ok(!message.includes("_API_KEY"), `it asked for a key this vendor has none of: ${message}`);
+});
+
+test("a vendor merely spelled like the command one is still reached the ordinary way", () => {
+  // Not served by any adapter here, however much its name looks like the
+  // one that is: it resolves with a key and an endpoint like every other
+  // vendor, and is never refused for a command it has nothing to do with.
+  const lookalike = `${COMMAND_VENDOR}-proxy`;
+  const project = projectDir();
+  const recordHome = makeTestHome(`
+    [reader]
+    vendor = "${lookalike}"
+    model = "reader-1"
+
+    [projects.app]
+    path = "${project}"
+  `);
+
+  const resolution = resolve(recordHome, project, {
+    [apiKeyVarFor(lookalike)]: "k",
+    [baseUrlVarFor(lookalike)]: ENDPOINT,
+    // Deliberately no PATH at all: the command lookup, if it were wrongly
+    // reached, would fail here.
+  });
+
+  assert.equal(resolution.kind, "reader");
+  assert.equal(resolution.kind === "reader" ? resolution.reader.via : "", "api");
 });
 
 test("this vendor is never refused for a brain.env it does not read", () => {

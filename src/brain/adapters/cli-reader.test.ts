@@ -19,10 +19,14 @@ import {
   buildCliReaderArgs,
   cliReaderFor,
   cliReaderPrompt,
+  findCommandOnPath,
   CLI_READER_COMMAND,
   CLI_READER_VENDOR,
 } from "./cli-reader.ts";
 import { FINDINGS_JSON_SCHEMA, parseFindings } from "../../reader/read.ts";
+// Test-only, and the whole point of the parity test below: the other
+// module keeping the same ten-line PATH lookup for its own binary.
+import { commandIsInstalled } from "../../inspector/index.ts";
 
 const FAKE_SOURCE = join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-cli-reader.mjs");
 
@@ -88,7 +92,7 @@ test("only this vendor's own spelling is served, and the command it needs is nam
   assert.equal(cliReaderFor(""), undefined);
 });
 
-test("whether the command is installed is answered from PATH, without running anything", () => {
+test("where the command is - or which way it is missing - is answered from PATH, without running anything", () => {
   const vendor = cliReaderFor(CLI_READER_VENDOR);
   assert.ok(vendor);
   const dir = mkdtempSync(join(tmpdir(), "fabrica-reader-path-"));
@@ -98,11 +102,59 @@ test("whether the command is installed is answered from PATH, without running an
   writeFileSync(planted, "#!/bin/sh\nexit 73\n");
   chmodSync(planted, 0o755);
 
-  assert.equal(vendor.installed({ PATH: dir }), true);
-  assert.equal(vendor.installed({ PATH: join(dir, "nowhere") }), false);
-  assert.equal(vendor.installed({}), false, "no PATH read as installed");
+  assert.deepEqual(vendor.locate({ PATH: dir }), { found: true, path: planted });
+  assert.deepEqual(vendor.locate({ PATH: join(dir, "nowhere") }), { found: false, why: "missing" });
+  assert.deepEqual(vendor.locate({}), { found: false, why: "missing" }, "no PATH read as installed");
+
+  // There, and not runnable: a different problem with a different fix,
+  // so it is reported as itself and the file is named. A refusal saying
+  // "not on PATH" about this would send the Client to install something
+  // he already has.
   chmodSync(planted, 0o644);
-  assert.equal(vendor.installed({ PATH: dir }), false, "a non-executable file read as installed");
+  assert.deepEqual(vendor.locate({ PATH: dir }), { found: false, why: "not-executable", path: planted });
+
+  // An earlier directory holding an unusable copy never hides a usable
+  // one further along PATH.
+  const second = mkdtempSync(join(tmpdir(), "fabrica-reader-path-"));
+  const usable = join(second, CLI_READER_COMMAND);
+  writeFileSync(usable, "#!/bin/sh\nexit 73\n");
+  chmodSync(usable, 0o755);
+  assert.deepEqual(vendor.locate({ PATH: `${dir}:${second}` }), { found: true, path: usable });
+});
+
+// The PATH lookup above is a second copy of the one Inspector's own
+// module keeps for its own binary, kept deliberately (a brain adapter
+// has no business depending on that module) - so what stops the two
+// quietly disagreeing is this: the same questions, both answerers, one
+// assertion. The import is test-only, the same arrangement
+// src/line/helpers/fixture.ts has with contract/helpers.
+test("the copied PATH lookup still answers exactly as the one Inspector's module keeps", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-reader-parity-"));
+  const runnable = join(dir, "runnable");
+  const plain = join(dir, "plain");
+  writeFileSync(runnable, "#!/bin/sh\nexit 0\n");
+  chmodSync(runnable, 0o755);
+  writeFileSync(plain, "not executable\n");
+  chmodSync(plain, 0o644);
+
+  const cases: { command: string; env: NodeJS.ProcessEnv }[] = [
+    { command: "runnable", env: { PATH: dir } },
+    { command: "plain", env: { PATH: dir } },
+    { command: "absent", env: { PATH: dir } },
+    { command: "runnable", env: {} },
+    { command: runnable, env: {} },
+    { command: plain, env: {} },
+    { command: join(dir, "absent"), env: { PATH: dir } },
+    { command: "runnable", env: { PATH: `${join(dir, "nowhere")}:${dir}` } },
+  ];
+
+  for (const { command, env } of cases) {
+    assert.equal(
+      findCommandOnPath(command, env).found,
+      commandIsInstalled(command, env),
+      `the two lookups disagree about \`${command}\` with PATH=${env.PATH ?? ""}`
+    );
+  }
 });
 
 test("the command line is the verified flag set: one result object, the schema, no tools, the model", () => {
@@ -257,6 +309,24 @@ test("a command that is not there is said plainly, not reported as the model's f
     (err: Error) => {
       assert.match(err.message, /could not run the reader's command/);
       assert.match(err.message, /ENOENT/);
+      // The code alone is not an explanation: this one means the machine
+      // changed since the task was allowed to start, and it says so.
+      assert.match(err.message, /PATH when the task started/);
+      return true;
+    }
+  );
+});
+
+test("a command that is there but cannot be run says that, not that it is missing", async () => {
+  const { command, log } = fakeCommand();
+  chmodSync(command, 0o644);
+
+  await assert.rejects(
+    () => ask("SCENARIO_CLEAN", log, command),
+    (err: Error) => {
+      assert.match(err.message, /EACCES/);
+      assert.match(err.message, /chmod \+x/);
+      assert.ok(!/not there/.test(err.message), `a permissions problem reported as a missing command: ${err.message}`);
       return true;
     }
   );
@@ -276,7 +346,7 @@ test("the real command answers a real read in the shape this adapter reads", asy
     realBinarySkipReason = "FABRICA_TEST_REAL_READER is not 1 (a real read spends real money)";
     return t.skip(realBinarySkipReason);
   }
-  if (!vendor.installed(process.env)) {
+  if (!vendor.locate(process.env).found) {
     realBinarySkipReason = `${vendor.command} is not on PATH`;
     return t.skip(realBinarySkipReason);
   }

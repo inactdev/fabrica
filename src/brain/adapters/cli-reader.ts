@@ -83,6 +83,19 @@ export interface CliReaderRequest {
   command?: string;
 }
 
+/** Where the command is, or why it cannot be run - the answer the
+ * refusal at task start is written from.
+ *
+ * Not a boolean, deliberately. "Not on PATH" and "there, but not
+ * executable" need opposite things done about them (an install versus a
+ * `chmod`), and a refusal that names the first about the second sends the
+ * Client looking for a problem he does not have. The path is carried
+ * along so the message can name the exact file it found. */
+export type CommandLookup =
+  | { found: true; path: string }
+  | { found: false; why: "missing" }
+  | { found: false; why: "not-executable"; path: string };
+
 /** What the generic reader module gets back for a vendor this file
  * serves. Nothing on it names anything: the caller sees a command string
  * to print in a refusal and two functions to call. */
@@ -92,8 +105,9 @@ export interface CliReaderVendor {
   vendor: string;
   /** The command that must be on PATH. Printed in refusals. */
   command: string;
-  /** Whether that command is there, looked up without running anything. */
-  installed: (env: NodeJS.ProcessEnv) => boolean;
+  /** Whether that command can be run, and if not why not - looked up
+   * without running anything. */
+  locate: (env: NodeJS.ProcessEnv) => CommandLookup;
   /** One read. Resolves with the model's answer as text - JSON, when the
    * structured answer arrived - and throws an Error written for the
    * Client for every way the call can fail. */
@@ -114,32 +128,48 @@ export function cliReaderFor(vendor: string): CliReaderVendor | undefined {
   return {
     vendor: CLI_READER_VENDOR,
     command: CLI_READER_COMMAND,
-    installed: (env) => commandOnPath(CLI_READER_COMMAND, env),
+    locate: (env) => findCommandOnPath(CLI_READER_COMMAND, env),
     ask: askCliReader,
   };
 }
 
-/** Whether `command` names an executable - a path as given, a bare name
- * against PATH - looked up without running anything.
+/** Where `command` resolves to as something runnable - a path as given, a
+ * bare name against PATH - looked up without running anything. A file
+ * that is there but not executable is reported as exactly that, and
+ * named, rather than folded in with "not there at all".
  *
- * `src/inspector/run.ts`'s `commandIsInstalled` is the same ten lines
- * for the same question about Inspector's own binary. Deliberately not
- * imported: a brain adapter has no business depending on the Inspector
- * module, and this is the cheaper of the two wrongs.
+ * `src/inspector/run.ts`'s `resolveCommandPath`/`commandIsInstalled` ask
+ * the same question about Inspector's own binary, in the same ten lines.
+ * Deliberately not imported: a brain adapter has no business depending on
+ * the Inspector module, and this is the cheaper of the two wrongs. What
+ * keeps the copy honest is not the comment - `cli-reader.test.ts` asserts
+ * the two answer alike for the same inputs, the same way this directory
+ * guards a fake against drift from the real thing (README.md).
  */
-function commandOnPath(command: string, env: NodeJS.ProcessEnv): boolean {
+export function findCommandOnPath(command: string, env: NodeJS.ProcessEnv): CommandLookup {
   const candidates =
     isAbsolute(command) || command.includes("/")
       ? [command]
       : (env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, command));
-  return candidates.some((path) => {
-    try {
-      accessSync(path, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+
+  let present: string | undefined;
+  for (const path of candidates) {
+    if (reachable(path, constants.X_OK)) return { found: true, path };
+    // First one that exists at all: the file the Client would reach for
+    // if he were told the command was missing, so it is the one worth
+    // naming in a refusal instead.
+    if (present === undefined && reachable(path, constants.F_OK)) present = path;
+  }
+  return present === undefined ? { found: false, why: "missing" } : { found: false, why: "not-executable", path: present };
+}
+
+function reachable(path: string, mode: number): boolean {
+  try {
+    accessSync(path, mode);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -214,6 +244,28 @@ async function askCliReader(request: CliReaderRequest): Promise<string> {
   }
 }
 
+/** Why the command would not start, in words, with the system's own code
+ * kept in front of them.
+ *
+ * Both of these mean the machine changed under a task that was already
+ * refused-or-allowed at its start, and they want opposite things done
+ * about them - so neither is left as a bare four-letter code for the
+ * Client to look up. Anything else is reported as it came: a code nobody
+ * here anticipated is still better said than translated into a guess.
+ */
+function spawnProblem(err: NodeJS.ErrnoException, command: string): string {
+  if (err.code === "ENOENT") {
+    return (
+      `ENOENT - \`${command}\` is not there. It was on PATH when the task started, so it has been removed, ` +
+      `renamed, or taken off PATH since.`
+    );
+  }
+  if (err.code === "EACCES") {
+    return `EACCES - \`${command}\` is there but could not be run (\`chmod +x\` it, or check the directories above it).`;
+  }
+  return err.code === undefined ? err.message : `${err.code} - ${err.message}`;
+}
+
 interface CommandRun {
   exitCode: number | null;
   stdout: string;
@@ -241,10 +293,7 @@ function runCommand(
     }, opts.timeoutMs);
     child.on("error", (err: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      // ENOENT here means the command went missing between the refusal
-      // check at task start and the read itself. Said plainly rather
-      // than reported as the model's own failure.
-      reject(new Error(`could not run the reader's command \`${command}\`: ${err.code ?? err.message}`));
+      reject(new Error(`could not run the reader's command \`${command}\`: ${spawnProblem(err, command)}`));
     });
     child.on("close", (exitCode) => {
       clearTimeout(timer);

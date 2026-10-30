@@ -651,7 +651,9 @@ everything downstream is identical: the same findings, handed back to the
 same worker as one more pass, on the same record and the same delivery.
 
 The one thing that can be missing is the command itself. `fabrica do`
-refuses up front, naming it, when `claude` is not on `PATH`.
+refuses up front, naming it, when `claude` is not on `PATH` - or when it
+is there but not executable, which gets its own message naming the file
+and the `chmod` instead of telling you to install what you already have.
 
 This is one more way to reach a model, never a default: a reader is only
 ever the vendor you named.

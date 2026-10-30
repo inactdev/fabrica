@@ -41,8 +41,8 @@ export { brainEnvPath, brainEnvValue, workerVendor } from "./adapters/index.ts";
 // spelling, if any, is served by a command on this host rather than by a
 // key and an endpoint (issue #315). The name itself stays inside the
 // adapter directory - everything downstream only ever asks.
-export { cliReaderFor, CLI_READER_VENDOR } from "./adapters/cli-reader.ts";
-export type { CliReaderRequest, CliReaderVendor } from "./adapters/cli-reader.ts";
+export { cliReaderFor, findCommandOnPath, CLI_READER_VENDOR } from "./adapters/cli-reader.ts";
+export type { CliReaderRequest, CliReaderVendor, CommandLookup } from "./adapters/cli-reader.ts";
 export { isModelName, MODEL_TRANSCRIPT_KIND, UNKNOWN_MODEL } from "./model.ts";
 export { registerLiveTranscriptListener } from "./live-transcript.ts";
 export { probeRelayHealth, registerRelayHealthProbe } from "./relay-health.ts";
