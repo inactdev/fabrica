@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
@@ -254,6 +254,101 @@ test("registerSummary: a written Dockerfile.inspector is named among the files, 
   assert.ok(lines.includes("check.sh and Dockerfile.inspector"), lines);
   assert.ok(!lines.includes("left exactly as it is"), lines);
   assert.ok(!lines.includes("worth a look"), lines);
+});
+
+// Work mode. Three things the Client has to read on his own screen: what
+// landed where, that nothing was proven, and what the two recorded
+// settings then do on every round.
+test("registerSummary: the work-mode case says what landed, that nothing was proven, and what the settings do", () => {
+  const lines = registerSummary({
+    kind: "terms",
+    name: "dayjob",
+    path: "/home/ari/work/widgets",
+    check: "./check.sh",
+    defaultBranch: "main",
+    tomlPath: "/home/c/.fabrica/projects.toml",
+    tomlEntry: '[projects.dayjob]\npath = "/home/ari/work/widgets"\nnoStamp = true\n',
+    terms: "/home/ari/fabrica-terms/widgets",
+    termsFiles: [
+      { file: ".inspector.json", outcome: "written", detail: "asks Inspector to judge work on this repository" },
+      { file: "check.sh", outcome: "kept", detail: "was already in this folder - left exactly as it is" },
+      {
+        file: "Dockerfile.inspector",
+        outcome: "written",
+        detail: "the image that command runs in, built from REPLACE-ME-with-the-image-this-check-runs-in",
+      },
+    ],
+  }).join("\n");
+
+  assert.ok(lines.includes("/home/ari/fabrica-terms/widgets"), lines);
+  assert.ok(lines.includes("the repository itself was not touched"), lines);
+  assert.ok(lines.includes("check.sh: was already in this folder"), lines);
+  assert.ok(lines.includes("nothing was proven"), lines);
+  assert.ok(lines.includes("is handed to Inspector instead of the repository"), lines);
+  assert.ok(lines.includes("REPLACE-ME-with-... left in one of them refuses the task"), lines);
+  assert.ok(lines.includes("githubTokenVar"), "a repository Fabrica cannot commit to needs its own token too");
+  assert.ok(!lines.includes('Ready: fabrica do'), "this route proved nothing, so it must not read as proven");
+  assert.ok(!lines.includes("Merge"), lines);
+});
+
+test("runRegisterCommand: --terms writes the three files beside the repository and registers it", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  const terms = mkdtempSync(join(tmpdir(), "fabrica-cli-terms-"));
+  const tools = fakeRegisterTools();
+  const io = captureIo();
+
+  const code = await runRegisterCommand([dir, "--terms", terms], { recordHome, tools, ...io });
+
+  assert.equal(code, 0);
+  const stdout = io.out.join("\n");
+  assert.ok(stdout.includes(terms), stdout);
+  assert.ok(stdout.includes("noStamp = true"), stdout);
+  assert.ok(existsSync(join(terms, ".inspector.json")), "the config lands in the folder, not the repository");
+  assert.ok(!existsSync(join(dir, ".inspector.json")));
+  assert.equal(tools.pullRequestCalls.length, 0, "nothing is pushed and nothing is opened on this route");
+  assert.equal(loadConfig(recordHome).projects.dayjob ?? undefined, undefined);
+  assert.ok(Object.values(loadConfig(recordHome).projects).some((p) => p.terms === terms));
+});
+
+// A relative --terms is resolved against cwd and recorded absolute, for
+// the same reason <path> is: a relative folder in the registry would
+// mean something different to every later caller.
+test("runRegisterCommand: a relative --terms is resolved against cwd and recorded absolutely", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  const parent = mkdtempSync(join(tmpdir(), "fabrica-cli-terms-rel-"));
+  mkdirSync(join(parent, "widgets"));
+
+  const code = await runRegisterCommand([dir, "--terms", "widgets"], {
+    recordHome,
+    cwd: parent,
+    tools: fakeRegisterTools(),
+    ...captureIo(),
+  });
+
+  assert.equal(code, 0);
+  const recorded = Object.values(loadConfig(recordHome).projects)[0].terms;
+  assert.equal(recorded, realpathSync(join(parent, "widgets")));
+});
+
+test("runRegisterCommand: --terms with --check refuses, naming both, having written nothing", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  const terms = mkdtempSync(join(tmpdir(), "fabrica-cli-terms-clash-"));
+  const io = captureIo();
+
+  const code = await runRegisterCommand([dir, "--terms", terms, "--check", "npm test"], {
+    recordHome,
+    tools: fakeRegisterTools(),
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.deepEqual(io.out, [], "a refusal says nothing on stdout");
+  assert.ok(io.err.join("\n").includes("--terms cannot be combined with --check"), io.err.join("\n"));
+  assert.equal(existsSync(join(terms, ".inspector.json")), false);
+  assert.equal(existsSync(projectsTomlPath(recordHome)), false);
 });
 
 test("main: `fabrica register --help` prints its usage and exits 0", async () => {

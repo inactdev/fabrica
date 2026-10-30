@@ -2,8 +2,19 @@ export { registerProject, commitMessageFor, pullRequestBodyFor, registerWarnings
 export type { DockerfileOutcome, RegisterRequest, RegisterResult, RegisterOptions } from "./register.ts";
 export { RegisterError, RegisterProposalError } from "./errors.ts";
 export type { RegisterErrorCode } from "./errors.ts";
-export { proposeInspectorConfig, readProposalSignals } from "./propose.ts";
-export type { InspectorProposal, ProposalSignals } from "./propose.ts";
+export { deriveProposal, proposeInspectorConfig, readProposalSignals } from "./propose.ts";
+export type {
+  CheckField,
+  CheckSource,
+  DependencyField,
+  ImageField,
+  InspectorProposal,
+  ProposalDerivation,
+  ProposalSignals,
+  ProtectedPathsField,
+} from "./propose.ts";
+export { resolveTermsFolder, writeTerms } from "./terms.ts";
+export type { TermsFile, TermsFileOutcome, TermsResult } from "./terms.ts";
 export {
   CHECK_SCRIPT,
   INSPECTOR_CONFIG,

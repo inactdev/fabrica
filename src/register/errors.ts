@@ -37,6 +37,21 @@ export type RegisterErrorCode =
   | "proposed"
   /** The repo already has .inspector.json on origin, but no check.sh. */
   | "no-check-script"
+  /** `--terms` names something that is not an existing folder. */
+  | "terms-unusable"
+  /** `--terms` names a folder inside the repository itself, where every
+   * worker's own checkout would carry it. */
+  | "terms-inside-repo"
+  /** `--terms` was given together with a flag that only describes the
+   * repository route (`--check`, `--image`, `--timeout`, `--protected`),
+   * which this route would have had to ignore. */
+  | "terms-with-repository-flags"
+  /** `--terms` was given for a repository that already carries
+   * .inspector.json on origin's default branch, so its terms are in it
+   * and a second set beside it could only disagree. */
+  | "terms-not-needed"
+  /** A file could not be written into the terms folder. */
+  | "terms-write-failed"
   /** The check ran in the image and failed. */
   | "check-failed"
   /** The box could not run the check at all - never read as a failure. */

@@ -57,6 +57,49 @@ test("appendProjectEntry writes the only-touched-tests ruling into the entry, as
   assert.equal(loadConfig(recordHome).projects.fabrica.onlyTouchedTests, true);
 });
 
+// Work mode (`--terms`): two more lines, written out for the same
+// reason onlyTouchedTests is - this text is what the Client is shown,
+// and these are the lines he edits.
+test("appendProjectEntry writes the terms folder and noStamp = true for a work-mode project", () => {
+  const recordHome = tempHome();
+  const { appended } = appendProjectEntry({
+    recordHome,
+    name: "dayjob",
+    path: "/home/ari/work/widgets",
+    check: "./check.sh",
+    terms: "/home/ari/fabrica-terms/widgets",
+    noStamp: true,
+  });
+
+  assert.equal(
+    appended,
+    '[projects.dayjob]\npath = "/home/ari/work/widgets"\ncheck = "./check.sh"\n' +
+      'terms = "/home/ari/fabrica-terms/widgets"\nnoStamp = true\nonlyTouchedTests = true\n'
+  );
+  assert.deepEqual(loadConfig(recordHome).projects.dayjob, {
+    path: "/home/ari/work/widgets",
+    check: "./check.sh",
+    terms: "/home/ari/fabrica-terms/widgets",
+    noStamp: true,
+    onlyTouchedTests: true,
+  });
+});
+
+// "Projects registered without --terms are unchanged": neither line is
+// written when neither was asked for, so an ordinary entry looks exactly
+// as it always did.
+test("appendProjectEntry writes neither line for a project with no terms folder", () => {
+  const recordHome = tempHome();
+  const { appended } = appendProjectEntry({
+    recordHome,
+    name: "fabrica",
+    path: "/srv/fabrica",
+    check: "./check.sh",
+  });
+
+  assert.doesNotMatch(appended, /terms|[Ss]tamp/);
+});
+
 test("appendProjectEntry leaves everything already in the file exactly as it was", () => {
   const recordHome = tempHome();
   const before =

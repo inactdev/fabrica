@@ -443,6 +443,12 @@ test("loadConfig: githubTokenVar must be a variable NAME, never the token and ne
   }
 });
 
+// Work mode's terms folder and the two flags beside it are covered
+// together with the rest of issue #316's settings further down this file
+// ("Work mode (issue #316)"), since `noStamp` and `pullRequestTemplate`
+// are read there too and one block describing the three reads better
+// than two describing parts of them.
+
 test("loadConfig: the unknown-field refusal names githubTokenVar among what is recognized", () => {
   const recordHome = makeTestHome(`
     [projects.dayjob]
