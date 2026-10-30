@@ -70,6 +70,21 @@ export interface ProjectConfig {
    * make through it (src/relay/limits.mjs's
    * DEFAULT_MAX_CALLS_PER_TASK). */
   maxCallsPerTask?: number;
+  /** `githubTokenVar = "<NAME>"` — the variable in `brain.env` holding
+   * this project's own GitHub token, for a project the Client's GitHub
+   * App cannot be installed on (issue #314, work mode). Named here,
+   * never held here: this is the variable's *name*, and the token is
+   * read from `brain.env` exactly like every other credential on the
+   * machine.
+   *
+   * Set, **every** GitHub operation for this project goes through that
+   * token and no App token is ever minted for it (Client's
+   * clarification: "every GitHub operation for that project"). Absent -
+   * the default, and every project today - the App is the only path.
+   * Never a fallback in either direction: a project names a token or it
+   * uses the App, and a machine with no App configured at all is not an
+   * error for a project that names a token. See src/projecttoken/. */
+  githubTokenVar?: string;
   /** `[projects.<name>.reviewer]` — this project's own reviewer,
    * overriding the global `[reviewer]` table outright (not field by
    * field: a project that names one names both fields). */

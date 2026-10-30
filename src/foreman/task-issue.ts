@@ -43,7 +43,7 @@ import { MAX_COMMENT_CHARS } from "../github/index.ts";
 import type { FetchedIssue, IssueComment, IssueRef, IssueRequest, OmittedComment } from "../github/index.ts";
 import { hostFromOriginUrl, originUrl, ownerRepoFromOriginUrl } from "../register/index.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
-import { readIssueScope, taskTokenMinter } from "./github-token.ts";
+import { readIssueScope, taskGithubCredential } from "./github-token.ts";
 import { ForemanError } from "./errors.ts";
 import type { ClosesIssue } from "./pr-body.ts";
 
@@ -126,23 +126,31 @@ function describeOrigin(project: string): string {
 
 /** The real pair: origin's own `owner/repo` when that remote is on
  * github.com, and one documented GET with a GitHub App token minted for
- * the issue's own repository and only `issues: read` (issue #187).
+ * the issue's own repository and only `issues: read` (issue #187) - or,
+ * for a project that names its own token in projects.toml, with that
+ * token (issue #314: every GitHub operation for such a project, this
+ * read included).
  *
  * The scope is the issue's repository, not the project's: `owner/repo#N`
  * and a pasted URL can name an issue somewhere else entirely, and a
  * token minted for the project would then be a token for the wrong
  * repository. An App not installed where the issue lives refuses by
- * name, which is the honest answer.
+ * name, which is the honest answer. A project's own token is the
+ * Client's to scope, and a fine-grained one covering only that project's
+ * repository will refuse a cross-repository issue the same way.
  *
  * The token is never logged, printed, or recorded - only the fact that
- * one was minted (`github-token.ts`). */
+ * one was minted or used (`github-token.ts`). */
 export function defaultIssueReader(
   recordHome: string,
   taskId: string,
+  /** The project the task runs on - which credential its GitHub calls
+   * go through is a per-project setting. */
+  project: string,
   minter?: TokenMinter,
   env: NodeJS.ProcessEnv = process.env
 ): IssueReader {
-  const bound = taskTokenMinter(recordHome, taskId, minter, env);
+  const bound = taskGithubCredential(recordHome, taskId, project, minter, env);
   return {
     projectRepo(project) {
       const url = originUrl(project);
@@ -152,11 +160,11 @@ export function defaultIssueReader(
     async issue(ref) {
       let token: string;
       try {
-        token = (await bound.mint("read-issue", readIssueScope(ref.owner, ref.repo))).token;
+        token = await bound.token("read-issue", readIssueScope(ref.owner, ref.repo));
       } catch (err) {
         throw new GitHubError(
           "issue-fetch-failed",
-          `Reading issue ${formatIssueRef(ref)} needs a GitHub App token for ${ref.owner}/${ref.repo}. ` +
+          `Reading issue ${formatIssueRef(ref)} needs a GitHub token for ${ref.owner}/${ref.repo}. ` +
             `${messageOf(err)}`
         );
       }
@@ -181,14 +189,14 @@ export async function fetchTaskIssue(
   taskId: string,
   project: string,
   issueArg: number | string,
-  /** Omitted reads the real GitHub, minting this task's own `issues:
-   * read` token for the issue's repository; tests supply a fake. */
+  /** Omitted reads the real GitHub, with this task's own `issues: read`
+   * token for the issue's repository; tests supply a fake. */
   reader?: IssueReader,
   /** Only reached when `reader` is omitted - the App the real reader
-   * mints from. */
+   * mints from, for a project that does not name a token of its own. */
   minter?: TokenMinter
 ): Promise<string> {
-  const read = reader ?? defaultIssueReader(recordHome, taskId, minter);
+  const read = reader ?? defaultIssueReader(recordHome, taskId, project, minter);
   const ref = resolveIssueRef(project, issueArg, read);
 
   let issue: FetchedIssue;

@@ -294,3 +294,75 @@ test("no minted token ever reaches the check's own words", async () => {
     await github.close();
   }
 });
+
+// Issue #314: a project may reach GitHub with a token of its own. This
+// line asks nothing about such a project - the App is not its
+// credential - which also means that when every registered project has
+// one, there is nothing here left to check.
+
+const DAYJOB = { name: "dayjob", variable: "DAYJOB_GITHUB_TOKEN" };
+
+test("every registered project uses its own token: OK with no App configured at all", async () => {
+  // The machine this setting exists for: a company organization the
+  // Client's App cannot be installed on. A permanent FAIL here would
+  // stop `fabrica up` from ever starting a session there.
+  const recordHome = mkdtempSync(join(tmpdir(), "fabrica-gh-app-doctor-work-mode-"));
+
+  const check = await githubAppStatus({}, recordHome, [], { ownTokens: [DAYJOB] });
+
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /not used/);
+  assert.match(check.detail, /dayjob \(DAYJOB_GITHUB_TOKEN\)/);
+  assert.equal(check.fix, undefined);
+});
+
+test("an App configured but used by nothing is a note on that passing line, not a failure", async () => {
+  const { recordHome, env } = configured();
+
+  const check = await githubAppStatus(env, recordHome, [], { ownTokens: [DAYJOB] });
+
+  assert.equal(check.ok, true);
+  assert.match(check.note ?? "", /configured on this machine and nothing uses it/);
+});
+
+test("no projects registered at all still FAILs on a missing App - the next one will need it", async () => {
+  const recordHome = mkdtempSync(join(tmpdir(), "fabrica-gh-app-doctor-empty-"));
+
+  const check = await githubAppStatus({}, recordHome, [], { ownTokens: [] });
+
+  assert.equal(check.ok, false);
+});
+
+test("a project with its own token is named on the App's line as not checked there", async () => {
+  const github = await stub();
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [WIDGETS], {
+      apiRoot: github.baseUrl,
+      ownTokens: [DAYJOB],
+    });
+
+    assert.equal(check.ok, true);
+    assert.match(check.detail, /dayjob reaches GitHub with a token of its own and was not checked here/);
+  } finally {
+    await github.close();
+  }
+});
+
+test("GITHUB_TOKEN is not a leftover when a project names it as its own publish token", async () => {
+  const github = await stub();
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus({ ...env, GITHUB_TOKEN: "ghp_fake" }, recordHome, [WIDGETS], {
+      apiRoot: github.baseUrl,
+      ownTokens: [{ name: "dayjob", variable: "GITHUB_TOKEN" }],
+    });
+
+    // Telling the Client to revoke the credential his day job's tasks
+    // publish with would be the worst advice this line could give.
+    assert.equal(check.ok, true);
+    assert.doesNotMatch(check.note ?? "", /revoke/);
+  } finally {
+    await github.close();
+  }
+});

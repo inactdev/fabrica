@@ -361,6 +361,20 @@ export type FabricaEventName =
    * bookkeeping, not a new promise to the Client about a seam, and
    * `contract/surface.ts` is a path `rule9-gate.yml` protects. */
   | "token-minted"
+  /** Fabrica reached GitHub with this project's own token instead - the
+   * work-mode setting for a project the App cannot be installed on
+   * (issue #314). Details: `src/foreman/github-token.ts`'s
+   * `ProjectTokenUsedDetails` - the repository, what the call was for,
+   * and the *name* of the brain.env variable the token came from. Never
+   * the token.
+   *
+   * A separate name from `"token-minted"` rather than a flag on it,
+   * because nothing was minted: there is no installation, no granted
+   * permission map and no expiry to record, and a record that invented
+   * them would be a record nobody could trust. One per call, for the
+   * same reason the App's own event is per mint - which credential
+   * reached GitHub, and what for, is the whole question this answers. */
+  | "project-token-used"
   /** The code reader read this task's whole diff after Inspector turned
    * it green and found nothing to flag (inspector issue #34). Details:
    * `src/foreman/reader-round.ts`'s `ReaderReadDetails`. No fix round

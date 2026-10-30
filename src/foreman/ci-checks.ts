@@ -12,7 +12,7 @@ import { appendEvent } from "../record/index.ts";
 import { readPullRequestChecks } from "../ci/index.ts";
 import type { ChecksReport, CheckSource, ChecksVerdict, ConcludedCheck } from "../ci/index.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
-import { readChecksScope, taskTokenMinter } from "./github-token.ts";
+import { readChecksScope, taskGithubCredential } from "./github-token.ts";
 
 /**
  * The outside call: read `prUrl`'s checks and answer with what they said,
@@ -29,19 +29,27 @@ export type ChecksReader = (prUrl: string, onTick: () => void) => Promise<Checks
 
 /** The production reader - the real GitHub read, with `src/ci/`'s own
  * defaults for the bounded wait and the poll interval, and one GitHub
- * App token minted for the pull request's own repository (issue #187).
+ * App token minted for the pull request's own repository (issue #187),
+ * or this project's own token when it names one (issue #314).
  *
- * A factory rather than a constant, because the mint belongs to a task:
- * `recordHome`/`taskId` are what put `"token-minted"` on that task's
- * record, and the repository comes from the pull request URL itself
- * rather than from the project, since a pull request is always opened
- * where its branch was pushed. */
-export function defaultChecksReader(recordHome: string, taskId: string, minter?: TokenMinter): ChecksReader {
-  const bound = taskTokenMinter(recordHome, taskId, minter);
+ * A factory rather than a constant, because the credential belongs to a
+ * task: `recordHome`/`taskId` are what put `"token-minted"` (or
+ * `"project-token-used"`) on that task's record, and the repository
+ * comes from the pull request URL itself rather than from the project,
+ * since a pull request is always opened where its branch was pushed. */
+export function defaultChecksReader(
+  recordHome: string,
+  taskId: string,
+  /** The project the task runs on - which credential its GitHub calls
+   * go through is a per-project setting. */
+  project: string,
+  minter?: TokenMinter
+): ChecksReader {
+  const bound = taskGithubCredential(recordHome, taskId, project, minter);
   return (prUrl, onTick) =>
     readPullRequestChecks(prUrl, {
       onTick,
-      mintToken: async (ref) => (await bound.mint("read-checks", readChecksScope(ref.owner, ref.repo))).token,
+      mintToken: (ref) => bound.token("read-checks", readChecksScope(ref.owner, ref.repo)),
     });
 }
 
@@ -90,16 +98,19 @@ export interface CiChecksFinishedDetails {
 export async function handToPullRequestChecks(
   recordHome: string,
   taskId: string,
+  /** The project the task runs on - which credential this read goes
+   * through is a per-project setting (issue #314). */
+  project: string,
   prUrl: string,
-  /** Omitted reads the real pull request, minting this task's own
-   * scoped token for it; a test supplies a fake. */
+  /** Omitted reads the real pull request with this task's own scoped
+   * credential; a test supplies a fake. */
   reader?: ChecksReader,
   /** Only reached when `reader` is omitted - `src/githubapp`'s fake
    * minter, so a test that wants the real read against a stub GitHub
    * still needs no registered App. */
   minter?: TokenMinter
 ): Promise<ChecksReport | undefined> {
-  const read = reader ?? defaultChecksReader(recordHome, taskId, minter);
+  const read = reader ?? defaultChecksReader(recordHome, taskId, project, minter);
   const report = await read(prUrl, () => {
     appendEvent(recordHome, { taskId, name: "heartbeat", details: { phase: "ci-checks" } });
   });

@@ -43,6 +43,14 @@ export type ForemanErrorCode =
    * `fabrica doctor`'s github-app line says. See
    * src/foreman/publish-permissions.ts. */
   | "publish-not-permitted"
+  /** A project reaches GitHub with its own token (projects.toml's
+   * `githubTokenVar`, issue #314) and that token could not be read: the
+   * variable it names is set nowhere, or `brain.env` can be read by
+   * other users on this machine. Refused rather than published with
+   * some other credential - the App is never a fallback for a project
+   * that names a token. Carries the line to add, or the `chmod`. See
+   * src/projecttoken/. */
+  | "project-token-unavailable"
   | "inspector-not-ready"
   /** The installed Inspector is known to refuse this project's
    * configuration (issue #306): `.inspector.json` still carries a

@@ -12,8 +12,20 @@
 // on the record, in a message, or in Fabrica's own process environment.
 // What the record carries is the repository, the installation, the
 // permissions GitHub granted, the expiry, and what the token was for.
+//
+// There are two credentials a task can have, decided per project and
+// never one as the other's fallback (issue #314, work mode). The App is
+// the default. A project whose projects.toml entry names the
+// brain.env variable holding its own GitHub token - for an organization
+// the App cannot be installed on - uses that token for EVERY GitHub
+// operation, and `taskGithubCredential` below is the one function that
+// knows which: every GitHub call in Fabrica gets its token from there,
+// so a call added later cannot accidentally get the App for a project
+// that has its own token. Which credential a project uses is
+// src/projecttoken/'s answer; what a call does with it is here.
 
 import { appendEvent } from "../record/index.ts";
+import { loadConfigOrProblem } from "../config/index.ts";
 import {
   PUBLISH_PERMISSIONS,
   READ_CHECKS_PERMISSIONS,
@@ -22,6 +34,7 @@ import {
   describePermissions,
 } from "../githubapp/index.ts";
 import type { GithubScope, MintPurpose, MintedToken, ScopedToken, TokenMinter } from "../githubapp/index.ts";
+import { resolveProjectToken } from "../projecttoken/index.ts";
 import { hostFromOriginUrl, originUrl, ownerRepoFromOriginUrl } from "../register/index.ts";
 import { ForemanError } from "./errors.ts";
 
@@ -90,6 +103,103 @@ export function taskTokenMinter(
   return recordingMinter(recordHome, taskId, minter ?? defaultTokenMinter({ recordHome, env }));
 }
 
+/** `"project-token-used"`'s own details (issue #314). Never the token -
+ * `variable` is its *name*, which is the half that is safe to print and
+ * the half anyone reading the record actually needs. */
+export interface ProjectTokenUsedDetails {
+  /** What the call was for: `publish`, `read-issue`, `read-checks` -
+   * the same vocabulary the App's own event uses, since it describes
+   * the call rather than the credential. */
+  purpose: MintPurpose;
+  /** `owner/repo` - the repository this call was against. */
+  repo: string;
+  /** The name of the `brain.env` variable the token was read from. */
+  variable: string;
+}
+
+/**
+ * One GitHub credential for one call, however this project gets one
+ * (issue #314). Every GitHub operation a task makes goes through this,
+ * which is what makes "a project that names its own token never reaches
+ * the App, and a project that names none never reaches anything else"
+ * true by construction rather than by each call site remembering to
+ * ask.
+ */
+export interface TaskGithubCredential {
+  /**
+   * Everything answerable without the network: the App configured and
+   * its key usable, or this project's own token present. Throws with
+   * the Client's own next step, so a caller that must refuse before it
+   * starts anything (`Inspector.prepare()`) can do so synchronously.
+   */
+  check(): void;
+  /** The token for one call, recorded on the task and discarded by the
+   * caller afterwards. */
+  token(purpose: MintPurpose, scope: GithubScope): Promise<string>;
+}
+
+/**
+ * Which credential this task's GitHub calls go through: this project's
+ * own token when its projects.toml entry names one, otherwise a token
+ * minted from the GitHub App. Never both, and never one as the other's
+ * fallback (issue #314's clarification).
+ *
+ * The decision is taken per call rather than cached, so a `githubTokenVar`
+ * added to projects.toml between two rounds of the same task is read the
+ * same way every other per-project setting is.
+ *
+ * A projects.toml that will not parse answers "the App", the same
+ * tolerance `registeredProject` has and for the same reason: a round
+ * refuses on a broken registry long before this, in resolve-check.ts,
+ * and a credential lookup must not become the second, worse reporter of
+ * it.
+ */
+export function taskGithubCredential(
+  recordHome: string,
+  taskId: string,
+  project: string,
+  /** The App's seam - a test's fake minter. Only reached for a project
+   * that names no token of its own. */
+  minter?: TokenMinter,
+  env: NodeJS.ProcessEnv = process.env
+): TaskGithubCredential {
+  const resolve = () =>
+    resolveProjectToken({
+      recordHome,
+      config: loadConfigOrProblem(recordHome).config,
+      projectPath: project,
+      env,
+    });
+  // Built at most once, and only for a project that uses the App: the
+  // real minter remembers which installation covers a repository, which
+  // is what keeps a second call from being a second round trip.
+  let app: TokenMinter | undefined;
+  const appMinter = () => (app ??= taskTokenMinter(recordHome, taskId, minter, env));
+
+  return {
+    check() {
+      const resolution = resolve();
+      if (resolution.kind === "refused") throw new ForemanError("project-token-unavailable", resolution.message);
+      // A project with its own token never asks whether the App is
+      // configured: on the machine this setting exists for, it cannot
+      // be, and that is not an error (issue #314's clarification).
+      if (resolution.kind === "app") appMinter().requireConfigured();
+    },
+    async token(purpose, scope) {
+      const resolution = resolve();
+      if (resolution.kind === "refused") throw new ForemanError("project-token-unavailable", resolution.message);
+      if (resolution.kind === "app") return (await appMinter().mint(purpose, scope)).token;
+      const details: ProjectTokenUsedDetails = {
+        purpose,
+        repo: `${scope.owner}/${scope.repo}`,
+        variable: resolution.token.variable,
+      };
+      appendEvent(recordHome, { taskId, name: "project-token-used", details });
+      return resolution.token.token;
+    },
+  };
+}
+
 /** Which GitHub repository a project's pull requests are opened in, read
  * from its `origin` remote - the same remote every task branch is cut
  * from (src/line/cut.ts). Throws `ForemanError("no-github-repo")`
@@ -136,8 +246,10 @@ export function githubRepoOf(project: string): { owner: string; repo: string } |
 }
 
 /** The publishing token for one round's Inspector handoff: this task's
- * repository alone, and only `contents: write` plus `pull_requests:
- * write`.
+ * repository alone, and - when it comes from the App - only `contents:
+ * write`, `pull_requests: write` and `statuses: write`. A project that
+ * names its own token in projects.toml publishes with that instead, and
+ * no App token is minted for it at all (issue #314).
  *
  * The project's repository is resolved inside `check()`/`mint()` rather
  * than when this is built, so a project with no github.com origin
@@ -145,17 +257,18 @@ export function githubRepoOf(project: string): { owner: string; repo: string } |
  * any worker starts - instead of throwing while the round is being
  * assembled. */
 export function publishToken(recordHome: string, taskId: string, project: string, minter?: TokenMinter): ScopedToken {
-  const bound = taskTokenMinter(recordHome, taskId, minter);
+  const credential = taskGithubCredential(recordHome, taskId, project, minter);
   return {
     check() {
       // Both halves, cheapest first: a project with no GitHub remote can
-      // never publish, and an unconfigured App can never mint. Neither
-      // needs the network.
+      // never publish, and a credential this machine does not have can
+      // never be used. Neither needs the network.
       projectRepo(project);
-      bound.requireConfigured();
+      credential.check();
     },
-    mint() {
-      return bound.mint("publish", { ...projectRepo(project), permissions: PUBLISH_PERMISSIONS });
+    async mint() {
+      const scope = { ...projectRepo(project), permissions: PUBLISH_PERMISSIONS };
+      return { token: await credential.token("publish", scope) };
     },
   };
 }

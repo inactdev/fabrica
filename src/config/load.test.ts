@@ -397,6 +397,70 @@ test("loadConfig: a project that declares no hosts carries none - the defaults a
   assert.equal(project.maxCallsPerTask, undefined);
 });
 
+test("loadConfig: a project may name the brain.env variable holding its own GitHub token", () => {
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    check = "bin/ci"
+    githubTokenVar = "DAYJOB_GITHUB_TOKEN"
+  `);
+
+  assert.deepEqual(loadConfig(recordHome).projects["dayjob"], {
+    path: join(homedir(), "work/widgets"),
+    check: "bin/ci",
+    githubTokenVar: "DAYJOB_GITHUB_TOKEN",
+    onlyTouchedTests: true,
+  });
+});
+
+test("loadConfig: a project that names no token carries none - the GitHub App is the default", () => {
+  const recordHome = makeTestHome(`
+    [projects.spending-app]
+    path = "~/inkling-umbrella/spending-app"
+  `);
+
+  assert.equal(loadConfig(recordHome).projects["spending-app"].githubTokenVar, undefined);
+});
+
+test("loadConfig: githubTokenVar must be a variable NAME, never the token and never a pattern", () => {
+  for (const value of [`""`, `"  "`, `"9LIVES"`, `"DAY JOB"`, `"github_pat_11AAA.*"`, `42`]) {
+    const recordHome = makeTestHome(`
+      [projects.dayjob]
+      path = "~/work/widgets"
+      githubTokenVar = ${value}
+    `);
+
+    assert.throws(
+      () => loadConfig(recordHome),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /githubTokenVar must be the NAME of a variable/);
+        return true;
+      },
+      `githubTokenVar = ${value} should have been refused`
+    );
+  }
+});
+
+test("loadConfig: the unknown-field refusal names githubTokenVar among what is recognized", () => {
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    githubToken = "github_pat_fake"
+  `);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /unknown field\(s\): githubToken\./);
+      assert.match(err.message, /githubTokenVar/);
+      return true;
+    }
+  );
+});
+
 test("loadConfig: hosts must be an array of strings", () => {
   for (const hosts of [`"registry.npmjs.org"`, `[1, 2]`, `["registry.npmjs.org", ""]`]) {
     const recordHome = makeTestHome(`

@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   capsActive,
+  describeProjectCredential,
   describeUnmeasured,
   eventsByTask,
   githubAppStatus,
@@ -22,6 +23,7 @@ import {
   probeWorkerToken,
   readEvents,
   requireGitRoot,
+  resolveProjectToken,
   stateOf,
   unmeasuredSpend,
   relayImageStatus,
@@ -30,7 +32,7 @@ import {
   workerTokenStatus,
   WORKER_NETWORK_PREFIX,
 } from "../index.ts";
-import type { ProjectRepo, WorkerNetwork } from "../index.ts";
+import type { ProjectOwnToken, ProjectRepo, ProjectTokenResolution, WorkerNetwork } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { dockerDaemonUp } from "./docker-daemon.ts";
 import {
@@ -75,9 +77,19 @@ the key or the file, so a config Inspector would turn away is found
 here rather than after a round has been spent on it. Fabrica never
 edits either file; the fix is always a hand change.
 
+Each project's line ends with which GitHub credential it uses: the
+GitHub App, or its own token when its projects.toml entry names one
+(githubTokenVar). A named variable that holds nothing, or a brain.env
+other users can read, is a FAIL on that project's line - nothing it
+works on could be published. The github app line asks nothing about such
+a project, and passes with no App configured at all when every
+registered project has a token of its own.
+
 The github app line also warns, without failing, while a personal
 GITHUB_TOKEN is still set in the environment or sitting in brain.env:
-nothing reads it any more, which is exactly why it should be revoked.
+nothing reads it any more, which is exactly why it should be revoked -
+unless a project names GITHUB_TOKEN as its own publish token, in which
+case something does and the warning stays off.
 
 The inspector line reports that commit against the tip of its own main
 inline, and FAILs - printing the exact \`go install\` command \`fabrica
@@ -172,7 +184,13 @@ export interface DoctorProbes {
    * nothing reads any more. Async because answering "installed where"
    * is two documented GitHub calls; the registered projects it asks
    * about are resolved here rather than in src/githubapp, which knows
-   * about Apps and not about projects.toml. */
+   * about Apps and not about projects.toml.
+   *
+   * A project that reaches GitHub with its own token (issue #314) is
+   * split out of that list and only named on the line, never asked
+   * about - and when every registered project is one, this passes with
+   * no App configured at all. Its own project line carries whether that
+   * token is actually there. */
   githubApp(recordHome: string): Promise<DoctorCheck>;
   /** Inspector on PATH, taking -branch, and not behind its own main -
    * which is a real FAIL, so `fabrica up` stops on a stale Inspector
@@ -645,26 +663,51 @@ export const realProbes: DoctorProbes = {
     return workerNetworksCheck(networks, networks === null ? [] : leftoverWorkerNetworks(networks, liveTaskIds(recordHome)));
   },
   workerToken: (recordHome) => workerTokenStatus(process.env, recordHome),
-  githubApp: (recordHome) => githubAppStatus(process.env, recordHome, registeredProjectRepos(recordHome)),
+  githubApp: (recordHome) =>
+    githubAppStatus(process.env, recordHome, registeredProjectRepos(recordHome), {
+      ownTokens: registeredOwnTokens(recordHome),
+    }),
   inspector: () => inspectorBranchStatus(process.env),
   live: (recordHome) => probeWorkerToken(process.env, recordHome),
 };
 
-/** Every registered project that has a github.com repository behind it,
- * for the one check that asks GitHub where the App is installed. A
- * projects.toml that will not parse answers "none" rather than throwing:
- * its own FAIL line is `collectDoctorChecks`'s to print, and the App
- * line still has three of its four questions to answer. */
+/** Every registered project that has a github.com repository behind it
+ * **and uses the App for it**, for the one check that asks GitHub where
+ * the App is installed. A project that names its own token (issue #314)
+ * is left out: the App is not its credential, so where the App is
+ * installed says nothing about whether that project can publish.
+ *
+ * A projects.toml that will not parse answers "none" rather than
+ * throwing: its own FAIL line is `collectDoctorChecks`'s to print, and
+ * the App line still has three of its four questions to answer. */
 function registeredProjectRepos(recordHome: string): ProjectRepo[] {
   const { config, problem } = loadConfigOrProblem(recordHome);
   if (problem) return [];
   return Object.entries(config.projects).flatMap(([name, project]) => {
+    if (project.githubTokenVar !== undefined) return [];
     const repo = githubRepoOf(project.path);
     return repo === null ? [] : [{ name, ...repo }];
   });
 }
 
-function projectCheck(name: string, path: string): DoctorCheck {
+/** The other half of the same split: every registered project that
+ * reaches GitHub with a token of its own. Named on the App's line
+ * (never asked about there) so the two numbers add up to the registry
+ * for anyone reading them. */
+function registeredOwnTokens(recordHome: string): ProjectOwnToken[] {
+  const { config, problem } = loadConfigOrProblem(recordHome);
+  if (problem) return [];
+  return Object.entries(config.projects).flatMap(([name, project]) =>
+    project.githubTokenVar === undefined ? [] : [{ name, variable: project.githubTokenVar }]
+  );
+}
+
+/** Which GitHub credential one project uses, as its own doctor line
+ * reports it (issue #314). Resolved by `collectDoctorChecks`, which
+ * already holds the config, rather than read again here. */
+export type ProjectCredentialLine = ProjectTokenResolution;
+
+function projectCheck(name: string, path: string, credential: ProjectCredentialLine): DoctorCheck {
   const label = `project ${name}`;
   try {
     requireGitRoot(path);
@@ -712,6 +755,17 @@ function projectCheck(name: string, path: string): DoctorCheck {
       fix: configProblem.fix,
     };
   }
+  // Issue #314: which GitHub credential this project uses, and - for a
+  // project that names its own token - whether it can actually be given
+  // one. A token named and not set means nothing it works on can ever be
+  // published, so it is a FAIL; a missing GitHub App is not this line's
+  // business (the App has its own line above, and for a token project it
+  // is not the credential at all). Asked after the four above for the
+  // same reason #306's question is: those are about whether this project
+  // can be worked, this one about where its work goes afterwards.
+  if (credential.kind === "refused") {
+    return { ok: false, label, detail: `${path}: ${firstSentence(credential.message)}`, fix: credential.fix };
+  }
   // "Known to refuse", not "would accept": the refusals checked above
   // are the ones Inspector documents today, not the whole of its own
   // validation, and a config that would not even parse has its key
@@ -720,7 +774,21 @@ function projectCheck(name: string, path: string): DoctorCheck {
   const inspected = existsSync(join(path, ".inspector.json"))
     ? ", nothing Inspector is known to refuse"
     : "";
-  return { ok: true, label, detail: `${path}: git root, has a check, has origin${inspected}` };
+  return {
+    ok: true,
+    label,
+    detail: `${path}: git root, has a check, has origin${inspected}, ${describeProjectCredential(credential)}`,
+  };
+}
+
+/** A doctor line is one line. Every refusal Fabrica writes opens with
+ * one complete sentence naming what is wrong and continues with the
+ * steps, which belong in the `fix` or in the refusal a task prints - not
+ * inline beside a dozen other checks. The same rule, and the same
+ * reading of it, `src/githubapp/doctor-checks.ts` applies to its own. */
+function firstSentence(message: string): string {
+  const end = message.search(/\.(\s|$)/);
+  return end === -1 ? message.split("\n")[0] : message.slice(0, end + 1);
 }
 
 function parseDoctorArgs(argv: string[]): { live: boolean } {
@@ -796,7 +864,20 @@ export async function collectDoctorChecks(opts: { recordHome: string; probes?: D
     if (names.length === 0) {
       checks.push({ ok: false, label: "projects", detail: "no projects are registered", fix: `add a [projects.<name>] entry to ${recordHome}/projects.toml` });
     }
-    for (const name of names) checks.push(projectCheck(name, config.projects[name].path));
+    for (const name of names) {
+      const path = config.projects[name].path;
+      checks.push(
+        projectCheck(
+          name,
+          path,
+          // Issue #314: the same question, asked with the same inputs, a
+          // round's own start asks (src/foreman/github-token.ts) - so
+          // what doctor says and what a task refuses on can never be
+          // two different answers.
+          resolveProjectToken({ recordHome, config, projectPath: path, projectLabel: name, env: process.env })
+        )
+      );
+    }
 
     const { perTaskUsd, perDayUsd } = config.caps;
     checks.push(

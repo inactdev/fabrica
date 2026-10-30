@@ -282,6 +282,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     hosts,
     maxRequestBytes,
     maxCallsPerTask,
+    githubTokenVar,
     reviewer,
     reader,
     knowledge,
@@ -293,8 +294,8 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, reviewer, reader, knowledge ` +
-        `and onlyTouchedTests are recognized.`
+        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, githubTokenVar, reviewer, reader, ` +
+        `knowledge and onlyTouchedTests are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -332,6 +333,9 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     path: expandLeadingTilde(projectPath),
     onlyTouchedTests: onlyTouchedTests ?? true,
   };
+  if (githubTokenVar !== undefined) {
+    project.githubTokenVar = requireEnvVarName(githubTokenVar, `${path}: [projects.${name}].githubTokenVar`);
+  }
   if (check !== undefined) project.check = check;
   if (model !== undefined) project.model = (model as string).trim();
   if (hosts !== undefined) project.hosts = requireHosts(hosts, `${path}: [projects.${name}].hosts`);
@@ -498,6 +502,32 @@ function requireHosts(value: unknown, label: string): string[] {
     throw new ConfigError("malformed", `${label} has an empty entry; remove it or name a host.`);
   }
   return hosts;
+}
+
+/**
+ * The name of a variable in `brain.env` (issue #314's
+ * `githubTokenVar`), not its value. Only what an environment variable
+ * can be called: a letter or underscore, then letters, digits and
+ * underscores.
+ *
+ * Checked here rather than where it is read, for two reasons. It is a
+ * typo the Client makes once and would otherwise meet as "that variable
+ * is not set" every task, with nothing saying the name itself could
+ * never have matched. And the reader builds a line-matching expression
+ * out of the name (`brainEnvValue`), so a name carrying regular
+ * expression punctuation would match lines nobody wrote - a name is
+ * never a pattern.
+ */
+function requireEnvVarName(value: unknown, label: string): string {
+  if (typeof value !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.trim())) {
+    throw new ConfigError(
+      "malformed",
+      `${label} must be the NAME of a variable in brain.env - letters, digits and underscores, not starting ` +
+        `with a digit (for example githubTokenVar = "DAYJOB_GITHUB_TOKEN") - and never the token itself, ` +
+        `not ${JSON.stringify(value)}.`
+    );
+  }
+  return value.trim();
 }
 
 function requirePositiveInteger(value: unknown, label: string): number {

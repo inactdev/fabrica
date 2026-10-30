@@ -37,7 +37,7 @@
 // projects.toml and a git remote, which is `src/cli/doctor-command.ts`'s
 // own business (and keeps this module's imports down to one).
 
-import { appSetupFix, leftoverPersonalToken, requireAppCredentials } from "./config.ts";
+import { appSettings, appSetupFix, leftoverPersonalToken, requireAppCredentials } from "./config.ts";
 import { GithubAppError } from "./errors.ts";
 import { grantPermissionsFix } from "./granted.ts";
 import type { MissingPermission } from "./granted.ts";
@@ -66,6 +66,20 @@ export interface ProjectRepo {
   repo: string;
 }
 
+/** A registered project that reaches GitHub with a token of its own
+ * instead of the App (issue #314, work mode) - the name in
+ * projects.toml, and the name of the brain.env variable holding the
+ * token. Never the token.
+ *
+ * This line asks nothing about such a project: it is the App's line, and
+ * the App is not that project's credential. Its own per-project doctor
+ * line reports which path it uses and whether the variable is set
+ * (src/cli/doctor-command.ts). */
+export interface ProjectOwnToken {
+  name: string;
+  variable: string;
+}
+
 export const GITHUB_APP_LABEL = "github app";
 
 export async function githubAppStatus(
@@ -76,10 +90,46 @@ export async function githubAppStatus(
    * 2 and 5 answered - and mints nothing, since there is no repository
    * to mint for. */
   repos: ProjectRepo[] = [],
-  opts: { fetchImpl?: AppFetch; apiRoot?: string } = {}
+  opts: {
+    fetchImpl?: AppFetch;
+    apiRoot?: string;
+    /** Every registered project that reaches GitHub with its own token
+     * (issue #314). Not checked here - see `ProjectOwnToken` - but
+     * named, because whether the App is used by anything at all is this
+     * line's own question. */
+    ownTokens?: ProjectOwnToken[];
+  } = {}
 ): Promise<GithubAppCheck> {
   const label = GITHUB_APP_LABEL;
-  const note = leftoverTokenNote(env, recordHome);
+  const ownTokens = opts.ownTokens ?? [];
+  const note = leftoverTokenNote(env, recordHome, ownTokens);
+
+  // Issue #314: nothing on this machine uses the App. On the machine
+  // that setting exists for, the App *cannot* be installed - the
+  // organization will not have it - so checking it would be a permanent
+  // FAIL about a credential nothing reads, and `fabrica up` stops on a
+  // blocking FAIL. The same reasoning that removed the personal-token
+  // line when nothing read it any more.
+  //
+  // Deliberately "every registered project uses its own token", not "no
+  // project uses the App": a machine with no projects registered at all
+  // is the ordinary first-run state, and an unconfigured App there is
+  // still the FAIL it has always been, because the next project
+  // registered will need one.
+  if (repos.length === 0 && ownTokens.length > 0) {
+    const named = ownTokens.map(({ name, variable }) => `${name} (${variable})`).join(", ");
+    const configured = appSettings(env, recordHome);
+    const unused =
+      configured.appId === undefined && configured.keyPath === undefined
+        ? null
+        : "a GitHub App is configured on this machine and nothing uses it";
+    return {
+      ok: true,
+      label,
+      detail: `not used - every registered project reaches GitHub with its own token: ${named}`,
+      ...(unused || note ? { note: [unused, note].filter(Boolean).join(" - ") } : {}),
+    };
+  }
 
   let credentials;
   try {
@@ -171,7 +221,16 @@ export async function githubAppStatus(
       ? "no registered project has a github.com origin to check"
       : `installed on ${repos.length === 1 ? "the registered project" : `all ${repos.length} registered projects`}` +
         `, and its publishing token carries every permission a handoff needs`;
-  const detail = `${named}, ${identity.installations === 1 ? "1 installation" : `${identity.installations} installations`}, ${reached}`;
+  // Issue #314: the projects this line did not ask about, said out loud.
+  // A reader counting projects would otherwise be left to work out why
+  // the number here is smaller than the registry's.
+  const aside =
+    ownTokens.length === 0
+      ? ""
+      : `; ${ownTokens.map(({ name }) => name).join(", ")} ${ownTokens.length === 1 ? "reaches" : "reach"} ` +
+        `GitHub with ${ownTokens.length === 1 ? "a token of its own" : "tokens of their own"} and ` +
+        `${ownTokens.length === 1 ? "was" : "were"} not checked here`;
+  const detail = `${named}, ${identity.installations === 1 ? "1 installation" : `${identity.installations} installations`}, ${reached}${aside}`;
   const notes = [...(unanswered.length > 0 ? [`could not check ${unanswered.join("; ")}`] : []), ...(note ? [note] : [])];
 
   return { ok: true, label, detail, ...(notes.length > 0 ? { note: notes.join(" - ") } : {}) };
@@ -192,8 +251,18 @@ function unionOfMissing(gaps: readonly PublishPermissionGap[]): MissingPermissio
 }
 
 /** The leftover-personal-token warning, in the words the Client needs:
- * what to do about it, since nothing reads it any more. */
-function leftoverTokenNote(env: NodeJS.ProcessEnv, recordHome: string): string | null {
+ * what to do about it, since nothing reads it any more.
+ *
+ * Unless something does: a project may name `GITHUB_TOKEN` itself as the
+ * variable its own token lives in (issue #314), and telling the Client to
+ * revoke a credential his day job's tasks publish with would be the worst
+ * advice this line could give. */
+function leftoverTokenNote(
+  env: NodeJS.ProcessEnv,
+  recordHome: string,
+  ownTokens: readonly ProjectOwnToken[]
+): string | null {
+  if (ownTokens.some(({ variable }) => variable === "GITHUB_TOKEN")) return null;
   const where = leftoverPersonalToken(env, recordHome);
   if (where === null) return null;
   return (
