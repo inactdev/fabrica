@@ -1,0 +1,87 @@
+# pin-freshness (issue #326). Fabrica pins Node in four places (held
+# together by src/cli/node-version-pins.test.ts), the coding agent's CLI
+# version in the worker image's Dockerfile, its base images by digest,
+# and - in README's install instructions - the Go version Inspector
+# needs. Nothing watched upstream, so a security release would have gone
+# unnoticed for as long as nobody happened to look.
+#
+# Once a week this job compares every one of those pins against upstream
+# and, for each pin that is behind, opens one issue naming the exact bump
+# and the exact lines to change, so a Fabrica task can take it from
+# there. One issue per stale pin (Client clarification on issue #326); a
+# later run while that issue is still open updates it in place instead of
+# opening a second one. The real work is
+# .github/scripts/check-pin-freshness.sh - see that file's header for
+# where "upstream" is for each pin, and for why the golang stage is
+# watched by its Go version rather than by its digest.
+#
+# Read-only against upstream. The only write anywhere is the issue, on
+# this repository, which is why `issues: write` is the one write
+# permission granted and `contents` stays read - this job must never be
+# able to move a pin, only to propose moving it.
+#
+# The trigger is `schedule`, which GitHub only ever runs from the default
+# branch's newest commit - so this job does nothing at all until this
+# file is merged to master. `workflow_dispatch` is here so the Client can
+# run it on demand (also only from the default branch) rather than
+# waiting a week to see what it says. Unlike docker-tests.yml this job
+# never runs on a pull request at all: a job that opens issues has no
+# business running from a branch's own copy of itself.
+#
+# The cron is deliberately not on the hour. GitHub's own documentation
+# warns that scheduled runs are delayed under load - and that queued jobs
+# are sometimes dropped - with the top of the hour the worst of it.
+#
+# `concurrency` matters more here than it looks: the whole "updates the
+# issue instead of opening another" property depends on a run seeing the
+# issue an earlier run opened. Two runs overlapping (the weekly one and a
+# manual dispatch, say) would both find nothing and both open one.
+# cancel-in-progress stays false so a run already talking to the GitHub
+# API is never cut off half way through.
+#
+# This file lives under .github/workflows/**, one of rule9-gate.yml's own
+# protected paths, so the pull request that adds it fails
+# `block-protected-path-change` on purpose - the Client merges it by
+# hand, exactly like docker-tests.yml and sync-inspector-contract.yml
+# before it.
+#
+# Proven by src/cli/pin-freshness-workflow.test.ts, which reads this
+# file's own source - there is no Fabrica code involved in a GitHub
+# Actions trigger, so reading the real file is the only way to hold these
+# facts to anything.
+name: pin-freshness
+
+on:
+  schedule:
+    # Mondays, 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: pin-freshness
+  cancel-in-progress: false
+
+jobs:
+  pin-freshness:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # Every pinned value is read out of the real file that holds it, so
+      # the checkout above is what this job compares against - and npm is
+      # how the agent CLI's published version is read, so the Node this
+      # repository pins is the Node that reads it. `node-version-file` is
+      # resolved relative to GITHUB_WORKSPACE, so it has to come after
+      # the checkout, as it does - the same ordering docker-tests.yml
+      # depends on.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - name: Compare every pin against upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/check-pin-freshness.sh

@@ -30,6 +30,13 @@
 # every task against this project, and load.test.ts is what catches it.
 tests.map: src/testmap/load.test.ts
 
+# Hand-added: CI glue has no colocated test of its own to be generated
+# from, so `fabrica tests-map` leaves it out. The pin-freshness job's
+# workflow and script are both proven by one test that reads their real
+# source and runs the script with its I/O faked.
+.github/workflows/pin-freshness.yml: src/cli/pin-freshness-workflow.test.ts
+.github/scripts/check-pin-freshness.sh: src/cli/pin-freshness-workflow.test.ts
+
 contract/rule1.isolation.test.ts: contract/rule1.isolation.test.ts
 contract/rule10.spend-caps.test.ts: contract/rule10.spend-caps.test.ts
 contract/rule11.standing-question.test.ts: contract/rule11.standing-question.test.ts
