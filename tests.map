@@ -396,6 +396,12 @@ src/record/tasks.ts: src/record/tasks.test.ts
 # the barrel is only reachable through what those two import.
 src/register/errors.ts: src/register/register.test.ts, src/register/terms.test.ts
 src/register/index.ts: src/register/register.test.ts, src/register/terms.test.ts
+# Hand-added: the module's two test-only helpers, each mapped to the
+# tests that actually drive it - a fake that drifts from what register
+# writes, or a fixture that drifts from the shape it stands for, fails
+# nothing on its own.
+src/register/helpers/fake-register-tools.ts: src/register/register.test.ts, src/register/terms.test.ts
+src/register/helpers/rails-fixture.ts: src/register/propose.test.ts, src/register/dockerfile.test.ts, src/register/scaffold.test.ts, src/register/terms.test.ts, src/register/register.test.ts
 src/register/terms.test.ts: src/register/terms.test.ts
 src/register/terms.ts: src/register/terms.test.ts
 src/register/dockerfile.test.ts: src/register/dockerfile.test.ts

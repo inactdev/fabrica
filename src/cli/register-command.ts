@@ -62,9 +62,12 @@ anything is created:
      Dockerfile.inspector with --image on its FROM line - unless the
      repository already carries one, which is left exactly as it is.
      The check container has no network, so a project with a
-     package-lock.json or a go.sum gets its dependencies installed in
-     that Dockerfile at build time, and anything else gets a comment
-     there naming what still has to be. Then it runs check.sh inside
+     package-lock.json, a go.sum or a Gemfile.lock gets its
+     dependencies installed in that Dockerfile at build time, and
+     anything else gets a comment there naming what still has to be. A
+     Gemfile.lock naming pg or redis also gets those servers installed
+     in the box and started by check.sh, since there is no network to
+     reach either over. Then it runs check.sh inside
      --image. A failing check refuses here: nothing is pushed. This one
      proving run does have the network, unlike the check box, so a
      check about to be green cannot read as red.
@@ -88,7 +91,8 @@ needed, and the recorded check is the repository's own ./check.sh.
 Run it without --check and --image on a repository that is *not* set up
 and it proposes an .inspector.json instead, derived from what the
 repository already says (an existing check.sh, package.json's scripts
-and engines, go.mod), and stops having created nothing:
+and engines, go.mod, a Gemfile.lock with .ruby-version and bin/rails),
+and stops having created nothing:
 
     fabrica register <path> > <path>/.inspector.json
 
@@ -96,7 +100,9 @@ The proposed document is the only thing on stdout, so that redirect
 writes exactly it. Every field's reasoning goes to stderr, one line per
 field, along with any disagreement between two signals - and so does a
 proposed Dockerfile.inspector to commit next to it, since the check box
-is built from that file. It exits non-zero, because nothing was written
+is built from that file, plus a proposed check.sh when the derived check
+only works with a preamble around it (a Rails suite's own servers).
+It exits non-zero, because nothing was written
 and nothing was registered: read the proposal, replace anything marked
 REPLACE-ME..., commit it yourself, and run this again. Fabrica never
 writes those files for you unasked - the files defining how Fabrica's

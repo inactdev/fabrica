@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fingerprint, makeFixtureRepo, pushToOrigin } from "../../contract/helpers/fixture.ts";
 import { loadConfig, projectsTomlPath } from "../config/index.ts";
 import { RegisterError } from "./errors.ts";
@@ -22,6 +22,7 @@ import { registerProject } from "./register.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, REGISTER_BRANCH } from "./origin.ts";
 import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
+import { railsFixtureFiles } from "./helpers/rails-fixture.ts";
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-terms-home-"));
@@ -44,9 +45,13 @@ function project(opts: { inspector?: boolean } = {}): string {
 }
 
 /** Commits and pushes, so a later read off origin's default branch sees
- * it - the ref every signal in this module is read from. */
+ * it - the ref every signal in this module is read from. A name may be a
+ * nested path (`bin/rails`), whose directory is created here. */
 function commit(dir: string, files: Record<string, string>): void {
-  for (const [name, contents] of Object.entries(files)) writeFileSync(join(dir, name), contents);
+  for (const [name, contents] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true });
+    writeFileSync(join(dir, name), contents);
+  }
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-qm", "fixture"]);
   pushToOrigin(dir);
@@ -176,6 +181,53 @@ test("register --terms: a package-lock.json project's check.sh links /deps/node_
 
   assert.match(readFileSync(join(terms, CHECK_SCRIPT), "utf8"), /ln -s \/deps\/node_modules node_modules/);
   assert.match(readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8"), /npm ci/);
+});
+
+// Issue #324, end to end on the route a day job's repository actually
+// takes: a Rails-shaped repository, read off origin's default branch,
+// and the three files it derives - with the repository itself untouched.
+test("register --terms: a Rails repository gets its servers, its gems and a longer timeout", async () => {
+  const recordHome = tempHome();
+  const dir = project();
+  dropCheckScript(dir);
+  commit(dir, railsFixtureFiles());
+  const terms = termsFolder();
+  const before = fingerprint(dir);
+
+  const result = await registerProject({ recordHome, path: dir, terms }, { tools: fakeRegisterTools() });
+
+  // .inspector.json: the usual, with the longer timeout (Client ruling,
+  // 30 minutes) and check.sh as the one protected path.
+  const config = JSON.parse(readFileSync(join(terms, INSPECTOR_CONFIG), "utf8")) as Record<string, unknown>;
+  assert.equal(config.check, RECORDED_CHECK);
+  assert.equal(config.timeoutSeconds, 1800);
+  assert.deepEqual(config.protectedPaths, [CHECK_SCRIPT]);
+
+  // check.sh: both servers started inside the box, waited for, the test
+  // database created, the suite run, both stopped again.
+  const script = readFileSync(join(terms, CHECK_SCRIPT), "utf8");
+  assert.match(script, /^service postgresql start$/m);
+  assert.match(script, /^wait_for PostgreSQL pg_isready -q$/m);
+  assert.match(script, /^redis-server --daemonize yes --save ''$/m);
+  assert.match(script, /^bin\/rails db:test:prepare$/m);
+  assert.match(script, /^bundle exec rspec$/m);
+  assert.match(script, /^trap stop_services EXIT$/m);
+  assert.equal(statSync(join(terms, CHECK_SCRIPT)).mode & 0o111, 0o111);
+
+  // Dockerfile.inspector: the official Ruby image for the pinned
+  // version, the servers' packages, the gems at build time.
+  const dockerfile = readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8");
+  assert.match(dockerfile, /^FROM ruby:3\.3\.4$/m);
+  assert.match(dockerfile, /postgresql libpq-dev redis-server/);
+  assert.match(dockerfile, /^RUN cd \/deps && bundle install$/m);
+
+  // ...and none of it touched the repository, exactly as on every other
+  // --terms run.
+  assert.equal(fingerprint(dir), before, "the Client's own checkout is only ever read");
+  for (const file of [INSPECTOR_CONFIG, CHECK_SCRIPT, DOCKERFILE_INSPECTOR]) {
+    assert.equal(existsSync(join(dir, file)), false, `${file} must never land in the repository`);
+  }
+  assert.equal(result.check, RECORDED_CHECK);
 });
 
 // Client ruling on this task: keep existing files, write only what's

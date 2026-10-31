@@ -22,6 +22,13 @@ import {
   type ProposalSignals,
 } from "./propose.ts";
 import { GO_SUM } from "./dockerfile.ts";
+import {
+  RAILS_GEMFILE,
+  RAILS_GEMFILE_LOCK,
+  RAILS_RUBY_VERSION,
+  railsFixtureFiles,
+  writeRailsFixture,
+} from "./helpers/rails-fixture.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -31,6 +38,20 @@ const NOTHING: ProposalSignals = {
   goMod: null,
   packageLock: false,
   goSum: false,
+  gemfileLock: null,
+  gemfile: null,
+  rubyVersion: null,
+  railsBin: false,
+};
+
+/** Issue #324's shape, as the fixture Rails-shaped repository says it:
+ * a Gemfile.lock naming pg, redis and rspec, a Gemfile, an exact
+ * .ruby-version, and a bin/rails. */
+const RAILS: Partial<ProposalSignals> = {
+  gemfileLock: RAILS_GEMFILE_LOCK,
+  gemfile: RAILS_GEMFILE,
+  rubyVersion: RAILS_RUBY_VERSION,
+  railsBin: true,
 };
 
 function propose(signals: Partial<ProposalSignals>) {
@@ -348,6 +369,209 @@ test("propose: the Dockerfile rides on stderr, never on stdout", () => {
   assert.ok(stderr.includes(dockerfile.trimEnd()), stderr);
 });
 
+// ------------------------------------------- the Ruby shape (issue #324)
+
+// The suite is named inside check.sh, not in .inspector.json: it only
+// passes with the servers started and the test database created around
+// it, and the script is the only place that preamble can live.
+test("propose: a Rails repository's check is ./check.sh, holding the suite the lockfile names", () => {
+  const { config, stderr, checkScript } = propose(RAILS);
+
+  assert.equal(config.check, "./check.sh");
+  assert.ok(stderr.includes("rspec"), stderr);
+  assert.ok(stderr.includes("only passes with this project's own servers started"), stderr);
+  assert.ok(checkScript !== null, "the script it names is part of the proposal");
+  assert.ok(checkScript.includes("bundle exec rspec\n"), checkScript ?? "");
+});
+
+test("propose: with no rspec in the lockfile, the suite is the Rails framework's own command", () => {
+  const { stderr, checkScript } = propose({
+    ...RAILS,
+    gemfileLock: "GEM\n  specs:\n    pg (1.5.6)\n    rails (7.1.3.2)\n",
+  });
+
+  assert.ok(checkScript?.endsWith("bin/rails test\n"), checkScript ?? "");
+  assert.ok(stderr.includes("framework's own test command"), stderr);
+});
+
+// Nothing to start and no database to create, so the command stands on
+// its own and the config can name it - the same rule `npm test` follows.
+test("propose: a plain Ruby project with no servers has its command named in the config", () => {
+  const { config, checkScript } = propose({
+    gemfileLock: "GEM\n  specs:\n    rake (13.2.1)\n    rspec-core (3.13.0)\n",
+  });
+
+  assert.equal(config.check, "bundle exec rspec");
+  assert.equal(checkScript, null, "there is no preamble to propose a script for");
+});
+
+test("propose: an exact .ruby-version derives the official Ruby image for that version", () => {
+  const { dockerfile, stderr } = propose(RAILS);
+
+  assert.ok(dockerfile.includes("FROM ruby:3.3.4"), dockerfile);
+  assert.ok(stderr.includes("Dockerfile.inspector FROM: ruby:3.3.4"), stderr);
+  assert.ok(stderr.includes(".ruby-version pins ruby 3.3.4"), stderr);
+});
+
+// Three files can pin it, asked in the order issue #324 names them.
+test("propose: the Ruby version falls back to the Gemfile's line, then to the lockfile's", () => {
+  const fromGemfile = propose({ ...RAILS, rubyVersion: null });
+  assert.ok(fromGemfile.dockerfile.includes("FROM ruby:3.3.4"), fromGemfile.dockerfile);
+  assert.ok(fromGemfile.stderr.includes("Gemfile's ruby line pins ruby 3.3.4"), fromGemfile.stderr);
+
+  // Gemfile.lock's RUBY VERSION carries a patch level (3.3.4p94) that
+  // belongs to a build of Ruby rather than to an image tag.
+  const fromLock = propose({ ...RAILS, rubyVersion: null, gemfile: `source "https://rubygems.org"\n` });
+  assert.ok(fromLock.dockerfile.includes("FROM ruby:3.3.4"), fromLock.dockerfile);
+  assert.ok(fromLock.stderr.includes("RUBY VERSION pins ruby 3.3.4"), fromLock.stderr);
+});
+
+test("propose: a Ruby project pinning no exact version gets a loud placeholder, never a guess", () => {
+  for (const rubyVersion of [null, "3.3\n", "~> 3.3.0\n", "jruby-9.4.5.0\n"]) {
+    const { dockerfile } = propose({
+      gemfileLock: "GEM\n  specs:\n    rake (13.2.1)\n",
+      rubyVersion,
+      gemfile: `source "https://rubygems.org"\nruby "~> 3.3.0"\n`,
+    });
+    const image = /^FROM\s+(\S+)/m.exec(dockerfile)?.[1] ?? "";
+    assert.ok(image.startsWith(IMAGE_PLACEHOLDER_PREFIX), `${rubyVersion}: ${dockerfile}`);
+    assert.notEqual(image, image.toLowerCase(), `${image} should carry uppercase, which Docker rejects`);
+  }
+});
+
+// A Rails application with a JavaScript bundler declares both, and the
+// box has to be the one that runs the suite.
+test("propose: Ruby signals win over a package.json beside them, in every field", () => {
+  const { config, dockerfile, stderr } = propose({
+    ...RAILS,
+    packageJson: pkg({ engines: { node: "24.18.0" }, scripts: { test: "vitest run" } }),
+    packageLock: true,
+  });
+
+  assert.equal(config.check, "./check.sh", "not npm test");
+  assert.ok(dockerfile.includes("FROM ruby:3.3.4"), dockerfile);
+  assert.ok(dockerfile.includes("bundle install"), dockerfile);
+  assert.ok(!dockerfile.includes("npm ci"), dockerfile);
+  // ...and the lockfile that went uninstalled is named, not dropped.
+  assert.ok(stderr.includes("there is a package-lock.json at the root too, and nothing installs it"), stderr);
+});
+
+test("propose: a Gemfile.lock becomes a bundle install step, with the servers the gems name", () => {
+  const { dockerfile, stderr } = propose(RAILS);
+
+  assert.ok(stderr.includes("Dockerfile.inspector dependencies: bundle install from Gemfile.lock"), stderr);
+  assert.ok(dockerfile.includes("COPY Gemfile Gemfile.lock .ruby-version /deps/"), dockerfile);
+  assert.ok(dockerfile.includes("RUN cd /deps && bundle install"), dockerfile);
+  assert.ok(dockerfile.includes("postgresql libpq-dev redis-server"), dockerfile);
+});
+
+test("propose: a Gemfile with no Gemfile.lock is named, and no install step is invented", () => {
+  const { dockerfile, stderr } = propose({ gemfile: RAILS_GEMFILE });
+
+  assert.ok(stderr.includes("no Gemfile.lock at the root"), stderr);
+  assert.ok(!dockerfile.includes("RUN "), "no install step is invented");
+});
+
+// The one field that stops being omitted, and not from a signal: a check
+// that boots a database and runs a Rails suite is in a different order
+// of magnitude, so Inspector's own default would be left deciding
+// whether a real suite is killed mid-run. 30 minutes, by Client ruling.
+test("propose: a check that boots its own servers is given a longer timeout, with its reason", () => {
+  const { config, stderr } = propose(RAILS);
+
+  assert.equal(config.timeoutSeconds, 1800);
+  assert.ok(stderr.includes("timeoutSeconds: 1800 -"), stderr);
+  assert.ok(stderr.includes("different order of magnitude"), stderr);
+});
+
+test("propose: a Ruby project with no servers to boot still gets no timeout at all", () => {
+  const { config, stderr } = propose({ gemfileLock: "GEM\n  specs:\n    rake (13.2.1)\n" });
+
+  assert.equal(Object.hasOwn(config, "timeoutSeconds"), false);
+  assert.ok(stderr.includes("timeoutSeconds: omitted"), stderr);
+});
+
+// Issue #324, in its own words: "Browser/system tests are out of scope;
+// register says so in its notes when it sees them."
+test("propose: browser-driven tests in the lockfile are named as out of scope", () => {
+  const { stderr } = propose(RAILS);
+
+  assert.ok(stderr.includes("  note: Gemfile.lock names capybara"), stderr);
+  assert.ok(stderr.includes("browser-driven system tests"), stderr);
+  assert.ok(stderr.includes("nothing here installs a browser"), stderr);
+});
+
+test("propose: a lockfile with no browser gem is told nothing about system tests", () => {
+  const { stderr } = propose({ ...RAILS, gemfileLock: "GEM\n  specs:\n    pg (1.5.6)\n    rspec-core (3.13.0)\n" });
+
+  assert.ok(!stderr.includes("browser-driven"), stderr);
+});
+
+// Only PostgreSQL and Redis are recognized, so another database engine
+// is a gap - named, rather than left to a check with nothing to connect
+// to.
+test("propose: a database this shape installs no server for is named", () => {
+  const { stderr } = propose({ ...RAILS, gemfileLock: "GEM\n  specs:\n    mysql2 (0.5.6)\n    rspec-core (3.13.0)\n" });
+
+  assert.ok(stderr.includes("  note: Gemfile.lock names mysql2"), stderr);
+  assert.ok(stderr.includes("installs no server for it"), stderr);
+});
+
+// Fabrica's own containment runs every container as the host user, so
+// the one proving run cannot start these servers - said here rather than
+// met as a permission error.
+test("propose: the root a server needs, and the proving run that has none, are both named", () => {
+  const { stderr } = propose(RAILS);
+
+  assert.ok(stderr.includes("needs the check box to run as root"), stderr);
+  assert.ok(stderr.includes("cannot prove here"), stderr);
+});
+
+// The proposal is three files for this shape, and still exactly one
+// document on stdout: the other two ride on stderr for the Client to
+// copy.
+test("propose: the proposed check.sh rides on stderr too, never on stdout", () => {
+  const { json, stderr, checkScript, notes } = propose(RAILS);
+
+  assert.ok(!json.includes("#!/bin/sh"), json);
+  assert.ok(stderr.includes(checkScript?.trimEnd() ?? ""), stderr);
+  assert.ok(notes[0].includes("a proposal of three files"), notes[0]);
+  assert.ok(stderr.includes("chmod +x check.sh"), stderr);
+});
+
+test("propose: a Rails proposal still names each field exactly once", () => {
+  const { notes } = propose(RAILS);
+
+  for (const key of [
+    "check",
+    "timeoutSeconds",
+    "protectedPaths",
+    "Dockerfile.inspector FROM",
+    "Dockerfile.inspector dependencies",
+  ]) {
+    const lines = notes.filter((line) => line.startsWith(`  ${key}: `));
+    assert.equal(lines.length, 1, `expected exactly one line for ${key}, got ${lines.length}`);
+  }
+});
+
+// check.sh wins over every other signal, here as everywhere - and the
+// Ruby suite it does not run is named rather than dropped.
+test("propose: an existing check.sh beats the Ruby signals, naming the disagreement", () => {
+  const { config, stderr, checkScript } = propose({ ...RAILS, checkScript: "#!/bin/sh\nmake verify\n" });
+
+  assert.equal(config.check, "./check.sh");
+  assert.equal(checkScript, null, "the repository's own script is never rewritten for it");
+  assert.ok(stderr.includes("disagreement:"), stderr);
+  assert.ok(stderr.includes("bundle exec rspec"), stderr);
+});
+
+test("propose: a check.sh that does run the Ruby suite is no disagreement", () => {
+  for (const body of ["bundle exec rspec\n", "bin/rails test\n", "bundle exec rake\n"]) {
+    const { stderr } = propose({ ...RAILS, checkScript: `#!/bin/sh\nset -e\n${body}` });
+    assert.ok(!stderr.includes("disagreement:"), `${body}: ${stderr}`);
+  }
+});
+
 // ---------------------------------------------- timeout and protection
 
 test("propose: timeoutSeconds is always omitted, and says why on stderr", () => {
@@ -403,6 +627,8 @@ test("propose: every key it can ever write is one this repository's own .inspect
     },
     { packageJson: pkg({ scripts: { test: "node --test" } }) },
     { goMod: "module example.com/app\n\ngo 1.22\n", goSum: true },
+    // The one shape that writes a timeoutSeconds of its own.
+    RAILS,
   ];
 
   for (const signals of cases) {
@@ -499,4 +725,39 @@ test("readProposalSignals reads the lockfiles off the ref too", () => {
 
   assert.equal(signals.packageLock, true);
   assert.equal(signals.goSum, false, "an uncommitted go.sum is not a signal");
+});
+
+// Gemfile.lock is the one lockfile read in full rather than as presence
+// alone, and bin/rails is the one signal that is a nested path - both
+// still read off the commit, from a real Rails-shaped fixture.
+test("readProposalSignals reads a Rails repository's four signals off the ref", () => {
+  const dir = makeFixtureRepo("exit 0", { inspector: false });
+  writeRailsFixture(dir);
+  // The fixture's own check.sh goes: an existing one wins over every
+  // other signal, which is proven elsewhere - what is being read here is
+  // what a repository with no check.sh says instead.
+  rmSync(join(dir, "check.sh"));
+  execFileSync("git", ["add", "-A"], { cwd: dir });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "rails app"], { cwd: dir });
+
+  const signals = readProposalSignals(dir, "HEAD");
+
+  assert.equal(signals.gemfileLock, railsFixtureFiles()["Gemfile.lock"].trimEnd());
+  assert.ok(signals.gemfile?.includes(`gem "rails"`), signals.gemfile ?? "");
+  assert.equal(signals.rubyVersion, "3.3.4");
+  assert.equal(signals.railsBin, true, "bin/rails is a nested path, and still read off the commit");
+
+  // ...and the proposal built from them is the Rails one, end to end.
+  const proposal = proposeInspectorConfig(signals, { projectPath: dir, defaultBranch: "main" });
+  assert.ok(proposal.dockerfile.includes("FROM ruby:3.3.4"), proposal.dockerfile);
+  assert.ok(proposal.checkScript?.includes("service postgresql start"), proposal.checkScript ?? "");
+});
+
+test("readProposalSignals: a repository with no Ruby in it has none of those signals", () => {
+  const signals = readProposalSignals(makeFixtureRepo("exit 0", { inspector: false }), "HEAD");
+
+  assert.equal(signals.gemfileLock, null);
+  assert.equal(signals.gemfile, null);
+  assert.equal(signals.rubyVersion, null);
+  assert.equal(signals.railsBin, false);
 });

@@ -34,9 +34,15 @@ export interface FakeRegisterToolsHandle extends RegisterTools {
 }
 
 /** The exit status `check.sh` in `workdir` would produce, read rather
- * than run: a `#!/bin/sh` script whose body is `exit N` (what
+ * than run: a `#!/bin/sh` script whose command is `exit N` (what
  * makeFixtureRepo and scaffold.ts's checkScript both produce). Anything
- * else counts as passing - there is nothing to disbelieve. */
+ * else counts as passing - there is nothing to disbelieve.
+ *
+ * Only the script's **last** line is read, not any line in it. A
+ * preamble can have an `exit` of its own in a branch that is not taken
+ * (issue #324's service-waiting loop fails the check with `exit 1` when
+ * a server never answers), and reading that one would report a red check
+ * for a script whose actual command is the suite. */
 function scriptedExit(workdir: string): number {
   let source: string;
   try {
@@ -44,7 +50,8 @@ function scriptedExit(workdir: string): number {
   } catch {
     return 127;
   }
-  const match = source.match(/^\s*exit\s+(\d+)\s*$/m);
+  const last = source.trimEnd().split("\n").at(-1) ?? ``;
+  const match = /^\s*exit\s+(\d+)\s*$/.exec(last);
   return match ? Number(match[1]) : 0;
 }
 
