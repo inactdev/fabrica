@@ -36,6 +36,7 @@ import type { Judgement } from "./judge.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
+import { attachedFilesFor, placeAttachedFiles, withAttachedFiles } from "./task-files.ts";
 import { testMapFor } from "./test-map.ts";
 import { workerBrief } from "./touched-tests.ts";
 import { recordingFailure } from "./task-failure.ts";
@@ -485,6 +486,14 @@ async function runFixRound(
   // note that has gone missing fails the round with the same message,
   // and in the same place, as it would on a task's first one.
   const knowledgeNotes = knowledgeNotesFor(recordHome, project);
+  // The files this task was handed (issue #325), read back off its own
+  // record and proved still readable - a fix round gets them exactly
+  // like its first round did, since the Client's note corrects the work
+  // rather than withdrawing the documents it was given. Read before the
+  // line is reopened below, so a file that has gone missing since fails
+  // this round with the same message, and in the same place, as it would
+  // on the task's first one (task-files.ts).
+  const attachedFiles = attachedFilesFor(recordHome, taskId);
   // And the project's committed test map, read now and for the same
   // reason: a fix round is held to the map as it stands today, and a
   // `tests.map` that has become unreadable fails the round before the
@@ -544,6 +553,16 @@ async function runFixRound(
           ? rebase.baseCommit
           : rebase.stopped.baseCommit;
 
+    // Issue #325: this round's copies of the task's own files, into the
+    // reopened workstation. Placed after the rebase above rather than
+    // before it, deliberately: the rebase is the one thing this round
+    // does to the branch on the host, and it runs against a worktree
+    // holding exactly what the last round left there. The folder is
+    // excluded from git before any file lands in it and removed again
+    // before this round's commit (round.ts), the same as on a first
+    // round - see src/attached/place.ts.
+    placeAttachedFiles(line.workdir, attachedFiles);
+
     // Every file this round's worker has been handed a conflict in,
     // earlier passes of the same rebase included: a rebase-only round's
     // brief names the tests the project's own map maps THESE to, and an
@@ -584,11 +603,15 @@ async function runFixRound(
         recordHome,
         line.project,
         buildFixBrief(
-          // The issue this task names, and the project's knowledge notes,
-          // ride along on a fix round too: the Client's note corrects the
-          // work, it does not replace the request the issue spells out or
-          // the notes the project stands on.
-          withKnowledge(withIssueText(originalBrief, issueText), knowledgeNotes),
+          // The issue this task names, the files it was handed, and the
+          // project's knowledge notes all ride along on a fix round too:
+          // the Client's note corrects the work, it does not replace the
+          // request the issue spells out, the documents the task came
+          // with, or the notes the project stands on.
+          withKnowledge(
+            withAttachedFiles(withIssueText(originalBrief, issueText), attachedFiles, { placed: true }),
+            knowledgeNotes
+          ),
           note,
           [
             refusalReport !== undefined ? refusalCorrection(refusalReport) : undefined,

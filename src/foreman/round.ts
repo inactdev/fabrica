@@ -25,6 +25,7 @@ import {
   withTestMapReport,
 } from "./delivery.ts";
 import { mergeGateDeclarations } from "./gate-declarations.ts";
+import { removeAttachedFiles } from "./task-files.ts";
 import { reportForRound } from "./test-map.ts";
 import type { TestMapEntry } from "../testmap/index.ts";
 import { recordMeterPause } from "./meters.ts";
@@ -156,6 +157,22 @@ function writeRoundResult(
   ctx: RoundContext,
   attempts: AttemptLoopResult
 ): RoundRecordResult {
+  // Issue #325, before anything below reads the branch or commits to
+  // it: the files this task was handed go, so the fixed subfolder they
+  // sat in during the round is not there for the delivery commit to see
+  // at all. The Client's ruling is that they are "deleted before the
+  // delivery commit", and this is the one place every round of every
+  // shape passes through on its way to one - here rather than at do.ts's
+  // and verdict.ts's two call sites, which would be two places for it to
+  // go missing from one.
+  //
+  // Belt and braces with the exclusion src/attached/place.ts writes, not
+  // instead of it: the folder is already invisible to `git add -A`, so
+  // neither this nor that has to work alone for the files to stay out of
+  // the branch. A no-op for every task handed no files, and for a
+  // worktree holding a `.fabrica-files/` that is the project's own.
+  removeAttachedFiles(line.workdir);
+
   const {
     receipts: newReceipts,
     lastGate,

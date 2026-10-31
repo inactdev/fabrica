@@ -39,11 +39,16 @@ export async function runTask(
      * #184). `brain` is already built with it by the caller; this is
      * what makes it reach the task's own record. */
     model?: string;
+    /** The files `fabrica do --file <path>` handed this task (issue
+     * #325), as absolute host paths. Recorded at registration and
+     * copied into every round's workstation; see
+     * src/foreman/task-files.ts. */
+    files?: string[];
   } = {}
 ): Promise<void> {
-  const { issue, model, ...foremanExtra } = extra;
+  const { issue, model, files, ...foremanExtra } = extra;
   // Rule 10: the caps in projects.toml are law for every task this
   // process starts - read here, in the process that actually spends.
   const foreman = createForeman({ recordHome, caps: loadConfigOrDefault(recordHome).caps, ...foremanExtra });
-  await foreman.do(taskText, { project: projectPath, brain, issue, model });
+  await foreman.do(taskText, { project: projectPath, brain, issue, model, files });
 }

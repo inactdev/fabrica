@@ -46,6 +46,15 @@ export type TaskFile =
    * so a task worded "do issue #N as written" never has to ask what #N
    * says. See src/foreman/task-issue.ts. */
   | "issue.md"
+  /** The files this task was handed (`fabrica do --file <path>`, issue
+   * #325), as JSON - `src/attached`'s `AttachedFile[]`: each one's
+   * absolute host path, the bare name its copy carries in the
+   * workstation, and the size it had at registration. Written once at
+   * registration, for every task, so "handed nothing" is a recorded
+   * fact rather than a missing file. Every later round reads it back
+   * and copies the files in again, the same way `issue` is re-read.
+   * See src/foreman/task-files.ts. */
+  | "files.json"
   /** Which model this task asked for and where that came from (issue
    * #184), as JSON - `src/foreman/model.ts`'s `ModelChoice`, written
    * once at registration. Every later round re-derives the worker's

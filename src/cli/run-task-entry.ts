@@ -25,13 +25,15 @@ try {
   process.exit(1);
 }
 
-// `issue` and `model` both travel as named flags (spawn-detached.ts),
-// present only when `fabrica do` was given them. The issue is handed on
-// as the text it arrived as: do-args.ts already proved it is one of the
-// three spellings, and registration parses it in one place
-// (src/foreman/task-issue.ts) rather than each process re-deriving a
-// number here.
-const { recordHome, projectPath, taskText, issue, model } = args;
+// `issue`, `model` and `files` all travel as named flags
+// (spawn-detached.ts), present only when `fabrica do` was given them.
+// The issue is handed on as the text it arrived as: do-args.ts already
+// proved it is one of the three spellings, and registration parses it in
+// one place (src/foreman/task-issue.ts) rather than each process
+// re-deriving a number here. The files arrive already absolute, for the
+// same reason: do-args.ts resolved them against the terminal's own
+// working directory, which this process does not share.
+const { recordHome, projectPath, taskText, issue, model, files } = args;
 
 try {
   // Issue #184: the declared model builds the worker here, and travels
@@ -47,6 +49,7 @@ try {
     },
     issue,
     model,
+    files,
   });
 } catch (err) {
   console.error(`fabrica do: task on "${projectPath}" failed: ${(err as Error).message}`);

@@ -133,6 +133,21 @@ early would be wrong - or when more than one issue is named. An issue
 named that way is not fetched either, so if the Client's own words are
 all the worker will have, make sure they say what to do.
 
+When the task needs a document the project doesn't contain - a note he
+wrote, a spec, a data file, an export - hand the file over instead of
+pasting its text into `<task text>`:
+
+    fabrica do "<task text>" --project <path-or-name> --file <path>
+
+Repeat `--file` once per file. Each one is copied into the worker's own
+folder before it starts, and its brief names each by name and size, so
+the worker reads them itself. Relative paths are fine; they're read from
+the folder you're in. Nothing in that folder is ever committed, so if
+the task wants a file to end up **in** the repository, say so in his own
+words and the worker will put a copy at the right path. If a path can't
+be read, nothing is started and `fabrica do` prints which one - check the
+path with him rather than pasting the file's contents in by hand.
+
 If `fabrica do` refuses with "this project isn't set up for Fabrica
 yet," no task was started and nothing is wrong with his words - the
 project needs setting up first. That's case 8.
