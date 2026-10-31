@@ -122,8 +122,28 @@ build command embeds a hash of the Dockerfile itself, which changes
 over time - `doctor` is the one place that command is kept current,
 rather than copied here where it would go stale).
 
-See `src/containment/README.md` for what the container confines, and
-`src/brain/adapters/claude-code.md` for how the coding agent's
+A project that commits a `Dockerfile.inspector` gets a second, better
+box: Fabrica builds **that project's own check image with the coding
+agent layered on top**, tags it per project, and runs the Worker in it.
+The point is that a Worker can then run the very tests covering what it
+just touched - a Rails project's `bundle exec rspec` exists in its box
+because the project's own image put it there - instead of writing blind
+until Inspector judges it afterwards. The same two commands supply it,
+and the same stamp decides when it is stale: the image is rebuilt when
+either input changes, the project's `Dockerfile.inspector` or Fabrica's
+own layer. A project committing no such file keeps the shared image
+exactly as before.
+
+That layer installs the coding agent, and the Node it runs on, off the
+image's `PATH`, adding exactly one command to the box - so a project's
+own node, ruby or go stays the one its checks run on, in the Worker's
+box and in Inspector's alike. It needs `bash`, `git` and either `curl`
+or `wget` in the project's image and refuses the build, naming what to
+add to `Dockerfile.inspector`, when one is missing.
+
+See `src/containment/README.md` for what the container confines,
+`src/projectimage/README.md` for which image a project's Worker uses,
+and `src/brain/adapters/claude-code.md` for how the coding agent's
 credential reaches it - set up in the next section.
 
 ### The worker token
@@ -369,9 +389,17 @@ spending caps, and any unmeasured spend blocking new work.
 additionally spends a few cents to confirm the worker token actually
 authenticates.
 
-`fabrica doctor --fix` additionally *supplies* the two images rather
+Each registered project also gets a second line naming the image its
+Worker works in - its own `Dockerfile.inspector` with the coding agent
+layered on top, or the shared image when it commits none - which `FAIL`s
+when that image is missing or either input has changed since it was
+built, and reports the agent's version installed inside it against the
+pinned one.
+
+`fabrica doctor --fix` additionally *supplies* those images rather
 than only naming them: it builds the worker image when it is missing or
-out of date, pulls the relay image when it is missing, and says what it
+out of date, pulls the relay image when it is missing, builds each
+project's own image when that line asks for it, and says what it
 did. It only ever runs the command the failing line already printed -
 the pins deciding "missing or out of date" are untouched - and the
 report that follows describes the machine as it is afterwards. Without
@@ -392,10 +420,11 @@ one, stops no task from running.
 On a Mac, `fabrica up` doesn't even report Docker not running - it runs
 `open -a Docker` for you and waits up to two minutes for the daemon,
 saying what it's waiting on, before any check asks. In the same spirit,
-it doesn't report a missing or out-of-date **worker image** or a missing
-**relay image** either: it builds and pulls them, printing docker's own
-output as it goes and one line per image saying what it did, and only
-refuses if that genuinely failed.
+it doesn't report a missing or out-of-date **worker image**, a missing
+**relay image**, or a project's own missing **machine image** either: it
+builds and pulls them, printing docker's own output as it goes and one
+line per image saying what it did, and only refuses if that genuinely
+failed.
 
 The **inspector** line also reports which build of Inspector you have:
 the commit the installed binary was built from, against the tip of

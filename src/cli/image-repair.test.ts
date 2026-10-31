@@ -12,11 +12,14 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { installFakeDocker } from "../containment/helpers/install-fake-docker.ts";
 import type { FakeDockerConfig } from "../containment/helpers/install-fake-docker.ts";
 import {
+  machineImageForProject,
+  machineImageLabel,
   relayImagePull,
   relayImageStatus,
   workerImageBuild,
@@ -53,6 +56,32 @@ function stampLabelFromDockerfile(): string {
   return line[1];
 }
 
+/** The stamp a current worker image carries - taken from the very
+ * `--build-arg` the build command passes, so a test that wants the
+ * worker-image line to pass seeds exactly what the build would. */
+function dockerfileHash(): string {
+  const args = workerImageBuild().args;
+  const arg = args[args.indexOf("--build-arg") + 1] ?? "";
+  const hash = arg.split("=")[1] ?? "";
+  assert.match(hash, /^[0-9a-f]{64}$/, `no Dockerfile hash in the build's own --build-arg (${arg})`);
+  return hash;
+}
+
+/** A project folder carrying a Dockerfile.inspector - one whose base
+ * image is deliberately nothing to do with Node, which is the case
+ * issue #322 exists for. */
+function projectWithDockerfile(): string {
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-repair-project-"));
+  writeFileSync(join(dir, "Dockerfile.inspector"), "FROM ruby:3.4\nRUN bundle install\n");
+  return dir;
+}
+
+function homeWith(project: string): string {
+  const home = mkdtempSync(join(tmpdir(), "fabrica-repair-home-"));
+  writeFileSync(join(home, "projects.toml"), `[projects.app]\npath = "${project}"\n`);
+  return home;
+}
+
 const ok = (label: string): DoctorCheck => ({ ok: true, label, detail: "fine" });
 
 function captureIo() {
@@ -75,6 +104,10 @@ function probes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     workerImage: () => workerImageStatus(),
     workerCli: () => ok(WORKER_CLI_LABEL),
     relayImage: () => relayImageStatus(),
+    // Issue #322's per-project lines. A stub here for the same reason
+    // the worker CLI line is one: the tests below that exercise them
+    // override it, and this module reads nothing from it otherwise.
+    projectImage: (_machine, label) => ok(label),
     workerNetworks: async () => ok("worker networks"),
     workerToken: () => ok("worker token"),
     githubApp: async () => ok("github app"),
@@ -370,6 +403,109 @@ test("a failing command's last word is reported even with no newline after it", 
   assert.equal(result.ok, false);
   assert.equal(result.detail, "no space left on device");
   assert.deepEqual(said, ["ended 1.2s", "no space left on device"]);
+});
+
+// Issue #322: the third kind of image - one per registered project,
+// built from that project's own Dockerfile.inspector.
+test("a registered project's own machine image is built, from its own file, and only when its line asked", async (t) => {
+  const { docker } = setUp(t, {
+    images: [
+      { Name: relayImagePull().image, Labels: {} },
+      { Name: workerImageBuild().image, Labels: { [stampLabelFromDockerfile()]: dockerfileHash() } },
+    ],
+  });
+  const project = projectWithDockerfile();
+  const recordHome = homeWith(project);
+  const machine = machineImageForProject(recordHome, project);
+  const label = machineImageLabel("app");
+  let built = false;
+  const p = probes({
+    projectImage: (asked, askedLabel) =>
+      built
+        ? { ok: true, label: askedLabel, detail: `${asked.image} is built and current`, needsBuild: false }
+        : { ok: false, label: askedLabel, detail: `${asked.image} is not built`, fix: "fabrica doctor --fix", needsBuild: true },
+  });
+
+  const io = captureIo();
+  const { checks, outcomes } = await repairImages({
+    checks: [...collect(p), p.projectImage(machine, label)],
+    probes: p,
+    recordHome,
+    runImageCommand: async (cmd, onOutput) => {
+      built = true;
+      return runImageCommand(cmd, onOutput);
+    },
+    ...io,
+  });
+
+  assert.deepEqual(outcomes.map((o) => [o.label, o.action, o.ok]), [[label, "built", true]]);
+  assert.deepEqual(
+    writes(docker.calls()).map((call) => call.slice(0, 2)),
+    [["build", "--build-arg"]],
+    "exactly one build, and it is the project's own"
+  );
+  const build = writes(docker.calls())[0];
+  assert.ok(build.includes(machine.image), `the project's own tag: ${build.join(" ")}`);
+  assert.ok(build.includes(machine.context), "built with the repository as its context");
+  // The generated Dockerfile it was handed really is the project's own
+  // file with Fabrica's layer on it.
+  const generated = readFileSync(build[build.indexOf("-f") + 1], "utf8");
+  assert.match(generated, /FROM ruby:3\.4/);
+  assert.match(generated, /nodejs\.org/);
+  // And the line printed afterwards is the line doctor would print.
+  assert.ok(checks.some((c) => c.label === label && c.ok), checks.map((c) => `${c.label}: ${c.detail}`).join("\n"));
+});
+
+test("a project whose image line asks for no build is left alone, however it failed", async (t) => {
+  const { docker } = setUp(t, {
+    images: [
+      { Name: relayImagePull().image, Labels: {} },
+      { Name: workerImageBuild().image, Labels: { [stampLabelFromDockerfile()]: dockerfileHash() } },
+    ],
+  });
+  const project = projectWithDockerfile();
+  const recordHome = homeWith(project);
+  const label = machineImageLabel("app");
+  const p = probes({
+    projectImage: (_machine, askedLabel) => ({
+      ok: false,
+      label: askedLabel,
+      detail: "built and current, but the worker CLI inside it is a different version",
+      needsBuild: false,
+    }),
+  });
+
+  const io = captureIo();
+  const { outcomes } = await repairImages({
+    checks: [...collect(p), p.projectImage(machineImageForProject(recordHome, project), label)],
+    probes: p,
+    recordHome,
+    ...io,
+  });
+
+  assert.deepEqual(outcomes, []);
+  assert.deepEqual(writes(docker.calls()), []);
+});
+
+test("a caller that names no record home considers only the two machine-wide images", async (t) => {
+  // Every caller before issue #322 asked for exactly that, and a repair
+  // with no registry to read cannot invent one.
+  const { docker } = setUp(t, {
+    images: [
+      { Name: relayImagePull().image, Labels: {} },
+      { Name: workerImageBuild().image, Labels: { [stampLabelFromDockerfile()]: dockerfileHash() } },
+    ],
+  });
+  const p = probes({
+    projectImage: (_machine, label) => ({ ok: false, label, detail: "is not built", needsBuild: true }),
+  });
+  const machine = machineImageForProject(homeWith(projectWithDockerfile()), projectWithDockerfile());
+
+  const io = captureIo();
+  const { outcomes } = await repairImages({ checks: [...collect(p), p.projectImage(machine, machineImageLabel("app"))], probes: p, ...io });
+
+  assert.deepEqual(outcomes, []);
+  assert.deepEqual(writes(docker.calls()), []);
 });
 
 test("the fix lines the checks print and the commands the repair runs are the same command, not two spellings", () => {

@@ -191,7 +191,14 @@ guess."* Concretely, for each candidate:
    image carrying the tool's own Linux build, and a headless way for
    its credential to reach a fresh container. See
    [`claude-code.md`](./claude-code.md), "Process containment," for how
-   the reference adapter answers both.
+   the reference adapter answers both. Note that the image is a
+   *parameter*, not an adapter's own constant any more (issue #322): a
+   project committing a `Dockerfile.inspector` has its machine's image
+   built from that file with [`machine-layer.ts`](./machine-layer.ts)'s
+   layer on top, so the box carries the project's own toolchain and its
+   checks can actually run there. A second adapter needs its own layer
+   written the same way, or it only ever runs in its own default image -
+   see `../../projectimage/README.md`.
 
 None of that is guessed here - it's verified against each real binary
 when that candidate's adapter is actually written.

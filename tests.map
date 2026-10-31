@@ -67,6 +67,10 @@ src/brain/adapters/helpers/fake-claude-cli.test.ts: src/brain/adapters/helpers/f
 src/brain/adapters/helpers/fake-cli-reader.mjs: src/brain/adapters/cli-reader.test.ts
 src/brain/adapters/index.test.ts: src/brain/adapters/index.test.ts
 src/brain/adapters/index.ts: src/brain/adapters/index.test.ts
+# Hand-added: the machine layer carries both version pins, so the test
+# that binds them to the repo's other Node declarations covers it too.
+src/brain/adapters/machine-layer.test.ts: src/brain/adapters/machine-layer.test.ts
+src/brain/adapters/machine-layer.ts: src/brain/adapters/machine-layer.test.ts, src/cli/node-version-pins.test.ts
 src/brain/adapters/openai-agent/client.test.ts: src/brain/adapters/openai-agent/client.test.ts
 src/brain/adapters/openai-agent/loop.test.ts: src/brain/adapters/openai-agent/loop.test.ts
 src/brain/adapters/openai-agent/runtime-imports.test.ts: src/brain/adapters/openai-agent/runtime-imports.test.ts
@@ -361,6 +365,15 @@ src/quiz/schedule.test.ts: src/quiz/schedule.test.ts
 src/quiz/schedule.ts: src/quiz/schedule.test.ts
 src/quiz/staleness.test.ts: src/quiz/staleness.test.ts
 src/quiz/staleness.ts: src/quiz/staleness.test.ts
+
+# Hand-added: src/projectimage/ was written after this file was last
+# generated. `index.ts` is a barrel with no colocated test of its own,
+# and `resolve.ts` is driven by both files here - resolve.test.ts for
+# what it answers, wiring.test.ts for every call site that has to ask.
+src/projectimage/index.ts: src/projectimage/resolve.test.ts
+src/projectimage/resolve.test.ts: src/projectimage/resolve.test.ts
+src/projectimage/resolve.ts: src/projectimage/resolve.test.ts, src/projectimage/wiring.test.ts
+src/projectimage/wiring.test.ts: src/projectimage/wiring.test.ts
 # Hand-added: src/reader/ was written after this file was last generated,
 # so none of it was listed. `call.ts` and `types.ts` have no colocated
 # test of their own, but read.test.ts drives both ways of reaching a

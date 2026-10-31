@@ -19,6 +19,9 @@ import {
   inspectorConfigProblem,
   listWorkerNetworks,
   loadConfigOrProblem,
+  machineImageFor,
+  machineImageLabel,
+  machineImageStatus,
   NETWORK_PRUNE_COMMAND,
   probeWorkerToken,
   readEvents,
@@ -37,7 +40,7 @@ import {
   NO_WORK_MODE,
   WORKER_NETWORK_PREFIX,
 } from "../index.ts";
-import type { ProjectOwnToken, ProjectRepo, ProjectTokenResolution, WorkerNetwork, WorkMode } from "../index.ts";
+import type { MachineImage, ProjectOwnToken, ProjectRepo, ProjectTokenResolution, WorkerNetwork, WorkMode } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { dockerDaemonUp, DOCKER_LABEL } from "./docker-daemon.ts";
 import { repairImages, type ImageCommand } from "./image-repair.ts";
@@ -83,6 +86,15 @@ the key or the file, so a config Inspector would turn away is found
 here rather than after a round has been spent on it. Fabrica never
 edits either file; the fix is always a hand change.
 
+Each registered project also gets an image line, naming the image its
+machine works in: the project's own Dockerfile.inspector with Fabrica's
+layer on top (the worker CLI, and the Node it runs on) when it has one -
+so the box the work is written in carries the project's own toolchain and
+its checks can actually run there - or the shared image when it commits
+none. It FAILs when that image is missing, or when either input changed
+after it was built, and reports the worker CLI version installed inside
+it against the one pinned version.
+
 Each project's line ends with which GitHub credential it uses: the
 GitHub App, or its own token when its projects.toml entry names one
 (githubTokenVar). A named variable that holds nothing, or a brain.env
@@ -111,9 +123,10 @@ machine check above it still runs; only the checks that need the file
 itself - the per-project ones, the caps, the spend block - are skipped,
 since an unreadable file cannot answer them either way.
 
-  --fix   Also put the two images a task needs onto this machine when
-          they are missing or out of date, instead of only naming the
-          command: builds the worker image, pulls the relay image, and
+  --fix   Also put the images a task needs onto this machine when they
+          are missing or out of date, instead of only naming the
+          command: builds the worker image, pulls the relay image,
+          builds each registered project's own machine image, and
           reports what it did. Each runs only when its own check above
           fails, and the pins those checks read are unchanged - so this
           never does more than run the command that check already
@@ -147,6 +160,16 @@ export interface DoctorCheck {
    * behind origin/master, which `doctor` has always reported as
    * information inside an OK line and never failed). */
   note?: string;
+  /** Set only by the per-project machine-image lines (issue #322): true
+   * when building that project's image is what would fix this line.
+   * `--fix` and `fabrica up` read it instead of asking a second time
+   * whether an image needs replacing - the decision stays the failing
+   * check's own, which is the rule src/cli/image-repair.ts is built on.
+   * False on such a line means the finding is real and a build is not
+   * the answer (a CLI version inside an otherwise current image, the
+   * same case the shared image's "worker CLI" line is never a trigger
+   * for). */
+  needsBuild?: boolean;
 }
 
 /** A failure `fabrica up` must refuse to start a session over, as
@@ -185,6 +208,14 @@ export interface DoctorProbes {
   /** The image every task's relay container runs from (issue #186) -
    * missing, no task can start its relay at all. */
   relayImage(): DoctorCheck;
+  /** Which image one registered project's machine works in, and whether
+   * the one on this machine is current (issue #322). A probe like the
+   * two image lines above, rather than something computed inline beside
+   * the other per-project questions, for the reason all of those are
+   * probes: answering it reads this machine's Docker. The project is
+   * resolved from the registry by the caller, so the image a round will
+   * actually start is the image this reports on. */
+  projectImage(machine: MachineImage, label: string): DoctorCheck;
   /** Docker networks left behind by tasks that are no longer running.
    * Each one holds an address pool Docker cannot hand out again, so
    * enough of them and no task can open a network at all. Needs the
@@ -678,6 +709,7 @@ export const realProbes: DoctorProbes = {
   workerImage: () => workerImageStatus(),
   workerCli: () => workerCliVersionStatus(),
   relayImage: () => relayImageStatus(),
+  projectImage: (machine, label) => machineImageStatus(label, machine),
   async workerNetworks(recordHome) {
     const networks = await listWorkerNetworks();
     return workerNetworksCheck(networks, networks === null ? [] : leftoverWorkerNetworks(networks, liveTaskIds(recordHome)));
@@ -974,6 +1006,14 @@ export async function collectDoctorChecks(opts: {
           workModeFor(config, path)
         )
       );
+      // Issue #322: which image this project's machine works in - its
+      // own check image with Fabrica's layer on top, or the shared one
+      // when it commits no Dockerfile.inspector - and whether the one on
+      // this machine is current. Resolved off the same config for the
+      // same reason as the line above it, and its `needsBuild` is what
+      // `--fix` and `fabrica up` build from, so the decision to build
+      // stays this line's own.
+      checks.push(probes.projectImage(machineImageFor(config, path), machineImageLabel(name)));
     }
 
     const { perTaskUsd, perDayUsd } = config.caps;
@@ -1042,6 +1082,9 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
             await repairImages({
               checks: collected,
               probes,
+              // Issue #322: and each registered project's own machine
+              // image, read out of the registry this record home holds.
+              recordHome,
               runImageCommand: opts.runImageCommand,
               stdout,
               stderr,
