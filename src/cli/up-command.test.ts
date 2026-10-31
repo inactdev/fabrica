@@ -47,10 +47,6 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     workerImage: () => ok("worker image"),
     workerCli: () => ok("worker CLI"),
     relayImage: () => ok("relay image"),
-    // Issue #322: the image a project's own machine works in - injected
-    // like every other docker-dependent line, so no test here depends on
-    // this machine's images.
-    projectImage: (_machine, label) => ok(label),
     workerNetworks: async () => ok("worker networks"),
     workerToken: () => ok("worker token"),
     githubApp: async () => ok("github app"),

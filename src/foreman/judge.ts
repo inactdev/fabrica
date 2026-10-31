@@ -18,7 +18,6 @@ import { handToPullRequestChecks } from "./ci-checks.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import { defaultCheckBox } from "../brain/index.ts";
 import type { CheckBox } from "../brain/index.ts";
-import { machineImageForProject } from "../projectimage/index.ts";
 import type { GateResult, ProductionLine } from "../../contract/surface.ts";
 import type { RebaseConflict } from "../line/index.ts";
 // Type only: this module is a judgement's shape, not the rebase policy.
@@ -423,17 +422,7 @@ export function prepareRound(
           // body; `fabrica doctor`'s project line says so.
           ...(workMode.pullRequestTemplate ? prTemplateFor(line.workdir, baseCommit) : {}),
         })
-      : selfTestJudge(
-          recordHome,
-          taskId,
-          line,
-          check,
-          // Issue #322: the project's own machine image, when it has one -
-          // a self-test runs the project's check command, which is exactly
-          // the thing that needs the project's own toolchain, and it must
-          // run in the same box the work was written in, not a second one.
-          opts.checkBox ?? defaultCheckBox({ image: machineImageForProject(recordHome, line.project).image })
-        );
+      : selfTestJudge(recordHome, taskId, line, check, opts.checkBox ?? defaultCheckBox());
   return { judge, mode, ...(reader === undefined ? {} : { reader }) };
 }
 

@@ -24,23 +24,9 @@
 // it would cost `fabrica up` a multi-minute build and still block. It
 // is re-asked after a build that happened for another reason, since the
 // image under it moved.
-//
-// Issue #322 adds a third kind, one per registered project: the image a
-// project's own machine works in, built from its `Dockerfile.inspector`
-// with Fabrica's layer on top. It obeys both rules above. Whether it
-// needs building is the per-project line's own answer, carried on the
-// check as `needsBuild` and only read here - never asked a second time -
-// and a per-project CLI version that disagrees with the pin inside an
-// otherwise current image sets `needsBuild` false for exactly the reason
-// the shared "worker CLI" line is not a trigger.
 
 import { spawn } from "node:child_process";
 import {
-  isLayered,
-  loadConfigOrProblem,
-  machineImageBuild,
-  machineImageFor,
-  machineImageLabel,
   relayImagePull,
   RELAY_IMAGE_LABEL,
   workerImageBuild,
@@ -161,13 +147,6 @@ interface RepairPlan {
   /** Which doctor lines are re-asked once this command has run - its
    * own, plus any other line that reads the image it just replaced. */
   reprobe: string[];
-  /** How to re-ask a line this plan owns that `DoctorProbes` knows
-   * nothing about: a per-project machine-image line, which exists once
-   * per registered project rather than once per machine. When this is
-   * set it answers for every label in `reprobe` above, which is why such
-   * a plan lists only its own. Left out by the two machine-wide plans,
-   * whose lines are resolved through the probes instead. */
-  reask?: () => DoctorCheck | null;
 }
 
 const PLANS: RepairPlan[] = [
@@ -190,50 +169,6 @@ const PLANS: RepairPlan[] = [
   },
 ];
 
-/** Every registered project whose own machine image this run may have to
- * build (issue #322).
- *
- * The decision is the per-project line's own, read off `needsBuild` on
- * the check `collectDoctorChecks` already made - exactly like the two
- * plans above read their own failing lines, and for the same reason: a
- * second probe here could answer differently from the line the Client
- * was shown. What is resolved here is only *how* to build it (the
- * generated Dockerfile and the `docker build` argv) and how to re-ask
- * that one line afterwards.
- *
- * A projects.toml that will not parse yields no plans: its own FAIL line
- * is doctor's to print, and there is no registry to read a project's
- * path out of.
- */
-function projectPlans(recordHome: string, checks: DoctorCheck[], probes: DoctorProbes): RepairPlan[] {
-  const { config, problem } = loadConfigOrProblem(recordHome);
-  if (problem) return [];
-  return Object.entries(config.projects).flatMap(([name, project]) => {
-    const label = machineImageLabel(name);
-    const asked = checks.find((check) => check.label === label);
-    if (asked === undefined || asked.ok || asked.needsBuild !== true) return [];
-    const machine = machineImageFor(config, project.path);
-    // Belt and braces: a line that asked for a build can only be a
-    // layered project's, since the shared image's own plan above owns
-    // the other case entirely.
-    if (!isLayered(machine)) return [];
-    return [
-      {
-        label,
-        action: "built" as const,
-        doing: `building it now from ${machine.inspectorDockerfile} - this takes a few minutes`,
-        command: () => machineImageBuild(recordHome, machine),
-        reprobe: [label],
-        // Through the same probe that produced the line above, never a
-        // direct read of its own: the line printed after a repair has to
-        // be the line doctor would print, which is the whole reason the
-        // two machine-wide plans re-ask through `probes` too.
-        reask: () => probes.projectImage(machine, label),
-      },
-    ];
-  });
-}
-
 export interface RepairImagesOptions {
   /** Every check `collectDoctorChecks` has produced so far. Read, not
    * re-derived: the decision to repair is the failing check's own, so
@@ -242,10 +177,6 @@ export interface RepairImagesOptions {
   /** Re-asked after a repair - the same probes that produced `checks`,
    * so the line printed afterwards is the line doctor would print. */
   probes: DoctorProbes;
-  /** Where the registry is read from, for the per-project machine images
-   * (issue #322). Omitted means only the two machine-wide images are
-   * considered - what every caller before that issue asked for. */
-  recordHome?: string;
   /** Test-only seam replacing the real `docker` spawn. */
   runImageCommand?: (cmd: ImageCommand, onOutput: (line: string) => void) => Promise<{ ok: boolean; detail: string }>;
   stdout?: (line: string) => void;
@@ -263,14 +194,13 @@ export interface RepairImagesResult {
 }
 
 /**
- * Builds the worker image, pulls the relay image, and builds each
- * registered project's own machine image, each only when its own doctor
- * check says it is missing or out of date, and reports what it did. A
- * command that fails is an outcome with `ok` false carrying the
- * command's own last word, never a thrown error, and the re-asked check
- * still FAILs with its own fix exactly as it would have without this
- * step - so a caller reads the same `DoctorCheck[]` either way and needs
- * no error handling of its own.
+ * Builds the worker image and pulls the relay image, each only when its
+ * own doctor check says it is missing or out of date, and reports what
+ * it did. A command that fails is an outcome with `ok` false carrying
+ * the command's own last word, never a thrown error, and the re-asked
+ * check still FAILs with its own fix exactly as it would have without
+ * this step - so a caller reads the same `DoctorCheck[]` either way and
+ * needs no error handling of its own.
  */
 export async function repairImages(opts: RepairImagesOptions): Promise<RepairImagesResult> {
   const stdout = opts.stdout ?? (() => {});
@@ -284,12 +214,7 @@ export async function repairImages(opts: RepairImagesOptions): Promise<RepairIma
   // failure saying the same thing in docker's words would only bury it.
   if (failing(DOCKER_LABEL)) return { checks: opts.checks, outcomes: [] };
 
-  // The machine-wide images first, then each project's own: the two
-  // above are what every task on this machine needs, and a project image
-  // takes minutes to build, so a machine that is missing both should not
-  // spend the first of those minutes on one project.
-  const plans = [...PLANS, ...(opts.recordHome === undefined ? [] : projectPlans(opts.recordHome, opts.checks, opts.probes))];
-  const wanted = plans.map((plan) => ({ plan, asked: failing(plan.label) })).filter(
+  const wanted = PLANS.map((plan) => ({ plan, asked: failing(plan.label) })).filter(
     (candidate): candidate is { plan: RepairPlan; asked: DoctorCheck } => candidate.asked !== undefined
   );
   if (wanted.length === 0) return { checks: opts.checks, outcomes: [] };
@@ -313,7 +238,7 @@ export async function repairImages(opts: RepairImagesOptions): Promise<RepairIma
     // succeeded but somehow left the image unfit must say so rather
     // than be taken on this module's word.
     for (const label of plan.reprobe) {
-      const fresh = plan.reask === undefined ? reprobe(label, opts.probes) : plan.reask();
+      const fresh = reprobe(label, opts.probes);
       if (fresh) refreshed.set(label, fresh);
     }
   }
