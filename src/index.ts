@@ -13,6 +13,9 @@ export { DEFAULT_ATTEMPTS } from "./foreman/index.ts";
 export { DEFAULT_CHECK_COMMAND } from "./foreman/index.ts";
 export { finalMessageFor } from "./foreman/index.ts";
 export type { FinalMessageForCommit } from "./foreman/index.ts";
+// Issue #316: the repository's own pull request template, for a project
+// that asks for its body to be rendered into it.
+export { readPullRequestTemplate, renderIntoTemplate, PULL_REQUEST_TEMPLATE_PATH } from "./foreman/index.ts";
 // The pull request's own text as the record describes it, which is not
 // always the four-section render of the latest write-up: a rebase-only
 // fix round (the Client's note "master moved") appends one section to
@@ -190,6 +193,18 @@ export { inspectorBranchStatus } from "./inspector/index.ts";
 // and the line that should have said so can never disagree.
 export { inspectorConfigProblem } from "./inspector/index.ts";
 export type { InspectorConfigProblem, InspectorConfigRefusal } from "./inspector/index.ts";
+// Issue #316, work mode: the same two readers for a project whose terms
+// live in a folder outside its repository. `termsProblem` is what
+// Inspector would refuse about that folder; `termsSetup` is "is this
+// project set up for Fabrica, and does it ask for a reviewer", answered
+// off the folder instead of off origin's default branch.
+export { termsProblem, termsSetup } from "./inspector/index.ts";
+// Which of work mode's three settings a project carries (issue #316),
+// read off one config by every surface that needs to know: the round
+// itself, `fabrica do`'s up-front refusal, `fabrica doctor`'s
+// per-project line.
+export { projectWorkMode, workModeFor, NO_WORK_MODE } from "./workmode/index.ts";
+export type { WorkMode } from "./workmode/index.ts";
 // Issue #187: every GitHub call Fabrica makes - Inspector's push and
 // pull request, the issue a task names, the checks on its pull request -
 // uses a GitHub App token minted for one repository, with only that

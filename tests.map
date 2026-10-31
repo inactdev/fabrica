@@ -233,7 +233,7 @@ src/foreman/inspector-presence.test.ts: src/foreman/inspector-presence.test.ts
 src/foreman/inspector-stamp-workflow.test.ts: src/foreman/inspector-stamp-workflow.test.ts
 # Hand-added: judge.ts has no colocated test of its own, so the generator
 # left it out - these three are what actually drive it.
-src/foreman/judge.ts: src/foreman/do.test.ts, src/foreman/round.test.ts, src/foreman/inspector-config.test.ts
+src/foreman/judge.ts: src/foreman/do.test.ts, src/foreman/round.test.ts, src/foreman/inspector-config.test.ts, src/foreman/work-mode-round.test.ts
 src/foreman/meter-pause-round.test.ts: src/foreman/meter-pause-round.test.ts
 src/foreman/meters.test.ts: src/foreman/meters.test.ts
 src/foreman/meters.ts: src/foreman/meters.test.ts
@@ -244,6 +244,8 @@ src/foreman/network-policy.ts: src/foreman/network-policy.test.ts
 src/foreman/no-host-check.test.ts: src/foreman/no-host-check.test.ts
 src/foreman/pr-body.test.ts: src/foreman/pr-body.test.ts
 src/foreman/pr-body.ts: src/foreman/pr-body.test.ts
+src/foreman/pr-template.test.ts: src/foreman/pr-template.test.ts
+src/foreman/pr-template.ts: src/foreman/pr-template.test.ts
 src/foreman/publish-permissions.test.ts: src/foreman/publish-permissions.test.ts
 src/foreman/publish-permissions.ts: src/foreman/publish-permissions.test.ts
 src/foreman/queries.test.ts: src/foreman/queries.test.ts
@@ -273,6 +275,7 @@ src/foreman/transport-retry.test.ts: src/foreman/transport-retry.test.ts
 src/foreman/transport-retry.ts: src/foreman/transport-retry.test.ts
 src/foreman/verdict.test.ts: src/foreman/verdict.test.ts
 src/foreman/verdict.ts: src/foreman/verdict.test.ts
+src/foreman/work-mode-round.test.ts: src/foreman/work-mode-round.test.ts
 src/foreman/writeup.test.ts: src/foreman/writeup.test.ts
 src/github/fetch-issue.test.ts: src/github/fetch-issue.test.ts
 src/github/fetch-issue.ts: src/github/fetch-issue.test.ts
@@ -300,11 +303,18 @@ src/inspector/ancestry.test.ts: src/inspector/ancestry.test.ts
 src/inspector/ancestry.ts: src/inspector/ancestry.test.ts
 src/inspector/config-check.test.ts: src/inspector/config-check.test.ts
 src/inspector/config-check.ts: src/inspector/config-check.test.ts
+# Hand-added: the ratified copy of the Inspector call (issue #109) has
+# no colocated test of its own, so the generator left it out - run.test.ts
+# reads it for every flag and exit code it asserts, which is exactly what
+# has to run when this file changes.
+src/inspector/consumer-contract.json: src/inspector/run.test.ts
 src/inspector/contract-sync-workflow.test.ts: src/inspector/contract-sync-workflow.test.ts
 src/inspector/doctor-checks.test.ts: src/inspector/doctor-checks.test.ts
 src/inspector/doctor-checks.ts: src/inspector/doctor-checks.test.ts
 src/inspector/run.test.ts: src/inspector/run.test.ts
 src/inspector/run.ts: src/inspector/run.test.ts
+src/inspector/terms.test.ts: src/inspector/terms.test.ts
+src/inspector/terms.ts: src/inspector/terms.test.ts
 src/inspector/version.test.ts: src/inspector/version.test.ts
 src/inspector/version.ts: src/inspector/version.test.ts
 src/knowledge/notes.test.ts: src/knowledge/notes.test.ts
@@ -391,6 +401,9 @@ src/relay/policy.ts: src/relay/policy.test.ts
 src/relay/server.test.ts: src/relay/server.test.ts
 src/reviewer/resolve.test.ts: src/reviewer/resolve.test.ts
 src/reviewer/resolve.ts: src/reviewer/resolve.test.ts
+src/workmode/resolve.test.ts: src/workmode/resolve.test.ts
+src/workmode/resolve.ts: src/workmode/resolve.test.ts
+
 src/testmap/classify.test.ts: src/testmap/classify.test.ts
 src/testmap/classify.ts: src/testmap/classify.test.ts
 src/testmap/describe.test.ts: src/testmap/describe.test.ts

@@ -27,12 +27,13 @@
 import { appendEvent } from "../record/index.ts";
 import { loadConfigOrProblem } from "../config/index.ts";
 import {
-  PUBLISH_PERMISSIONS,
   READ_CHECKS_PERMISSIONS,
   READ_ISSUE_PERMISSIONS,
   defaultTokenMinter,
   describePermissions,
+  publishPermissionsFor,
 } from "../githubapp/index.ts";
+import { projectWorkMode } from "../workmode/index.ts";
 import type { GithubScope, MintPurpose, MintedToken, ScopedToken, TokenMinter } from "../githubapp/index.ts";
 import { resolveProjectToken } from "../projecttoken/index.ts";
 import { hostFromOriginUrl, originUrl, ownerRepoFromOriginUrl } from "../register/index.ts";
@@ -251,6 +252,14 @@ export function githubRepoOf(project: string): { owner: string; repo: string } |
  * names its own token in projects.toml publishes with that instead, and
  * no App token is minted for it at all (issue #314).
  *
+ * `statuses: write` is dropped for a project Inspector posts no commit
+ * status for (issue #316's `noStamp`): a handoff that will not stamp
+ * must not hold the permission to, and an App that was never granted it
+ * would answer the mint itself with a refusal. Read from the registry
+ * here rather than passed in, so this and issue #304's start gate - the
+ * one that checks what GitHub granted on exactly this mint - can never
+ * be asking about two different sets.
+ *
  * The project's repository is resolved inside `check()`/`mint()` rather
  * than when this is built, so a project with no github.com origin
  * refuses through `Inspector.prepare()`'s own path - one refusal, before
@@ -267,7 +276,8 @@ export function publishToken(recordHome: string, taskId: string, project: string
       credential.check();
     },
     async mint() {
-      const scope = { ...projectRepo(project), permissions: PUBLISH_PERMISSIONS };
+      const permissions = publishPermissionsFor(projectWorkMode(recordHome, project).noStamp);
+      const scope = { ...projectRepo(project), permissions };
       return { token: await credential.token("publish", scope) };
     },
   };

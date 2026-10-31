@@ -507,3 +507,73 @@ test("Inspector's report files are copied into the task folder before the worktr
   assert.equal(readTaskFile(recordHome, task.id, "inspector-latest.json"), '{"run":"run-1.json"}');
   assert.equal(readTaskFile(recordHome, task.id, "inspector-run.json"), '{"ok":true}');
 });
+
+// Work mode (issue #316): the config is in a folder outside the
+// repository, so none of the three in-repo reads above has a question to
+// answer - and every one of them, asked anyway, would turn such a
+// project away for the one reason that is not a problem.
+test("outside terms: the handoff happens even though the repository carries no .inspector.json", async () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0", { inspector: false });
+  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
+  const inspector = fakeInspector({ verdict: "green", report: "judged against terms from outside" });
+
+  const inspection = await handToInspector(
+    recordHome,
+    "terms-task",
+    { taskId: "terms-task", branch: "fabrica/terms-task", project, workdir: project, recordHome },
+    baseCommit,
+    inspector,
+    { outsideTerms: true }
+  );
+
+  assert.equal(inspection?.verdict, "green");
+  assert.equal(inspector.calls.length, 1);
+  const names = readEventsForTask(recordHome, "terms-task").map((event) => event.name);
+  assert.deepEqual(names, ["inspector-called", "inspection-finished"]);
+});
+
+test("outside terms: a worktree whose .inspector.json differs from the base commit is still handed over", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
+  // The in-repo path refuses exactly this ("differs from the task base
+  // commit"); with terms outside the repository the file is not what
+  // Inspector reads at all, so it says nothing about the handoff.
+  writeFileSync(join(project, ".inspector.json"), '{"check":"./check.sh","image":"edited"}\n');
+  execSync("git add -A && git -c user.email=t@t -c user.name=t commit -qm edit", { cwd: project, shell: "/bin/bash" });
+  const inspector = fakeInspector({ verdict: "green", report: "ok" });
+
+  const inspection = await handToInspector(
+    recordHome,
+    "terms-edited",
+    { taskId: "terms-edited", branch: "fabrica/terms-edited", project, workdir: project, recordHome },
+    baseCommit,
+    inspector,
+    { outsideTerms: true }
+  );
+
+  assert.equal(inspection?.verdict, "green");
+  assert.equal(inspector.calls.length, 1);
+});
+
+test("without the setting, the same edited worktree is refused exactly as before", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  const baseCommit = execSync("git rev-parse HEAD", { cwd: project, encoding: "utf8" }).trim();
+  writeFileSync(join(project, ".inspector.json"), '{"check":"./check.sh","image":"edited"}\n');
+  execSync("git add -A && git -c user.email=t@t -c user.name=t commit -qm edit", { cwd: project, shell: "/bin/bash" });
+  const inspector = fakeInspector({ verdict: "green", report: "should not be called" });
+
+  const inspection = await handToInspector(
+    recordHome,
+    "in-repo-edited",
+    { taskId: "in-repo-edited", branch: "fabrica/in-repo-edited", project, workdir: project, recordHome },
+    baseCommit,
+    inspector
+  );
+
+  assert.equal(inspection?.verdict, "refused");
+  assert.match(inspection!.report, /differs from the task base commit/);
+  assert.equal(inspector.calls.length, 0);
+});

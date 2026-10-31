@@ -26,6 +26,26 @@ export const PUBLISH_PERMISSIONS: Readonly<Record<string, AppPermission>> = Obje
   statuses: "write",
 });
 
+/** The same handoff for a project Inspector posts no commit status for
+ * (issue #316, work mode: `noStamp = true`): the push and the pull
+ * request, and nothing that could write a status. One call site's needs,
+ * so it is one constant here rather than a subtraction done wherever
+ * the question comes up - and it is why skipping issue #304's start gate
+ * for such a project is honest rather than a hole: the token genuinely
+ * does not need what the gate was checking for. */
+export const PUBLISH_WITHOUT_STAMP_PERMISSIONS: Readonly<Record<string, AppPermission>> = Object.freeze({
+  contents: "write",
+  pull_requests: "write",
+});
+
+/** Which of the two a handoff uses. The one answer both the mint
+ * (`src/foreman/github-token.ts`) and the gate that checks the mint
+ * (`src/foreman/publish-permissions.ts`) read, so they can never ask
+ * GitHub for one set and check for another. */
+export function publishPermissionsFor(noStamp: boolean): Readonly<Record<string, AppPermission>> {
+  return noStamp ? PUBLISH_WITHOUT_STAMP_PERMISSIONS : PUBLISH_PERMISSIONS;
+}
+
 /** The issue a task names, read once at registration
  * (`src/github/fetch-issue.ts`: one `GET
  * /repos/{owner}/{repo}/issues/{N}`). Read-only, and nothing else: this

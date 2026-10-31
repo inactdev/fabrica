@@ -27,6 +27,13 @@ export interface FinalMessageForCommit {
   ok: boolean;
   /** Set when ok is false: what was wrong with the write-up. */
   reason?: string;
+  /** The write-up `title`/`body` were rendered from - present only when
+   * `ok`. Its one reader is the pull request body for a project that
+   * renders into its repository's own template (`pr-template.ts`): that
+   * shape places the same fields under different headings, and a
+   * worker's write-up is structured data Fabrica renders, never prose
+   * Fabrica parses. */
+  writeup?: WorkerWriteup;
 }
 
 /** The Client's own template (ruling 2026-10-18): the body's content
@@ -34,7 +41,7 @@ export interface FinalMessageForCommit {
  * The headings are the Client's exact words - a reviewer who did not run
  * the task reads these, so "why" leads (what the change is *for*) and
  * the engineering detail comes third. */
-const CONTENT_SECTIONS = [
+export const CONTENT_SECTIONS = [
   { heading: "## Context (Why)", field: "why" },
   { heading: "## Description (What)", field: "what" },
   { heading: "## Changes in the codebase (How)", field: "how" },
@@ -54,7 +61,7 @@ const ADDITIONAL_BULLETS = [
   { label: "Could not verify here", field: "couldNotVerify" },
 ] as const satisfies readonly { label: string; field: keyof WorkerWriteup }[];
 
-const ADDITIONAL_HEADING = "## Additional information";
+export const ADDITIONAL_HEADING = "## Additional information";
 
 /** Every heading this template owns, in the order the body renders them.
  * Each one appears in a rendered body exactly once, and only ever
@@ -155,6 +162,31 @@ export function writeupProblem(writeup: WorkerWriteup | undefined): string | und
   return problems.length > 0 ? problems.join("; ") : undefined;
 }
 
+/** One write-up field as a body renders it: the worker's own words, with
+ * any line that is nothing but one of this template's headings dropped.
+ * Exported because a project rendering into its repository's own pull
+ * request template (`pr-template.ts`) places the same text under
+ * different headings, and the two must not grow separate ideas of what a
+ * field's text is. */
+export function writeupSection(writeup: WorkerWriteup, field: keyof WorkerWriteup): string {
+  const value = writeup[field];
+  return typeof value === "string" ? withoutTemplateHeadings(value) : "";
+}
+
+/** "## Additional information"'s bullets, without the heading - the
+ * worker's confidence and the three (or four) labelled fields the
+ * reviewer reads last. Exported for the same reason `writeupSection` is:
+ * a body rendered into a repository's own template carries these too,
+ * and there is one definition of what they are. */
+export function additionalInformationBullets(writeup: WorkerWriteup): string {
+  const bullets = [bullet("Confidence", `${writeup.confidence}/100`)];
+  for (const { label, field } of ADDITIONAL_BULLETS) {
+    const value = writeup[field] === undefined ? undefined : withoutTemplateHeadings(writeup[field]!);
+    if (value !== undefined && value.length > 0) bullets.push(bullet(label, value));
+  }
+  return bullets.join("\n");
+}
+
 /** What a red attempt, its receipt, and a failure report say. */
 export function describeInvalidWriteup(reason: string): string {
   return `write-up invalid: ${reason}`;
@@ -173,14 +205,15 @@ export function finalMessageFor(writeup: WorkerWriteup | undefined, fallbackTitl
   if (reason !== undefined || writeup === undefined) {
     return { title: fallbackTitle, body: `${describeInvalidWriteup(reason!)}.`, ok: false, reason };
   }
-  const sections = CONTENT_SECTIONS.map(({ heading, field }) => `${heading}\n\n${withoutTemplateHeadings(writeup[field])}`);
-  const bullets = [bullet("Confidence", `${writeup.confidence}/100`)];
-  for (const { label, field } of ADDITIONAL_BULLETS) {
-    const value = writeup[field] === undefined ? undefined : withoutTemplateHeadings(writeup[field]!);
-    if (value !== undefined && value.length > 0) bullets.push(bullet(label, value));
-  }
-  sections.push(`${ADDITIONAL_HEADING}\n\n${bullets.join("\n")}`);
-  return { title: writeup.title.trim(), body: sections.join("\n\n"), ok: true };
+  const sections = CONTENT_SECTIONS.map(({ heading, field }) => `${heading}\n\n${writeupSection(writeup, field)}`);
+  sections.push(`${ADDITIONAL_HEADING}\n\n${additionalInformationBullets(writeup)}`);
+  // The write-up rides along so a consumer that needs a DIFFERENT shape
+  // of the same words - a project whose pull request body is its
+  // repository's own template (issue #316) - renders from the data
+  // rather than parsing the body above back apart. Only ever set on a
+  // valid write-up: the fallback body is Fabrica's own wording, and
+  // there is nothing to re-render.
+  return { title: writeup.title.trim(), body: sections.join("\n\n"), ok: true, writeup };
 }
 
 export function renderCommitMessage(message: FinalMessageForCommit): string {

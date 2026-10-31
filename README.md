@@ -268,6 +268,53 @@ so for a project using one, a permission you forgot shows up as a failed
 publish at the end of the round instead. Grant all six above and that
 does not arise.
 
+### When nothing may be added to the repository
+
+The other half of a company repository: not just the credential, but the
+files. Inspector normally reads three of them out of the repository root
+— `.inspector.json`, the check script, and `Dockerfile.inspector` — and
+posts a commit status on the pull request it opens. Where neither is
+allowed, three project settings move all of it out of the way:
+
+    [projects.dayjob]
+    path                = "~/work/widgets"
+    check               = "./check.sh"
+    githubTokenVar      = "DAYJOB_GITHUB_TOKEN"
+    terms               = "~/fabrica-terms/widgets"
+    noStamp             = true
+    pullRequestTemplate = true
+
+**`terms`** is a folder on this machine — outside the repository, and
+not inside a folder that contains it — holding those three files.
+Inspector is handed the folder and mounts it read-only into the check
+box; the repository stays exactly as it is, and Fabrica stops looking
+for any of the three in it. Fabrica never writes into the folder, and
+`fabrica register` never touches it: a work-mode project is registered
+by hand. A relative path is read as relative to `projects.toml`.
+
+**`noStamp = true`** means Inspector still pushes the branch and opens
+or updates the pull request on a green result, but posts no commit
+status at all. The publishing token stops asking GitHub for the
+permission to post one, so an App or a personal token granted only
+Contents and Pull requests is enough for such a project.
+
+**`pullRequestTemplate = true`** makes the pull request body the
+repository's own `.github/PULL_REQUEST_TEMPLATE.md`: the worker's Why,
+What and How go under the template's own matching sections (Motivation,
+Description, Changes, Testing and the obvious synonyms), whatever the
+template already had under those headings is kept, and everything that
+found no section — the rest of the write-up — is appended at the end
+under one **Notes** heading. The commit message is unchanged either way.
+
+`fabrica doctor` reports all three on that project's own line, FAILs if
+the terms folder is one Inspector would refuse (missing, not a folder,
+inside the repository, missing one of the two files it reads by name),
+and says plainly when a project asks for its repository's template and
+there is none to render into.
+
+A project that carries none of these three behaves exactly as every
+project did before they existed.
+
 ### Paying per token instead (optional)
 
 The default Worker is the coding agent above, on the flat-rate

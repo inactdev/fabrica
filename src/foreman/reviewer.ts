@@ -30,12 +30,18 @@ import { ForemanError } from "./errors.ts";
  * `baseCommit` is what `.inspector.json` is read at: the commit the
  * task was cut from, never the worktree a Worker has already had its
  * hands on - a Worker must not be able to add or drop `testPaths` and
- * change who reviews its own work. */
+ * change who reviews its own work.
+ *
+ * It is omitted for exactly one shape of project (issue #316): one whose
+ * terms live in a folder outside its repository, where `workdir` is that
+ * folder and there is no commit to read it at. That is safe for the
+ * reason the pinning exists at all - the terms folder is never mounted
+ * into a worker's box, so no Worker can reach the file. */
 export function requireReviewer(
   recordHome: string,
   workdir: string,
   projectPath: string,
-  baseCommit: string
+  baseCommit?: string
 ): ResolvedReviewer | undefined {
   const resolution = resolveReviewer({
     recordHome,

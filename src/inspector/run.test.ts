@@ -333,3 +333,83 @@ test("declaresTestPaths reads the config at a commit, not the worktree a worker 
   writeFileSync(join(workdir, ".inspector.json"), "not json at all\n");
   assert.equal(declaresTestPaths(workdir), false, "an unparseable config is Inspector's refusal to make, not a demand for a reviewer");
 });
+
+// Work mode (issue #316): a repository none of Inspector's three files
+// may be committed to, and whose CI must not be touched. Both flags are
+// Inspector's own (`-terms`, `-no-stamp`), declared in
+// consumer-contract.json like every other flag above, so renaming one
+// here without carrying it to the file Inspector's side is synced from
+// fails this suite.
+
+test("inspectorAdapter hands Inspector the terms folder for a project whose terms live outside its repository", async () => {
+  const workdir = tempDir();
+  const terms = tempDir();
+  const path = argsEcho(workdir, "inspector-terms-args.sh");
+
+  const inspection = await inspectorAdapter(path, { env: {}, token: fakeToken(), terms }).inspect({
+    branch: "fabrica/task-1",
+    workdir,
+  });
+
+  assert.equal(
+    inspection.report,
+    [flag("repo"), workdir, flag("branch"), "fabrica/task-1", flag("terms"), terms].join(" ")
+  );
+});
+
+test("inspectorAdapter asks for no stamp with a bare flag, taking no value", async () => {
+  const workdir = tempDir();
+  const path = argsEcho(workdir, "inspector-no-stamp-args.sh");
+
+  const inspection = await inspectorAdapter(path, { env: {}, token: fakeToken(), noStamp: true }).inspect({
+    branch: "fabrica/task-1",
+    workdir,
+  });
+
+  assert.equal(inspection.report, [flag("repo"), workdir, flag("branch"), "fabrica/task-1", flag("no-stamp")].join(" "));
+});
+
+test("inspectorAdapter passes neither work-mode flag for a project that carries neither setting", async () => {
+  const workdir = tempDir();
+  const path = argsEcho(workdir, "inspector-no-work-mode-args.sh");
+
+  const inspection = await inspectorAdapter(path, { env: {}, token: fakeToken(), noStamp: false }).inspect({
+    branch: "fabrica/task-1",
+    workdir,
+  });
+
+  assert.equal(inspection.report, [flag("repo"), workdir, flag("branch"), "fabrica/task-1"].join(" "));
+});
+
+test("inspectorAdapter carries both work-mode flags together, with everything else it was given", async () => {
+  const workdir = tempDir();
+  const terms = tempDir();
+  const path = argsEcho(workdir, "inspector-work-mode-args.sh");
+
+  const inspection = await inspectorAdapter(path, {
+    env: {},
+    token: fakeToken(),
+    terms,
+    noStamp: true,
+    reviewer: REVIEWER,
+  }).inspect({ branch: "fabrica/task-1", workdir, expectedTip: "f".repeat(40) });
+
+  assert.equal(
+    inspection.report,
+    [
+      flag("repo"),
+      workdir,
+      flag("branch"),
+      "fabrica/task-1",
+      flag("terms"),
+      terms,
+      flag("no-stamp"),
+      flag("expected-tip"),
+      "f".repeat(40),
+      flag("vendor"),
+      REVIEWER.vendor,
+      flag("model"),
+      REVIEWER.model,
+    ].join(" ")
+  );
+});

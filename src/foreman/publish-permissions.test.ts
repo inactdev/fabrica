@@ -192,3 +192,55 @@ test("a project that publishes with its own token is let through, and nothing is
   assert.equal(minter.calls.length, 0);
   assert.deepEqual(readEvents(recordHome).filter((e) => e.name === "token-minted"), []);
 });
+
+// Work mode (issue #316): a project Inspector posts no commit status
+// for. Its handoff asks GitHub for no `statuses: write` at all, so this
+// gate must check exactly that narrower set - otherwise it refuses every
+// task on such a project over a permission nothing it does will use.
+
+function noStampHome(project: string): string {
+  const recordHome = home();
+  writeFileSync(
+    join(recordHome, "projects.toml"),
+    `[projects.dayjob]\npath = ${JSON.stringify(project)}\ncheck = "bin/ci"\nnoStamp = true\n`
+  );
+  return recordHome;
+}
+
+test("a no-stamp project is let through on a grant with no statuses: write", async () => {
+  const project = githubProject();
+  const recordHome = noStampHome(project);
+  const { id: taskId } = registerTask(recordHome, "small change");
+  const minter = fakeMinter({ granted: WITHOUT_STATUSES });
+
+  await requirePublishPermissions(recordHome, taskId, project, minter);
+
+  // And the mint it took asked for the narrower set, not the wider one
+  // with a missing permission waved through.
+  assert.deepEqual(minter.calls[0].scope.permissions, { contents: "write", pull_requests: "write" });
+});
+
+test("a no-stamp project is still refused when it cannot push or open a pull request", async () => {
+  const project = githubProject();
+  const recordHome = noStampHome(project);
+  const { id: taskId } = registerTask(recordHome, "small change");
+
+  await assert.rejects(
+    () =>
+      requirePublishPermissions(recordHome, taskId, project, fakeMinter({ granted: { contents: "write" } })),
+    (err: unknown) =>
+      err instanceof ForemanError &&
+      err.code === "publish-not-permitted" &&
+      /pull_requests: write/.test(err.message)
+  );
+});
+
+test("a project that says nothing about the stamp is still held to the full publishing set", async () => {
+  const recordHome = home();
+  const { id: taskId } = registerTask(recordHome, "small change");
+  const minter = fakeMinter();
+
+  await requirePublishPermissions(recordHome, taskId, githubProject(), minter);
+
+  assert.deepEqual(minter.calls[0].scope.permissions, PUBLISH_PERMISSIONS);
+});

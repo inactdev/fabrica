@@ -11,7 +11,7 @@ import { APP_ID_VAR, APP_KEY_VAR } from "./config.ts";
 import { GithubAppError } from "./errors.ts";
 import { defaultTokenMinter } from "./minter.ts";
 import { publishPermissionGap } from "./publish-permissions.ts";
-import { PUBLISH_PERMISSIONS } from "./scopes.ts";
+import { publishPermissionsFor, PUBLISH_PERMISSIONS, PUBLISH_WITHOUT_STAMP_PERMISSIONS } from "./scopes.ts";
 import { startStubGithub, type StubGithub, type StubGithubOptions } from "./helpers/stub-github.ts";
 import { testKeyPair } from "./helpers/test-key.ts";
 import { fakeMinter } from "./helpers/fake-minter.ts";
@@ -127,4 +127,35 @@ test("the minted token is never part of what comes back", async () => {
   assert.deepEqual(minter.calls, [
     { purpose: "publish", scope: { owner: "acme", repo: "widgets", permissions: PUBLISH_PERMISSIONS } },
   ]);
+});
+
+// Work mode (issue #316): a handoff that posts no commit status asks for
+// no `statuses: write`, so the gap is measured against what that handoff
+// will actually request - never against a wider set it has no use for.
+test("a narrower publishing set is both what is minted and what is compared", async () => {
+  const minter = fakeMinter({ granted: { contents: "write", pull_requests: "write" } });
+
+  const gap = await publishPermissionGap(minter, "acme", "widgets", PUBLISH_WITHOUT_STAMP_PERMISSIONS);
+
+  assert.equal(gap, null);
+  assert.deepEqual(minter.calls[0].scope.permissions, PUBLISH_WITHOUT_STAMP_PERMISSIONS);
+});
+
+test("publishPermissionsFor: the stamp decides which of the two sets a handoff uses", () => {
+  assert.deepEqual(publishPermissionsFor(false), PUBLISH_PERMISSIONS);
+  assert.deepEqual(publishPermissionsFor(true), PUBLISH_WITHOUT_STAMP_PERMISSIONS);
+  // The narrower set is the wider one minus the one permission the
+  // stamp needs, and nothing else.
+  assert.deepEqual(Object.keys(PUBLISH_PERMISSIONS).filter((key) => !(key in PUBLISH_WITHOUT_STAMP_PERMISSIONS)), [
+    "statuses",
+  ]);
+});
+
+test("the default is still the full publishing set, for every project that says nothing", async () => {
+  const minter = fakeMinter({ granted: { contents: "write", pull_requests: "write" } });
+
+  const gap = await publishPermissionGap(minter, "acme", "widgets");
+
+  assert.match(gap?.detail ?? "", /statuses: write/);
+  assert.deepEqual(minter.calls[0].scope.permissions, PUBLISH_PERMISSIONS);
 });

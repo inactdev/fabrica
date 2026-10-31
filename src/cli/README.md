@@ -176,6 +176,19 @@ The one command this issue builds. What it does, in order:
    work nothing can properly judge should never reach a worker or spend
    a cent. `originSetup` answers both halves at once so the fetch
    happens once, not twice.
+
+   Issue #316 adds the one project this gate must never refuse: one
+   whose `projects.toml` entry names a `terms` folder outside the
+   repository. Such a project **is** set up for Fabrica, by that
+   setting, and its repository may carry no `.inspector.json` at all by
+   design - so origin is not asked about one (`termsSetup` stands in for
+   `originSetup`, with no fetch at all), and `testPaths` is read out of
+   the terms folder, the one place such a project's config actually is.
+   Without this it would be told, at every single task, to run `fabrica
+   register` against a repository nothing of ours may be added to.
+   Whether that folder can be *used* is a different finding with a
+   different fix, and belongs to the round's own gate and `fabrica
+   doctor` (`src/inspector/terms.ts`).
 5. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
    new task's id the moment it's registered (`watch-for-task-id.ts`).
    The child's argv is three positionals - record home, project path,
@@ -486,7 +499,16 @@ away and the line that should have said so cannot disagree; and - issue
 of its own, naming the `brain.env` variable and never its value, a FAIL
 when that variable holds nothing or when `brain.env` can be read by
 anyone else, again off the same `resolveProjectToken` a round's own
-start reads), the caps,
+start reads; and - issue #316 - which of work mode's three settings it
+carries, where a project whose terms live in a folder outside its
+repository is asked about **that folder** instead of about the
+repository's own files, which it may carry none of by design: the terms
+folder is named on the line, a folder the installed Inspector would
+refuse FAILs it, `no Inspector stamp` is reported for a `noStamp`
+project, and a project asking for its repository's own pull request
+template is told plainly when there is none to render into - not a FAIL,
+since such a project still works, but this is the one line the Client
+would look at), the caps,
 and any SPEND UNKNOWN block. `--live` adds one
 minimal real call with the worker token (a few cents) and reports it
 alive or dead. No check prints a token. The adapter-, relay-, App- and

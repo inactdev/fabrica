@@ -11,7 +11,15 @@
 // process has already exited, which is the whole point of detachment
 // (see the module README's "Why detached execution" section).
 
-import { ConfigError, notSetUpMessage, originSetup, resolveReader, resolveReviewer } from "../index.ts";
+import {
+  ConfigError,
+  notSetUpMessage,
+  originSetup,
+  resolveReader,
+  resolveReviewer,
+  termsSetup,
+  workModeFor,
+} from "../index.ts";
 import type { FabricaConfig } from "../index.ts";
 import { CliError } from "./errors.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
@@ -106,7 +114,15 @@ function refusalForUnsetUpProject(
   config: FabricaConfig,
   projectArg: string
 ): string | null {
-  const setup = originSetup(projectPath);
+  // Issue #316: a project whose terms live in a folder outside its
+  // repository is set up for Fabrica by that setting, and its
+  // repository may carry none of those files by design - so origin is
+  // not asked about them at all, and `testPaths` is read out of the
+  // terms folder (which no Worker can reach) instead. Without this such
+  // a project would be told, every task, to run `fabrica register` on a
+  // repository nothing of ours may be added to.
+  const terms = workModeFor(config, projectPath).terms;
+  const setup = terms === undefined ? originSetup(projectPath) : termsSetup(terms);
   if (setup === null) return null;
   if (!setup.inspectorConfigured) return `fabrica do: ${notSetUpMessage(projectPath)}`;
 
