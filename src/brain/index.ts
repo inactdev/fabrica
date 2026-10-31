@@ -52,32 +52,13 @@ export type { MeterReading, MeterSource } from "./meters.ts";
 export { currentTaskNetwork, withTaskNetwork } from "./task-network.ts";
 export type { TaskNetworkPolicy } from "./task-network.ts";
 export {
-  installedCliVersionIn,
-  pinnedCliVersion,
   probeWorkerToken,
-  readImageStamp,
   workerCliVersionStatus,
   workerImageBuild,
   workerImageStatus,
   workerTokenStatus,
-  DOCKERFILE_STAMP_LABEL,
   WORKER_CLI_LABEL,
   WORKER_IMAGE_LABEL,
 } from "./adapters/doctor-checks.ts";
 export type { ImageCommand } from "./adapters/doctor-checks.ts";
-// The per-project machine image seam (src/projectimage/, issue #322):
-// the layer Fabrica puts on top of a project's own check image, and the
-// shared image a project with no such file keeps. The CLI, its version
-// and the Node it runs on are all named inside the adapter directory;
-// everything downstream only ever asks for the text.
-export { DEFAULT_MACHINE_IMAGE } from "./adapters/index.ts";
-export {
-  finalStageUser,
-  machineDockerfile,
-  machineLayer,
-  pinnedMachineNodeVersion,
-  MACHINE_CLI_PATH,
-  MACHINE_NODE_DIR,
-  MACHINE_STAMP_ARG,
-} from "./adapters/machine-layer.ts";
 export type { BoxCheckResult, CheckBox } from "./check-box.ts";

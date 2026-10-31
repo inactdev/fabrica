@@ -9,7 +9,7 @@
 // redirects that to <recordHome>/cli.log, since there is no terminal
 // left to print to by the time this can fail).
 
-import { defaultBrainAdapter, machineImageForProject } from "../index.ts";
+import { defaultBrainAdapter } from "../index.ts";
 import { runTask } from "./run-task.ts";
 import { prefixTaskLog } from "./task-log.ts";
 import { parseTaskEntryArgs } from "./task-entry-args.ts";
@@ -33,16 +33,10 @@ try {
 // number here.
 const { recordHome, projectPath, taskText, issue, model } = args;
 
-// Issue #322: which image this project's machine works in - its own
-// check image with Fabrica's layer on top when it commits a
-// Dockerfile.inspector, so the box the work is written in carries the
-// project's own toolchain, and the shared image when it does not.
-const { image } = machineImageForProject(recordHome, projectPath);
-
 try {
   // Issue #184: the declared model builds the worker here, and travels
   // on into doTask, which records it on the task and on every receipt.
-  await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome, { model, image }), {
+  await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome, { model }), {
     // The task id does not exist until registration, and this process
     // is the only party that knows its own pid - so the pid file
     // (issue #203's `stop`) is written here, at the first moment both

@@ -44,10 +44,8 @@ order:
      (\`open -a Docker\`) and waits up to two minutes for the daemon,
      saying what it is waiting on.
   2. Runs the same checks as \`fabrica doctor\`. A worker image that is
-     missing or out of date is built, a missing relay image is
-     pulled, and so is the image each registered project's own machine
-     works in (its Dockerfile.inspector with the coding agent layered
-     on top), right here rather than reported - the exact command
+     missing or out of date is built, and a missing relay image is
+     pulled, right here rather than reported - the exact command
      doctor's own fix line names, run for you, saying what it did.
      (\`fabrica doctor\` needs --fix for that; it stays read-only
      otherwise.) Then stops here, with the doctor output, only on a
@@ -610,9 +608,6 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
         await repairImages({
           checks: collected,
           probes: doctorProbes,
-          // Issue #322: a session always starts with every image a task
-          // needs on this machine, including the project's own one.
-          recordHome,
           runImageCommand: opts.runImageCommand,
           stdout,
           stderr,

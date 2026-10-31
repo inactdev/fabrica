@@ -161,7 +161,6 @@ export function selectedBrain(env: NodeJS.ProcessEnv, recordHome: string, opts: 
     return claudeCodeAdapter({
       ...credentialEnvFrom(env, recordHome),
       ...(declaredModel === undefined ? {} : { model: declaredModel }),
-      ...(opts.image === undefined ? {} : { image: opts.image }),
     });
   }
 
@@ -183,7 +182,6 @@ export function selectedBrain(env: NodeJS.ProcessEnv, recordHome: string, opts: 
   }
   return openAiCompatibleAdapter({
     model,
-    ...(opts.image === undefined ? {} : { image: opts.image }),
     // The file src/config/load.ts's projectsTomlPath names, spelled out
     // here rather than imported: a brain adapter has no business
     // depending on the config loader, and this is only ever a path
@@ -194,12 +192,6 @@ export function selectedBrain(env: NodeJS.ProcessEnv, recordHome: string, opts: 
     ...(cost === undefined ? {} : { costSource: cost as CostSource }),
   });
 }
-
-/** The shared image a machine works in when its project has no
- * `Dockerfile.inspector` of its own to layer on (issue #322). Re-exported
- * from here, the one directory allowed to name an adapter, so everything
- * downstream can name the image without naming what is in it. */
-export { DEFAULT_IMAGE as DEFAULT_MACHINE_IMAGE } from "./claude-code.ts";
 
 /** The vendor behind the CLI worker that runs by default, and the one
  * behind the direct-API worker `FABRICA_BRAIN` opens. Named here
@@ -263,16 +255,6 @@ function brainLabels(env: NodeJS.ProcessEnv, recordHome: string, declaredModel?:
  * configuration decides, which is the default. */
 export interface BrainChoice {
   model?: string;
-  /** Which image this worker's box runs in (issue #322) - a project's own
-   * check image with Fabrica's layer on top, resolved by
-   * `src/projectimage/` from the project the task is on. Omitted means
-   * the adapter's own default, the shared image, which is what a project
-   * carrying no `Dockerfile.inspector` keeps and what a call with no
-   * project behind it (the quiz re-check) uses. Resolved by the caller
-   * rather than here: `fabrica doctor` has to report the image a round
-   * will actually use, and a second resolution inside the adapter could
-   * disagree with the line the Client was shown. */
-  image?: string;
 }
 
 /** The real worker. Which adapter it is, and its token, are both looked
@@ -298,11 +280,7 @@ export function defaultBrainAdapter(recordHome: string, opts: BrainChoice = {}):
   };
 }
 
-/** The default worker's box, for self-testing a project with no
- * Inspector. `image` is the project's own machine image when it has one
- * (issue #322): a self-test runs the project's check command, which is
- * exactly the thing that needs the project's toolchain, so it must never
- * run in a different box from the one the work was written in. */
-export function defaultCheckBox(opts: { image?: string } = {}): CheckBox {
-  return claudeCodeCheckBox(opts.image === undefined ? {} : { image: opts.image });
+/** The default worker's box, for self-testing a project with no Inspector. */
+export function defaultCheckBox(): CheckBox {
+  return claudeCodeCheckBox();
 }

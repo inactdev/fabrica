@@ -28,16 +28,6 @@ const DOCKERFILE = join(dirname(fileURLToPath(import.meta.url)), "docker", "Dock
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const STAMP_LABEL = "fabrica.dockerfile-sha256";
 
-/** The one place both version pins live - exported for the per-project
- * machine layer (issue #322), which reads the same two pins out of the
- * same file rather than carrying copies of them. */
-export const WORKER_DOCKERFILE = DOCKERFILE;
-
-/** The label an image's build stamp is stored under. One notion of "the
- * Dockerfile this image was built from, hashed", shared by the one
- * shared image and every per-project one. */
-export const DOCKERFILE_STAMP_LABEL = STAMP_LABEL;
-
 /** The doctor label each check below reports under - exported so
  * anything that has to find one of these lines among all of doctor's
  * (src/cli/image-repair.ts, deciding which image to put on this
@@ -111,13 +101,11 @@ function buildFix(): string {
   return `run from any folder: ${workerImageBuild().shell}`;
 }
 
-/** One image's stamp: null when the image is absent, "" when it carries
- * none. Exported (issue #322) so a per-project machine image is asked
- * the same question, in the same words, as the shared one - there is one
- * notion of "is this image current", not two. */
-export function readImageStamp(image: string = DEFAULT_IMAGE): string | null {
+/** The image's stamp: null when the image is absent, "" when it carries
+ * none. */
+function readStamp(): string | null {
   try {
-    const out = execFileSync("docker", ["image", "inspect", image, "--format", `{{index .Config.Labels "${STAMP_LABEL}"}}`], {
+    const out = execFileSync("docker", ["image", "inspect", DEFAULT_IMAGE, "--format", `{{index .Config.Labels "${STAMP_LABEL}"}}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -127,7 +115,7 @@ export function readImageStamp(image: string = DEFAULT_IMAGE): string | null {
   }
 }
 
-export function workerImageStatus(stamp: () => string | null = readImageStamp): AdapterCheck {
+export function workerImageStatus(stamp: () => string | null = readStamp): AdapterCheck {
   const label = WORKER_IMAGE_LABEL;
   const found = stamp();
   if (found === null) return { ok: false, label, detail: `${DEFAULT_IMAGE} is not built`, fix: buildFix() };
@@ -144,13 +132,13 @@ export function workerImageStatus(stamp: () => string | null = readImageStamp): 
  * version (the Dockerfile's own comment says why it is pinned at all:
  * claude-code.md's behavior notes were verified against one exact
  * version, so a rebuild must not silently install another). */
-export const WORKER_CLI_PACKAGE = "@anthropic-ai/claude-code";
+const CLI_PACKAGE = "@anthropic-ai/claude-code";
 
 /** The version the Dockerfile pins, or null when it pins none (`@latest`,
  * or no version at all) - in which case there is nothing for an
  * installed version to disagree with. */
 export function pinnedCliVersion(dockerfile: () => string = () => readFileSync(DOCKERFILE, "utf8")): string | null {
-  const pin = new RegExp(`npm install -g ${WORKER_CLI_PACKAGE.replace("/", "\\/")}@(\\S+)`).exec(dockerfile());
+  const pin = new RegExp(`npm install -g ${CLI_PACKAGE.replace("/", "\\/")}@(\\S+)`).exec(dockerfile());
   const version = pin?.[1];
   return version === undefined || version === "latest" ? null : version;
 }
@@ -176,31 +164,6 @@ function installedCliVersion(): string | null {
   if (!imagePresent(DEFAULT_IMAGE)) return null;
   try {
     const out = execFileSync("docker", ["run", "--rm", "--network", "none", DEFAULT_IMAGE, "claude", "--version"], {
-      encoding: "utf8",
-      timeout: 60_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return /\d+\.\d+\.\d+[^\s]*/.exec(out.trim())?.[0] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** The same question asked of a per-project machine image (issue #322):
- * the issue's own clarification is that the worker CLI version check
- * applies to every one of them, and the version read back has to come
- * from the CLI itself there too.
- *
- * `--entrypoint` rather than a trailing command, which is the one
- * difference from the shared image above: a project's own
- * `Dockerfile.inspector` may set an ENTRYPOINT, and a trailing command
- * would then be passed to it as arguments instead of being run. Null
- * when the image isn't built (checked first, so `docker run` is never
- * left trying to pull a local-only image) or the CLI can't answer. */
-export function installedCliVersionIn(image: string): string | null {
-  if (!imagePresent(image)) return null;
-  try {
-    const out = execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "claude", image, "--version"], {
       encoding: "utf8",
       timeout: 60_000,
       stdio: ["ignore", "pipe", "ignore"],

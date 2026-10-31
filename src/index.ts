@@ -179,24 +179,6 @@ export {
 } from "./brain/index.ts";
 export type { ImageCommand } from "./brain/index.ts";
 export { relayImagePull, relayImageStatus, RELAY_IMAGE_LABEL } from "./relay/index.ts";
-// Issue #322: which image each project's machine works in - the project's
-// own check image with Fabrica's layer on top, or the shared one for a
-// project that commits no Dockerfile.inspector. Read by the round that
-// starts the box, by `fabrica doctor`'s per-project line, and by the
-// build `fabrica doctor --fix` and `fabrica up` run themselves.
-export {
-  isLayered,
-  machineDockerfileFor,
-  machineImageBuild,
-  machineImageFor,
-  machineImageForProject,
-  machineImageForTask,
-  machineImageLabel,
-  machineImageStatus,
-  machineImageTag,
-  MACHINE_IMAGE_PREFIX,
-} from "./projectimage/index.ts";
-export type { MachineImage, MachineImageCheck } from "./projectimage/index.ts";
 // The Docker networks tasks run on: what is still open
 // (`fabrica doctor`'s leftover count) and the one command that clears
 // the unused ones, named identically wherever the Client is told about
