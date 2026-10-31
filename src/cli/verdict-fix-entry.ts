@@ -8,7 +8,7 @@
 // everything it needs - project, baseCommit, prior receipts, the note -
 // from recordHome/taskId alone.
 
-import { defaultBrainAdapter, readModelChoice, runRecordedFix } from "../index.ts";
+import { defaultBrainAdapter, machineImageForTask, readModelChoice, runRecordedFix } from "../index.ts";
 import { prefixTaskLog } from "./task-log.ts";
 import { writeTaskPidFile } from "./task-process.ts";
 
@@ -32,8 +32,12 @@ writeTaskPidFile(recordHome, taskId);
 // task was registered with, read back off its own record.
 const declaredModel = readModelChoice(recordHome, taskId).declaredModel ?? undefined;
 
+// Issue #322: and in the same image, re-derived the same way - a fix
+// round must not be written in a different box from the round it fixes.
+const image = machineImageForTask(recordHome, taskId)?.image;
+
 try {
-  await runRecordedFix(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel }) });
+  await runRecordedFix(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel, image }) });
 } catch (err) {
   console.error(`fabrica verdict: fix round for "${taskId}" failed: ${(err as Error).message}`);
   process.exit(1);

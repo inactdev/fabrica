@@ -17,6 +17,7 @@ import { fakeInspector } from "../../contract/helpers/fake-inspector.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { main } from "./main.ts";
 import { collectDoctorChecks, runDoctorCommand, type CopyInfo, type DoctorCheck, type DoctorProbes } from "./doctor-command.ts";
+import type { MachineImage } from "../index.ts";
 
 const ok = (label: string): DoctorCheck => ({ ok: true, label, detail: "fine" });
 
@@ -30,6 +31,10 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
     workerImage: () => ok("worker image"),
     workerCli: () => ok("worker CLI"),
     relayImage: () => ok("relay image"),
+    // Issue #322: one line per project, and it reads this machine's
+    // Docker like the two image lines above - so it is injected here too,
+    // and a test about per-project images overrides it.
+    projectImage: (_machine: MachineImage, label: string) => ok(label),
     workerNetworks: async () => ok("worker networks"),
     workerToken: () => ok("worker token"),
     githubApp: async () => ok("github app"),
@@ -92,8 +97,8 @@ test("fabrica doctor: everything healthy - every line OK, exit 0, and nothing is
   const probes = okProbes();
   const { code, lines } = await doctor(healthyHome(), probes);
   assert.equal(code, 0, lines.join("\n"));
-  // 11 machine checks, 1 project, caps, spend.
-  assert.equal(lines.length, 14, lines.join("\n"));
+  // 11 machine checks, 1 project plus its own machine-image line, caps, spend.
+  assert.equal(lines.length, 15, lines.join("\n"));
   assert.ok(lines.every((l) => l.startsWith("OK ")), lines.join("\n"));
   assert.equal(probes.liveCalls, 0, "the live call ran without --live - doctor must spend nothing by default");
 });
@@ -239,8 +244,10 @@ test("fabrica doctor: a named token that is set nowhere FAILs that project's lin
   assert.match(text, /FAIL project dayjob: .*DAYJOB_GITHUB_TOKEN is not set/);
   assert.match(text, /fix: add a line DAYJOB_GITHUB_TOKEN=<the token>/);
   // One line, as every doctor line is - the whole refusal's reasoning
-  // belongs to the task that refuses, not beside a dozen checks.
-  assert.equal(text.split("\n").filter((l) => l.includes("project dayjob")).length, 1);
+  // belongs to the task that refuses, not beside a dozen checks. Matched
+  // on the label's own colon, so this project's separate machine-image
+  // line ("project dayjob image: ...") is not read as a second one.
+  assert.equal(text.split("\n").filter((l) => l.includes("project dayjob:")).length, 1);
 });
 
 test("fabrica doctor: a brain.env other users can read FAILs that project's line too", async () => {
@@ -379,6 +386,90 @@ test("fabrica doctor --fix: a missing relay image is the other half, and both fl
   assert.match(ran[0], /docker pull /);
   assert.ok(io.out.some((l) => l.startsWith("relay image: pulled ")), io.out.join("\n"));
   assert.ok(io.out.includes("OK   relay image: supplied and current"), io.out.join("\n"));
+});
+
+// Issue #322: the image a project's own machine works in - one line per
+// registered project, right after that project's own line, and a build
+// that `--fix` runs itself.
+test("fabrica doctor: each project's line names the image its machine works in", async () => {
+  const home = healthyHome();
+  const seen: { image: string; label: string }[] = [];
+  const { lines } = await doctor(
+    home,
+    okProbes({
+      projectImage: (machine, label) => {
+        seen.push({ image: machine.image, label });
+        return { ok: true, label, detail: `${machine.image} - built and current` };
+      },
+    })
+  );
+
+  assert.equal(seen.length, 1, "one line per registered project");
+  assert.equal(seen[0].label, "project demo image");
+  assert.ok(seen[0].image.startsWith("fabrica-machine-"), `the fixture commits a Dockerfile.inspector: ${seen[0].image}`);
+  // Right after the project's own line, so the two read as one block.
+  const at = lines.findIndex((l) => l.includes("project demo:"));
+  assert.ok(lines[at + 1].includes("project demo image:"), lines.join("\n"));
+});
+
+test("fabrica doctor --fix: a project's own machine image is built from its Dockerfile.inspector", async () => {
+  const home = healthyHome();
+  const ran: string[] = [];
+  let built = false;
+  const { code } = await (async () => {
+    const io = captureIo();
+    const exit = await runDoctorCommand(["--fix"], {
+      recordHome: home,
+      probes: okProbes({
+        projectImage: (machine, label) =>
+          built
+            ? { ok: true, label, detail: `${machine.image} - built and current`, needsBuild: false }
+            : { ok: false, label, detail: `${machine.image} - not built`, fix: "fabrica doctor --fix", needsBuild: true },
+      }),
+      runImageCommand: async (cmd, onOutput) => {
+        ran.push(cmd.shell);
+        onOutput("#1 DONE 0.1s");
+        built = true;
+        return { ok: true, detail: "" };
+      },
+      ...io,
+    });
+    assert.ok(io.out.some((l) => l.startsWith("project demo image: built fabrica-machine-")), io.out.join("\n"));
+    assert.ok(io.out.some((l) => l.includes("OK   project demo image:")), io.out.join("\n"));
+    return { code: exit };
+  })();
+
+  assert.equal(code, 0);
+  assert.equal(ran.length, 1, "exactly one build, for the one project that needed it");
+  assert.match(ran[0], /^docker build --build-arg FABRICA_IMAGE_STAMP=[0-9a-f]{64} -t fabrica-machine-\S+ -f \S+\.Dockerfile \S+$/);
+});
+
+test("fabrica doctor --fix: a per-project CLI version mismatch is reported and never rebuilt", async () => {
+  // `needsBuild` false: the image was built from this very Dockerfile and
+  // still has another version inside, so a layer-cached rebuild cannot
+  // change it - the same reason the shared "worker CLI" line is not a
+  // trigger either.
+  const ran: string[] = [];
+  const io = captureIo();
+  const code = await runDoctorCommand(["--fix"], {
+    recordHome: healthyHome(),
+    probes: okProbes({
+      projectImage: (machine, label) => ({
+        ok: false,
+        label,
+        detail: `${machine.image} - built and current, but it has worker CLI 2.0.1 installed where 2.1.222 is pinned`,
+        needsBuild: false,
+      }),
+    }),
+    runImageCommand: async (cmd) => {
+      ran.push(cmd.shell);
+      return { ok: true, detail: "" };
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1, "the finding is real and still fails");
+  assert.deepEqual(ran, [], "but nothing is built for it");
 });
 
 test("fabrica doctor --fix --live: the live call is made after the repair, never with an image about to be replaced", async () => {

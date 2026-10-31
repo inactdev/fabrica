@@ -7,7 +7,7 @@
 // (runRecordedAnswer, src/foreman/answer.ts), which re-derives
 // everything it needs from recordHome/taskId alone.
 
-import { defaultBrainAdapter, readModelChoice, runRecordedAnswer } from "../index.ts";
+import { defaultBrainAdapter, machineImageForTask, readModelChoice, runRecordedAnswer } from "../index.ts";
 import { prefixTaskLog } from "./task-log.ts";
 import { writeTaskPidFile } from "./task-process.ts";
 
@@ -33,8 +33,13 @@ writeTaskPidFile(recordHome, taskId);
 // like everything else this process needs.
 const declaredModel = readModelChoice(recordHome, taskId).declaredModel ?? undefined;
 
+// Issue #322: the same image this task's first round ran in, re-derived
+// from the project on its own record rather than threaded across the
+// process boundary - the same way the model above is.
+const image = machineImageForTask(recordHome, taskId)?.image;
+
 try {
-  await runRecordedAnswer(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel }) });
+  await runRecordedAnswer(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel, image }) });
 } catch (err) {
   console.error(`fabrica answer: resuming "${taskId}" failed: ${(err as Error).message}`);
   process.exit(1);
