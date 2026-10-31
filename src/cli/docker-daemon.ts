@@ -27,6 +27,15 @@ import { execFileSync, spawnSync } from "node:child_process";
  * waiting and lets doctor's own docker FAIL do the talking, not an
  * expected duration. */
 export const DOCKER_START_TIMEOUT_MS = 120_000;
+
+/** The label `fabrica doctor`'s own Docker line reports under - which
+ * is this module's question, verbatim ("does the daemon answer"), so
+ * the string lives here beside it. Exported because the image repair
+ * step (src/cli/image-repair.ts) has to find that one line among all of
+ * doctor's before it tries to build or pull anything: with no daemon
+ * there is nothing a `docker build` could do but fail a second time,
+ * and that line already carries the one fix. */
+export const DOCKER_LABEL = "docker";
 const DOCKER_POLL_INTERVAL_MS = 2_000;
 const DOCKER_PROGRESS_INTERVAL_MS = 15_000;
 

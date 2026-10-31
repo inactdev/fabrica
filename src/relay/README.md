@@ -558,5 +558,5 @@ job (`src/foreman/meters.ts`).
 | `policy.test.ts` | The composition: additive hosts, ports, a host nothing could match, and the defaults. |
 | `npm-registry.test.ts` | Hermetic: a real `projects.toml` through `networkPolicyFor` into a real relay decision, against a fake registry. No Docker, no internet. |
 | `npm-ci-in-box.test.ts` | Docker-gated: a real `npm ci` inside a real worker box, against the real registry, reachable only because the project listed it. Skips without Docker; runs for real under `.github/workflows/docker-tests.yml`. |
-| `container/doctor-check.ts` | `fabrica doctor`'s `relay image` line - present, or a FAIL carrying the exact `docker pull`. |
+| `container/doctor-check.ts` | `fabrica doctor`'s `relay image` line - present, or a FAIL carrying the exact `docker pull`. `relayImagePull()` is that one command as argv plus shell text, so the fix the check prints and the pull `fabrica up` / `fabrica doctor --fix` run themselves (`src/cli/image-repair.ts`) cannot be two different commands. `RELAY_IMAGE_LABEL` is this line's own label, exported so that step can find it among all of doctor's. |
 | `docker-isolation.test.ts` | The containerized proof: a real worker box, on the isolated network, reaches the relay container and nothing else; the relay container itself reaches the real internet through its own egress network. |

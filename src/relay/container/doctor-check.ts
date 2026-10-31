@@ -25,6 +25,42 @@ export interface RelayCheck {
   fix?: string;
 }
 
+/** The doctor label this check reports under - exported for the same
+ * reason src/brain/adapters/doctor-checks.ts exports its own two: the
+ * repair step that puts this image on the machine
+ * (src/cli/image-repair.ts) has to find this line among all of
+ * doctor's, and must not do it with a second copy of the string. */
+export const RELAY_IMAGE_LABEL = "relay image";
+
+/** One command that puts an image on this machine - the structurally
+ * identical shape src/brain/adapters/doctor-checks.ts declares for the
+ * worker image, declared here rather than shared for the same reason
+ * `RelayCheck` above is declared here rather than imported. */
+export interface ImageCommand {
+  command: string;
+  args: string[];
+  cwd?: string;
+  image: string;
+  shell: string;
+}
+
+/** The one definition of how the relay image gets onto this machine:
+ * both the fix line below and the pull `fabrica up` / `fabrica doctor
+ * --fix` now runs themselves come from here, so they can never be two
+ * different commands.
+ *
+ * Pinned by digest, so the tag-less form is what this, `docker run` and
+ * `docker pull` all name - and what makes `docker pull` the whole of
+ * the fix: there is no version to choose and nothing to build. */
+export function relayImagePull(): ImageCommand {
+  return {
+    command: "docker",
+    args: ["pull", RELAY_IMAGE],
+    image: RELAY_IMAGE,
+    shell: `docker pull ${RELAY_IMAGE}`,
+  };
+}
+
 /** True when the image is on this machine. `docker image inspect` only
  * ever looks locally - it never pulls - which is what makes this safe to
  * run in a preflight that promises to spend nothing. */
@@ -38,16 +74,17 @@ function imagePresent(image: string): boolean {
 }
 
 export function relayImageStatus(present: (image: string) => boolean = imagePresent): RelayCheck {
-  const label = "relay image";
-  // Pinned by digest, so the tag-less form is what both this check and
-  // `docker run` name; `docker pull <image>@sha256:...` is the exact
-  // command that puts it there.
+  const label = RELAY_IMAGE_LABEL;
   return present(RELAY_IMAGE)
     ? { ok: true, label, detail: `${RELAY_IMAGE} is pulled` }
     : {
         ok: false,
         label,
         detail: `${RELAY_IMAGE} is not on this machine, so no task's relay can start`,
-        fix: `docker pull ${RELAY_IMAGE}`,
+        // Still printed even now that `fabrica up` and `fabrica doctor
+        // --fix` run it themselves: plain `fabrica doctor` stays
+        // read-only (Client ruling 2026-10-30), so this line is the
+        // only thing that tells the Client what would be done.
+        fix: relayImagePull().shell,
       };
 }

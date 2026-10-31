@@ -39,7 +39,8 @@ import {
 } from "../index.ts";
 import type { ProjectOwnToken, ProjectRepo, ProjectTokenResolution, WorkerNetwork, WorkMode } from "../index.ts";
 import { CliError } from "./errors.ts";
-import { dockerDaemonUp } from "./docker-daemon.ts";
+import { dockerDaemonUp, DOCKER_LABEL } from "./docker-daemon.ts";
+import { repairImages, type ImageCommand } from "./image-repair.ts";
 import {
   clonePackInstallProcedure,
   GLOBAL_PACKAGE_NAME,
@@ -52,7 +53,7 @@ import {
 } from "./npm-prefix.ts";
 import { resolveRecordHome } from "./record-home.ts";
 
-export const DOCTOR_USAGE = "fabrica doctor [--live]";
+export const DOCTOR_USAGE = "fabrica doctor [--fix] [--live]";
 
 export const DOCTOR_HELP = `Usage: ${DOCTOR_USAGE}
 
@@ -110,6 +111,15 @@ machine check above it still runs; only the checks that need the file
 itself - the per-project ones, the caps, the spend block - are skipped,
 since an unreadable file cannot answer them either way.
 
+  --fix   Also put the two images a task needs onto this machine when
+          they are missing or out of date, instead of only naming the
+          command: builds the worker image, pulls the relay image, and
+          reports what it did. Each runs only when its own check above
+          fails, and the pins those checks read are unchanged - so this
+          never does more than run the command that check already
+          printed. Without it, doctor reads and spends nothing, exactly
+          as before. Runs before --live, so a live call is made with
+          the image this just built.
   --live  Also make one minimal real call with the worker token (a few
           cents) and report whether it is alive or dead.
 
@@ -658,8 +668,13 @@ export const realProbes: DoctorProbes = {
   },
   docker: () =>
     dockerDaemonUp()
-      ? { ok: true, label: "docker", detail: "reachable" }
-      : { ok: false, label: "docker", detail: "not reachable", fix: "start Docker (e.g. open -a Docker), then try again" },
+      ? { ok: true, label: DOCKER_LABEL, detail: "reachable" }
+      : {
+          ok: false,
+          label: DOCKER_LABEL,
+          detail: "not reachable",
+          fix: "start Docker (e.g. open -a Docker), then try again",
+        },
   workerImage: () => workerImageStatus(),
   workerCli: () => workerCliVersionStatus(),
   relayImage: () => relayImageStatus(),
@@ -849,13 +864,15 @@ function firstSentence(message: string): string {
   return end === -1 ? message.split("\n")[0] : message.slice(0, end + 1);
 }
 
-function parseDoctorArgs(argv: string[]): { live: boolean } {
+function parseDoctorArgs(argv: string[]): { fix: boolean; live: boolean } {
+  let fix = false;
   let live = false;
   for (const arg of argv) {
     if (arg === "--live") live = true;
+    else if (arg === "--fix") fix = true;
     else throw new CliError("bad-usage", `fabrica doctor: unknown argument "${arg}". Usage: ${DOCTOR_USAGE}`);
   }
-  return { live };
+  return { fix, live };
 }
 
 export interface RunDoctorCommandOptions {
@@ -863,6 +880,9 @@ export interface RunDoctorCommandOptions {
   probes?: DoctorProbes;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+  /** Test-only seam replacing the real `docker` spawn `--fix` makes -
+   * forwarded to src/cli/image-repair.ts verbatim. */
+  runImageCommand?: (cmd: ImageCommand, onOutput: (line: string) => void) => Promise<{ ok: boolean; detail: string }>;
 }
 
 /** The one line `fabrica doctor` prints per check - exported so anything
@@ -881,11 +901,26 @@ export function formatDoctorLine(check: DoctorCheck): string {
  * cannot tell one kind of FAIL from another. `runDoctorCommand` below
  * is this plus the printing and the exit code, so the two commands can
  * never disagree about which checks ran or in what order. */
-export async function collectDoctorChecks(opts: { recordHome: string; probes?: DoctorProbes; live?: boolean }): Promise<DoctorCheck[]> {
+export async function collectDoctorChecks(opts: {
+  recordHome: string;
+  probes?: DoctorProbes;
+  live?: boolean;
+  /** Runs once, with every check except the live one, and hands back
+   * the checks to carry on with - what `fabrica up` and `fabrica doctor
+   * --fix` pass to build the worker image and pull the relay image when
+   * their own lines above say they are missing or out of date
+   * (src/cli/image-repair.ts).
+   *
+   * Hooked in here rather than wrapped around this function by each
+   * caller so that the one ordering constraint lives in one place: the
+   * live probe below runs a container from the worker image, so it must
+   * never be made with an image this run is about to replace. */
+  repair?: (checks: DoctorCheck[]) => Promise<DoctorCheck[]>;
+}): Promise<DoctorCheck[]> {
   const { recordHome } = opts;
   const probes = opts.probes ?? realProbes;
 
-  const checks: DoctorCheck[] = [
+  let checks: DoctorCheck[] = [
     probes.node(),
     probes.checkout(),
     probes.npmLink(),
@@ -961,6 +996,8 @@ export async function collectDoctorChecks(opts: { recordHome: string; probes?: D
     }
   }
 
+  if (opts.repair) checks = await opts.repair(checks);
+
   if (opts.live) checks.push(await probes.live(recordHome));
 
   return checks;
@@ -970,9 +1007,10 @@ export async function collectDoctorChecks(opts: { recordHome: string; probes?: D
 export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOptions = {}): Promise<number> {
   const stdout = opts.stdout ?? ((line: string) => console.log(line));
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
+  let fix: boolean;
   let live: boolean;
   try {
-    ({ live } = parseDoctorArgs(argv));
+    ({ fix, live } = parseDoctorArgs(argv));
   } catch (err) {
     stderr(err instanceof Error ? err.message : String(err));
     return 1;
@@ -983,7 +1021,34 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
   // is the Client asking what is wrong with this machine, and answering
   // "nothing" because nothing happens to be blocked right now would be
   // a different, less useful command.
-  const checks = await collectDoctorChecks({ recordHome, probes: opts.probes, live });
+  //
+  // `--fix` and nothing else changes that: without it this reads and
+  // spends nothing, exactly as before (Client ruling 2026-10-30 - plain
+  // doctor stays read-only). With it, the images are supplied first and
+  // the report below describes the machine as it is afterwards, so the
+  // exit code answers "is this machine ready now", not "was it ready
+  // when I started".
+  // Resolved once and handed to both: the lines a repair reads and the
+  // lines it re-asks afterwards must come from the same probes, or the
+  // report could describe one machine and the exit code another.
+  const probes = opts.probes ?? realProbes;
+  const checks = await collectDoctorChecks({
+    recordHome,
+    probes,
+    live,
+    repair: fix
+      ? async (collected) =>
+          (
+            await repairImages({
+              checks: collected,
+              probes,
+              runImageCommand: opts.runImageCommand,
+              stdout,
+              stderr,
+            })
+          ).checks
+      : undefined,
+  });
   for (const check of checks) stdout(formatDoctorLine(check));
   return checks.every((c) => c.ok) ? 0 : 1;
 }

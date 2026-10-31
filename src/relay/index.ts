@@ -3,7 +3,7 @@ export { GITHUB_HOSTS, isAllowedTarget } from "./allowlist.mjs";
 export { DEFAULT_MAX_CALLS_PER_TASK, DEFAULT_MAX_REQUEST_BYTES } from "./limits.mjs";
 export { parseAllowedHost, relayLimitsFor, tunnelAllowlistFor } from "./policy.ts";
 export type { DeclaredNetwork } from "./policy.ts";
-export { relayImageStatus } from "./container/index.ts";
+export { relayImagePull, relayImageStatus, RELAY_IMAGE_LABEL } from "./container/index.ts";
 export { RelayError } from "./errors.mjs";
 export type { RelayErrorCode } from "./errors.mjs";
 export type { AllowedHost, CredentialSwap, GatewayTarget, ObservedHeaders, RefusalDetails, RelayOptions, RelayHandle } from "./types.ts";

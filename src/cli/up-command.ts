@@ -23,10 +23,12 @@ import {
   advisoryLine,
   collectDoctorChecks,
   formatDoctorLine,
+  realProbes,
   runningCopyCommit,
   stopsATask,
   type DoctorProbes,
 } from "./doctor-command.ts";
+import { repairImages, type ImageCommand } from "./image-repair.ts";
 import { ensureDockerDaemon, type DockerDaemonOutcome, type EnsureDockerDaemonOptions } from "./docker-daemon.ts";
 import { spawnDetachedLiveView } from "./spawn-detached.ts";
 import { findLiveViewProcess as locateLiveViewProcess, stopLiveViewProcess as terminateLiveViewProcess } from "./live-view-process.ts";
@@ -41,13 +43,18 @@ order:
   1. On a Mac, if Docker is installed but not running, starts it
      (\`open -a Docker\`) and waits up to two minutes for the daemon,
      saying what it is waiting on.
-  2. Runs the same checks as \`fabrica doctor\` - stops here, with the
-     doctor output, only on a finding that makes a task impossible (no
-     Docker, no worker image, no token, a project folder gone).
-     Anything that stops no task - a missing or commit-less
-     build-info.json, being behind origin/master, a leftover \`npm link\`
-     symlink - is printed as a warning above the session instead, and
-     is still a FAIL in \`fabrica doctor\` itself.
+  2. Runs the same checks as \`fabrica doctor\`. A worker image that is
+     missing or out of date is built, and a missing relay image is
+     pulled, right here rather than reported - the exact command
+     doctor's own fix line names, run for you, saying what it did.
+     (\`fabrica doctor\` needs --fix for that; it stays read-only
+     otherwise.) Then stops here, with the doctor output, only on a
+     finding that makes a task impossible and that nothing above could
+     supply (no Docker, no token, a project folder gone). Anything
+     that stops no task - a missing or commit-less build-info.json,
+     being behind origin/master, a leftover \`npm link\` symlink - is
+     printed as a warning above the session instead, and is still a
+     FAIL in \`fabrica doctor\` itself.
   3. Starts the live view in the background (http://localhost:7777)
      and opens it in your default browser - unless one is already
      listening there and running this exact copy's code (checked via
@@ -484,6 +491,10 @@ export interface RunUpCommandOptions {
   stderr?: (line: string) => void;
   /** Forwarded to collectDoctorChecks verbatim - see its own DoctorProbes. */
   doctorProbes?: DoctorProbes;
+  /** Test-only seam replacing the real `docker` spawn behind the
+   * build-the-worker-image / pull-the-relay-image step - forwarded to
+   * src/cli/image-repair.ts verbatim. */
+  runImageCommand?: (cmd: ImageCommand, onOutput: (line: string) => void) => Promise<{ ok: boolean; detail: string }>;
   /** Forwarded to the macOS "start Docker and wait for its daemon" step
    * verbatim (minus its two output callbacks, which this command owns) -
    * see src/cli/docker-daemon.ts. A test overrides `platform` here to
@@ -574,7 +585,37 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   // Everything else is a warning above the session, since refusing to
   // start over it costs the Client a session and buys nothing. Doctor
   // itself is unchanged - these are all still FAIL lines there.
-  const checks = await collectDoctorChecks({ recordHome, probes: opts.doctorProbes });
+  // The two images every task needs are supplied rather than reported:
+  // a missing or out-of-date worker image is built and a missing relay
+  // image is pulled, each only when its own check above says so, and
+  // what was done is printed (src/cli/image-repair.ts). The same
+  // self-fix posture as step 1 - this is the other finding whose fix
+  // has always been one command the Client ran by hand, and the
+  // blockers below are read from the machine as it is afterwards, so a
+  // session is never refused over an image this command could supply.
+  // `fabrica doctor` needs --fix for the same step; `fabrica up` is
+  // about to run tasks, so it does it unasked (Client ruling
+  // 2026-10-30).
+  // Resolved once and handed to both, so the findings a repair reads,
+  // the findings it re-asks, and the blockers below are all one
+  // machine's answers rather than two sources that could disagree.
+  const doctorProbes = opts.doctorProbes ?? realProbes;
+  const checks = await collectDoctorChecks({
+    recordHome,
+    probes: doctorProbes,
+    repair: async (collected) =>
+      (
+        await repairImages({
+          checks: collected,
+          probes: doctorProbes,
+          runImageCommand: opts.runImageCommand,
+          stdout,
+          stderr,
+        })
+      ).checks,
+  });
+  // Read after the repair, never before: a finding this command could
+  // supply itself is not a reason to refuse a session.
   const blockers = checks.filter(stopsATask);
   if (blockers.length > 0) {
     // The whole report, exactly as doctor renders it - including any

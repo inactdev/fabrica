@@ -28,17 +28,64 @@ const DOCKERFILE = join(dirname(fileURLToPath(import.meta.url)), "docker", "Dock
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const STAMP_LABEL = "fabrica.dockerfile-sha256";
 
+/** The doctor label each check below reports under - exported so
+ * anything that has to find one of these lines among all of doctor's
+ * (src/cli/image-repair.ts, deciding which image to put on this
+ * machine) matches the label the check itself carries, rather than a
+ * copy of the same string that could drift from it. */
+export const WORKER_IMAGE_LABEL = "worker image";
+export const WORKER_CLI_LABEL = "worker CLI";
+
 /** The hash the image is stamped with at build time (the Dockerfile's
  * `DOCKERFILE_SHA256` build arg, stored as a LABEL). */
 export function dockerfileSha256(): string {
   return createHash("sha256").update(readFileSync(DOCKERFILE)).digest("hex");
 }
 
-function buildCommand(): string {
-  return (
-    `cd ${REPO_ROOT} && docker build --build-arg DOCKERFILE_SHA256=${dockerfileSha256()} ` +
-    `-t ${DEFAULT_IMAGE} -f ${relative(REPO_ROOT, DOCKERFILE)} .`
-  );
+/** One command that puts an image on this machine: the argv, the
+ * directory it has to run in, and the same thing again as one
+ * copy-pasteable shell line. Declared here rather than imported from
+ * the CLI layer, for the reason `AdapterCheck` above is: a module under
+ * src/ has no business depending on src/cli/, and
+ * src/relay/container/doctor-check.ts declares the structurally
+ * identical shape for its own image. */
+export interface ImageCommand {
+  command: string;
+  args: string[];
+  /** The directory the command must run in; absent means anywhere. */
+  cwd?: string;
+  /** What ends up on this machine once it succeeds. */
+  image: string;
+  /** The identical command as one shell line, for printing. */
+  shell: string;
+}
+
+/** The one definition of how the worker image gets built (issue #130's
+ * fix line, and the build `fabrica up` / `fabrica doctor --fix` now runs
+ * themselves): both the printed command and the spawned argv come from
+ * here, so they can never be two different commands.
+ *
+ * Nothing about *when* a build is needed lives here - that stays
+ * `workerImageStatus` below, comparing the image's stamp against this
+ * Dockerfile's hash exactly as it always did. */
+export function workerImageBuild(): ImageCommand {
+  const args = [
+    "build",
+    "--build-arg",
+    `DOCKERFILE_SHA256=${dockerfileSha256()}`,
+    "-t",
+    DEFAULT_IMAGE,
+    "-f",
+    relative(REPO_ROOT, DOCKERFILE),
+    ".",
+  ];
+  return {
+    command: "docker",
+    args,
+    cwd: REPO_ROOT,
+    image: DEFAULT_IMAGE,
+    shell: `cd ${REPO_ROOT} && docker ${args.join(" ")}`,
+  };
 }
 
 /** The build command as a doctor fix line (issue #130): it opens with its
@@ -46,9 +93,12 @@ function buildCommand(): string {
  * Client happens to be - said out loud, so nobody goes looking for the
  * right directory first. The note leads and the command trails, so
  * copying the fix from `cd` to the end of the line still pastes
- * something runnable. */
+ * something runnable. Still printed even now that `fabrica up` and
+ * `fabrica doctor --fix` run it themselves: plain `fabrica doctor`
+ * stays read-only (Client ruling 2026-10-30), so its fix line is the
+ * only thing that tells the Client what would be done. */
 function buildFix(): string {
-  return `run from any folder: ${buildCommand()}`;
+  return `run from any folder: ${workerImageBuild().shell}`;
 }
 
 /** The image's stamp: null when the image is absent, "" when it carries
@@ -66,7 +116,7 @@ function readStamp(): string | null {
 }
 
 export function workerImageStatus(stamp: () => string | null = readStamp): AdapterCheck {
-  const label = "worker image";
+  const label = WORKER_IMAGE_LABEL;
   const found = stamp();
   if (found === null) return { ok: false, label, detail: `${DEFAULT_IMAGE} is not built`, fix: buildFix() };
   if (found === "") {
@@ -135,7 +185,7 @@ export function workerCliVersionStatus(
   installed: () => string | null = installedCliVersion,
   pinned: () => string | null = () => pinnedCliVersion()
 ): AdapterCheck {
-  const label = "worker CLI";
+  const label = WORKER_CLI_LABEL;
   const have = installed();
   const want = pinned();
   const pin = want === null ? "the Dockerfile pins no version" : `the Dockerfile pins ${want}`;

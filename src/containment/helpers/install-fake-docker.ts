@@ -20,6 +20,11 @@ export interface FakeNetwork {
   Containers?: Record<string, unknown>;
 }
 
+export interface FakeImage {
+  Name: string;
+  Labels?: Record<string, string>;
+}
+
 export interface FakeDockerConfig {
   networks?: FakeNetwork[];
   /** Every `docker network ls` exits non-zero, the way the real CLI
@@ -30,6 +35,18 @@ export interface FakeDockerConfig {
   /** Every `docker network disconnect` fails, leaving a network with an
    * attached container genuinely stuck. */
   failDisconnect?: boolean;
+  /** The images the fake daemon starts with - what `docker image
+   * inspect` finds, and what a `build`/`pull` adds to. */
+  images?: FakeImage[];
+  /** What `docker build` fails with, when it should fail. */
+  buildFailure?: string;
+  /** What `docker pull` fails with, when it should fail. */
+  pullFailure?: string;
+  /** What a successful `docker build` writes (to stderr, like the real
+   * BuildKit). Defaults to a short progress-looking stand-in. */
+  buildOutput?: string;
+  /** What a successful `docker pull` writes (to stdout). */
+  pullOutput?: string;
 }
 
 export interface FakeDocker {
@@ -37,6 +54,9 @@ export interface FakeDocker {
   calls: () => string[][];
   /** The networks the fake daemon still has. */
   remaining: () => string[];
+  /** The images the fake daemon has now, built and pulled ones
+   * included. */
+  images: () => string[];
 }
 
 /** `t` is a node:test context - the shim and the env are restored in
@@ -73,6 +93,7 @@ export function installFakeDocker(
 
   const callsFile = join(state, "calls.jsonl");
   const statePath = join(state, "state.json");
+  const imagesPath = join(state, "images.json");
   return {
     calls: () =>
       existsSync(callsFile)
@@ -88,6 +109,14 @@ export function installFakeDocker(
         ? (JSON.parse(readFileSync(statePath, "utf8")) as FakeNetwork[])
         : (config.networks ?? []);
       return live.map((network) => network.Name);
+    },
+    // Same reasoning, for images: nothing built or pulled means no
+    // images.json, so what it started with is what it has.
+    images: () => {
+      const live = existsSync(imagesPath)
+        ? (JSON.parse(readFileSync(imagesPath, "utf8")) as FakeImage[])
+        : (config.images ?? []);
+      return live.map((image) => image.Name);
     },
   };
 }

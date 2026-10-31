@@ -106,16 +106,24 @@ unless you are changing Fabrica's own code.
 ### Building the worker image
 
 Running a task needs Docker: every Worker call runs inside a throwaway
-container, built once from `src/brain/adapters/docker/Dockerfile`. Run
+container, built once from `src/brain/adapters/docker/Dockerfile`, and
+every task's network goes through a relay container running a
+digest-pinned stock image. You do not have to put either there
+yourself:
 
-    fabrica doctor
+    fabrica up          # builds and pulls whatever is missing, then starts your session
+    fabrica doctor --fix   # the same, without starting a session
 
-and, if the image is missing or out of date, it prints the exact
-`docker build` command to run (the command embeds a hash of the
-Dockerfile itself, which changes over time - `doctor` is the one place
-that command is kept current, rather than copied here where it would go
-stale). See `src/containment/README.md` for what the container confines,
-and `src/brain/adapters/claude-code.md` for how the coding agent's
+`fabrica up` does it unasked - it is about to run tasks - and reports
+what it built. Plain `fabrica doctor` stays read-only: it tells you the
+image is missing or out of date and prints the exact `docker build` /
+`docker pull` command, which is the same command `--fix` runs (the
+build command embeds a hash of the Dockerfile itself, which changes
+over time - `doctor` is the one place that command is kept current,
+rather than copied here where it would go stale).
+
+See `src/containment/README.md` for what the container confines, and
+`src/brain/adapters/claude-code.md` for how the coding agent's
 credential reaches it - set up in the next section.
 
 ### The worker token
@@ -361,10 +369,19 @@ spending caps, and any unmeasured spend blocking new work.
 additionally spends a few cents to confirm the worker token actually
 authenticates.
 
+`fabrica doctor --fix` additionally *supplies* the two images rather
+than only naming them: it builds the worker image when it is missing or
+out of date, pulls the relay image when it is missing, and says what it
+did. It only ever runs the command the failing line already printed -
+the pins deciding "missing or out of date" are untouched - and the
+report that follows describes the machine as it is afterwards. Without
+`--fix`, doctor changes nothing, as it always did. (`fabrica up` does
+this step unasked; see below.)
+
 Every `FAIL` here is worth fixing, but they are not all equally urgent,
 and `fabrica up` treats them differently: it refuses to start a session
-only over a finding that makes a task *impossible* - no Docker, no
-worker image, no token, a project folder gone - and prints the rest as
+only over a finding that makes a task *impossible* and that it could
+not supply itself - no Docker, no token, a project folder gone - and prints the rest as
 `WARN` lines above the session, with their fixes, before starting it
 anyway. Today those are the **checkout** line (an installed copy that
 cannot say which commit it is, a developer checkout off `master`, or
@@ -374,7 +391,11 @@ one, stops no task from running.
 
 On a Mac, `fabrica up` doesn't even report Docker not running - it runs
 `open -a Docker` for you and waits up to two minutes for the daemon,
-saying what it's waiting on, before any check asks.
+saying what it's waiting on, before any check asks. In the same spirit,
+it doesn't report a missing or out-of-date **worker image** or a missing
+**relay image** either: it builds and pulls them, printing docker's own
+output as it goes and one line per image saying what it did, and only
+refuses if that genuinely failed.
 
 The **inspector** line also reports which build of Inspector you have:
 the commit the installed binary was built from, against the tip of

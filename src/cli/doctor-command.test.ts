@@ -16,7 +16,7 @@ import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { fakeInspector } from "../../contract/helpers/fake-inspector.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { main } from "./main.ts";
-import { runDoctorCommand, type CopyInfo, type DoctorCheck, type DoctorProbes } from "./doctor-command.ts";
+import { collectDoctorChecks, runDoctorCommand, type CopyInfo, type DoctorCheck, type DoctorProbes } from "./doctor-command.ts";
 
 const ok = (label: string): DoctorCheck => ({ ok: true, label, detail: "fine" });
 
@@ -312,6 +312,163 @@ test("fabrica doctor --live: makes the one live call, and a dead token fails", a
   assert.ok(lines.some((l) => l.startsWith("FAIL worker token (live)")));
 });
 
+/** A failing image line, and a repair seam that records what it was
+ * asked to run and flips that line's probe to passing - so these tests
+ * are about doctor's own wiring (does --fix run it, in the right place,
+ * and is the report afterwards the machine as it is now), not about the
+ * repair step itself. That is proven against the real `docker` argv and
+ * the fake docker in src/cli/image-repair.test.ts. */
+function repairableProbes(which: "workerImage" | "relayImage") {
+  const label = which === "workerImage" ? "worker image" : "relay image";
+  const ran: string[] = [];
+  let supplied = false;
+  const line = (): DoctorCheck =>
+    supplied
+      ? { ok: true, label, detail: "supplied and current" }
+      : { ok: false, label, detail: "is not here", fix: "run the command" };
+  return {
+    label,
+    probes: okProbes(which === "workerImage" ? { workerImage: line } : { relayImage: line }),
+    ran,
+    runImageCommand: async (cmd: { shell: string }, onOutput: (line: string) => void) => {
+      ran.push(cmd.shell);
+      onOutput("#1 DONE 0.1s");
+      supplied = true;
+      return { ok: true, detail: "" };
+    },
+  };
+}
+
+test("fabrica doctor without --fix stays read-only: a missing image is reported with its fix and nothing is built", async () => {
+  const { probes, ran } = repairableProbes("workerImage");
+  const io = captureIo();
+  const code = await runDoctorCommand([], { recordHome: healthyHome(), probes, ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(ran, [], "plain doctor must build nothing");
+  assert.ok(
+    io.out.some((l) => l.startsWith("FAIL worker image:") && l.includes("run the command")),
+    io.out.join("\n")
+  );
+});
+
+test("fabrica doctor --fix: builds the missing image, says what it did, and the report that follows is the machine as it is now", async () => {
+  const { probes, ran, runImageCommand } = repairableProbes("workerImage");
+  const io = captureIo();
+  const code = await runDoctorCommand(["--fix"], { recordHome: healthyHome(), probes, runImageCommand, ...io });
+
+  assert.equal(code, 0, io.out.concat(io.err).join("\n"));
+  assert.equal(ran.length, 1, "exactly one command ran");
+  assert.match(ran[0], /docker build /, "and it is the real build command, not the check's wording");
+  assert.ok(io.out.includes("  #1 DONE 0.1s"), "docker's own output has to reach the terminal");
+  assert.ok(io.out.some((l) => l.startsWith("worker image: built ")), io.out.join("\n"));
+  assert.ok(io.out.includes("OK   worker image: supplied and current"), io.out.join("\n"));
+  assert.ok(
+    !io.out.some((l) => l.startsWith("FAIL worker image:")),
+    "the report prints once, after the repair - not the stale line as well"
+  );
+});
+
+test("fabrica doctor --fix: a missing relay image is the other half, and both flags work together", async () => {
+  const { probes, ran, runImageCommand } = repairableProbes("relayImage");
+  const io = captureIo();
+  const code = await runDoctorCommand(["--fix", "--live"], { recordHome: healthyHome(), probes, runImageCommand, ...io });
+
+  assert.equal(code, 0, io.out.concat(io.err).join("\n"));
+  assert.equal(ran.length, 1);
+  assert.match(ran[0], /docker pull /);
+  assert.ok(io.out.some((l) => l.startsWith("relay image: pulled ")), io.out.join("\n"));
+  assert.ok(io.out.includes("OK   relay image: supplied and current"), io.out.join("\n"));
+});
+
+test("fabrica doctor --fix --live: the live call is made after the repair, never with an image about to be replaced", async () => {
+  // The live probe runs a container from the worker image, so the one
+  // ordering this must guarantee is repair-then-spend.
+  const order: string[] = [];
+  let supplied = false;
+  const probes = okProbes({
+    workerImage: () =>
+      supplied
+        ? { ok: true, label: "worker image", detail: "built and current" }
+        : { ok: false, label: "worker image", detail: "is not built", fix: "run the command" },
+    live: async () => {
+      order.push("live");
+      return ok("worker token (live)");
+    },
+  });
+  const io = captureIo();
+  const code = await runDoctorCommand(["--fix", "--live"], {
+    recordHome: healthyHome(),
+    probes,
+    runImageCommand: async () => {
+      order.push("build");
+      supplied = true;
+      return { ok: true, detail: "" };
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.out.concat(io.err).join("\n"));
+  assert.deepEqual(order, ["build", "live"]);
+});
+
+test("collectDoctorChecks: the repair hook runs exactly once, after every other check and before the live one", async () => {
+  // Both commands hand their repair step to this one hook rather than
+  // wrapping this function themselves, so this is where "once, and
+  // before anything spends money on the image it may replace" is
+  // actually guaranteed - for every caller at once, present and future.
+  const order: string[] = [];
+  const probes = okProbes({
+    live: async () => {
+      order.push("live");
+      return ok("worker token (live)");
+    },
+  });
+  const seen: DoctorCheck[][] = [];
+  const checks = await collectDoctorChecks({
+    recordHome: healthyHome(),
+    probes,
+    live: true,
+    repair: async (collected) => {
+      order.push("repair");
+      seen.push(collected);
+      return collected.concat([{ ok: true, label: "repaired", detail: "this run's own line" }]);
+    },
+  });
+
+  // One entry each, in this order: the hook ran once, and the probe
+  // that spends against the worker image ran after it.
+  assert.deepEqual(order, ["repair", "live"]);
+  // What it was handed: every machine and config check already answered,
+  // and no live line yet - a repair decides what to do from the same
+  // findings doctor would have printed.
+  assert.ok(seen[0].some((c) => c.label === "worker image"), "the image lines it reads");
+  assert.ok(seen[0].some((c) => c.label === "caps"), "and the config checks, already run");
+  assert.equal(seen[0].some((c) => c.label === "worker token (live)"), false);
+  // And what it hands back is what the caller goes on to print and
+  // judge, with the live line appended after it.
+  assert.equal(checks.at(-1)?.label, "worker token (live)");
+  assert.ok(checks.some((c) => c.label === "repaired"));
+});
+
+test("fabrica doctor --fix: a build that fails leaves the FAIL, its fix, and the non-zero exit exactly as before", async () => {
+  const { probes } = repairableProbes("workerImage");
+  const io = captureIo();
+  const code = await runDoctorCommand(["--fix"], {
+    recordHome: healthyHome(),
+    probes,
+    runImageCommand: async () => ({ ok: false, detail: "no space left on device" }),
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.ok(io.err.some((l) => l.includes("no space left on device")), io.err.join("\n"));
+  assert.ok(
+    io.out.some((l) => l.startsWith("FAIL worker image:") && l.includes("run the command")),
+    io.out.join("\n")
+  );
+});
+
 test("fabrica doctor refuses an unknown argument rather than ignoring it", async () => {
   const { code } = await doctor(healthyHome(), okProbes(), ["--json"]);
   assert.equal(code, 1);
@@ -320,7 +477,7 @@ test("fabrica doctor refuses an unknown argument rather than ignoring it", async
 test("fabrica doctor is dispatched by main", async () => {
   const io = captureIo();
   assert.equal(await main(["doctor", "--help"], io), 0);
-  assert.match(io.out.join("\n"), /fabrica doctor \[--live\]/);
+  assert.match(io.out.join("\n"), /fabrica doctor \[--fix\] \[--live\]/);
 });
 
 test("node check: the version the check box runs (from .inspector.json's image) is OK; any other fails with that version", async () => {
