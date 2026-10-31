@@ -19,6 +19,15 @@ export type ForemanErrorCode =
    * the brief would be past its size ceiling with them in. Raised before
    * any ProductionLine is cut - see src/foreman/task-knowledge.ts. */
   | "knowledge-unavailable"
+  /** A file this task was handed (`fabrica do --file <path>`, issue
+   * #325) could not be carried into the workstation: a named path has
+   * nothing readable at it, is not a regular file, is named
+   * `.gitignore`, shares its file name with another of the task's
+   * files, or the copy itself failed. Also a `files.json` nothing can
+   * parse. Raised at registration for a path that was wrong from the
+   * start, and before any ProductionLine is cut for one that has gone
+   * missing since - see src/foreman/task-files.ts. */
+  | "attached-unavailable"
   /** The project commits a `tests.map` whose own text cannot be read - a
    * line that is not `pattern: tests`. Refused rather than skipped: a
    * half-read map would name fewer tests in the brief and report more

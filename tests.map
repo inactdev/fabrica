@@ -57,6 +57,19 @@ integrations/live-view/record-view.ts: integrations/live-view/record-view.test.t
 integrations/live-view/server.test.ts: integrations/live-view/server.test.ts
 integrations/live-view/server.ts: integrations/live-view/server.test.ts
 integrations/live-view/state-agreement.test.ts: integrations/live-view/state-agreement.test.ts
+src/attached/brief.test.ts: src/attached/brief.test.ts
+src/attached/brief.ts: src/attached/brief.test.ts
+src/attached/place.test.ts: src/attached/place.test.ts
+src/attached/place.ts: src/attached/place.test.ts
+src/attached/resolve.test.ts: src/attached/resolve.test.ts
+src/attached/resolve.ts: src/attached/resolve.test.ts
+# Hand-added: errors.ts, types.ts and index.ts have no colocated test of
+# their own, the same way src/config's three don't - these are the suites
+# that actually exercise every shape and every refusal they declare,
+# through the real functions.
+src/attached/errors.ts: src/attached/resolve.test.ts, src/attached/place.test.ts
+src/attached/index.ts: src/attached/resolve.test.ts, src/attached/place.test.ts, src/attached/brief.test.ts
+src/attached/types.ts: src/attached/resolve.test.ts, src/attached/brief.test.ts
 src/brain/adapters/claude-code.test.ts: src/brain/adapters/claude-code.test.ts
 src/brain/adapters/claude-code.ts: src/brain/adapters/claude-code.test.ts
 src/brain/adapters/cli-reader.test.ts: src/brain/adapters/cli-reader.test.ts
@@ -277,6 +290,8 @@ src/foreman/standing-question.ts: src/foreman/standing-question.test.ts
 src/foreman/stop.test.ts: src/foreman/stop.test.ts
 src/foreman/stop.ts: src/foreman/stop.test.ts
 src/foreman/task-failed.test.ts: src/foreman/task-failed.test.ts
+src/foreman/task-files.test.ts: src/foreman/task-files.test.ts
+src/foreman/task-files.ts: src/foreman/task-files.test.ts
 src/foreman/task-issue.test.ts: src/foreman/task-issue.test.ts
 src/foreman/task-issue.ts: src/foreman/task-issue.test.ts
 src/foreman/task-knowledge.test.ts: src/foreman/task-knowledge.test.ts
@@ -390,6 +405,11 @@ src/record/tail.test.ts: src/record/tail.test.ts
 src/record/tail.ts: src/record/tail.test.ts
 src/record/tasks.test.ts: src/record/tasks.test.ts
 src/record/tasks.ts: src/record/tasks.test.ts
+# Hand-added: types.ts has no colocated test of its own, so the generator
+# left it out. Its one load-bearing shape is the `TaskFile` union, and
+# tasks.test.ts is what drives every member of it through the real
+# write/read/append functions.
+src/record/types.ts: src/record/tasks.test.ts
 # Hand-added: errors.ts and index.ts have no colocated test of their own,
 # so the generator left them out. register.test.ts drives every refusal
 # code through the real command, and terms.test.ts the work-mode ones;
