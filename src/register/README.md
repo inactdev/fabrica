@@ -107,14 +107,18 @@ where the old "that needs `--check` and `--image`" refusal used to be:
 **origin's default branch** (never the working tree — the same ref step 7
 just asked the `.inspector.json` question against, and the ref a task's
 base commit is cut from): an existing `check.sh`, `package.json`'s
-`scripts`/`engines`/dependencies, `go.mod`, and whether a
-`package-lock.json` or a `go.sum` is there. Reading is one function,
-deriving is a pure one over what it read, so every rule below is tested
-with no repository at all.
+`scripts`/`engines`/dependencies, `go.mod`, whether a
+`package-lock.json` or a `go.sum` is there, and — issue #324 — a
+`Gemfile.lock`'s own contents, the `Gemfile`, `.ruby-version` and
+whether `bin/rails` is there. Reading is one function, deriving is a
+pure one over what it read, so every rule below is tested with no
+repository at all.
 
 Since inspector#47 (issue #303) the proposal is **two files**: the config
 names no image and no network any more, so the `Dockerfile.inspector` the
-check box is built from is proposed alongside it.
+check box is built from is proposed alongside it. For the one shape whose
+check cannot be named as a bare command it is **three** — see "The Ruby
+shape" below.
 
 It **prints the proposal and never writes it** — the issue's own words. A
 tool that quietly writes the file defining how its own work is judged is
@@ -139,9 +143,10 @@ cannot read a proposal as a successful registration.
 
 - **`check`** — an existing `check.sh` wins over everything, and any
   signal it contradicts is **named** on stderr rather than dropped (the
-  Client's ruling on question 3). Otherwise `package.json`'s `test`
-  script makes it `npm test`, a `go.mod` makes it `go test ./...`, and a
-  repository naming no command at all is told to write `check.sh`.
+  Client's ruling on question 3). Otherwise a `Gemfile.lock`'s own suite
+  wins (below), then `package.json`'s `test` script makes it `npm test`,
+  a `go.mod` makes it `go test ./...`, and a repository naming no command
+  at all is told to write `check.sh`.
 - **`Dockerfile.inspector`'s `FROM`** — the only declaration-to-image
   pairing there is live evidence for is an exactly-pinned `engines.node`
   against `cimg/node:<version>`, which is this repository's own
@@ -161,13 +166,19 @@ cannot read a proposal as a successful registration.
   ...) additionally gets a `warning:` line, because that step cannot
   succeed at all in a box with no network — it is about the check, not
   about anything the proposal writes.
-- **`timeoutSeconds`** — always omitted, and the line says why. Nothing
+- **`timeoutSeconds`** — omitted, and the line says why. Nothing
   in a `package.json`, a `go.mod` or a `check.sh` says how long a check
   takes, and the invented number would be the one deciding whether a real
   check is killed mid-run. (A CI workflow's `timeout-minutes:` is the one
   real signal in a repository and is deliberately not read: workflow
   files aren't among the signals issue #114 names, and this repository
-  ships no YAML parser.)
+  ships no YAML parser.) The **one exception** is a check that boots its
+  own servers (the Ruby shape below): 30 minutes, by Client ruling on
+  issue #324, because that check is in a different order of magnitude
+  from `go test ./...` and leaving Inspector's own default to decide
+  would be leaving a real suite to be killed mid-run. The line says it is
+  a ceiling rather than a measurement, and to set it to what one real run
+  actually takes.
 - **`protectedPaths`** — a file-path check (`./check.sh`) is listed; an
   indirect one lists nothing and says the decision is the Client's, since
   which file freezing `npm test` means (the script, the `package.json`
@@ -333,12 +344,20 @@ somewhere to put reasoning, which is the one thing `.inspector.json`
 never had.
 
 **The check container has no network**, so a project's own dependencies
-are installed in this file, at build time. Two shapes are recognized,
-both named by issue #303 itself: a `package-lock.json` (`npm ci`) and a
-`go.sum` (`go mod download`). Anything else — declared dependencies with
+are installed in this file, at build time. Three shapes are recognized:
+a `package-lock.json` (`npm ci`) and a `go.sum` (`go mod download`),
+both named by issue #303 itself, and a `Gemfile.lock` (`bundle install`,
+issue #324 — see below). Anything else — declared dependencies with
 no lockfile, a `requirements.txt`, a system package — gets a **comment
 in the file** naming what still has to be installed there. Never a
 silent gap, and never an invented install step.
+
+`Gemfile.lock` is asked **first** when a repository carries more than
+one: that repository is a Rails application with a JavaScript bundler,
+whose suite is still the Ruby one. Between the other two,
+`package-lock.json` wins for no deeper reason than that one answer has
+to be picked. Either way the Dockerfile says which it took, and a
+lockfile that went uninstalled is named in the notes.
 
 They go in `/deps`, not beside the checkout, because **Inspector puts
 the repository's own files in place when it runs the check**: anything
@@ -384,6 +403,89 @@ shape is a fact about the repository's lockfiles, not about the
 Dockerfile — so the pull request body also names the one thing only the
 reviewer can settle: whether their own file puts the dependencies where
 `check.sh` looks for them.
+
+## The Ruby shape: a suite with servers in the box (issue #324)
+
+A Rails application needs more than its gems installed. Its suite talks
+to PostgreSQL and to Redis, and the check box has **no network** — so
+there is no server to reach over one, and both have to run inside that
+same container. Which is why this shape is the only one that reads a
+lockfile's *contents*: nothing but `Gemfile.lock` can say whether this
+project needs them.
+
+Everything is derived from the repository's own signals, and each half
+lands where it can actually work:
+
+- **`Dockerfile.inspector`** — `FROM ruby:<version>` for the version
+  `.ruby-version` pins, or the `Gemfile`'s own `ruby` line, or (last)
+  `Gemfile.lock`'s `RUBY VERSION`, whose `3.3.4p94` patch level belongs
+  to a build of Ruby rather than to an image tag. The official Ruby
+  image's tags *are* exactly those versions, which is what makes this
+  derivable where `go.mod`'s toolchain version is not; a version that is
+  a **range**, or an implementation there is no image for (`jruby-`),
+  gets the usual `REPLACE-ME-with-...`. Then the servers' Debian
+  packages (`postgresql libpq-dev` when the lockfile has `pg`,
+  `redis-server` when it has `redis` or `redis-client`), then
+  `bundle install` into `/deps` at build time — the gems land in the
+  image's own `GEM_HOME`, outside the checkout, so there is **nothing
+  for `check.sh` to link in**, unlike `node_modules`.
+- **`check.sh`** — starts each server, **waits until it answers**
+  (`pg_isready`, `redis-cli ping`) rather than sleeping a fixed time,
+  creates the test database (`bin/rails db:test:prepare`, only when
+  `bin/rails` is actually there), runs the suite, and stops both again
+  through an `EXIT` trap so a **failing** suite stops them too. The trap
+  runs no `exit` of its own, which is what keeps the suite's status the
+  check's status. `scaffold.test.ts` runs that generated script for real
+  against stubbed servers — the order, the waiting loop, the trap and
+  the exit status are executed, not asserted by substring.
+- **`.inspector.json`** — the usual, plus the longer timeout above.
+- **The suite is named *inside* `check.sh`**, not in the config, which
+  names `./check.sh`. `bundle exec rspec` as `.inspector.json`'s `check`
+  would be a command running with no database anywhere near it. That is
+  what `CheckField.scriptCommand` carries, and it is why the printed
+  proposal is three files for this shape: the config names a script, so
+  the script is part of the proposal rather than left to be worked out.
+  `bundle exec rspec` wins when the lockfile has rspec; `bin/rails test`
+  is the fallback for an application that ships `bin/rails`.
+
+Two build-time details that are not guesses. `libpq-dev` is there
+because the `pg` gem's native extension wants `libpq-fe.h`, which is the
+package that installs it. And a **superuser role named after the user
+the check runs as** is created while the server is up at build time
+(`su postgres -c "createuser -s root"`), because Debian authenticates a
+local socket connection by asking the kernel which user opened it
+(`peer`) and then wants a role of that name — while a Rails
+`config/database.yml` names no user at all. The role lives in the
+cluster's data directory, which is part of the image.
+
+### What it says it has not done
+
+The standing rulings call a silent skip a bug, so each of these is a
+`note:` line of its own:
+
+- **Browser and system tests are out of scope** (issue #324's own
+  words). A `capybara` or `selenium-webdriver` in the lockfile is named,
+  and nothing installs a browser or a driver.
+- **Only those two servers are recognized.** A `mysql2` or `trilogy` in
+  the lockfile is named, with what to add and where.
+- **A `package-lock.json` beside the `Gemfile.lock` is not installed**,
+  and the note says so plus what to add if the check needs built assets.
+- **Starting those servers needs root**, which the official Ruby image
+  runs as — but `src/containment/run.ts` runs every container as the
+  *host* user, so `register`'s own one proving run cannot start them.
+  This is the one check shape the `--check`/`--image` route cannot prove
+  here, and both the proposal's notes and the `check-failed` refusal say
+  so rather than leaving a permission error to be puzzled over. The
+  `--terms` route and the commit-it-yourself route are unaffected, and a
+  first task's own red-or-green is the proof.
+
+Nothing about PostgreSQL, Redis or Rails themselves is proven by this
+repository's tests: that needs the built image, which is Inspector's to
+build. What is proven is the generated script and the generated
+Dockerfile — that the script runs, in the right order, with the right
+exit status, and that the Dockerfile leaves no server running (a `RUN`
+is its own container, so a service started in one is gone by the next
+line; `check.sh` is the only thing that starts one).
 
 ## `--timeout`, and the one proving run
 

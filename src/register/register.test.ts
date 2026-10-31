@@ -22,6 +22,7 @@ import { registerProject } from "./register.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, REGISTER_BRANCH } from "./origin.ts";
 import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
+import { writeRailsFixture } from "./helpers/rails-fixture.ts";
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-register-home-"));
@@ -161,6 +162,68 @@ test("register: a package-lock.json project gets an install step and a check.sh 
   assert.ok(script.includes("ln -s /deps/node_modules node_modules"), script);
   const [pr] = tools.pullRequestCalls;
   assert.ok(pr.body.includes("npm ci"), "the reviewer should read what the image bakes");
+});
+
+// Issue #324, on the route that commits into the repository: the shape
+// is a fact about the lockfile, so the servers and the gems reach the
+// committed files even though the command here is the Client's own
+// --check rather than a derived one.
+test("register: a Rails project's committed files carry its servers, its gems and the suite", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  writeRailsFixture(dir);
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-qm", "rails app"]);
+  git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
+  const tools = fakeRegisterTools();
+
+  await registerProject(
+    { recordHome, path: dir, check: "bundle exec rspec", image: "ruby:3.3.4" },
+    { tools }
+  );
+
+  const dockerfile = fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR);
+  assert.ok(dockerfile.includes("FROM ruby:3.3.4"), dockerfile);
+  assert.ok(dockerfile.includes("postgresql libpq-dev redis-server"), dockerfile);
+  assert.ok(dockerfile.includes("bundle install"), dockerfile);
+
+  // The Client's own command, with the preamble the shape needs around
+  // it - nothing about --check is paraphrased.
+  const script = fileOnOriginBranch(dir, REGISTER_BRANCH, CHECK_SCRIPT);
+  assert.ok(script.includes("service postgresql start"), script);
+  assert.ok(script.includes("bin/rails db:test:prepare"), script);
+  assert.ok(script.trimEnd().endsWith("bundle exec rspec"), script);
+
+  const [pr] = tools.pullRequestCalls;
+  assert.ok(pr.body.includes("PostgreSQL and Redis are installed in"), pr.body);
+});
+
+// Fabrica's containment runs every container as the host user, and
+// starting those servers needs root - so this one route cannot prove
+// this one check shape, and the refusal has to say which of the two it
+// is rather than leaving a permission error to be puzzled over.
+test("register: a failing check on a project with servers says why this route cannot prove it", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  writeRailsFixture(dir);
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-qm", "rails app"]);
+  git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
+  const tools = fakeRegisterTools({
+    check: () => ({ ran: true, exitCode: 1, output: "service postgresql start: Permission denied" }),
+  });
+
+  await assert.rejects(
+    registerProject({ recordHome, path: dir, check: "bundle exec rspec", image: "ruby:3.3.4" }, { tools }),
+    (err: unknown) => {
+      assert.ok(err instanceof RegisterError);
+      assert.equal(err.code, "check-failed");
+      assert.match(err.message, /PostgreSQL and Redis inside the box, which needs root/);
+      assert.match(err.message, /--terms/);
+      return true;
+    }
+  );
+  assert.equal(originHasBranch(dir, REGISTER_BRANCH), false, "and still nothing was pushed");
 });
 
 // Nothing is invented for a shape it does not recognize: the file says

@@ -18,9 +18,11 @@ import {
   dependencyInstallerIn,
   dependencyShapeFrom,
   dependencyShapeInTree,
+  gemsIn,
   inspectorDockerfile,
   knownNonRootUser,
 } from "./dockerfile.ts";
+import { RAILS_GEMFILE_LOCK, writeRailsFixture } from "./helpers/rails-fixture.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -50,6 +52,148 @@ test("dependencyShapeFrom: only the npm shape needs check.sh to link anything in
   assert.equal(dependencyShapeFrom({ packageLock: false, goSum: true })?.linksNodeModules, false);
 });
 
+// ------------------------------------------------- the Ruby shape (#324)
+
+// A Gemfile.lock's contents are read, not just its presence: only the
+// lockfile can say whether the check box needs a database server in it.
+test("gemsIn reads the gems in the bundle, never the requirement lines under them", () => {
+  const gems = gemsIn(RAILS_GEMFILE_LOCK);
+
+  assert.equal(gems.has("pg"), true);
+  assert.equal(gems.has("redis"), true);
+  assert.equal(gems.has("rspec-core"), true);
+  // Six spaces deep, i.e. something capybara asked for, and never a
+  // resolved gem of its own in this lockfile.
+  assert.equal(gems.has("nokogiri"), false, "a requirement line says what was asked for, not what is installed");
+  // Two spaces deep, under DEPENDENCIES - the Gemfile's own list.
+  assert.equal(gems.has("DEPENDENCIES"), false);
+});
+
+test("dependencyShapeFrom: a Gemfile.lock means bundle install, and no node_modules to link", () => {
+  const shape = dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK });
+
+  assert.equal(shape?.install, "bundle install");
+  assert.equal(shape?.lockfile, "Gemfile.lock");
+  assert.equal(shape?.manifest, "Gemfile");
+  // Gems land in the image's own GEM_HOME, outside the checkout - like a
+  // Go module cache, unlike node_modules.
+  assert.equal(shape?.linksNodeModules, false);
+});
+
+// A Rails application with a JavaScript bundler carries both lockfiles,
+// and its suite is still the Ruby one.
+test("dependencyShapeFrom: Gemfile.lock wins over a package-lock.json beside it", () => {
+  const shape = dependencyShapeFrom({ packageLock: true, goSum: true, gemfileLock: RAILS_GEMFILE_LOCK });
+
+  assert.equal(shape?.install, "bundle install");
+});
+
+test("dependencyShapeFrom: the servers come from the lockfile, never from the shape being Ruby", () => {
+  const labels = (lockfile: string) =>
+    (dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: lockfile })?.services ?? []).map(
+      (service) => service.label
+    );
+
+  assert.deepEqual(labels(RAILS_GEMFILE_LOCK), ["PostgreSQL", "Redis"]);
+  assert.deepEqual(labels("GEM\n  specs:\n    pg (1.5.6)\n"), ["PostgreSQL"]);
+  // redis-client is what a current Rails cache store or Sidekiq
+  // resolves to, and names a Redis dependency just as surely.
+  assert.deepEqual(labels("GEM\n  specs:\n    redis-client (0.22.2)\n"), ["Redis"]);
+  assert.deepEqual(labels("GEM\n  specs:\n    rake (13.2.1)\n"), [], "a plain Ruby project needs no server");
+});
+
+// `bin/rails db:test:prepare` is only a command a repository shipping
+// bin/rails actually has.
+test("dependencyShapeFrom: the test-database step needs bin/rails, not just a Gemfile.lock", () => {
+  const withRails = dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: RAILS_GEMFILE_LOCK,
+    railsBin: true,
+  });
+  const without = dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK });
+
+  assert.equal(withRails?.prepare?.run, "bin/rails db:test:prepare");
+  assert.equal(without?.prepare, undefined);
+});
+
+// A Gemfile may read its own `ruby` line out of .ruby-version, so the
+// file is copied in when it is there - and never when it is not, since a
+// COPY of a file the repository lacks fails the build.
+test("dependencyShapeFrom: .ruby-version is copied in only when the repository has one", () => {
+  const present = dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: RAILS_GEMFILE_LOCK,
+    rubyVersionFile: true,
+  });
+  const absent = dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK });
+
+  assert.deepEqual(present?.extraCopies, [".ruby-version"]);
+  assert.equal(absent?.extraCopies, undefined);
+});
+
+test("inspectorDockerfile: the Ruby shape installs its servers and its gems at build time", () => {
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({
+      packageLock: false,
+      goSum: false,
+      gemfileLock: RAILS_GEMFILE_LOCK,
+      rubyVersionFile: true,
+      railsBin: true,
+    }),
+  });
+  const ran = instructions(text);
+
+  assert.ok(ran.includes("FROM ruby:3.3.4"), text);
+  assert.ok(ran.includes("USER root"), "apt-get needs root");
+  assert.ok(
+    ran.some((line) => line.includes("apt-get install") && line.includes("postgresql libpq-dev redis-server")),
+    text
+  );
+  // The pg gem's native extension wants libpq-fe.h, which libpq-dev is
+  // what installs.
+  assert.ok(text.includes("libpq-dev"), text);
+  // A role for the user the check runs as, created while the server is
+  // up at build time: Rails' own database.yml names no user, so a local
+  // socket connection is authenticated as whoever runs the check.
+  assert.ok(
+    ran.some((line) => line.includes(`su postgres -c "createuser -s root"`)),
+    text
+  );
+  assert.ok(ran.includes(`COPY Gemfile Gemfile.lock .ruby-version ${DEPS_DIR}/`), text);
+  assert.ok(ran.includes(`RUN cd ${DEPS_DIR} && bundle install`), text);
+});
+
+// Nothing in a Dockerfile can start a server for the check: a RUN is its
+// own container, gone by the next line. check.sh starts them.
+test("inspectorDockerfile: nothing in it leaves a server running", () => {
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK }),
+  });
+
+  for (const line of instructions(text)) {
+    if (!line.includes("postgresql start")) continue;
+    assert.ok(line.includes("postgresql stop"), `${line} starts the server and never stops it`);
+  }
+  assert.ok(!instructions(text).some((line) => line.startsWith("CMD") || line.startsWith("ENTRYPOINT")), text);
+});
+
+test("inspectorDockerfile: the Ruby install step names the files bundler does not get", () => {
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK }),
+  });
+
+  assert.ok(text.includes("gemspec"), text);
+  assert.ok(text.includes(".bundle/config"), text);
+});
+
 test("dependencyShapeInTree reads the lockfiles a real checkout carries", () => {
   const empty = mkdtempSync(join(tmpdir(), "fabrica-dockerfile-"));
   assert.equal(dependencyShapeInTree(empty), null);
@@ -61,6 +205,15 @@ test("dependencyShapeInTree reads the lockfiles a real checkout carries", () => 
   const go = mkdtempSync(join(tmpdir(), "fabrica-dockerfile-go-"));
   writeFileSync(join(go, "go.sum"), "example.com/x v1.0.0 h1:abc=\n");
   assert.equal(dependencyShapeInTree(go)?.lockfile, "go.sum");
+
+  // The Ruby shape reads four things off a real checkout, not one.
+  const rails = mkdtempSync(join(tmpdir(), "fabrica-dockerfile-rails-"));
+  writeRailsFixture(rails);
+  const shape = dependencyShapeInTree(rails);
+  assert.equal(shape?.lockfile, "Gemfile.lock");
+  assert.deepEqual(shape?.extraCopies, [".ruby-version"]);
+  assert.equal(shape?.prepare?.run, "bin/rails db:test:prepare");
+  assert.deepEqual((shape?.services ?? []).map((service) => service.label), ["PostgreSQL", "Redis"]);
 });
 
 // --------------------------------------------------------- the FROM line

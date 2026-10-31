@@ -160,6 +160,7 @@ export function writeTerms(opts: {
   // one, so the derived command goes inside it and the config, the
   // script and projects.toml all name the same thing.
   const config = inspectorConfigJson({
+    ...(derived.timeoutSeconds !== undefined ? { timeoutSeconds: derived.timeoutSeconds } : {}),
     ...(protectedPaths.paths !== undefined ? { protectedPaths: protectedPaths.paths } : {}),
   });
 
@@ -188,15 +189,19 @@ export function writeTerms(opts: {
       });
     } else {
       const declared = check.source === "declared-command";
+      // `scriptCommand` when the derived check only works inside this
+      // script (issue #324's servers and test database): there, `command`
+      // is `./check.sh` itself, and writing that into the script would
+      // have it call itself forever.
       const body = declared
-        ? check.command
+        ? check.scriptCommand ?? check.command
         : `# ${CHECK_PLACEHOLDER}\n` +
           `echo "${CHECK_SCRIPT}: no command has been written here yet - nothing in the repository named ` +
           `one." >&2\n` +
           `exit 1`;
       const result = writeIfMissing(opts.terms, CHECK_SCRIPT, checkScript(body, dependencies.shape), written, {
         written: declared
-          ? `holds the one command that has to pass: ${check.command}`
+          ? `holds the one command that has to pass: ${check.scriptCommand ?? check.command}`
           : `fails until you write the command in it - nothing in the repository named one, and a stub that ` +
             `exited 0 would make every task on this project green for free`,
         kept: `was already in this folder - left exactly as it is`,

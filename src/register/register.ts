@@ -241,7 +241,12 @@ export function pullRequestBodyFor(
         (shape === null
           ? `nothing could be installed\n  in it for you: the file says so where an install step would have gone.\n`
           : `this installs the\n  project's dependencies at build time (\`${shape.install}\`, from\n` +
-            `  \`${shape.lockfile}\`), and \`${CHECK_SCRIPT}\` uses what it finds there.\n`)
+            `  \`${shape.lockfile}\`), and \`${CHECK_SCRIPT}\` uses what it finds there.\n` +
+            ((shape.services ?? []).length === 0
+              ? ``
+              : `  ${(shape.services ?? []).map((service) => service.label).join(" and ")} are installed in\n` +
+                `  it too, for the same reason - there is no network to reach either over -\n` +
+                `  and \`${CHECK_SCRIPT}\` starts them, waits for them, and stops them again.\n`))
       : `- \`${DOCKERFILE_INSPECTOR}\` is **not** touched - this repository already\n` +
         `  carries one, and \`fabrica register\` never overwrites a committed file.\n` +
         `  The check was proven in \`${image}\` here, but the box Inspector builds is\n` +
@@ -310,6 +315,28 @@ export function registerWarnings(command: string, shape: DependencyShape | null)
             shape.linksNodeModules ? ` and ${CHECK_SCRIPT} links them in` : ``
           }, so the command should not install them again.`),
   ];
+}
+
+/**
+ * The one likely cause this command can name for itself when a check
+ * that starts its own servers fails the proving run (issue #324):
+ * Fabrica's containment runs every container as the *host* user
+ * (`src/containment/run.ts`'s `--user`), and starting PostgreSQL or
+ * Redis needs root. Inspector's own box runs the image's own user, which
+ * for the official Ruby image is root, so this is a limit of the proving
+ * run rather than of the check - and a sentence saying so is worth more
+ * than leaving a permission error to be puzzled over.
+ */
+function servicesCaveat(shape: DependencyShape | null): string {
+  const services = shape?.services ?? [];
+  if (services.length === 0) return ``;
+  return (
+    ` This check starts ${services.map((service) => service.label).join(" and ")} inside the box, which needs ` +
+    `root - and this one proving run is deliberately run as your own user, not as root, so a permission error ` +
+    `below is this route's limit rather than a fault in the check. Commit ${INSPECTOR_CONFIG}, ${CHECK_SCRIPT} ` +
+    `and ${DOCKERFILE_INSPECTOR} yourself and register the repository again, or register it with --terms, and ` +
+    `let the first task's own red-or-green be the proof.`
+  );
 }
 
 /** The flags that only describe the route writing into the repository,
@@ -707,7 +734,7 @@ export async function registerProject(
         "check-failed",
         `fabrica register: ${RECORDED_CHECK} failed inside ${image} (exit ${result.exitCode}), so it is not yet ` +
           `a check Fabrica can hold work to. Nothing was pushed, no pull request was opened, and nothing was ` +
-          `registered. Its output:\n\n${result.output}`
+          `registered.${servicesCaveat(shape)} Its output:\n\n${result.output}`
       );
     }
 
