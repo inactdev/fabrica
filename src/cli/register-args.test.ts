@@ -31,6 +31,33 @@ test("parseRegisterArgs: --name overrides the default project name", () => {
   assert.equal(parseRegisterArgs(["/repo", "--name", "spending-app"]).name, "spending-app");
 });
 
+// Work mode: a folder of the Client's own for the three files the
+// repository cannot carry. Whether it may be combined with the other
+// flags is src/register's own refusal, for the same reason --check's
+// presence is: `registerProject` is also a library entry point, and one
+// implementation of that rule is what keeps the two from disagreeing.
+test("parseRegisterArgs: --terms names the folder, and parsing does not pre-empt its own refusals", () => {
+  assert.equal(parseRegisterArgs(["/repo", "--terms", "/home/ari/terms/widgets"]).terms, "/home/ari/terms/widgets");
+  assert.equal(parseRegisterArgs(["/repo", "--terms=/terms"]).terms, "/terms");
+  assert.equal(parseRegisterArgs(["/repo"]).terms, undefined);
+  assert.equal(
+    parseRegisterArgs(["/repo", "--terms", "/terms", "--check", "npm test"]).check,
+    "npm test",
+    "the contradiction is src/register's to refuse, naming both flags"
+  );
+});
+
+test("parseRegisterArgs: an empty --terms refuses rather than becoming the current directory", () => {
+  assert.throws(
+    () => parseRegisterArgs(["/repo", "--terms", "   "]),
+    (err: unknown) => err instanceof CliError && err.message.includes("--terms was given an empty value")
+  );
+});
+
+test("parseRegisterArgs: the usage line shows the work-mode invocation too", () => {
+  assert.match(REGISTER_USAGE, /--terms <folder>/);
+});
+
 test("parseRegisterArgs: every value flag also accepts the --flag=value form", () => {
   const args = parseRegisterArgs([
     "--check=npm test",

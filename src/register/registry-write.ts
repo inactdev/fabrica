@@ -88,7 +88,8 @@ export function existingRegistration(
 
 /**
  * Appends one `[projects.<name>]` table with `path`, `check` and
- * `onlyTouchedTests`. Returns the exact text appended, so the caller can
+ * `onlyTouchedTests`, plus the two work-mode settings when this is a
+ * work-mode project. Returns the exact text appended, so the caller can
  * show the Client what landed in his own file rather than describing it.
  *
  * `onlyTouchedTests = true` is written out even though the loader
@@ -97,12 +98,25 @@ export function existingRegistration(
  * a standing ruling that governs every task on the project is worth
  * showing him - and an explicit line is the one he edits to turn it
  * off.
+ *
+ * `noStamp = true` is written for the same reason, and only for a
+ * work-mode project: absence means the `inspector` commit status is
+ * expected, which is every project set up in its own repository.
  */
 export function appendProjectEntry(opts: {
   recordHome: string;
   name: string;
   path: string;
   check: string;
+  /** Work mode (`fabrica register --terms`): the folder holding this
+   * project's `.inspector.json`, `check.sh` and `Dockerfile.inspector`,
+   * written absolute. Omitted for a project whose terms are in its own
+   * repository. */
+  terms?: string;
+  /** Work mode's companion setting (`src/config/types.ts`): Inspector
+   * posts no commit status for this project. Written out only when
+   * given, and only ever as `true` by `register` itself. */
+  noStamp?: boolean;
 }): { tomlPath: string; appended: string } {
   const tomlPath = projectsTomlPath(opts.recordHome);
 
@@ -124,6 +138,8 @@ export function appendProjectEntry(opts: {
     `[projects.${opts.name}]\n` +
     `path = ${tomlString(opts.path)}\n` +
     `check = ${tomlString(opts.check)}\n` +
+    (opts.terms === undefined ? `` : `terms = ${tomlString(opts.terms)}\n`) +
+    (opts.noStamp === undefined ? `` : `noStamp = ${opts.noStamp ? "true" : "false"}\n`) +
     `onlyTouchedTests = true\n`;
 
   // A file not ending in a newline would otherwise glue its last line to

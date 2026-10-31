@@ -16,6 +16,7 @@ import {
   GO_MOD,
   IMAGE_PLACEHOLDER_PREFIX,
   PACKAGE_JSON,
+  deriveProposal,
   proposeInspectorConfig,
   readProposalSignals,
   type ProposalSignals,
@@ -86,6 +87,36 @@ test("propose: a repository that names no command at all is told to write check.
   assert.equal(config.check, "./check.sh");
   assert.ok(stderr.includes("nothing in the repository names a command"), stderr);
   assert.ok(stderr.includes("Write check.sh"), stderr);
+});
+
+// The printed proposal quotes the command and stops; a route that
+// *writes* a check.sh (--terms, see terms.ts) has to know which of the
+// three cases produced it, because they want different files. A `check`
+// of "./check.sh" is two of them - the repository's own script, and
+// nothing naming a command at all - which is exactly why the command
+// alone is not enough to decide from.
+test("deriveProposal: the check carries where it came from, not only what it is", () => {
+  const source = (signals: Partial<ProposalSignals>) =>
+    deriveProposal({ ...NOTHING, ...signals }).check.source;
+
+  assert.equal(source({ checkScript: "#!/bin/sh\nnpm test\n" }), "repository-script");
+  assert.equal(source({ packageJson: pkg({ scripts: { test: "node --test" } }) }), "declared-command");
+  assert.equal(source({ goMod: "module example.com/app\n\ngo 1.22\n" }), "declared-command");
+  assert.equal(source({}), "none");
+});
+
+// One derivation, two routes. Whatever `deriveProposal` says is what
+// both the printed proposal and the written terms folder are built from,
+// so a work-mode project can never be set up by a second set of rules.
+test("deriveProposal: the printed proposal is built from exactly what it returns", () => {
+  const signals = { ...NOTHING, packageJson: pkg({ engines: { node: "24.18.0" } }) };
+  const derived = deriveProposal(signals);
+  const proposal = proposeInspectorConfig(signals, { projectPath: "/srv/app", defaultBranch: "main" });
+
+  assert.equal(proposal.dockerfile, derived.dockerfile);
+  for (const line of derived.fieldNotes) {
+    assert.ok(proposal.notes.includes(line), line);
+  }
 });
 
 // "When signals disagree an existing check.sh wins and the disagreement

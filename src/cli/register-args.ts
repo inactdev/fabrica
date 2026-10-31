@@ -1,5 +1,5 @@
 // Parses the arguments after `fabrica register`. One positional (the
-// repository's path) and five flags; every wrong shape refuses with
+// repository's path) and six flags; every wrong shape refuses with
 // exact instructions, matching do-args.ts's style.
 //
 // --check and --image are deliberately not required here even though the
@@ -8,12 +8,18 @@
 // carry .inspector.json?), and asking git that from an argument parser
 // would be the wrong place for it. src/register/register.ts requires
 // them at the point it knows, and says why.
+//
+// --terms being incompatible with four of the others is refused there
+// too, for a different reason: `registerProject` is also a library
+// entry point (src/index.ts), and one implementation of that rule means
+// the library and the command can never come to disagree about it.
 
 import { CliError } from "./errors.ts";
 
 export const REGISTER_USAGE =
   'fabrica register <path> --check "<command>" --image <docker image> ' +
-  "[--timeout <seconds>] [--protected <glob,...>] [--name <name>]";
+  "[--timeout <seconds>] [--protected <glob,...>] [--name <name>]\n" +
+  "       fabrica register <path> --terms <folder> [--name <name>]";
 
 export interface RegisterArgs {
   path: string;
@@ -24,9 +30,12 @@ export interface RegisterArgs {
   protectedPaths: string[];
   name?: string;
   timeoutSeconds?: number;
+  /** `--terms <folder>`: a work-mode project, whose three files go into
+   * this folder instead of into the repository. */
+  terms?: string;
 }
 
-const VALUE_FLAGS = ["--check", "--image", "--protected", "--name", "--timeout"] as const;
+const VALUE_FLAGS = ["--check", "--image", "--protected", "--name", "--timeout", "--terms"] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 
 /**
@@ -83,7 +92,7 @@ export function parseRegisterArgs(argv: string[]): RegisterArgs {
     );
   }
 
-  for (const flag of ["--check", "--image", "--name"] as const) {
+  for (const flag of ["--check", "--image", "--name", "--terms"] as const) {
     const value = values[flag];
     if (value !== undefined && value.trim().length === 0) {
       throw new CliError("bad-usage", `fabrica register: ${flag} was given an empty value. Usage: ${REGISTER_USAGE}`);
@@ -118,5 +127,6 @@ export function parseRegisterArgs(argv: string[]): RegisterArgs {
     protectedPaths,
     ...(values["--name"] !== undefined ? { name: values["--name"] } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(values["--terms"] !== undefined ? { terms: values["--terms"] } : {}),
   };
 }

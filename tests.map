@@ -182,6 +182,12 @@ src/config/load.test.ts: src/config/load.test.ts
 src/config/load.ts: src/config/load.test.ts
 src/config/registry.test.ts: src/config/registry.test.ts
 src/config/registry.ts: src/config/registry.test.ts
+# Hand-added: types.ts, errors.ts and index.ts have no colocated test of
+# their own, so the generator left them out. load.test.ts is what
+# actually exercises every shape they declare, through the real loader.
+src/config/errors.ts: src/config/load.test.ts
+src/config/index.ts: src/config/load.test.ts
+src/config/types.ts: src/config/load.test.ts
 src/containment/caffeinate.test.ts: src/containment/caffeinate.test.ts
 src/containment/caffeinate.ts: src/containment/caffeinate.test.ts
 src/containment/docker-args.test.ts: src/containment/docker-args.test.ts
@@ -369,6 +375,11 @@ src/reader/resolve.test.ts: src/reader/resolve.test.ts
 src/reader/resolve.ts: src/reader/resolve.test.ts
 src/reader/types.ts: src/reader/read.test.ts, src/reader/resolve.test.ts
 
+# Hand-added: src/index.ts is the one public entry point every
+# contract/*.test.ts imports the implementation from, so "what covers it"
+# is the contract suite - there is no one colocated test that could.
+src/index.ts: npm test -- contract
+
 src/record/append.test.ts: src/record/append.test.ts
 src/record/append.ts: src/record/append.test.ts
 src/record/ids.test.ts: src/record/ids.test.ts
@@ -379,6 +390,14 @@ src/record/tail.test.ts: src/record/tail.test.ts
 src/record/tail.ts: src/record/tail.test.ts
 src/record/tasks.test.ts: src/record/tasks.test.ts
 src/record/tasks.ts: src/record/tasks.test.ts
+# Hand-added: errors.ts and index.ts have no colocated test of their own,
+# so the generator left them out. register.test.ts drives every refusal
+# code through the real command, and terms.test.ts the work-mode ones;
+# the barrel is only reachable through what those two import.
+src/register/errors.ts: src/register/register.test.ts, src/register/terms.test.ts
+src/register/index.ts: src/register/register.test.ts, src/register/terms.test.ts
+src/register/terms.test.ts: src/register/terms.test.ts
+src/register/terms.ts: src/register/terms.test.ts
 src/register/dockerfile.test.ts: src/register/dockerfile.test.ts
 src/register/dockerfile.ts: src/register/dockerfile.test.ts
 src/register/origin.test.ts: src/register/origin.test.ts

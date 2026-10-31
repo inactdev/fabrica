@@ -591,6 +591,44 @@ Fabrica's own work is judged, so Fabrica never puts it in your
 repository unasked. The `--check`/`--image` route above does write it -
 onto a branch, in a pull request you review before it merges.
 
+### If you can't commit those files at all: `--terms <folder>`
+
+A day job's repository takes no `.inspector.json`, no `check.sh` and no
+`Dockerfile.inspector` - there is no pull request to open for them. So
+name a folder of your own instead:
+
+    fabrica register <path> --terms ~/fabrica-terms/widgets
+
+The same three files, derived the same way from what the repository
+already says, are written into that folder, and the project is
+registered pointing at it (`terms = "..."`, plus `noStamp = true`: no
+`inspector` commit status is expected for a repository nothing of yours
+is keyed on). **The repository is read and nothing more** - no branch,
+no commit, no pull request, so `gh` and Docker are not needed either.
+
+A file already in the folder is kept exactly as it is and only what is
+missing is written, so running it again after editing by hand is safe.
+Three things it tells you rather than leaving you to find out:
+
+- **Nothing is proven.** Unlike the route that writes into the
+  repository, this one runs no check - the `FROM` line is usually still
+  a `REPLACE-ME-with-...` placeholder. Read all three files and finish
+  them.
+- **`check.sh` is not written when your repository already has one.**
+  That file is what `./check.sh` means; a second copy beside it would be
+  a silent fork.
+- **The two settings start working at the next task, not now.** From
+  then on `fabrica do` reads the folder instead of the repository and
+  Inspector is handed it, so a `REPLACE-ME-with-...` still sitting in
+  one of the three files is that task's refusal. Finish them first.
+
+Use `--terms` on its own: it refuses `--check`, `--image`, `--timeout`
+and `--protected`, which only describe the route that writes into the
+repository, rather than accepting one and quietly ignoring it. A
+repository Fabrica cannot commit to usually also needs its own GitHub
+token - `githubTokenVar = "<NAME>"` on the same entry, naming the
+`brain.env` variable holding it.
+
 ## Running a task
 
     fabrica do "<task text>" --project <path-or-name> [--model <name>]

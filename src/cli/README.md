@@ -90,6 +90,21 @@ pulls the FROM image and a check that is about to be green must not
 read as red here. See `src/register/README.md`'s "`Dockerfile.inspector`,
 and why `/deps`" and "`--timeout`, and the one proving run".
 
+`--terms <folder>` is the work-mode route: a repository that can carry
+none of those three files gets them written into a folder of the
+Client's own instead, and `projects.toml` records it plus
+`noStamp = true`. Nothing about the repository is touched - no branch, no
+commit, no pull request - so `gh` and Docker are not asked about
+either. It refuses `--check`, `--image`, `--timeout` and `--protected`
+rather than accepting one it would have to ignore, and the refusal is
+`src/register/register.ts`'s, not this layer's, for the same reason
+`--check`'s presence is: `registerProject` is also a library entry
+point. `registerSummary` prints the one limit of that route on stdout -
+nothing was proven - and what the two settings it recorded then do on
+every round (`src/workmode/`), so a placeholder left in one of the three
+files reads as the next task's refusal rather than a surprise. See
+`src/register/README.md`'s "Work mode: `--terms <folder>`".
+
 Progress goes to **stderr** and the summary to stdout: this command
 pulls images, pushes, and calls GitHub, so saying nothing for a minute
 reads as a hang - but stdout stays worth reading from a script.
@@ -1482,7 +1497,7 @@ already recorded, and the response says `signaled: false`.
 | `tsx-bootstrap.mjs` | What the detached child actually runs; loads an arbitrary entry script with tsx support taught to it fresh, via `pathToFileURL` - except a `?` in the entry's path, refused outright rather than attempted (see above). |
 | `main.ts` | `fabrica <command> [args]` dispatch and top-level `--help`. A new subcommand adds one more branch here, the way `answer` (#8) and `status`/`log`/`watch` (#12) each did - and one more decision: `skill-settings.test.ts` reads this dispatch and fails until every command in it is either auto-approved by each shipped harness's `settings.json` or listed as deciding/hook-only there (issue #76). |
 | `help.ts` | Top-level help text and the list of known commands. |
-| `register-args.ts` | Parses `fabrica register`'s arguments. `--check`/`--image` are not required here on purpose - only the repository can say whether they are needed (see above). |
+| `register-args.ts` | Parses `fabrica register`'s arguments. `--check`/`--image` are not required here on purpose - only the repository can say whether they are needed (see above) - and `--terms`'s incompatibility with four of the others is refused in `src/register/` for the same reason. |
 | `register-command.ts` | `fabrica register`: resolves the record home and the path (absolute, so `fabrica register .` works), calls `registerProject`, and prints `registerSummary`. Progress to stderr, summary to stdout. The mechanism is `src/register/`; `REGISTER_HELP` is `register --help`'s text. |
 | `do-args.ts` | Parses `fabrica do`'s arguments. |
 | `do-command.ts` | Ties config, project resolution, the "is this project set up for Fabrica" refusal (`refusalForUnsetUpProject`, overridable in tests via `setUpRefusal`), the detached spawn, and the ask-outcome wait together for `fabrica do`; `DO_HELP` is `do --help`'s text. That setup refusal now has a third ground (inspector issue #34): an inspected project with no usable code reader - no `[reader]` table, no `<VENDOR>_API_KEY`, or no `<VENDOR>_BASE_URL` - is refused with the lines to add, before anything is registered. Unlike the reviewer ground it needs no `testPaths`, since every task's diff is read. |

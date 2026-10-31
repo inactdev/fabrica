@@ -102,8 +102,10 @@ export interface ProjectConfig {
    * Set, Fabrica hands the folder to Inspector and stops looking for
    * those files in the repository at all; absent - the default, and
    * every project today - everything reads out of the repository exactly
-   * as before. Read-only to Fabrica: nothing ever writes into it. See
-   * src/workmode/. */
+   * as before. Written once, by `fabrica register --terms`, which
+   * scaffolds those files into the folder and records this line; read-only
+   * to Fabrica from then on - no round ever writes into it. See
+   * src/workmode/ and src/register/terms.ts. */
   terms?: string;
   /** `noStamp = true` — Inspector is asked not to post its commit
    * status for this project, and Fabrica's own checks for one are

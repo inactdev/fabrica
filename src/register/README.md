@@ -56,6 +56,10 @@ there every failure path unwinds what it made:
 `projects.toml` is written **last**, so the registry only ever gains an
 entry once the repository side actually happened.
 
+A work-mode registration (`--terms <folder>`, below) replaces steps 2,
+3, 4, 5, 8, 9 and 10 with one: write the three files into that folder.
+Steps 1, 6, 7 and 11 are unchanged.
+
 ## Why origin's default branch, never the local checkout
 
 A task's base commit is cut from origin's default branch
@@ -185,6 +189,109 @@ stale (a proposal needs no `gh` and no Docker), and it would also answer
 "this project is already registered" with a config proposal he cannot
 use. Refusals first, proposal last.
 
+## Work mode: `--terms <folder>`, for a repository that can carry none of this
+
+At a day job the three files that say how work is judged cannot be
+committed to the company's repository at all. There is no pull request
+to open for them. So `--terms <folder>` writes them into a folder of the
+Client's own instead, and `projects.toml` records where (`terms`) plus
+`noStamp = true` — two of issue #316's three work-mode settings, beside
+issue #314's `githubTokenVar` (`src/projecttoken/`). Both are read, on
+every round, by `src/workmode/`; this command is the one place that
+writes them. The third, `pullRequestTemplate`, is the Client's own
+choice per repository and is not written here.
+
+`terms.ts` is that route. Its three properties, and they are the whole
+of it:
+
+- **The repository is not touched.** No worktree, no commit, no branch,
+  no push, no pull request. `terms.test.ts` proves it with the same
+  `fingerprint()` ruler CONTRACT rule 1 uses, and asserts none of the
+  four faked outside things was reached.
+- **The contents are derived, not invented.** `propose.ts`'s
+  `deriveProposal` is the same code, over the same signals, read off the
+  same ref (origin's default branch) as the proposal `register` prints.
+  There is no second set of rules for a work-mode project — which is
+  what `propose.test.ts`'s "the printed proposal is built from exactly
+  what it returns" pins.
+- **Nothing already in the folder is overwritten** (Client ruling on
+  this task: "keep existing files, write only what's missing"). Each
+  write is a `wx` open, so "already there" is the filesystem's own
+  answer rather than a question asked before a write that could race it.
+  So a folder the Client has edited by hand survives a second run byte
+  for byte.
+
+### The four prerequisites it skips, and why
+
+`gh`, the Docker daemon, a `fabrica/register` branch on origin and a
+leftover local one are all prerequisites of *pushing*. This route
+pushes nothing, so refusing it for a logged-out `gh` or a stopped Docker
+daemon would refuse a setup the machine is perfectly able to do. What
+still refuses, unchanged: `<path>` being a git repository's root with an
+`origin` (a task's base commit is still cut from origin's default
+branch), the name being a usable `projects.toml` key, and the project
+not already being registered.
+
+In their place, three refusals of its own, all of them reads:
+`--terms` naming something that is not an existing folder
+(`terms-unusable` — it is never created for you, so a typo cannot
+quietly become a registered project's terms folder); naming a folder
+*inside* the repository (`terms-inside-repo` — there, the terms are in
+every Worker's own checkout, editable by the very task they judge); and
+a repository that already carries `.inspector.json` on origin's default
+branch (`terms-not-needed` — its terms are in it, and a second set
+beside them could only disagree).
+
+### Why it refuses `--check`, `--image`, `--timeout` and `--protected`
+
+Those four describe the route that writes into the repository.
+`--image` exists to be pulled by the one proving run, and this route has
+nothing to run it against: `check.sh` lands in the terms folder, not in
+a worktree of the repository. `--timeout` and `--protected` are derived
+here the way a proposal derives them. Accepting any of them and ignoring
+it is the silent skip the standing rulings forbid, so the combination is
+a refusal naming both flags — in `register.ts`, not in the argument
+parser, because `registerProject` is also a library entry point and one
+implementation is what keeps the two from disagreeing.
+
+### `.inspector.json` names `./check.sh` here, whatever the signals said
+
+The printed proposal can name an indirect command (`npm test`), because
+it writes no script for that command to live in. This route does write
+one, so it keeps "One source of truth for the check" below instead: the
+derived command goes inside `check.sh`, and the config, the script and
+`projects.toml` all name `./check.sh`.
+
+The one file deliberately not written: a repository that already carries
+its own `check.sh` at its root keeps it, and no second one goes into the
+terms folder — `./check.sh` already means that file, and a copy would be
+a silent fork of it. Reported on the result and printed, never skipped
+quietly. A repository naming no command at all gets a `check.sh` that
+**fails** with an explanation and the usual `REPLACE-ME-with-...`
+marker; a stub exiting 0 would make every task on the project green for
+free.
+
+### What `--terms` does not do
+
+- **It proves nothing.** The repository route runs `./check.sh` inside
+  `--image` before it pushes, and can, because it has a worktree and an
+  image the Client named. Here the `FROM` line is usually still a
+  placeholder, so there is nothing to run and nothing is claimed. The
+  summary says so on stdout.
+- **It finishes nothing.** The two settings it records are read from the
+  next task onwards — `fabrica do` asks `termsSetup` about the folder
+  instead of `originSetup` about the repository, and a round hands
+  Inspector `-terms` (`src/workmode/`, `src/inspector/terms.ts`,
+  `src/foreman/judge.ts`) — but a `REPLACE-ME-with-...` still in one of
+  the three files is a refusal at that task, which this route cannot
+  pre-empt because it runs nothing. `registerSummary` says so in the
+  same breath as the registration rather than leaving the Client to meet
+  it as a refusal.
+- **It writes no `pullRequestTemplate`.** Work mode's third setting says
+  the repository's own `.github/PULL_REQUEST_TEMPLATE.md` is the shape
+  of the pull request body — a fact about that repository, not something
+  this command could read off the two it was given.
+
 ## `.inspector.json`'s schema, and where it came from
 
 Up to three keys: `check` (always `./check.sh`), `protectedPaths`, and —
@@ -311,7 +418,8 @@ request body, before the merge.
 ## One source of truth for the check
 
 `projects.toml`'s `check` is always `./check.sh` — not the `--check`
-command verbatim — in both the full and the shortcut case. `check.sh`
+command verbatim — in the full, the shortcut and the work-mode case
+alike. `check.sh`
 holds the command, `.inspector.json` names `./check.sh`, and
 `projects.toml` names `./check.sh`. Recording the raw command instead
 would mean an edit to `check.sh` silently left `projects.toml`

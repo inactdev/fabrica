@@ -357,6 +357,9 @@ export type {
 // to write one from gets a *proposal* instead, printed and never written
 // (issue #114): RegisterProposalError is how that reaches the CLI, which
 // has to put the document on stdout alone and the reasoning on stderr.
+// A repository it can never be committed to at all - a day job's - takes
+// `--terms <folder>` and gets the same proposal written into a folder of
+// the Client's own, with the repository untouched (work mode).
 export {
   registerProject,
   proposeInspectorConfig,
@@ -377,6 +380,8 @@ export type {
   RegisterRequest,
   RegisterResult,
   RegisterTools,
+  TermsFile,
+  TermsFileOutcome,
 } from "./register/index.ts";
 
 // Off-the-books nets (issue #13), prevention half: recordBlockedEditAttempt

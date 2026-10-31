@@ -38,6 +38,15 @@ once per project, before the first \`fabrica do\` against it.
                             protected.
   --name <name>            The name to register it under. Defaults to
                             origin's repository name.
+  --terms <folder>         For a repository you cannot commit these
+                            files to at all - a day job's. The three of
+                            them are written into this folder instead,
+                            derived from what the repository already
+                            says, and the repository is not touched:
+                            no branch, no commit, no pull request. Use
+                            it alone - it cannot be combined with
+                            --check, --image, --timeout or --protected,
+                            which only describe the other route.
 
 What it does, in order - everything that can refuse refuses before
 anything is created:
@@ -93,6 +102,15 @@ REPLACE-ME..., commit it yourself, and run this again. Fabrica never
 writes those files for you unasked - the files defining how Fabrica's
 own work is judged are yours to commit.
 
+With --terms <folder>, the same three files are derived the same way
+and written into that folder, and the project is registered pointing at
+it. The repository is read and nothing more. A file already in the
+folder is kept exactly as it is and only what is missing is written, so
+running it again after editing by hand is safe. Two things this route
+cannot do, and says so rather than implying otherwise: it runs no
+check, so nothing about the setup is proven, and it gives the project
+noStamp = true - no inspector commit status is expected for it.
+
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
 `;
@@ -111,7 +129,21 @@ export interface RunRegisterCommandOptions {
  * itself so the wording is testable without a registration. */
 export function registerSummary(result: RegisterResult): string[] {
   const lines: string[] = [];
-  if (result.kind === "full") {
+  if (result.kind === "terms") {
+    lines.push(`Wrote ${result.name}'s terms into ${result.terms} - the repository itself was not touched.`);
+    for (const file of result.termsFiles ?? []) {
+      lines.push(`  ${file.file}: ${file.detail}`);
+    }
+    // Both of these are honest limits of this route rather than
+    // incidental detail, so they are on stdout with the summary and not
+    // buried in the progress lines on stderr.
+    lines.push(
+      `  nothing was proven: unlike a registration that writes into the repository, this route runs no check`
+    );
+    lines.push(
+      `  read all three, replace anything marked REPLACE-ME-with-..., and keep them beside the repository`
+    );
+  } else if (result.kind === "full") {
     lines.push(`Opened a pull request setting ${result.name} up for Fabrica:`);
     lines.push(`  ${result.pullRequestUrl}`);
     lines.push(
@@ -128,11 +160,29 @@ export function registerSummary(result: RegisterResult): string[] {
   }
   lines.push(`Registered in ${result.tomlPath}:`);
   for (const line of result.tomlEntry.trim().split("\n")) lines.push(`  ${line}`);
-  lines.push(
-    result.kind === "full"
-      ? `Merge that pull request, then: fabrica do "<task text>" --project ${result.name}`
-      : `Ready: fabrica do "<task text>" --project ${result.name}`
-  );
+  if (result.kind === "terms") {
+    // Said here rather than left for the Client to meet as a refusal:
+    // the two settings above are what every round then reads (terms ->
+    // the folder Inspector is handed instead of the repository, noStamp
+    // -> no commit status is expected), so a placeholder still in one of
+    // those files is a refusal at the next task rather than something
+    // this command can prove now.
+    lines.push(
+      `Those two settings are what every round reads: ${result.terms} is handed to Inspector instead of the ` +
+        `repository, and no inspector commit status is expected. Finish the files there before the first task - ` +
+        `a REPLACE-ME-with-... left in one of them refuses the task.`
+    );
+    lines.push(
+      `A repository Fabrica cannot commit to usually needs its own GitHub token too: add ` +
+        `githubTokenVar = "<NAME>" to that entry, naming the brain.env variable holding it.`
+    );
+  } else {
+    lines.push(
+      result.kind === "full"
+        ? `Merge that pull request, then: fabrica do "<task text>" --project ${result.name}`
+        : `Ready: fabrica do "<task text>" --project ${result.name}`
+    );
+  }
   return lines;
 }
 
@@ -159,6 +209,11 @@ export async function runRegisterCommand(argv: string[], opts: RunRegisterComman
         protectedPaths: args.protectedPaths,
         ...(args.name !== undefined ? { name: args.name } : {}),
         ...(args.timeoutSeconds !== undefined ? { timeoutSeconds: args.timeoutSeconds } : {}),
+        // Resolved against cwd for the same reason <path> is, and
+        // recorded in projects.toml absolute: a relative terms folder
+        // in the registry would mean something different to every
+        // later caller.
+        ...(args.terms !== undefined ? { terms: resolve(opts.cwd ?? process.cwd(), args.terms) } : {}),
       },
       {
         ...(opts.tools !== undefined ? { tools: opts.tools } : {}),

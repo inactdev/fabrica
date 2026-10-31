@@ -164,7 +164,25 @@ function checkScriptBody(text: string): string {
     .join("; ");
 }
 
-interface CheckField {
+/**
+ * Where the derived check came from. The printed proposal does not need
+ * to know - it quotes `command` and stops - but a route that *writes* a
+ * `check.sh` (`--terms`, see terms.ts) does: whether the repository
+ * already has its own script, names a command but no script, or names
+ * nothing at all decides whether a `check.sh` is written beside the
+ * config and what goes in it.
+ */
+export type CheckSource =
+  /** The repository already carries `check.sh` at its root, and an
+   * existing one wins over every other signal. */
+  | "repository-script"
+  /** The repository names a command but no script of its own -
+   * `package.json`'s `test` script, a Go module's `go test ./...`. */
+  | "declared-command"
+  /** Nothing in the repository names a command that has to pass. */
+  | "none";
+
+export interface CheckField {
   /** What goes in `.inspector.json`'s `check`. */
   command: string;
   /** The repository-relative file that command *is*, when it is one -
@@ -175,6 +193,7 @@ interface CheckField {
    * script's own body when there is a script, the command itself
    * otherwise. */
   text: string;
+  source: CheckSource;
   reason: string;
 }
 
@@ -190,6 +209,7 @@ function proposeCheck(signals: ProposalSignals, pkg: Record<string, unknown> | n
       command: RECORDED_CHECK,
       file: CHECK_SCRIPT,
       text: signals.checkScript,
+      source: "repository-script",
       reason:
         `the repository already has a ${CHECK_SCRIPT} at its root, and an existing one wins over every ` +
         `other signal` +
@@ -202,6 +222,7 @@ function proposeCheck(signals: ProposalSignals, pkg: Record<string, unknown> | n
     return {
       command: "npm test",
       file: null,
+      source: "declared-command",
       // The script's own body too, not just the `npm test` that invokes
       // it: a "test" script that starts with its own `npm ci` is a check
       // that fetches, and the warning about that has to see it.
@@ -216,6 +237,7 @@ function proposeCheck(signals: ProposalSignals, pkg: Record<string, unknown> | n
       command: "go test ./...",
       file: null,
       text: "go test ./...",
+      source: "declared-command",
       reason:
         `${GO_MOD} makes this a Go module${version === null ? `` : ` (go ${version})`} and nothing in it names ` +
         `another command, so the toolchain's own test command stands`,
@@ -226,6 +248,7 @@ function proposeCheck(signals: ProposalSignals, pkg: Record<string, unknown> | n
     command: RECORDED_CHECK,
     file: CHECK_SCRIPT,
     text: "",
+    source: "none",
     reason:
       `nothing in the repository names a command that has to pass - no ${CHECK_SCRIPT}, no ${PACKAGE_JSON} ` +
       `"test" script, no ${GO_MOD}. Write ${CHECK_SCRIPT} with the one command you want held to, and this ` +
@@ -259,7 +282,7 @@ function checkDisagreements(signals: ProposalSignals, pkg: Record<string, unknow
   return notes;
 }
 
-interface ImageField {
+export interface ImageField {
   value: string;
   reason: string;
 }
@@ -319,7 +342,7 @@ function proposeImage(signals: ProposalSignals, pkg: Record<string, unknown> | n
   };
 }
 
-interface DependencyField {
+export interface DependencyField {
   /** The install step the Dockerfile gets, or `null` for a shape nothing
    * here recognizes - which becomes a comment in the file, never a
    * silent gap. */
@@ -408,9 +431,11 @@ function fetchingCheckWarning(check: CheckField, dependencies: DependencyField):
 }
 
 /**
- * The other half of the `/deps` mechanism, on the one route where
- * `register` does not write it: a proposal writes no `check.sh`, so the
- * Client's own has to use what the image installed. `npm ci` at build
+ * The other half of the `/deps` mechanism, for a route that does not
+ * write `check.sh` itself: a printed proposal never does, and the
+ * `--terms` route does not when the repository already carries its own.
+ * Either way the Client's own file has to use what the image installed.
+ * `npm ci` at build
  * time lands in `/deps` rather than in the checkout - Inspector puts the
  * repository's own files in place at check time, over anything installed
  * at that path - so a `check.sh` that links nothing in runs against a
@@ -432,7 +457,7 @@ function linkingNote(dependencies: DependencyField, warned: boolean): string | n
   );
 }
 
-interface ProtectedPathsField {
+export interface ProtectedPathsField {
   /** `undefined` leaves the key out of the document entirely. */
   paths: string[] | undefined;
   reason: string;
@@ -472,54 +497,102 @@ function proposeProtectedPaths(check: CheckField): ProtectedPathsField {
 }
 
 /**
- * The whole proposal. Pure: everything it knows came from the three
- * strings in `signals`, so a test needs no repository.
+ * Everything derived from a repository's own signals, with none of it
+ * yet committed to being printed or written. Pure: everything it knows
+ * came from the strings in `signals`, so a test needs no repository.
+ *
+ * Both routes share this. `proposeInspectorConfig` below prints it and
+ * writes nothing (issue #114); `terms.ts` writes it into the folder
+ * `--terms` names and touches the repository not at all. The derivation
+ * is identical either way - which is the point: a work-mode project's
+ * terms are proposed from the same signals, by the same rules, as the
+ * proposal the Client reads on his screen.
  */
-export function proposeInspectorConfig(
-  signals: ProposalSignals,
-  ctx: { projectPath: string; defaultBranch: string }
-): InspectorProposal {
+export interface ProposalDerivation {
+  check: CheckField;
+  image: ImageField;
+  dependencies: DependencyField;
+  protectedPaths: ProtectedPathsField;
+  /** `Dockerfile.inspector`'s contents, with a trailing newline. */
+  dockerfile: string;
+  /**
+   * One line per field, then any disagreement between two signals, then
+   * the one warning about the check itself - in order, and the same on
+   * both routes. A caller frames them; it never has to assemble them.
+   */
+  fieldNotes: string[];
+  /**
+   * The `/deps` linking instruction, for a route that writes no
+   * `check.sh` of its own - the Client's own file has to do the linking
+   * then. `null` when there is nothing to link, or when `fieldNotes`'
+   * warning already said it (one instruction, in one place).
+   */
+  linkingNote: string | null;
+}
+
+/** Reads nothing and writes nothing: the rules, applied to what was
+ * read. */
+export function deriveProposal(signals: ProposalSignals): ProposalDerivation {
   const pkg = parsedPackageJson(signals.packageJson);
   const check = proposeCheck(signals, pkg);
   const image = proposeImage(signals, pkg);
   const dependencies = proposeDependencies(signals, pkg);
   const protectedPaths = proposeProtectedPaths(check);
+  const warning = fetchingCheckWarning(check, dependencies);
+
+  return {
+    check,
+    image,
+    dependencies,
+    protectedPaths,
+    dockerfile: inspectorDockerfile({
+      from: image.value,
+      reason: image.reason,
+      shape: dependencies.shape,
+    }),
+    fieldNotes: [
+      `  check: ${check.command} - ${check.reason}.`,
+      // Always omitted, and the one field where that is the whole
+      // answer: nothing in a package.json, a go.mod or a check.sh says
+      // how long a check takes, and an invented number is the number
+      // that would decide whether a real check is killed mid-run.
+      `  timeoutSeconds: omitted - nothing in the repository says how long the check takes, so Inspector's own ` +
+        `default stands. Set it once you have watched the check run.`,
+      `  protectedPaths: ${protectedPaths.paths === undefined ? "omitted" : protectedPaths.paths.join(", ")} - ` +
+        `${protectedPaths.reason}.`,
+      // The check box is built from Dockerfile.inspector since
+      // inspector#47, so these two are fields of that file rather than
+      // keys of a config - there is no `image` key and no `network` key
+      // to write any more, with any value.
+      `  ${DOCKERFILE_INSPECTOR} FROM: ${image.value} - ${image.reason}.`,
+      `  ${DOCKERFILE_INSPECTOR} dependencies: ${dependencies.summary} - ${dependencies.reason}.`,
+      ...checkDisagreements(signals, pkg),
+      ...(warning === null ? [] : [warning]),
+    ],
+    linkingNote: linkingNote(dependencies, warning !== null),
+  };
+}
+
+/**
+ * The whole printed proposal - the route that writes nothing at all.
+ */
+export function proposeInspectorConfig(
+  signals: ProposalSignals,
+  ctx: { projectPath: string; defaultBranch: string }
+): InspectorProposal {
+  const derived = deriveProposal(signals);
+  const { check, image, protectedPaths, dockerfile, linkingNote: linking } = derived;
 
   const json = inspectorConfigJson({
     check: check.command,
     ...(protectedPaths.paths !== undefined ? { protectedPaths: protectedPaths.paths } : {}),
   }).trimEnd();
 
-  const dockerfile = inspectorDockerfile({
-    from: image.value,
-    reason: image.reason,
-    shape: dependencies.shape,
-  });
-
-  const warning = fetchingCheckWarning(check, dependencies);
-  const linking = linkingNote(dependencies, warning !== null);
-
   const notes = [
     `fabrica register: ${ctx.projectPath} has no ${INSPECTOR_CONFIG} on origin/${ctx.defaultBranch}, so it ` +
       `needs setting up. Nothing was written and nothing was registered - what follows is a proposal of two ` +
       `files, derived from what the repository already says, for you to read and commit yourself.`,
-    `  check: ${check.command} - ${check.reason}.`,
-    // Always omitted, and the one field where that is the whole answer:
-    // nothing in a package.json, a go.mod or a check.sh says how long a
-    // check takes, and an invented number is the number that would
-    // decide whether a real check is killed mid-run.
-    `  timeoutSeconds: omitted - nothing in the repository says how long the check takes, so Inspector's own ` +
-      `default stands. Set it once you have watched the check run.`,
-    `  protectedPaths: ${protectedPaths.paths === undefined ? "omitted" : protectedPaths.paths.join(", ")} - ` +
-      `${protectedPaths.reason}.`,
-    // The check box is built from Dockerfile.inspector since
-    // inspector#47, so these two are fields of that file rather than
-    // keys of a config - there is no `image` key and no `network` key to
-    // write any more, with any value.
-    `  ${DOCKERFILE_INSPECTOR} FROM: ${image.value} - ${image.reason}.`,
-    `  ${DOCKERFILE_INSPECTOR} dependencies: ${dependencies.summary} - ${dependencies.reason}.`,
-    ...checkDisagreements(signals, pkg),
-    ...(warning === null ? [] : [warning]),
+    ...derived.fieldNotes,
     ...(linking === null ? [] : [linking]),
     `${INSPECTOR_CONFIG} is on stdout, alone: \`fabrica register ${ctx.projectPath} > ` +
       `${ctx.projectPath}/${INSPECTOR_CONFIG}\` writes exactly it and nothing else. ${DOCKERFILE_INSPECTOR} ` +
@@ -529,7 +602,9 @@ export function proposeInspectorConfig(
       `${ctx.defaultBranch}, then run \`fabrica register ${ctx.projectPath}\` again. Or pass ` +
       `--check "<command>" --image <docker image> and register will write ${INSPECTOR_CONFIG}, ` +
       `${CHECK_SCRIPT} and ${DOCKERFILE_INSPECTOR} for you, on a branch, in a pull request you review before ` +
-      `it merges.`,
+      `it merges. A repository you cannot commit them to at all - a day job's - takes --terms <folder> ` +
+      `instead: the same three files, derived the same way, written into that folder, with the repository ` +
+      `left alone.`,
   ];
 
   return { json, dockerfile, notes };

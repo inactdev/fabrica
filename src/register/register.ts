@@ -22,6 +22,9 @@
 //   6. the project name is usable, and isn't registered already
 //   7. does origin's default branch already carry .inspector.json?
 //        yes -> the projects.toml half only, and stop (step 11)
+//        no, and --terms <folder> -> write the three files into that
+//        folder, derived exactly as a proposal is, and stop having
+//        touched the repository not at all (see terms.ts)
 //        no, and no --check/--image -> print a proposed .inspector.json,
 //        derived from what the repository already says, and stop having
 //        created nothing (issue #114, see propose.ts)
@@ -63,6 +66,7 @@ import {
   type DependencyShape,
 } from "./dockerfile.ts";
 import { realRegisterTools, type RegisterTools } from "./tools.ts";
+import { resolveTermsFolder, writeTerms, type TermsFile } from "./terms.ts";
 
 export interface RegisterRequest {
   recordHome: string;
@@ -88,13 +92,27 @@ export interface RegisterRequest {
   timeoutSeconds?: number;
   /** Overrides the default name (origin's repository name). */
   name?: string;
+  /** `--terms <folder>`: a work-mode project, whose `.inspector.json`,
+   * `check.sh` and `Dockerfile.inspector` cannot be committed to the
+   * repository at all. They are written into this folder instead,
+   * derived from the repository's own signals exactly as a printed
+   * proposal is, and the repository is not touched - no branch, no
+   * commit, no pull request. See terms.ts.
+   *
+   * Mutually exclusive with `check`, `image`, `timeoutSeconds` and
+   * `protectedPaths`: those describe the route that writes into the
+   * repository and would have to be ignored here, which is a silent
+   * skip rather than a setting. */
+  terms?: string;
 }
 
 export interface RegisterResult {
   /** "full": wrote the files, ran the check, opened a pull request, then
    * registered. "registry-only": origin's default branch was already set
-   * up, so only projects.toml changed. */
-  kind: "full" | "registry-only";
+   * up, so only projects.toml changed. "terms": a work-mode project -
+   * the three files went into the folder `--terms` named and the
+   * repository was not touched. */
+  kind: "full" | "registry-only" | "terms";
   name: string;
   path: string;
   check: string;
@@ -108,6 +126,12 @@ export interface RegisterResult {
   /** Full setup only: whether Dockerfile.inspector was written, or a
    * committed one was found and left exactly as it was. */
   dockerfile?: DockerfileOutcome;
+  /** Work mode only: the folder the three files went into, absolute, as
+   * recorded in projects.toml. */
+  terms?: string;
+  /** Work mode only: all three files, each saying whether it was
+   * written, kept as it already was, or deliberately not written. */
+  termsFiles?: TermsFile[];
   /** Traps the Client should see before merging - the pull request body
    * carries the same words. Absent when there are none. */
   warnings?: string[];
@@ -288,10 +312,42 @@ export function registerWarnings(command: string, shape: DependencyShape | null)
   ];
 }
 
+/** The flags that only describe the route writing into the repository,
+ * named for the refusal below: `--terms` has no proving run to pull an
+ * image for, no commit to put a `--check` command in, and derives its
+ * own `timeoutSeconds` and `protectedPaths` the way a proposal does. */
+function repositoryRouteFlagsIn(request: RegisterRequest): string[] {
+  return [
+    ...(request.check !== undefined && request.check.trim().length > 0 ? ["--check"] : []),
+    ...(request.image !== undefined && request.image.trim().length > 0 ? ["--image"] : []),
+    ...(request.timeoutSeconds !== undefined ? ["--timeout"] : []),
+    ...((request.protectedPaths ?? []).length > 0 ? ["--protected"] : []),
+  ];
+}
+
 /** Returns the parsed, validated inputs every path needs, having proved
  * the machine can do the job - or throws a RegisterError naming the one
  * thing that is missing. Creates nothing. */
 function prepare(request: RegisterRequest, tools: RegisterTools) {
+  // First, because it reads nothing at all: a `--terms` run given a flag
+  // belonging to the other route. Accepting and ignoring one would be a
+  // silent skip, and this command's whole shape is that a refusal costs
+  // the Client nothing but the message.
+  const workMode = request.terms !== undefined;
+  if (workMode) {
+    const conflicting = repositoryRouteFlagsIn(request);
+    if (conflicting.length > 0) {
+      throw new RegisterError(
+        "terms-with-repository-flags",
+        `fabrica register: --terms cannot be combined with ${conflicting.join(", ")}. ` +
+          `--terms writes this project's terms into a folder of your own, deriving them from what the ` +
+          `repository already says - there is no commit for a --check command to land in and no proving run ` +
+          `for --image to be pulled by, so those flags would have to be ignored. Run it with --terms alone and ` +
+          `edit the files it writes. Nothing was changed.`
+      );
+    }
+  }
+
   let project: string;
   try {
     project = requireRepoRoot(request.path);
@@ -315,50 +371,62 @@ function prepare(request: RegisterRequest, tools: RegisterTools) {
     );
   }
 
-  const host = hostFromOriginUrl(url);
-  const gh = tools.ghStatus(host);
-  if (!gh.ok) {
-    throw new RegisterError(
-      "gh-not-ready",
-      `fabrica register: ${gh.detail}. ${gh.fix ? `Fix: ${gh.fix}. ` : ""}Nothing was changed.`
-    );
-  }
+  // Four prerequisites of *pushing*, so four questions a work-mode
+  // registration has no business asking: it commits nothing, creates no
+  // branch and opens no pull request, and refusing it for a logged-out
+  // `gh` or a stopped Docker daemon would refuse a setup this machine is
+  // perfectly able to do. The terms folder is checked in their place -
+  // the one thing this route genuinely cannot work without.
+  let terms: string | undefined;
+  if (workMode) {
+    terms = resolveTermsFolder(request.terms!, project);
+  } else {
+    const host = hostFromOriginUrl(url);
+    const gh = tools.ghStatus(host);
+    if (!gh.ok) {
+      throw new RegisterError(
+        "gh-not-ready",
+        `fabrica register: ${gh.detail}. ${gh.fix ? `Fix: ${gh.fix}. ` : ""}Nothing was changed.`
+      );
+    }
 
-  const docker = tools.dockerStatus();
-  if (!docker.ok) {
-    throw new RegisterError(
-      "docker-not-ready",
-      `fabrica register: ${docker.detail}. ${docker.fix ? `Fix: ${docker.fix}. ` : ""}Nothing was changed.`
-    );
-  }
+    const docker = tools.dockerStatus();
+    if (!docker.ok) {
+      throw new RegisterError(
+        "docker-not-ready",
+        `fabrica register: ${docker.detail}. ${docker.fix ? `Fix: ${docker.fix}. ` : ""}Nothing was changed.`
+      );
+    }
 
-  // Reading origin's branch list proves two things at once: that origin
-  // is reachable with the Client's own credentials (so a push has a clean
-  // path), and that fabrica/register isn't already there.
-  let takenOnOrigin: boolean;
-  try {
-    takenOnOrigin = branchExistsOnOrigin(project, REGISTER_BRANCH);
-  } catch (err) {
-    throw new RegisterError(
-      "origin-unreadable",
-      `fabrica register: could not read origin for ${project}, so there is no clean path to push: ` +
-        `${gitFailure(err)}. Nothing was changed.`
-    );
-  }
-  if (takenOnOrigin) {
-    throw new RegisterError(
-      "branch-exists",
-      `fabrica register: origin already has a ${REGISTER_BRANCH} branch. Fabrica never overwrites or ` +
-        `force-pushes one. Merge or delete that branch (and close its pull request if it has one), then try ` +
-        `again. Nothing was changed.`
-    );
-  }
-  if (branchExistsLocally(project, REGISTER_BRANCH)) {
-    throw new RegisterError(
-      "branch-exists",
-      `fabrica register: ${project} already has a local ${REGISTER_BRANCH} branch, left over from an earlier ` +
-        `run. Delete it (\`git -C ${project} branch -D ${REGISTER_BRANCH}\`), then try again. Nothing was changed.`
-    );
+    // Reading origin's branch list proves two things at once: that
+    // origin is reachable with the Client's own credentials (so a push
+    // has a clean path), and that fabrica/register isn't already there.
+    let takenOnOrigin: boolean;
+    try {
+      takenOnOrigin = branchExistsOnOrigin(project, REGISTER_BRANCH);
+    } catch (err) {
+      throw new RegisterError(
+        "origin-unreadable",
+        `fabrica register: could not read origin for ${project}, so there is no clean path to push: ` +
+          `${gitFailure(err)}. Nothing was changed.`
+      );
+    }
+    if (takenOnOrigin) {
+      throw new RegisterError(
+        "branch-exists",
+        `fabrica register: origin already has a ${REGISTER_BRANCH} branch. Fabrica never overwrites or ` +
+          `force-pushes one. Merge or delete that branch (and close its pull request if it has one), then try ` +
+          `again. Nothing was changed.`
+      );
+    }
+    if (branchExistsLocally(project, REGISTER_BRANCH)) {
+      throw new RegisterError(
+        "branch-exists",
+        `fabrica register: ${project} already has a local ${REGISTER_BRANCH} branch, left over from an earlier ` +
+          `run. Delete it (\`git -C ${project} branch -D ${REGISTER_BRANCH}\`), then try again. Nothing was ` +
+          `changed.`
+      );
+    }
   }
 
   const name = request.name ?? repoNameFromOriginUrl(url);
@@ -384,7 +452,7 @@ function prepare(request: RegisterRequest, tools: RegisterTools) {
     );
   }
 
-  return { project, url, name };
+  return { project, url, name, terms };
 }
 
 /** The shortcut case (Client ruling): origin's default branch already
@@ -425,6 +493,56 @@ function registerExisting(
   };
 }
 
+/**
+ * Work mode (`--terms <folder>`): the three files go into the Client's
+ * own folder, the repository is not touched at all, and projects.toml
+ * records where they are plus the two settings that go with it.
+ *
+ * `noStamp = true` rides along because it is the same decision: a
+ * repository Fabrica may not commit its terms to is a repository whose
+ * `inspector` commit status nothing is keyed on either - there is no
+ * required-check setting of the Client's to wire it into. Both lines are
+ * the settings `src/workmode/` reads off the entry on every round
+ * afterwards; this command is the one place that writes them.
+ */
+function registerTerms(
+  request: RegisterRequest,
+  ctx: { project: string; name: string; terms: string },
+  defaultBranch: string,
+  notify: (line: string) => void
+): RegisterResult {
+  const result = writeTerms({
+    terms: ctx.terms,
+    projectPath: ctx.project,
+    // The same ref the ".inspector.json already there?" question was
+    // just asked against, and the ref a task's base commit is actually
+    // cut from - never the Client's working tree.
+    signals: readProposalSignals(ctx.project, `origin/${defaultBranch}`),
+  });
+  for (const note of result.notes) notify(note);
+
+  const { tomlPath, appended } = appendProjectEntry({
+    recordHome: request.recordHome,
+    name: ctx.name,
+    path: ctx.project,
+    check: RECORDED_CHECK,
+    terms: ctx.terms,
+    noStamp: true,
+  });
+
+  return {
+    kind: "terms",
+    name: ctx.name,
+    path: ctx.project,
+    check: RECORDED_CHECK,
+    defaultBranch,
+    tomlPath,
+    tomlEntry: appended,
+    terms: result.terms,
+    termsFiles: result.files,
+  };
+}
+
 /** Returns the registration, or throws a RegisterError whose message is
  * ready to show the Client verbatim. Never leaves a temporary worktree
  * behind, on any path. */
@@ -435,7 +553,7 @@ export async function registerProject(
   const tools = opts.tools ?? realRegisterTools;
   const notify = opts.notify ?? (() => {});
 
-  const { project, name } = prepare(request, tools);
+  const { project, name, terms } = prepare(request, tools);
 
   notify(`Reading origin's default branch for ${project}...`);
   let defaultBranch: string;
@@ -449,8 +567,29 @@ export async function registerProject(
   }
 
   if (fileExistsOnRef(project, `origin/${defaultBranch}`, INSPECTOR_CONFIG)) {
+    // A work-mode registration here would put a second set of terms
+    // beside a repository that already carries its own, and the two
+    // could only ever disagree about how work on it is judged. Refused
+    // rather than registered one way and written the other.
+    if (terms !== undefined) {
+      throw new RegisterError(
+        "terms-not-needed",
+        `fabrica register: ${project} already carries ${INSPECTOR_CONFIG} on origin/${defaultBranch}, so its ` +
+          `terms are in the repository itself and --terms has nothing to add - a second set beside it could ` +
+          `only disagree with them. Register it without --terms. Nothing was changed.`
+      );
+    }
     notify(`origin/${defaultBranch} already has ${INSPECTOR_CONFIG} - registering ${name} only.`);
     return registerExisting(request, { project, name }, defaultBranch);
+  }
+
+  // Work mode: the repository cannot carry its own terms, so they go
+  // into the Client's own folder and nothing here is committed, pushed
+  // or opened. Before the --check/--image requirement below, which is
+  // the repository route's own.
+  if (terms !== undefined) {
+    notify(`Writing ${name}'s terms into ${terms} - the repository itself is not touched.`);
+    return registerTerms(request, { project, name, terms }, defaultBranch, notify);
   }
 
   // Past this point the full setup is what's happening, so the two
