@@ -7,7 +7,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import type { CommitAncestry, InspectorBuild } from "../index.ts";
 import type { CopyInfo } from "./doctor-command.ts";
 import { runUpdateCommand, type InspectorUpdateProbes, type UpdateProbes } from "./update-command.ts";
@@ -731,4 +733,87 @@ test("runUpdateCommand: nothing here can open a browser tab - every route to one
         `fabrica up alone (see this file's own header and src/cli/up-command.ts's RefreshStaleLiveViewOptions).`
     );
   }
+});
+
+// Issue #322's amendment, requirement 3. New code can move Fabrica's own
+// machine layer, which makes every registered project's machine image
+// stale at once - so `fabrica update` brings them all forward with the
+// code rather than leaving the first task on each project to discover
+// it. The first time that issue landed, a merge left every project
+// needing an image that could not be built at all.
+function homeWithProjects(projects: Record<string, string>): string {
+  const home = mkdtempSync(join(tmpdir(), "fabrica-update-home-"));
+  writeFileSync(
+    join(home, "projects.toml"),
+    Object.entries(projects)
+      .map(([name, path]) => `[projects.${name}]\npath = ${JSON.stringify(path)}\n`)
+      .join("\n")
+  );
+  return home;
+}
+
+function layeredProject(label: string, from = "ruby:3.4"): string {
+  const dir = mkdtempSync(join(tmpdir(), `fabrica-update-${label}-`));
+  writeFileSync(join(dir, "Dockerfile.inspector"), `FROM ${from}\n`);
+  return dir;
+}
+
+test("runUpdateCommand: every registered project's machine image is built after the code lands", async () => {
+  const io = captureIo();
+  const recordHome = homeWithProjects({ api: layeredProject("api"), web: layeredProject("web") });
+  const built: string[] = [];
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], {
+    recordHome,
+    probes: devCheckoutProbes(),
+    machineImageIo: {
+      stamp: () => null,
+      // These fixture projects' base images run as root, and saying so
+      // here is what keeps this suite off a real daemon: composing a
+      // generated Dockerfile has to know the user its base image
+      // carries, which lives in the image rather than in any text.
+      baseUser: () => "",
+      run: async (cmd) => {
+        built.push(cmd.image);
+        return { ok: true, detail: "" };
+      },
+    },
+    ...live.opts,
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(built.length, 2, built.join(", "));
+  assert.match(io.out.join("\n"), /2 project images built/);
+});
+
+test("runUpdateCommand: one project's machine image failing to build is named, and fails nothing else", async () => {
+  const io = captureIo();
+  const broken = layeredProject("broken");
+  const recordHome = homeWithProjects({ broken, fine: layeredProject("fine") });
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], {
+    recordHome,
+    probes: devCheckoutProbes(),
+    machineImageIo: {
+      stamp: () => null,
+      baseUser: () => "",
+      run: async (cmd) =>
+        cmd.args.some((arg) => arg.includes(basename(broken).toLowerCase().replace(/[^a-z0-9]+/g, "-")))
+          ? { ok: false, detail: "ERROR: failed to solve: no such base image" }
+          : { ok: true, detail: "" },
+    },
+    ...live.opts,
+    ...io,
+  });
+
+  // Fabrica itself was still updated, and the live view still restarted.
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(live.state.startCalls, 1);
+  assert.match(io.err.join("\n"), /broken's machine image .* could not be built/);
+  assert.match(io.err.join("\n"), /no such base image/);
+  assert.match(io.err.join("\n"), /every other project was still brought forward/);
+  assert.match(io.out.join("\n"), /1 project image FAILED to build, 1 built/);
 });

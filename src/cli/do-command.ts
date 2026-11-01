@@ -27,6 +27,7 @@ import { DO_USAGE, parseDoArgs } from "./do-args.ts";
 import { resolveProjectPath } from "./resolve-project.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { spawnDetachedTask } from "./spawn-detached.ts";
+import { requireMachineImage, type MachineImageIo } from "./machine-image.ts";
 import { waitForAskOutcome } from "./wait-for-ask-outcome.ts";
 
 export const DO_HELP = `Usage: ${DO_USAGE}
@@ -191,6 +192,10 @@ export interface RunDoCommandOptions {
     config: FabricaConfig,
     projectArg: string
   ) => string | null;
+  /** Test-only seam for the per-project machine image gate (issue #322),
+   * which otherwise asks the real docker daemon and can run a real
+   * build. */
+  machineImageIo?: MachineImageIo;
 }
 
 /** Returns the process exit code - never throws. */
@@ -214,6 +219,33 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
     const notSetUp = (opts.setUpRefusal ?? refusalForUnsetUpProject)(projectPath, recordHome, config, projectArg);
     if (notSetUp !== null) {
       stderr(notSetUp);
+      return 1;
+    }
+
+    // Issue #322's amendment, requirement 4: the box this task will be
+    // written in has to be on this machine before anything is
+    // registered. A project on the shared image costs nothing here; one
+    // with a machine image of its own has it built now when it is
+    // missing or stale, and the task is refused - in the build's own
+    // words - when that build fails, so no round and no attempt is spent
+    // on a project whose box cannot be made. Only this project is ever
+    // touched or waited on, so a project with a broken
+    // Dockerfile.inspector cannot stop work on any other.
+    try {
+      await requireMachineImage(recordHome, projectPath, {
+        onBuilding: (machine, command) => {
+          stderr(
+            `fabrica do: ${projectPath} works in its own machine image (${machine.image}), which is not built or ` +
+              `is out of date - building it now from ${machine.inspectorDockerfile}. This takes a few minutes, ` +
+              `once, and the next task on this project will not wait for it.`
+          );
+          stderr(`  $ ${command.shell}`);
+        },
+        onOutput: (line) => stderr(`  ${line}`),
+        ...opts.machineImageIo,
+      });
+    } catch (err) {
+      stderr(`fabrica do: ${(err as Error).message}`);
       return 1;
     }
 

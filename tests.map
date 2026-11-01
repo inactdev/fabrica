@@ -87,6 +87,14 @@ src/brain/adapters/helpers/fake-claude-cli.test.ts: src/brain/adapters/helpers/f
 src/brain/adapters/helpers/fake-cli-reader.mjs: src/brain/adapters/cli-reader.test.ts
 src/brain/adapters/index.test.ts: src/brain/adapters/index.test.ts
 src/brain/adapters/index.ts: src/brain/adapters/index.test.ts
+# Hand-added: the machine layer carries both version pins, so the test
+# that binds them to the repo's other Node declarations covers it too -
+# and the real `docker build` of what it generates (issue #322's
+# amendment) is the only test that proves the file is buildable at all,
+# so touching the layer runs that too (it skips, loudly, without Docker).
+src/brain/adapters/machine-image-build.test.ts: src/brain/adapters/machine-image-build.test.ts
+src/brain/adapters/machine-layer.test.ts: src/brain/adapters/machine-layer.test.ts
+src/brain/adapters/machine-layer.ts: src/brain/adapters/machine-layer.test.ts, src/brain/adapters/machine-image-build.test.ts, src/cli/node-version-pins.test.ts
 src/brain/adapters/openai-agent/client.test.ts: src/brain/adapters/openai-agent/client.test.ts
 src/brain/adapters/openai-agent/loop.test.ts: src/brain/adapters/openai-agent/loop.test.ts
 src/brain/adapters/openai-agent/runtime-imports.test.ts: src/brain/adapters/openai-agent/runtime-imports.test.ts
@@ -147,6 +155,12 @@ src/cli/log-args.test.ts: src/cli/log-args.test.ts
 src/cli/log-args.ts: src/cli/log-args.test.ts
 src/cli/log-command.test.ts: src/cli/log-command.test.ts
 src/cli/log-command.ts: src/cli/log-command.test.ts
+# Hand-added: issue #322's amendment - the gate that refuses a task whose
+# project has no buildable machine image, and the all-projects build
+# `fabrica update` runs. Its own suite covers the decision and the
+# refusal; the two commands that call it cover their own wiring.
+src/cli/machine-image.test.ts: src/cli/machine-image.test.ts
+src/cli/machine-image.ts: src/cli/machine-image.test.ts, src/cli/do-command.test.ts, src/cli/update-command.test.ts
 src/cli/main.test.ts: src/cli/main.test.ts
 src/cli/main.ts: src/cli/main.test.ts
 src/cli/node-version-pins.test.ts: src/cli/node-version-pins.test.ts
@@ -404,6 +418,15 @@ src/quiz/schedule.test.ts: src/quiz/schedule.test.ts
 src/quiz/schedule.ts: src/quiz/schedule.test.ts
 src/quiz/staleness.test.ts: src/quiz/staleness.test.ts
 src/quiz/staleness.ts: src/quiz/staleness.test.ts
+
+# Hand-added: src/projectimage/ was written after this file was last
+# generated. `index.ts` is a barrel with no colocated test of its own,
+# and `resolve.ts` is driven by both files here - resolve.test.ts for
+# what it answers, wiring.test.ts for every call site that has to ask.
+src/projectimage/index.ts: src/projectimage/resolve.test.ts
+src/projectimage/resolve.test.ts: src/projectimage/resolve.test.ts
+src/projectimage/resolve.ts: src/projectimage/resolve.test.ts, src/projectimage/wiring.test.ts
+src/projectimage/wiring.test.ts: src/projectimage/wiring.test.ts
 # Hand-added: src/reader/ was written after this file was last generated,
 # so none of it was listed. `call.ts` and `types.ts` have no colocated
 # test of their own, but read.test.ts drives both ways of reaching a

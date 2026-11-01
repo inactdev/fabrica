@@ -48,6 +48,21 @@ function captureIo() {
 // (Client ruling 2026-10-10, #73) - every test below reaches a real outcome.
 const FAST_ASK_WAIT = { askPollMs: 20 };
 
+/** Issue #322's amendment, requirement 4: `fabrica do` now makes sure
+ * the project's own machine image is on this machine before registering
+ * anything. Every fixture below is on the shared image - no
+ * `Dockerfile.inspector` - except the work-mode ones, whose terms folder
+ * carries one, so those need a build that is not a real `docker build`.
+ * This stands in for one that succeeds. The gate's own decisions are
+ * covered in machine-image.test.ts; what the two tests spreading this
+ * cover is something else entirely. */
+const MACHINE_IMAGE_BUILDS = {
+  // `baseUser` is the other half of staying off a real daemon:
+  // composing a generated Dockerfile has to know the user its base image
+  // carries, and that lives in the image rather than in any text.
+  machineImageIo: { stamp: () => null, baseUser: () => "", run: async () => ({ ok: true, detail: "" }) },
+};
+
 test("runDoCommand: a literal project path registers a task and prints just its id", async () => {
   const recordHome = tempRecordHome();
   const project = makeFixtureRepo("exit 0");
@@ -672,12 +687,73 @@ test("runDoCommand: a project whose terms live outside its repository is not tol
     recordHome,
     entryScript: FAKE_ENTRY,
     ...FAST_ASK_WAIT,
+    ...MACHINE_IMAGE_BUILDS,
     ...io,
   });
 
   assert.doesNotMatch(io.err.join("\n"), /isn't set up for Fabrica yet/);
   assert.equal(io.out.length, 1, `it got as far as registering: ${io.err.join("\n")}`);
   assert.equal(code, 0, io.err.join("\n"));
+});
+
+// Issue #322's amendment, requirement 4: the box a task will be written
+// in has to exist before the task does. The first time that issue
+// landed, every project needed an image that could not be built, and a
+// task on such a project would have found that out somewhere inside a
+// round.
+test("runDoCommand: a project whose machine image cannot be built is refused before anything is registered", async () => {
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  writeFileSync(join(project, "Dockerfile.inspector"), "FROM no-such-base:nope\n");
+  const io = captureIo();
+
+  const code = await runDoCommand(["add a comment", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    machineImageIo: {
+      stamp: () => null,
+      baseUser: () => "",
+      run: async () => ({ ok: false, detail: "ERROR: failed to solve: no-such-base:nope: not found" }),
+    },
+    ...io,
+  });
+
+  assert.equal(code, 1, io.out.join("\n"));
+  assert.deepEqual(io.out, [], "nothing was registered, so there is no task id to print");
+  assert.match(io.err.join("\n"), /could not be built/);
+  assert.match(io.err.join("\n"), /no-such-base:nope: not found/, "the build's own error, not a paraphrase");
+  assert.match(io.err.join("\n"), /no attempt was spent/);
+  assert.deepEqual(readEventsForTask(recordHome, "task-1"), [], "and no round was begun");
+});
+
+test("runDoCommand: a project on the shared image asks docker nothing at all", async () => {
+  // The ordinary case, and it must stay free: a project that commits no
+  // Dockerfile.inspector has no image of its own to check or build.
+  const recordHome = tempRecordHome();
+  const project = makeFixtureRepo("exit 0");
+  const io = captureIo();
+  let asked = 0;
+
+  const code = await runDoCommand(["add a comment", "--project", project], {
+    recordHome,
+    entryScript: FAKE_ENTRY,
+    ...FAST_ASK_WAIT,
+    machineImageIo: {
+      stamp: () => {
+        asked += 1;
+        return null;
+      },
+      run: async () => {
+        asked += 1;
+        return { ok: true, detail: "" };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(asked, 0, "the shared image is not a per-project image to probe");
 });
 
 // The reviewer half of the same gate, read from the terms folder - the
