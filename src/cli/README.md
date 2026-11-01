@@ -116,7 +116,7 @@ list (`skill-settings.test.ts`); HANDBOOK.md's case 8 is what stops the
 chat agent running it unasked, by turning `fabrica do`'s refusal below
 into a yes/no question for the Client first.
 
-## `fabrica do "<task text>" --project <path-or-name> [--issue <N>] [--model <name>]`
+## `fabrica do "<task text>" --project <path-or-name> [--issue <N>] [--model <name>] [--file <path>]...`
 
 The one command this issue builds. What it does, in order:
 
@@ -142,10 +142,20 @@ The one command this issue builds. What it does, in order:
    `model` setting in `projects.toml`. An empty value refuses rather
    than silently falling back to the default - the Client asking for a
    model and quietly getting another one is the confusion that flag
-   exists to end. Anything else - missing task text, missing
-   `--project`, an unrecognized flag, an `--issue` naming no issue, two
-   positionals - refuses with the exact usage line, exit 1, nothing
-   spawned.
+   exists to end. Issue #325 adds the one **repeatable** flag,
+   `--file <path>`/`--file=<path>`: a document this task needs, copied
+   into every round's worker folder under `.fabrica-files/` before the
+   machine starts (`src/attached/`, whose README owns the whole design -
+   including why nothing in that folder is ever committed). Only the
+   value's own shape is judged here: an empty one refuses, for the same
+   reason an empty `--model` does, and every path is made **absolute**
+   against this terminal's working directory, because the detached
+   process that registers the task does not share it. Whether there is a
+   readable file at a path is settled at registration, where the refusal
+   lands on the task's own record. Anything else - missing task text,
+   missing `--project`, an unrecognized flag, an `--issue` naming no
+   issue, two positionals - refuses with the exact usage line, exit 1,
+   nothing spawned.
 2. **Reads config** (`loadConfig`, from `src/index.ts`) for the record
    home's project registry and caps. A record home with no
    `projects.toml` at all yet (a brand-new install) is not an error -
@@ -217,7 +227,12 @@ The one command this issue builds. What it does, in order:
    that boundary as the text the Client typed, not a number re-derived
    on the way: all three spellings have to arrive intact, and
    registration is the one place that resolves which repository a bare
-   number means (`src/foreman/task-issue.ts`).
+   number means (`src/foreman/task-issue.ts`). `--file` (issue #325) is
+   the one flag of the three that may appear more than once, and it
+   crosses as one `--file <path>` pair per file rather than as a
+   delimited list in a single flag: a filesystem path is exactly the
+   kind of value a delimiter would mangle, with nothing on the far side
+   able to tell a mangled path from a deliberate one.
 6. **Waits, bounded, to see whether the task asks, proceeds, or fails**
    (`wait-for-ask-outcome.ts`, issue #8): the detached process is still
    running `doTask` (`src/foreman/do.ts`), which now does register ->

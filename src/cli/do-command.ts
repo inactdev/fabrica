@@ -71,6 +71,19 @@ record as it runs.
                             Whatever model actually runs is recorded on
                             every receipt beside this declaration, and
                             shown on the task's row.
+  --file <path>            A file this task needs - a spec, a note, a
+                            data file. Repeat it for each one. Every
+                            file is copied into the worker's own folder,
+                            under \`.fabrica-files/\`, before the machine
+                            starts, and the brief names each by name and
+                            size. That folder is kept out of git and
+                            removed before the work is committed, so a
+                            file only lands in the repository if the
+                            task asks for it and the machine copies it
+                            to a real path. The paths are read once,
+                            when the task is registered; if one cannot
+                            be read, nothing starts and the cause
+                            prints here.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
@@ -186,7 +199,7 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
   try {
-    const { taskText, projectArg, issue, model } = parseDoArgs(argv);
+    const { taskText, projectArg, issue, model, files } = parseDoArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
     const config = loadConfigOrDefault(recordHome);
     const projectPath = resolveProjectPath(config, projectArg);
@@ -210,6 +223,7 @@ export async function runDoCommand(argv: string[], opts: RunDoCommandOptions = {
       taskText,
       issue,
       model,
+      files,
       entryScript: opts.entryScript,
       timeoutMs: opts.timeoutMs,
     });

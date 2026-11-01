@@ -53,10 +53,43 @@ test("parseTaskEntryArgs: either optional flag, both, or neither - order does no
   });
 });
 
+test("parseTaskEntryArgs: --file is the one repeatable flag, and keeps its order", () => {
+  assert.deepEqual(
+    parseTaskEntryArgs(argv("/home", "/proj", "t", "--file", "/docs/pots.md", "--file", "/docs/data.csv")),
+    {
+      recordHome: "/home",
+      projectPath: "/proj",
+      taskText: "t",
+      files: ["/docs/pots.md", "/docs/data.csv"],
+    }
+  );
+  // Mixed in with the others, in any order - the whole reason these are
+  // named flags rather than positionals.
+  assert.deepEqual(
+    parseTaskEntryArgs(argv("/home", "/proj", "t", "--file", "/docs/pots.md", "--issue", "325", "--model", "small-5")),
+    {
+      recordHome: "/home",
+      projectPath: "/proj",
+      taskText: "t",
+      issue: "325",
+      model: "small-5",
+      files: ["/docs/pots.md"],
+    }
+  );
+});
+
+test("parseTaskEntryArgs: a path is carried through untrimmed - a trailing space can be part of a file name", () => {
+  assert.deepEqual(parseTaskEntryArgs(argv("/home", "/proj", "t", "--file", "/docs/odd name .md")).files, [
+    "/docs/odd name .md",
+  ]);
+});
+
 test("parseTaskEntryArgs: a wrong shape throws rather than running the task on a guess", () => {
   assert.throws(() => parseTaskEntryArgs(argv("/home", "/proj")), /expected <recordHome>/);
   assert.throws(() => parseTaskEntryArgs(argv("/home", "/proj", "t", "--model")), /"--model" was given no value/);
   assert.throws(() => parseTaskEntryArgs(argv("/home", "/proj", "t", "--issue", "  ")), /"--issue" was given no value/);
+  assert.throws(() => parseTaskEntryArgs(argv("/home", "/proj", "t", "--file")), /"--file" was given no value/);
+  assert.throws(() => parseTaskEntryArgs(argv("/home", "/proj", "t", "--file", "")), /"--file" was given no value/);
   assert.throws(() => parseTaskEntryArgs(argv("/home", "/proj", "t", "--wat", "x")), /unknown argument "--wat"/);
 });
 
@@ -71,4 +104,18 @@ test("taskEntryFlags: what the spawner appends is exactly what the parser reads 
     taskText: "t",
     model: "small-5",
   });
+
+  // One pair per file, and the round trip back out again - a path is
+  // exactly the kind of value a delimited single flag would mangle.
+  assert.deepEqual(taskEntryFlags({ files: [] }), []);
+  assert.deepEqual(taskEntryFlags({ files: ["/docs/a.md", "/docs/b,c.md"] }), [
+    "--file",
+    "/docs/a.md",
+    "--file",
+    "/docs/b,c.md",
+  ]);
+  assert.deepEqual(
+    parseTaskEntryArgs(argv("/home", "/proj", "t", ...taskEntryFlags({ issue: 325, files: ["/docs/b,c.md"] }))),
+    { recordHome: "/home", projectPath: "/proj", taskText: "t", issue: "325", files: ["/docs/b,c.md"] }
+  );
 });

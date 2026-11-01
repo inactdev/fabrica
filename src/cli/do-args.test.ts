@@ -140,6 +140,49 @@ test("parseDoArgs: --model with nothing behind it refuses rather than silently r
   }
 });
 
+test("parseDoArgs: --file is repeatable, keeps its order, and comes back absolute", () => {
+  const parsed = parseDoArgs([
+    "rework the kiln table",
+    "--project",
+    "app",
+    "--file",
+    "/docs/pots.md",
+    "--file=/docs/data.csv",
+  ]);
+
+  assert.deepEqual(parsed, {
+    taskText: "rework the kiln table",
+    projectArg: "app",
+    files: ["/docs/pots.md", "/docs/data.csv"],
+  });
+});
+
+test("parseDoArgs: a relative --file is resolved against this terminal's own folder", () => {
+  // The detached process that actually registers the task does not share
+  // this one's working directory, so a relative path has to be settled
+  // here or it means something different there.
+  const parsed = parseDoArgs(["t", "--project", "app", "--file", "notes/pots.md"]);
+  assert.deepEqual(parsed.files, [join(process.cwd(), "notes", "pots.md")]);
+});
+
+test("parseDoArgs: no --file at all carries no files key", () => {
+  assert.equal("files" in parseDoArgs(["t", "--project", "app"]), false);
+});
+
+test("parseDoArgs: --file with nothing behind it refuses rather than silently dropping a document", () => {
+  for (const argv of [
+    ["t", "--project", "app", "--file"],
+    ["t", "--project", "app", "--file", "   "],
+    ["t", "--project", "app", "--file="],
+  ]) {
+    assert.throws(
+      () => parseDoArgs(argv),
+      (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--file"),
+      `${argv.join(" ")} must refuse`
+    );
+  }
+});
+
 test("parseDoArgs: an unknown flag refuses", () => {
   assert.throws(
     () => parseDoArgs(["fix it", "--project", "spending-app", "--attempts", "3"]),

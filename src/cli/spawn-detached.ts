@@ -45,6 +45,11 @@ export interface SpawnDetachedTaskOptions {
    * forwarded the same way, and used by the entry script to build the
    * worker as well as by doTask to record the declaration. */
   model?: string;
+  /** The files this task is handed (do-args.ts's repeatable `--file`,
+   * issue #325), already absolute - forwarded as one `--file <path>`
+   * pair each, in order (task-entry-args.ts). Omitted, nothing is
+   * appended. */
+  files?: string[];
   /** Overridden in tests to point at a fixture entry script that uses a
    * fake brain, so exercising the real spawn-and-discover mechanism
    * never has to invoke the real adapter's coding agent. */
@@ -58,7 +63,16 @@ export interface SpawnDetachedTaskOptions {
 export async function spawnDetachedTask(
   opts: SpawnDetachedTaskOptions
 ): Promise<{ taskId: string; isRunning: () => boolean }> {
-  const { recordHome, projectPath, taskText, issue, model, entryScript = DEFAULT_ENTRY_SCRIPT, timeoutMs } = opts;
+  const {
+    recordHome,
+    projectPath,
+    taskText,
+    issue,
+    model,
+    files,
+    entryScript = DEFAULT_ENTRY_SCRIPT,
+    timeoutMs,
+  } = opts;
 
   // A first-ever `fabrica do` on a fresh machine has no recordHome yet -
   // registerTask would create it in time, but that happens inside the
@@ -67,7 +81,7 @@ export async function spawnDetachedTask(
   const logFd = openSync(join(recordHome, "cli.log"), "a");
   const child = spawn(
     process.execPath,
-    [BOOTSTRAP, entryScript, recordHome, projectPath, taskText, ...taskEntryFlags({ issue, model })],
+    [BOOTSTRAP, entryScript, recordHome, projectPath, taskText, ...taskEntryFlags({ issue, model, files })],
     { detached: true, stdio: ["ignore", logFd, logFd] }
   );
   closeSync(logFd); // the child holds its own duplicated copy from here on

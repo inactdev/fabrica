@@ -37,6 +37,7 @@ import { markRecorded, recordingFailure, requireGitRoot } from "./task-failure.t
 import { sweepTaskNetworks } from "./task-networks.ts";
 import { fetchTaskIssue, parseIssueArgOrRefuse, withIssueText } from "./task-issue.ts";
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
+import { freezeAttachedFiles, withAttachedFiles } from "./task-files.ts";
 import type { IssueReader } from "./task-issue.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
 import type { Caps } from "../../contract/surface.ts";
@@ -152,6 +153,11 @@ export async function registerAndAsk(
      * against projects.toml and persisted here, once, for every later
      * round to re-derive (see src/foreman/model.ts). */
     model?: string;
+    /** `fabrica do --file <path>` (issue #325) - the files this task was
+     * handed. Resolved and persisted here, once, the same way the issue
+     * and the model are, so every later round copies the same list into
+     * its workstation (see src/foreman/task-files.ts). */
+    files?: string[];
     caps?: Caps;
     onTaskRegistered?: (taskId: string) => void;
   }
@@ -264,6 +270,21 @@ export async function registerAndAsk(
     // "task-failed" by the wrapper around this body).
     const knowledgeNotes = knowledgeNotesFor(recordHome, opts.project);
 
+    // The files this task was handed (issue #325), resolved once here
+    // and written to this task's own record - every later round reads
+    // that list back and copies them into its workstation afresh
+    // (task-files.ts). Written for every task, an empty list included,
+    // so "handed nothing" is a recorded fact rather than a missing file
+    // that could equally mean "an older task" - exactly why caps.json
+    // above is written unconditionally too.
+    //
+    // Placed with the issue fetch and the knowledge read, and for the
+    // same reason: a named path with nothing readable at it refuses
+    // here, before any ProductionLine is cut and before anything spends,
+    // naming the path (ForemanError("attached-unavailable"), recorded as
+    // "task-failed" by the wrapper around this body).
+    const attachedFiles = freezeAttachedFiles(recordHome, taskId, opts.files ?? []);
+
     // A task must never look started when its very first step never ran -
     // "ask-failed" is what lets an outside observer (fabrica do's own
     // process, src/cli/wait-for-ask-outcome.ts) tell that apart from
@@ -273,12 +294,21 @@ export async function registerAndAsk(
     // failed task must never look like a started one). Rethrown after
     // recording, unchanged - every direct caller of registerAndAsk/doTask
     // still sees the real error; only the record gains a trace of it.
-    // The task's own words plus the issue they refer to, in full, plus
-    // the project's knowledge notes - every round's worker brief carries
-    // the same sections (do.ts/verdict.ts, via `withIssueText`/
+    // The task's own words plus the issue they refer to, in full, the
+    // files it was handed, and the project's knowledge notes - every
+    // round's worker brief carries the same sections
+    // (do.ts/verdict.ts, via `withIssueText`/`withAttachedFiles`/
     // `withKnowledge`), so the clarifying step and the work see the same
-    // request and the same notes.
-    const askBrief = withKnowledge(withIssueText(taskText, issueText), knowledgeNotes);
+    // request, the same files and the same notes.
+    //
+    // `placed: false` is the one difference between this brief and a
+    // round's: this step runs before any ProductionLine exists, so the
+    // files are named and their sizes given, but there is no workstation
+    // to read them from yet and the section says so.
+    const askBrief = withKnowledge(
+      withAttachedFiles(withIssueText(taskText, issueText), attachedFiles, { placed: false }),
+      knowledgeNotes
+    );
 
     // Issue #176: a question that does not arrive in the fixed shape is
     // rejected and asked again inside this same pass, up to

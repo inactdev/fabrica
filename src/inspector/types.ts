@@ -413,8 +413,22 @@ export interface Foreman {
      *
      * `model` (issue #184): which model this task asks for, overriding
      * the project's own `model` setting. Recorded on every receipt
-     * beside the model that actually ran. */
-    opts: { project: string; attempts?: number; brain?: Brain; issue?: number | string; model?: string }
+     * beside the model that actually ran.
+     *
+     * `files` (issue #325): documents this task is handed, as absolute
+     * host paths. Each is copied into every round's workstation under a
+     * fixed subfolder before the machine starts, recorded on the task by
+     * name and size, and named in the brief - so a task that needs a
+     * spec or a data file no longer has to have its whole text pasted
+     * into `taskText`. */
+    opts: {
+      project: string;
+      attempts?: number;
+      brain?: Brain;
+      issue?: number | string;
+      model?: string;
+      files?: string[];
+    }
   ): Promise<FabricaTask>;
   answer(taskId: string, text: string): Promise<FabricaTask>;
   deliveryOf(taskId: string): Promise<Delivery | null>;

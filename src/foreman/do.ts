@@ -23,6 +23,7 @@ import { alreadyReadFor } from "./queries.ts";
 import { closesIssueFor } from "./pr-body.ts";
 import { storedClosesIssue, taskIssueText, withIssueText } from "./task-issue.ts";
 import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
+import { attachedFilesFor, placeAttachedFiles, withAttachedFiles } from "./task-files.ts";
 import { testMapFor } from "./test-map.ts";
 import { baseCommitOf } from "../delivery/index.ts";
 import { registerAndAsk } from "./ask.ts";
@@ -62,6 +63,11 @@ export async function doTask(
      * is built with it by the caller (`defaultBrainAdapter`); this is
      * what gets persisted and recorded. */
     model?: string;
+    /** `fabrica do --file <path>` (issue #325): the files this task was
+     * handed, as absolute host paths. Recorded at registration and
+     * copied into every round's workstation under a fixed subfolder -
+     * see src/foreman/task-files.ts. */
+    files?: string[];
     inspector?: Inspector;
     checkBox?: CheckBox;
     /** Issue #267's seam (judge.ts's `ChecksReader`) - omitted reads
@@ -219,6 +225,15 @@ async function productionRound(
   // that cannot be read fails the task with no ProductionLine behind it,
   // naming which - the Client's own condition on this.
   const knowledgeNotes = knowledgeNotesFor(recordHome, project);
+  // The files this task was handed (issue #325), read back off the
+  // record ask.ts wrote them to - and proved still readable here, for
+  // the same reason and with the same timing the knowledge notes above
+  // are: a file the Client has moved or deleted since fails the round
+  // before any ProductionLine is cut, naming the path, rather than
+  // halfway through it. Copied into the workstation below, once there is
+  // one. Empty for every task that was handed none, which leaves this
+  // round exactly as it was.
+  const attachedFiles = attachedFilesFor(recordHome, taskId);
   // The project's committed test map, read here for the same reason and
   // with the same timing: a `tests.map` whose own text cannot be read
   // fails the task before any ProductionLine exists, naming the line to
@@ -290,6 +305,17 @@ async function productionRound(
       details: { branch: line.branch, reopened: isRetry, baseCommit },
     });
 
+    // Issue #325: the task's own files, into the one folder a machine
+    // can actually read - the workstation, which its container is
+    // bind-mounted to and which nothing else is. Done here, after the
+    // line genuinely exists and before any attempt runs, so the first
+    // thing the machine sees is a workstation with its documents already
+    // in it. The subfolder is excluded from git before any file lands
+    // there and is removed again before this round's work is committed
+    // (round.ts) - see src/attached/place.ts for the Client's ruling on
+    // both halves.
+    placeAttachedFiles(line.workdir, attachedFiles);
+
     // Who judges each attempt: Inspector, or the worker's own box (issue
     // #64) - never a check run on the host.
     const { judge, mode, reader } = prepareRound(recordHome, taskId, line, baseCommit, {
@@ -317,12 +343,16 @@ async function productionRound(
     // also carries the only-touched-tests ruling. Built here, not at
     // each caller, so a resumed round (answer.ts) and a first attempt
     // resolve it identically.
-    // The task's own words, the issue it names, then the project's
-    // knowledge notes - all inside what `workerBrief` puts the standing
-    // prefix in front of. Kept as its own value because the reader's fix
-    // pass (inspector issue #34) appends its correction to exactly these
-    // words, the same way verdict.ts's fix round appends the Client's.
-    const roundWords = withKnowledge(withIssueText(brief, issueText), knowledgeNotes);
+    // The task's own words, the issue it names, the files it was handed,
+    // then the project's knowledge notes - all inside what `workerBrief`
+    // puts the standing prefix in front of. Kept as its own value
+    // because the reader's fix pass (inspector issue #34) appends its
+    // correction to exactly these words, the same way verdict.ts's fix
+    // round appends the Client's.
+    const roundWords = withKnowledge(
+      withAttachedFiles(withIssueText(brief, issueText), attachedFiles, { placed: true }),
+      knowledgeNotes
+    );
 
     // Everything every pass of this round shares. One object rather than
     // two call sites, so an ordinary attempt and the reader's fix pass
