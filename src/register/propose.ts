@@ -25,6 +25,10 @@
 //   - an existing `check.sh`, which wins every disagreement
 //   - `package.json`'s `scripts`, `engines` and declared dependencies
 //   - `go.mod`
+//   - `Gemfile.lock` (contents), `Gemfile`, `.ruby-version` and whether
+//     `bin/rails` is there - issue #324's Ruby shape, which is the one
+//     that reads a lockfile's contents, since what the check box has to
+//     run (Postgres, Redis) is written inside it
 //   - whether `package-lock.json` or `go.sum` is there, which decides
 //     the install step the Dockerfile gets
 //
@@ -32,16 +36,24 @@
 // every rule below is testable with no git and no repository.
 
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, fileExistsOnRef, readFileOnRef } from "./origin.ts";
-import { inspectorConfigJson } from "./scaffold.ts";
+import { checkScript, inspectorConfigJson } from "./scaffold.ts";
 import {
+  BROWSER_GEMS,
   DEPS_DIR,
   DOCKERFILE_INSPECTOR,
+  GEMFILE,
+  GEMFILE_LOCK,
   GO_MOD,
   GO_SUM,
   PACKAGE_JSON,
   PACKAGE_LOCK,
+  RAILS_BIN,
+  RSPEC_GEMS,
+  RUBY_VERSION_FILE,
+  UNSERVED_DATABASE_GEMS,
   dependencyInstallerIn,
   dependencyShapeFrom,
+  gemsIn,
   inspectorDockerfile,
   type DependencyShape,
 } from "./dockerfile.ts";
@@ -49,7 +61,7 @@ import {
 // Re-exported rather than declared again: the filenames a proposal reads
 // and the filenames the Dockerfile writer copies have to be the same
 // strings, by construction.
-export { GO_MOD, PACKAGE_JSON };
+export { GEMFILE, GEMFILE_LOCK, GO_MOD, PACKAGE_JSON, RUBY_VERSION_FILE };
 
 /**
  * A marker value, never a guess. Uppercase on purpose: a Docker
@@ -61,10 +73,19 @@ export { GO_MOD, PACKAGE_JSON };
  */
 export const IMAGE_PLACEHOLDER_PREFIX = "REPLACE-ME-with-";
 
+/**
+ * `timeoutSeconds` for a check that boots its own servers, loads a
+ * schema and runs a Rails suite: 30 minutes, by Client ruling on issue
+ * #324 ("the usual, with a longer default timeout"). Every other shape
+ * still writes no timeout at all - see `proposeTimeout`.
+ */
+export const RUBY_TIMEOUT_SECONDS = 30 * 60;
+
 /** The things a repository is read for. `null` means the file isn't on
- * the branch at all; the two lockfiles are read as presence alone, since
- * nothing here cares what is inside one (and one of them is routinely a
- * megabyte). */
+ * the branch at all; `package-lock.json` and `go.sum` are read as
+ * presence alone, since nothing here cares what is inside one (and one
+ * of them is routinely a megabyte) - `Gemfile.lock` is the exception and
+ * says why on its own field. */
 export interface ProposalSignals {
   /** `check.sh` at the repository root. */
   checkScript: string | null;
@@ -76,6 +97,20 @@ export interface ProposalSignals {
   packageLock: boolean;
   /** Whether `go.sum` is at the repository root. */
   goSum: boolean;
+  /** `Gemfile.lock` at the repository root - contents, not presence,
+   * unlike the two lockfiles above (issue #324): which servers the check
+   * box has to run, and whether the suite is rspec's, are written inside
+   * it. Bundler's lockfile is a few hundred lines even for a large
+   * application, so reading it costs nothing like a `package-lock.json`
+   * would. */
+  gemfileLock: string | null;
+  /** `Gemfile` at the repository root - read for its own `ruby` line. */
+  gemfile: string | null;
+  /** `.ruby-version` at the repository root. */
+  rubyVersion: string | null;
+  /** Whether `bin/rails` is at the repository root, i.e. whether
+   * `bin/rails <task>` is a command this repository has. */
+  railsBin: boolean;
 }
 
 /** What `fabrica register` prints when a repository has no
@@ -98,8 +133,20 @@ export interface InspectorProposal {
    */
   dockerfile: string;
   /**
+   * The `check.sh` to commit beside them, for a project whose derived
+   * suite only passes with a preamble around it (issue #324): the config
+   * then names `./check.sh` rather than the command, so the script is
+   * part of the proposal rather than left to the Client to work out.
+   * `null` for every other project, where the config names the command
+   * itself and what else `check.sh` should hold is his call.
+   *
+   * On `notes` for the same reason the Dockerfile is, and never on
+   * stdout.
+   */
+  checkScript: string | null;
+  /**
    * stderr, in order: what happened, one line per field, any
-   * disagreement between signals, the Dockerfile itself, and what to do
+   * disagreement between signals, the files themselves, and what to do
    * next.
    */
   notes: string[];
@@ -113,6 +160,10 @@ export function readProposalSignals(project: string, ref: string): ProposalSigna
     goMod: readFileOnRef(project, ref, GO_MOD),
     packageLock: fileExistsOnRef(project, ref, PACKAGE_LOCK),
     goSum: fileExistsOnRef(project, ref, GO_SUM),
+    gemfileLock: readFileOnRef(project, ref, GEMFILE_LOCK),
+    gemfile: readFileOnRef(project, ref, GEMFILE),
+    rubyVersion: readFileOnRef(project, ref, RUBY_VERSION_FILE),
+    railsBin: fileExistsOnRef(project, ref, RAILS_BIN),
   };
 }
 
@@ -153,6 +204,63 @@ function goVersion(goMod: string | null): string | null {
   return match ? match[1] : null;
 }
 
+/** Where an exactly-pinned Ruby version was read from, for the `FROM`
+ * line's own reasoning - the file is the evidence, so it is named. */
+interface RubyVersion {
+  version: string;
+  source: string;
+}
+
+/**
+ * The one Ruby version a repository pins, with the file that pins it, or
+ * `null` when it names none - or names a *range*, which is no single
+ * image tag (the same rule `engines.node` follows below).
+ *
+ * Three files can say it, asked in the order issue #324 names them:
+ * `.ruby-version` first, then the Gemfile's own `ruby` line, then - last
+ * - `Gemfile.lock`'s `RUBY VERSION`, which is the version bundler itself
+ * recorded when the lockfile was written, with the patch level
+ * (`3.3.4p63`) that belongs to a build of Ruby rather than to an image
+ * tag.
+ */
+function rubyVersion(signals: ProposalSignals): RubyVersion | null {
+  // rbenv and rvm both write a bare version; rvm's own files sometimes
+  // carry a `ruby-` prefix, and a `jruby-`/`truffleruby-` one names an
+  // implementation this does not have an image for, so it matches
+  // nothing here and falls through to the placeholder.
+  const pinned = signals.rubyVersion === null ? null : /^(?:ruby-)?v?(\d+\.\d+\.\d+)\s*$/m.exec(signals.rubyVersion);
+  if (pinned !== null) return { version: pinned[1], source: RUBY_VERSION_FILE };
+
+  const declared = signals.gemfile === null ? null : /^\s*ruby\s+["'](\d+\.\d+\.\d+)["']/m.exec(signals.gemfile);
+  if (declared !== null) return { version: declared[1], source: `${GEMFILE}'s ruby line` };
+
+  const locked =
+    signals.gemfileLock === null ? null : /^RUBY VERSION\s*\n\s+ruby\s+(\d+\.\d+\.\d+)/m.exec(signals.gemfileLock);
+  if (locked !== null) return { version: locked[1], source: `${GEMFILE_LOCK}'s RUBY VERSION` };
+
+  return null;
+}
+
+/** The gems in the bundle, or an empty set for a repository with no
+ * `Gemfile.lock` - so every question below ("does it use pg?") can be
+ * asked without first asking whether this is a Ruby project at all. */
+function lockedGems(signals: ProposalSignals): Set<string> {
+  return signals.gemfileLock === null ? new Set<string>() : gemsIn(signals.gemfileLock);
+}
+
+/** The suite command a Ruby repository's own signals name, or `null`
+ * when they name none. `rspec` wins when the lockfile has it, since a
+ * repository that installed rspec runs its suite with it; otherwise
+ * `bin/rails test` is the command a Rails application ships
+ * (issue #324: "bin/rails test or bundle exec rspec, whichever the
+ * repository has"). */
+function rubySuiteCommand(signals: ProposalSignals): string | null {
+  const gems = lockedGems(signals);
+  if (RSPEC_GEMS.some((gem) => gems.has(gem))) return "bundle exec rspec";
+  if (signals.railsBin) return `${RAILS_BIN} test`;
+  return null;
+}
+
 /** `check.sh`'s meaningful lines - the shebang, comments and a bare
  * `set -e` carry no command, and quoting them back at the Client as
  * "what your check runs" would be noise. */
@@ -185,6 +293,18 @@ export type CheckSource =
 export interface CheckField {
   /** What goes in `.inspector.json`'s `check`. */
   command: string;
+  /**
+   * The command `check.sh` itself runs, when `command` is `./check.sh`
+   * *because* the suite only works with the script's own preamble around
+   * it - the Ruby shape's servers and test database (issue #324).
+   * `undefined` when `command` is the command, which is every other
+   * case: there, a route that writes a `check.sh` puts `command` in it.
+   *
+   * The distinction is load-bearing on the printed route: naming
+   * `bundle exec rspec` as `.inspector.json`'s check would be naming a
+   * command that runs with no database server anywhere near it.
+   */
+  scriptCommand?: string;
   /** The repository-relative file that command *is*, when it is one -
    * what `protectedPaths` lists. `null` for an indirect command like
    * `npm test`, where which file to freeze is the Client's call. */
@@ -201,8 +321,18 @@ export interface CheckField {
  * `check`. An existing `check.sh` wins over every other signal (Client
  * ruling), and any signal it disagrees with is named rather than
  * silently dropped.
+ *
+ * `shape` is the dependency shape already derived from the same signals
+ * (`proposeDependencies`), and the one thing this needs from it: whether
+ * the derived command needs a preamble around it to work at all, which
+ * decides whether the config can name the command or has to name
+ * `./check.sh`.
  */
-function proposeCheck(signals: ProposalSignals, pkg: Record<string, unknown> | null): CheckField {
+function proposeCheck(
+  signals: ProposalSignals,
+  pkg: Record<string, unknown> | null,
+  shape: DependencyShape | null
+): CheckField {
   if (signals.checkScript !== null) {
     const body = checkScriptBody(signals.checkScript);
     return {
@@ -215,6 +345,44 @@ function proposeCheck(signals: ProposalSignals, pkg: Record<string, unknown> | n
         `other signal` +
         (body.length > 0 ? `. It runs: ${body}` : ``),
     };
+  }
+
+  // Before package.json's, and deliberately: a Rails application with a
+  // JavaScript bundler has both, and its suite is the Ruby one. The same
+  // reasoning orders the shapes in dockerfile.ts.
+  const ruby = rubySuiteCommand(signals);
+  if (ruby !== null) {
+    // Asked of the shape rather than of the gems again: whether there is
+    // a preamble at all is one decision, made in dockerfile.ts, and two
+    // readings of the same lockfile could only come to disagree.
+    const needsBox = (shape?.services ?? []).length > 0 || shape?.prepare !== undefined;
+    const named =
+      ruby === "bundle exec rspec"
+        ? `${GEMFILE_LOCK} has rspec in it, so that is how this project's suite is run`
+        : `${RAILS_BIN} is a Rails application's own launcher and ${GEMFILE_LOCK} names no rspec, so the ` +
+          `framework's own test command stands`;
+    return needsBox
+      ? {
+          // The command cannot stand alone: it needs the servers started
+          // and the test database created around it, and the only place
+          // that preamble can live is the script.
+          command: RECORDED_CHECK,
+          scriptCommand: ruby,
+          file: CHECK_SCRIPT,
+          text: ruby,
+          source: "declared-command",
+          reason:
+            `${named}. It is named inside ${CHECK_SCRIPT} rather than here, because it only passes with this ` +
+            `project's own servers started and its test database created first - which is what the proposed ` +
+            `${CHECK_SCRIPT} below does`,
+        }
+      : {
+          command: ruby,
+          file: null,
+          text: ruby,
+          source: "declared-command",
+          reason: named,
+        };
   }
 
   const testScript = stringField(pkg, "scripts", "test");
@@ -251,8 +419,8 @@ function proposeCheck(signals: ProposalSignals, pkg: Record<string, unknown> | n
     source: "none",
     reason:
       `nothing in the repository names a command that has to pass - no ${CHECK_SCRIPT}, no ${PACKAGE_JSON} ` +
-      `"test" script, no ${GO_MOD}. Write ${CHECK_SCRIPT} with the one command you want held to, and this ` +
-      `names it`,
+      `"test" script, no ${GO_MOD}, no suite named by ${GEMFILE_LOCK}. Write ${CHECK_SCRIPT} with the one ` +
+      `command you want held to, and this names it`,
   };
 }
 
@@ -279,6 +447,14 @@ function checkDisagreements(signals: ProposalSignals, pkg: Record<string, unknow
         `${INSPECTOR_CONFIG}.`
     );
   }
+  const ruby = rubySuiteCommand(signals);
+  if (ruby !== null && !/\b(?:rspec|rails\s+test|rake)\b/.test(body)) {
+    notes.push(
+      `  disagreement: this repository's own signals name \`${ruby}\` as its suite, but ${CHECK_SCRIPT} runs ` +
+        `neither that nor a \`rake\` that could be running it. ${CHECK_SCRIPT} wins - if it should run the Ruby ` +
+        `suite too, that is an edit to ${CHECK_SCRIPT}, not to ${INSPECTOR_CONFIG}.`
+    );
+  }
   return notes;
 }
 
@@ -299,6 +475,34 @@ export interface ImageField {
  * version has no in-repo precedent for a Go image at all.
  */
 function proposeImage(signals: ProposalSignals, pkg: Record<string, unknown> | null): ImageField {
+  // A Ruby project's own image, asked before node's: a Rails
+  // application with a JavaScript bundler declares both, and the box has
+  // to be the one that runs the suite. Issue #324 names the pairing -
+  // the official Ruby image for the version the repository pins - and
+  // the official image's tags are exactly those versions
+  // (`ruby:3.3.4`), which is what makes it derivable at all.
+  if (signals.gemfileLock !== null) {
+    const ruby = rubyVersion(signals);
+    if (ruby !== null) {
+      return {
+        value: `ruby:${ruby.version}`,
+        reason:
+          `${ruby.source} pins ruby ${ruby.version}, and \`ruby:<version>\` is the official Ruby image for ` +
+          `exactly that version. Passing --image instead has \`fabrica register\` pull the tag and refuse if ` +
+          `it does not exist, which is worth doing for an old patch release`,
+      };
+    }
+    return {
+      value: `${IMAGE_PLACEHOLDER_PREFIX}an-image-that-ships-this-projects-ruby`,
+      reason:
+        `${GEMFILE_LOCK} makes this a Ruby project, but nothing in it pins one exact Ruby version - ` +
+        `${RUBY_VERSION_FILE} is absent or holds a range, and neither ${GEMFILE} nor ${GEMFILE_LOCK} names one ` +
+        `either - and a range is no single image tag. Pin the version you want the check held to (an exact ` +
+        `\`x.y.z\` in ${RUBY_VERSION_FILE}) and run this again, or name the image yourself. This value is ` +
+        `deliberately not a valid Docker reference, so it cannot be committed by accident`,
+    };
+  }
+
   const node = stringField(pkg, "engines", "node");
   if (node !== null) {
     const exact = /^v?(\d+\.\d+\.\d+)$/.exec(node);
@@ -363,12 +567,30 @@ function proposeDependencies(
   signals: ProposalSignals,
   pkg: Record<string, unknown> | null
 ): DependencyField {
-  const shape = dependencyShapeFrom({ packageLock: signals.packageLock, goSum: signals.goSum });
+  const shape = dependencyShapeFrom({
+    packageLock: signals.packageLock,
+    goSum: signals.goSum,
+    gemfileLock: signals.gemfileLock,
+    rubyVersionFile: signals.rubyVersion !== null,
+    railsBin: signals.railsBin,
+  });
   if (shape !== null) {
     return {
       shape,
       summary: `${shape.install} from ${shape.lockfile}`,
       reason: shape.note,
+    };
+  }
+
+  if (signals.gemfile !== null) {
+    return {
+      shape: null,
+      summary: "none - a comment naming what is missing",
+      reason:
+        `${GEMFILE} makes this a Ruby project but there is no ${GEMFILE_LOCK} at the root, so there is no ` +
+        `lockfile to install exactly. The check box has no network, so install the gems in ` +
+        `${DOCKERFILE_INSPECTOR} yourself (or commit ${GEMFILE_LOCK} and run this again) - the file says so ` +
+        `where the step would have gone`,
     };
   }
 
@@ -399,9 +621,40 @@ function proposeDependencies(
     shape: null,
     summary: "none",
     reason:
-      `nothing in the repository declares a dependency to install - no ${PACKAGE_LOCK}, no ${GO_SUM}, and ` +
-      `nothing in ${PACKAGE_JSON} or ${GO_MOD} naming one. The file says so where an install step would have ` +
-      `gone, since the check box has no network to get one later`,
+      `nothing in the repository declares a dependency to install - no ${PACKAGE_LOCK}, no ${GO_SUM}, no ` +
+      `${GEMFILE_LOCK}, and nothing in ${PACKAGE_JSON} or ${GO_MOD} naming one. The file says so where an ` +
+      `install step would have gone, since the check box has no network to get one later`,
+  };
+}
+
+/**
+ * `timeoutSeconds`. Almost always omitted, and the line says why:
+ * nothing in a `package.json`, a `go.mod` or a `check.sh` says how long
+ * a check takes, and the invented number would be the one deciding
+ * whether a real check is killed mid-run.
+ *
+ * The Ruby shape is the one exception, and not from a signal: a check
+ * that boots its own Postgres, loads a schema and runs a Rails suite is
+ * in a different order of magnitude from `go test ./...`, so leaving
+ * Inspector's own default to decide would be leaving a real suite to be
+ * killed mid-run. 30 minutes, by Client ruling on issue #324.
+ */
+function proposeTimeout(dependencies: DependencyField): { seconds?: number; reason: string } {
+  if (dependencies.shape?.services !== undefined && dependencies.shape.services.length > 0) {
+    const labels = dependencies.shape.services.map((service) => service.label).join(" and ");
+    return {
+      seconds: RUBY_TIMEOUT_SECONDS,
+      reason:
+        `${RUBY_TIMEOUT_SECONDS} - this check starts ${labels} in the box, creates the test database and then ` +
+        `runs the whole suite, which is a different order of magnitude from a check that only compiles and ` +
+        `tests. Nothing in the repository says how long it actually takes, so this is a ceiling rather than a ` +
+        `measurement: watch one run and set it to what you see`,
+    };
+  }
+  return {
+    reason:
+      `omitted - nothing in the repository says how long the check takes, so Inspector's own default stands. ` +
+      `Set it once you have watched the check run`,
   };
 }
 
@@ -455,6 +708,62 @@ function linkingNote(dependencies: DependencyField, warned: boolean): string | n
     `\`${dependencies.shape.install}\` anywhere that does have a network; passing --check "<command>" has ` +
     `\`fabrica register\` write that preamble for you.`
   );
+}
+
+/**
+ * What the Ruby shape knows it has *not* answered (issue #324). Each
+ * line is a gap this proposal could leave silently and deliberately does
+ * not: the standing rulings call a silent skip a bug, and every one of
+ * these is something the Client would otherwise meet as a red first
+ * task.
+ */
+function rubyNotes(signals: ProposalSignals, dependencies: DependencyField): string[] {
+  const shape = dependencies.shape;
+  if (signals.gemfileLock === null || shape === null) return [];
+  const gems = lockedGems(signals);
+  const notes: string[] = [];
+
+  // Issue #324, in its own words: "Browser/system tests are out of
+  // scope; register says so in its notes when it sees them."
+  const browser = BROWSER_GEMS.filter((gem) => gems.has(gem));
+  if (browser.length > 0) {
+    notes.push(
+      `  note: ${GEMFILE_LOCK} names ${browser.join(" and ")}, so this project has browser-driven system ` +
+        `tests - and nothing here installs a browser or a driver for one. They are out of scope for what this ` +
+        `proposes: a check that has to drive a browser needs it added to ${DOCKERFILE_INSPECTOR}, or those ` +
+        `tests left out of the command ${CHECK_SCRIPT} runs.`
+    );
+  }
+
+  const unserved = UNSERVED_DATABASE_GEMS.filter((gem) => gems.has(gem));
+  if (unserved.length > 0) {
+    notes.push(
+      `  note: ${GEMFILE_LOCK} names ${unserved.join(" and ")}, and this proposal installs no server for ` +
+        `${unserved.length === 1 ? `it` : `them`} - only PostgreSQL and Redis are recognized. Add the package ` +
+        `to ${DOCKERFILE_INSPECTOR} and start it in ${CHECK_SCRIPT} the way the others are started there, or ` +
+        `the suite has nothing to connect to.`
+    );
+  }
+
+  if (signals.packageLock) {
+    notes.push(
+      `  note: there is a ${PACKAGE_LOCK} at the root too, and nothing installs it: this is read as a Ruby ` +
+        `project with a JavaScript bundler, whose suite is the Ruby one. If the check needs built assets, add ` +
+        `an \`npm ci\` step to ${DOCKERFILE_INSPECTOR} and the build command to ${CHECK_SCRIPT}.`
+    );
+  }
+
+  if ((shape.services ?? []).length > 0) {
+    notes.push(
+      `  note: starting those servers needs the check box to run as root, which the official Ruby image does. ` +
+        `\`fabrica register --check ... --image ...\` runs its own one proving run as *your* user rather than ` +
+        `as root, so this is the one check shape that route cannot prove here - commit the files below ` +
+        `yourself and register the repository again, or use --terms, and let the first task's own red-or-green ` +
+        `be the proof.`
+    );
+  }
+
+  return notes;
 }
 
 export interface ProtectedPathsField {
@@ -513,8 +822,25 @@ export interface ProposalDerivation {
   image: ImageField;
   dependencies: DependencyField;
   protectedPaths: ProtectedPathsField;
+  /** `.inspector.json`'s `timeoutSeconds`, or `undefined` to leave the
+   * key out entirely and Inspector's own default standing - which is
+   * every shape but the one whose check boots its own servers. */
+  timeoutSeconds?: number;
   /** `Dockerfile.inspector`'s contents, with a trailing newline. */
   dockerfile: string;
+  /**
+   * `check.sh`'s contents, for the one case where the derived check
+   * cannot be named in `.inspector.json` on its own: the suite needs the
+   * script's preamble around it (issue #324's servers and test
+   * database), so the config names `./check.sh` and this is the script
+   * it names. `null` whenever the config names the command itself, where
+   * a printed proposal has no script to propose and the Client's own
+   * `check.sh` is his to write.
+   *
+   * The `--terms` route writes its own `check.sh` for every case, from
+   * the same `checkScript` with the same inputs - see terms.ts.
+   */
+  checkScriptText: string | null;
   /**
    * One line per field, then any disagreement between two signals, then
    * the one warning about the check itself - in order, and the same on
@@ -534,10 +860,13 @@ export interface ProposalDerivation {
  * read. */
 export function deriveProposal(signals: ProposalSignals): ProposalDerivation {
   const pkg = parsedPackageJson(signals.packageJson);
-  const check = proposeCheck(signals, pkg);
-  const image = proposeImage(signals, pkg);
+  // The dependency shape first: `check` needs to know whether the
+  // command it derives can stand on its own (see proposeCheck).
   const dependencies = proposeDependencies(signals, pkg);
+  const check = proposeCheck(signals, pkg, dependencies.shape);
+  const image = proposeImage(signals, pkg);
   const protectedPaths = proposeProtectedPaths(check);
+  const timeout = proposeTimeout(dependencies);
   const warning = fetchingCheckWarning(check, dependencies);
 
   return {
@@ -545,19 +874,20 @@ export function deriveProposal(signals: ProposalSignals): ProposalDerivation {
     image,
     dependencies,
     protectedPaths,
+    ...(timeout.seconds !== undefined ? { timeoutSeconds: timeout.seconds } : {}),
     dockerfile: inspectorDockerfile({
       from: image.value,
       reason: image.reason,
       shape: dependencies.shape,
     }),
+    // The same function the `--terms` route writes its script with, over
+    // the same command and the same shape, so the proposal a Client
+    // reads and the file that route writes cannot come to differ.
+    checkScriptText:
+      check.scriptCommand === undefined ? null : checkScript(check.scriptCommand, dependencies.shape),
     fieldNotes: [
       `  check: ${check.command} - ${check.reason}.`,
-      // Always omitted, and the one field where that is the whole
-      // answer: nothing in a package.json, a go.mod or a check.sh says
-      // how long a check takes, and an invented number is the number
-      // that would decide whether a real check is killed mid-run.
-      `  timeoutSeconds: omitted - nothing in the repository says how long the check takes, so Inspector's own ` +
-        `default stands. Set it once you have watched the check run.`,
+      `  timeoutSeconds: ${timeout.reason}.`,
       `  protectedPaths: ${protectedPaths.paths === undefined ? "omitted" : protectedPaths.paths.join(", ")} - ` +
         `${protectedPaths.reason}.`,
       // The check box is built from Dockerfile.inspector since
@@ -567,6 +897,7 @@ export function deriveProposal(signals: ProposalSignals): ProposalDerivation {
       `  ${DOCKERFILE_INSPECTOR} FROM: ${image.value} - ${image.reason}.`,
       `  ${DOCKERFILE_INSPECTOR} dependencies: ${dependencies.summary} - ${dependencies.reason}.`,
       ...checkDisagreements(signals, pkg),
+      ...rubyNotes(signals, dependencies),
       ...(warning === null ? [] : [warning]),
     ],
     linkingNote: linkingNote(dependencies, warning !== null),
@@ -581,31 +912,44 @@ export function proposeInspectorConfig(
   ctx: { projectPath: string; defaultBranch: string }
 ): InspectorProposal {
   const derived = deriveProposal(signals);
-  const { check, image, protectedPaths, dockerfile, linkingNote: linking } = derived;
+  const { check, image, protectedPaths, dockerfile, checkScriptText, linkingNote: linking } = derived;
 
   const json = inspectorConfigJson({
     check: check.command,
+    ...(derived.timeoutSeconds !== undefined ? { timeoutSeconds: derived.timeoutSeconds } : {}),
     ...(protectedPaths.paths !== undefined ? { protectedPaths: protectedPaths.paths } : {}),
   }).trimEnd();
 
+  // Two files for almost every project; three when the derived check
+  // needs a script of its own to work at all.
+  const count = checkScriptText === null ? `two` : `three`;
+
   const notes = [
     `fabrica register: ${ctx.projectPath} has no ${INSPECTOR_CONFIG} on origin/${ctx.defaultBranch}, so it ` +
-      `needs setting up. Nothing was written and nothing was registered - what follows is a proposal of two ` +
-      `files, derived from what the repository already says, for you to read and commit yourself.`,
+      `needs setting up. Nothing was written and nothing was registered - what follows is a proposal of ` +
+      `${count} files, derived from what the repository already says, for you to read and commit yourself.`,
     ...derived.fieldNotes,
     ...(linking === null ? [] : [linking]),
     `${INSPECTOR_CONFIG} is on stdout, alone: \`fabrica register ${ctx.projectPath} > ` +
       `${ctx.projectPath}/${INSPECTOR_CONFIG}\` writes exactly it and nothing else. ${DOCKERFILE_INSPECTOR} ` +
       `goes next to it, and is this - it is deliberately not on stdout, since that stream is the one file ` +
       `the redirect above writes:\n\n${dockerfile.trimEnd()}\n`,
-    `Read both, replace anything marked ${IMAGE_PLACEHOLDER_PREFIX}..., commit them onto ` +
-      `${ctx.defaultBranch}, then run \`fabrica register ${ctx.projectPath}\` again. Or pass ` +
-      `--check "<command>" --image <docker image> and register will write ${INSPECTOR_CONFIG}, ` +
-      `${CHECK_SCRIPT} and ${DOCKERFILE_INSPECTOR} for you, on a branch, in a pull request you review before ` +
-      `it merges. A repository you cannot commit them to at all - a day job's - takes --terms <folder> ` +
-      `instead: the same three files, derived the same way, written into that folder, with the repository ` +
-      `left alone.`,
+    ...(checkScriptText === null
+      ? []
+      : [
+          `${CHECK_SCRIPT} is the third file, and the one ${INSPECTOR_CONFIG} above names instead of the ` +
+            `command itself, because the suite only passes with this preamble around it. It is not on stdout ` +
+            `either, for the same reason ${DOCKERFILE_INSPECTOR} is not. Commit it executable ` +
+            `(\`chmod +x ${CHECK_SCRIPT}\`):\n\n${checkScriptText.trimEnd()}\n`,
+        ]),
+    `Read ${checkScriptText === null ? `both` : `all three`}, replace anything marked ` +
+      `${IMAGE_PLACEHOLDER_PREFIX}..., commit them onto ${ctx.defaultBranch}, then run ` +
+      `\`fabrica register ${ctx.projectPath}\` again. Or pass --check "<command>" --image <docker image> and ` +
+      `register will write ${INSPECTOR_CONFIG}, ${CHECK_SCRIPT} and ${DOCKERFILE_INSPECTOR} for you, on a ` +
+      `branch, in a pull request you review before it merges. A repository you cannot commit them to at all - ` +
+      `a day job's - takes --terms <folder> instead: the same three files, derived the same way, written into ` +
+      `that folder, with the repository left alone.`,
   ];
 
-  return { json, dockerfile, notes };
+  return { json, dockerfile, checkScript: checkScriptText, notes };
 }

@@ -33,13 +33,16 @@ export { checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.
 export {
   DEPS_DIR,
   DOCKERFILE_INSPECTOR,
+  SERVICE_WAIT_SECONDS,
   dependencyInstallerIn,
   dependencyShapeFrom,
   dependencyShapeInTree,
+  gemsIn,
   inspectorDockerfile,
   knownNonRootUser,
+  rubyShape,
 } from "./dockerfile.ts";
-export type { DependencyShape } from "./dockerfile.ts";
+export type { BoxService, DependencyShape, ShapeStep } from "./dockerfile.ts";
 export { appendProjectEntry, existingRegistration, isUsableProjectName } from "./registry-write.ts";
 export { pullRequestUrlIn, realRegisterTools } from "./tools.ts";
 export type { PrerequisiteResult, PullRequestResult, RegisterTools } from "./tools.ts";

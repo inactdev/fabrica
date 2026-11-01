@@ -17,7 +17,7 @@
 // are the reference shape for both, and the only live, working evidence
 // of them in reach.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CHECK_SCRIPT } from "./origin.ts";
 
@@ -34,12 +34,54 @@ export const PACKAGE_JSON = "package.json";
 export const PACKAGE_LOCK = "package-lock.json";
 export const GO_MOD = "go.mod";
 export const GO_SUM = "go.sum";
+export const GEMFILE = "Gemfile";
+export const GEMFILE_LOCK = "Gemfile.lock";
+export const RUBY_VERSION_FILE = ".ruby-version";
+/** A Rails application's own launcher, committed at that path by every
+ * `rails new` - the one signal that says `bin/rails <task>` is a command
+ * this repository actually has. */
+export const RAILS_BIN = "bin/rails";
+
+/** One step a generated file carries: the line itself, and the sentence
+ * written above it saying why it is there. Nothing here is ever written
+ * without its reason, since the Client edits these files later. */
+export interface ShapeStep {
+  /** The comment above the line, in prose. */
+  note: string;
+  /** The command, spelled as the file spells it. */
+  run: string;
+}
+
+/**
+ * A service the check box has to run **for itself**: it has no network,
+ * so there is no database or cache server to reach over one, and a
+ * project whose suite needs them needs them inside the same container
+ * (issue #324).
+ */
+export interface BoxService {
+  /** How the file and the notes name it. */
+  label: string;
+  /** The Debian packages that install it. */
+  packages: readonly string[];
+  /** `check.sh`: what starts it, in the background. */
+  start: string;
+  /** `check.sh`: argv of a command that succeeds once it answers.
+   * Waited on rather than slept past - the first connection can be made
+   * before the server is accepting one. */
+  ready: readonly string[];
+  /** `check.sh`: what stops it again on the way out. */
+  stop: string;
+  /** `Dockerfile.inspector`: setup run as root at build time, once the
+   * packages are installed, for a service that needs any. `user` is the
+   * user the check itself runs as. */
+  buildSetup?: (user: string) => ShapeStep;
+}
 
 /**
  * A dependency shape `register` recognizes: a lockfile at the repository
- * root, and the install step that lockfile means. Two of them, both
- * named by issue #303 itself - anything else gets a comment in the
- * Dockerfile rather than an invented install step.
+ * root, and the install step that lockfile means. Two of them were named
+ * by issue #303 itself and a third by issue #324 - anything else gets a
+ * comment in the Dockerfile rather than an invented install step.
  */
 export interface DependencyShape {
   /** The lockfile whose presence identified the shape. */
@@ -51,7 +93,8 @@ export interface DependencyShape {
   install: string;
   /** Whether `check.sh` has to link what the build installed into the
    * checkout for it to be usable at all - true for `node_modules`,
-   * false for a module cache that lives outside the checkout. */
+   * false for a module cache or a gem home that lives outside the
+   * checkout. */
   linksNodeModules: boolean;
   /** One sentence for a note, a summary line or a pull request body. */
   note: string;
@@ -61,6 +104,17 @@ export interface DependencyShape {
    * for every one - the file says which rather than leaving the next
    * person to find out from a failed build. */
   buildNote?: string;
+  /** Files copied into `/deps` beside the manifest and the lockfile,
+   * because the install step reads them too. Empty for a shape whose
+   * installer needs nothing else - a `COPY` of a file the repository may
+   * not have fails the build. */
+  extraCopies?: readonly string[];
+  /** Servers `check.sh` starts inside the box, waits for, and stops
+   * again, since the box has no network to reach one over. */
+  services?: readonly BoxService[];
+  /** One step `check.sh` runs after the services answer and before the
+   * suite - the test database. */
+  prepare?: ShapeStep;
 }
 
 const NPM: DependencyShape = {
@@ -89,10 +143,165 @@ const GO: DependencyShape = {
     `\`go test\` finds it with nothing further to do`,
 };
 
-/** The shape named by which lockfiles are present. `package-lock.json`
- * wins a repository carrying both, for no deeper reason than that one
- * answer has to be picked and the Dockerfile says which it took. */
-export function dependencyShapeFrom(present: { packageLock: boolean; goSum: boolean }): DependencyShape | null {
+/**
+ * The gems a `Gemfile.lock` says are **in the bundle**. Bundler writes
+ * every resolved gem as a four-space entry under a `specs:` heading (of
+ * `GEM`, `GIT` or `PATH`), and that gem's own requirements six spaces
+ * deeper; `DEPENDENCIES` repeats what the Gemfile asked for at two.
+ *
+ * Only the four-space entries are read. A deeper line says what
+ * something *asked for*, not what is installed, so reading those would
+ * call `pg` present because some unrelated gem happens to support
+ * Postgres.
+ */
+export function gemsIn(lockfile: string): Set<string> {
+  const names = new Set<string>();
+  for (const line of lockfile.split("\n")) {
+    const spec = /^ {4}(\S+) \(/.exec(line);
+    if (spec !== null) names.add(spec[1]);
+  }
+  return names;
+}
+
+/** The gem that names a Postgres dependency. */
+export const PG_GEM = "pg";
+/** The gems that name a Redis one: `redis` itself, and `redis-client`,
+ * which is what a current Rails cache store or Sidekiq resolves to. */
+export const REDIS_GEMS: readonly string[] = ["redis", "redis-client"];
+/** The gems that mean the suite is run with `rspec` rather than with
+ * `bin/rails test`: `rspec-core` ships the `rspec` executable, and the
+ * two wrappers that pull it in are matched too, since a lockfile written
+ * from a `gem "rspec-rails"` line names all of them anyway. */
+export const RSPEC_GEMS: readonly string[] = ["rspec-core", "rspec-rails", "rspec"];
+/** Gems that drive a browser. Issue #324 puts system tests out of scope,
+ * so these are *named* in the notes and nothing is installed for them. */
+export const BROWSER_GEMS: readonly string[] = ["capybara", "selenium-webdriver", "cuprite", "webdrivers"];
+/** Database gems this shape knowingly installs no server for, so a
+ * repository using one is told rather than left with a check that cannot
+ * connect to anything. */
+export const UNSERVED_DATABASE_GEMS: readonly string[] = ["mysql2", "trilogy"];
+
+const POSTGRES: BoxService = {
+  label: "PostgreSQL",
+  // The server, its client tools (`pg_isready` among them), and the
+  // `pg` gem's own build dependency: its native extension wants
+  // libpq-fe.h, which is what libpq-dev installs.
+  packages: ["postgresql", "libpq-dev"],
+  // Debian's SysV wrapper, which works in a container: `systemctl` needs
+  // a systemd there is none of, and the server itself may not run as
+  // root - this script su's to the postgres user for us.
+  start: "service postgresql start",
+  ready: ["pg_isready", "-q"],
+  stop: "service postgresql stop",
+  buildSetup: (user) => ({
+    note:
+      `PostgreSQL authenticates a connection over the local socket by asking the kernel which user opened it ` +
+      `(Debian's "peer" default) and then wants a role of that name - and a Rails config/database.yml names no ` +
+      `user at all, so that is whoever runs the check. The role is created here, while the server is up at ` +
+      `build time; it lives in the cluster's data directory, which is part of the image.`,
+    run: `service postgresql start && su postgres -c "createuser -s ${user}" && service postgresql stop`,
+  }),
+};
+
+const REDIS: BoxService = {
+  label: "Redis",
+  packages: ["redis-server"],
+  // No config file, so this is the package's default port and no
+  // persistence: a check's Redis is a throwaway cache, and `--save ''`
+  // keeps it from writing a snapshot into the checkout.
+  start: `redis-server --daemonize yes --save ''`,
+  ready: ["redis-cli", "ping"],
+  stop: "redis-cli shutdown nosave",
+};
+
+/**
+ * The Ruby shape (issue #324), built from the lockfile rather than
+ * declared as a constant: which servers the check box needs, and whether
+ * there is a test database to create, are things only this repository's
+ * own `Gemfile.lock` and `bin/rails` can say.
+ *
+ * Gems install at build time into the image's own `GEM_HOME`
+ * (`/usr/local/bundle` in the official Ruby image), which is outside the
+ * checkout - so, like a Go module cache and unlike `node_modules`, there
+ * is nothing for `check.sh` to link in.
+ */
+export function rubyShape(opts: {
+  /** `Gemfile.lock`'s contents. */
+  lockfile: string;
+  /** Whether `.ruby-version` is at the root - a Gemfile may read its
+   * `ruby` line out of that file, so it is copied in when it exists. */
+  rubyVersionFile?: boolean;
+  /** Whether `bin/rails` is at the root, i.e. whether `bin/rails
+   * db:test:prepare` is a command this repository has. */
+  railsBin?: boolean;
+}): DependencyShape {
+  const gems = gemsIn(opts.lockfile);
+  const services: BoxService[] = [];
+  if (gems.has(PG_GEM)) services.push(POSTGRES);
+  if (REDIS_GEMS.some((gem) => gems.has(gem))) services.push(REDIS);
+
+  return {
+    lockfile: GEMFILE_LOCK,
+    manifest: GEMFILE,
+    install: "bundle install",
+    linksNodeModules: false,
+    ...(opts.rubyVersionFile === true ? { extraCopies: [RUBY_VERSION_FILE] } : {}),
+    ...(services.length > 0 ? { services } : {}),
+    ...(opts.railsBin === true
+      ? {
+          prepare: {
+            note:
+              `The test database, dropped and loaded from this repository's own schema. A Rails suite checks the ` +
+              `test schema is current before it runs anything, and the box starts with an empty server, so ` +
+              `there is nothing for it to find until this has run.`,
+            run: `${RAILS_BIN} db:test:prepare`,
+          },
+        }
+      : {}),
+    note:
+      `${GEMFILE_LOCK} at the repository root is this project's lockfile, so the check image installs exactly ` +
+      `it with \`bundle install\` at build time. The gems land in the image's own GEM_HOME, outside the ` +
+      `checkout, so \`bundle exec\` finds them with nothing further to do` +
+      (services.length === 0
+        ? ``
+        : `, and ${services.map((service) => service.label).join(" and ")} ` +
+          `${services.length === 1 ? `is` : `are`} installed in the box too, for ${CHECK_SCRIPT} to start`),
+    buildNote:
+      `\`bundle install\` sees only the files copied below, which is enough for a Gemfile that names gems and ` +
+      `nothing more. One that reads another file - a \`gemspec\`, an \`eval_gemfile\`, a \`path:\` gem - needs ` +
+      `a COPY for that file too. A committed \`.bundle/config\` naming a path of its own is the other half of ` +
+      `the same trap: at check time it would point bundler at the checkout rather than at the gems installed ` +
+      `here, where there is no network to install them again.`,
+  };
+}
+
+/**
+ * The shape named by which lockfiles are present.
+ *
+ * `Gemfile.lock` is asked first, and deliberately: a repository carrying
+ * it *and* a `package-lock.json` is a Rails application with a
+ * JavaScript bundler, whose suite is still the Ruby one. Between the
+ * other two, `package-lock.json` wins for no deeper reason than that one
+ * answer has to be picked. The Dockerfile says which it took either way,
+ * and `propose.ts` names the lockfile that went uninstalled.
+ */
+export function dependencyShapeFrom(present: {
+  packageLock: boolean;
+  goSum: boolean;
+  /** `Gemfile.lock`'s own contents, or `null`/absent when there is none.
+   * Read in full rather than as presence alone, unlike the other two:
+   * which servers the check box needs is written inside it. */
+  gemfileLock?: string | null;
+  rubyVersionFile?: boolean;
+  railsBin?: boolean;
+}): DependencyShape | null {
+  if (present.gemfileLock !== null && present.gemfileLock !== undefined) {
+    return rubyShape({
+      lockfile: present.gemfileLock,
+      rubyVersionFile: present.rubyVersionFile,
+      railsBin: present.railsBin,
+    });
+  }
   if (present.packageLock) return NPM;
   if (present.goSum) return GO;
   return null;
@@ -104,7 +313,21 @@ export function dependencyShapeInTree(dir: string): DependencyShape | null {
   return dependencyShapeFrom({
     packageLock: existsSync(join(dir, PACKAGE_LOCK)),
     goSum: existsSync(join(dir, GO_SUM)),
+    gemfileLock: fileIn(dir, GEMFILE_LOCK),
+    rubyVersionFile: existsSync(join(dir, RUBY_VERSION_FILE)),
+    railsBin: existsSync(join(dir, RAILS_BIN)),
   });
+}
+
+/** A file's contents, or null when it isn't there - the filesystem's own
+ * answer in one call, rather than an `existsSync` that a read could race.
+ */
+function fileIn(dir: string, name: string): string | null {
+  try {
+    return readFileSync(join(dir, name), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -155,8 +378,16 @@ export function knownNonRootUser(from: string): string | null {
   return /^cimg\//.test(from.trim()) ? "circleci" : null;
 }
 
-/** Wraps a sentence as Dockerfile comment lines, at 76 columns. */
-function comment(text: string): string[] {
+/** How long `check.sh` waits for a service to answer before failing the
+ * check with a line naming which one did not. Long enough for a cold
+ * Postgres cluster on a loaded machine, short enough that a server that
+ * is never coming up does not burn the whole check timeout. */
+export const SERVICE_WAIT_SECONDS = 60;
+
+/** Wraps a sentence as `#` comment lines, at 76 columns - for the two
+ * generated files a human reads and edits later (this one and
+ * `check.sh`, see scaffold.ts). */
+export function comment(text: string): string[] {
   const lines: string[] = [];
   let line = "#";
   for (const word of text.split(/\s+/).filter((w) => w.length > 0)) {
@@ -171,9 +402,17 @@ function comment(text: string): string[] {
   return lines;
 }
 
+/** Everything the install step copies into `/deps`: the manifest, the
+ * lockfile, and whatever else that installer reads. */
+function copiedFiles(shape: DependencyShape): string {
+  return [shape.manifest, shape.lockfile, ...(shape.extraCopies ?? [])].join(" ");
+}
+
 /** The install step's own lines, with the ownership dance a non-root
- * image needs around them. */
-function installLines(shape: DependencyShape, from: string): string[] {
+ * image needs around them. `rooted` says the service lines above already
+ * selected `USER root`, so the guidance about the image's default user
+ * would be describing something that is no longer true. */
+function installLines(shape: DependencyShape, from: string, rooted: boolean): string[] {
   const user = knownNonRootUser(from);
   const caveat = shape.buildNote === undefined ? [] : [`#`, ...comment(shape.buildNote)];
   if (user !== null) {
@@ -182,7 +421,16 @@ function installLines(shape: DependencyShape, from: string): string[] {
       `USER root`,
       `RUN mkdir -p ${DEPS_DIR} && chown -R ${user}:${user} ${DEPS_DIR}`,
       `USER ${user}`,
-      `COPY --chown=${user}:${user} ${shape.manifest} ${shape.lockfile} ${DEPS_DIR}/`,
+      `COPY --chown=${user}:${user} ${copiedFiles(shape)} ${DEPS_DIR}/`,
+      `RUN cd ${DEPS_DIR} && ${shape.install}`,
+    ];
+  }
+  if (rooted) {
+    return [
+      ...caveat,
+      `#`,
+      ...comment(`This installs as root, which the USER root above selected.`),
+      `COPY ${copiedFiles(shape)} ${DEPS_DIR}/`,
       `RUN cd ${DEPS_DIR} && ${shape.install}`,
     ];
   }
@@ -195,9 +443,55 @@ function installLines(shape: DependencyShape, from: string): string[] {
     `#   USER root`,
     `#   RUN mkdir -p ${DEPS_DIR} && chown -R <user>:<user> ${DEPS_DIR}`,
     `#   USER <user>`,
-    `COPY ${shape.manifest} ${shape.lockfile} ${DEPS_DIR}/`,
+    `COPY ${copiedFiles(shape)} ${DEPS_DIR}/`,
     `RUN cd ${DEPS_DIR} && ${shape.install}`,
   ];
+}
+
+/**
+ * The lines that put a shape's own servers in the image (issue #324):
+ * the packages, installed as root, and whatever setup each one needs
+ * once they are there.
+ *
+ * Nothing here starts a server. A `RUN` is its own container, so a
+ * service started in one is gone by the next line and gone again at
+ * check time - `check.sh` starts them, and this file only has to make
+ * them installable.
+ */
+function serviceLines(shape: DependencyShape, from: string): string[] {
+  const services = shape.services ?? [];
+  if (services.length === 0) return [];
+
+  // The user the *check* runs as, which is who a build-time role or
+  // permission has to be created for. `root` is the assumption
+  // everywhere else in this file for an image this does not know, and
+  // the official Ruby image is one that genuinely runs as root.
+  const user = knownNonRootUser(from) ?? "root";
+  const labels = services.map((service) => service.label).join(" and ");
+  const one = services.length === 1;
+  const them = one ? `it` : `them`;
+  const packages = services.flatMap((service) => service.packages);
+
+  const lines = [
+    `#`,
+    ...comment(
+      `${labels} run inside the check box itself: it has no network, so there is no server to reach over one. ` +
+        `${CHECK_SCRIPT} starts ${them}, waits until ${one ? `it` : `each`} answers, and stops ${them} again. ` +
+        `Starting ${them} needs this box to run as root, which the image above does.`
+    ),
+    `USER root`,
+    `RUN apt-get update \\`,
+    ` && apt-get install -y --no-install-recommends ${packages.join(" ")} \\`,
+    ` && rm -rf /var/lib/apt/lists/*`,
+  ];
+
+  for (const service of services) {
+    const setup = service.buildSetup?.(user);
+    if (setup === undefined) continue;
+    lines.push(`#`, ...comment(setup.note), `RUN ${setup.run}`);
+  }
+
+  return lines;
 }
 
 /**
@@ -232,18 +526,23 @@ export function inspectorDockerfile(opts: {
   ];
 
   if (opts.shape !== null) {
+    const services = serviceLines(opts.shape, opts.from);
     lines.push(
+      ...services,
       `#`,
       ...comment(`${opts.shape.note}.`),
-      ...installLines(opts.shape, opts.from)
+      ...installLines(opts.shape, opts.from, services.length > 0)
     );
   } else {
     lines.push(
       `#`,
       ...comment(
-        `Nothing in this repository said how its dependencies are installed: there is no ${PACKAGE_LOCK} and no ` +
-          `${GO_SUM} at its root, so no install step was written for you. Add what ./check.sh needs here - the ` +
-          `check box has no network, so a check that fetches anything while it runs fails there.`
+        `Nothing in this repository said how its dependencies are installed: there is no ${PACKAGE_LOCK}, no ` +
+          `${GO_SUM} and no ${GEMFILE_LOCK} at its root, so no install step was written for you.`
+      ),
+      ...comment(
+        `Add what ./check.sh needs here - the check box has no network, so a check that fetches anything while ` +
+          `it runs fails there.`
       )
     );
   }

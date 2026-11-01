@@ -1,13 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.ts";
 import { dependencyShapeFrom } from "./dockerfile.ts";
+import { RAILS_GEMFILE_LOCK } from "./helpers/rails-fixture.ts";
 import { RECORDED_CHECK } from "./origin.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** The Ruby shape of a Rails application: both servers, and a test
+ * database to create. */
+function railsShape() {
+  return dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: RAILS_GEMFILE_LOCK,
+    rubyVersionFile: true,
+    railsBin: true,
+  });
+}
 
 test("protectedPathsFor always protects the gate, its definition and the box it runs in", () => {
   assert.deepEqual(protectedPathsFor([]), ["check.sh", ".inspector.json", "Dockerfile.inspector"]);
@@ -147,4 +162,117 @@ test("checkScript links in what the check image baked, for a package-lock.json p
 test("checkScript adds no preamble for a shape whose dependencies need no link", () => {
   const go = dependencyShapeFrom({ packageLock: false, goSum: true });
   assert.equal(checkScript("go test ./...", go), checkScript("go test ./..."));
+});
+
+// ------------------------------- the Ruby shape's own preamble (#324)
+
+test("checkScript: a Ruby shape with no servers is still just the command", () => {
+  const plain = dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: "GEM\n  specs:\n    rake (13)\n" });
+
+  assert.equal(checkScript("bundle exec rspec", plain), checkScript("bundle exec rspec"));
+});
+
+test("checkScript: the servers are started, waited for, stopped, and the command still comes last", () => {
+  const script = checkScript("bundle exec rspec", railsShape());
+
+  assert.ok(script.includes("service postgresql start\n"), script);
+  assert.ok(script.includes("wait_for PostgreSQL pg_isready -q\n"), script);
+  assert.ok(script.includes(`redis-server --daemonize yes --save ''\n`), script);
+  assert.ok(script.includes("wait_for Redis redis-cli ping\n"), script);
+  // Stopped however the script ends, including a failing suite - and the
+  // trap runs no exit of its own, so the suite's status survives it.
+  assert.ok(script.includes("trap stop_services EXIT\n"), script);
+  assert.ok(script.includes("service postgresql stop"), script);
+  assert.ok(script.includes("redis-cli shutdown nosave"), script);
+  assert.ok(!/^\s*exit /m.test(script.split("stop_services() {")[1].split("}")[0]), "the trap must not exit");
+  // The test database, then the suite, in that order and last.
+  assert.ok(script.indexOf("bin/rails db:test:prepare") < script.indexOf("bundle exec rspec\n"), script);
+  assert.ok(script.endsWith("bundle exec rspec\n"), script);
+});
+
+/**
+ * The preamble, genuinely executed - the one thing a generated shell
+ * script can be wrong about in a way no substring assertion would
+ * catch. Every outside command it names is stubbed onto `PATH`,
+ * appending to a log, so this proves the order, the waiting loop, the
+ * trap and the exit status for real, under this machine's own `/bin/sh`.
+ *
+ * It proves nothing about PostgreSQL, Redis or Rails themselves: those
+ * need the built image, which is Inspector's to build. What it does
+ * prove is that the script around them is a working script.
+ */
+function runGeneratedCheck(opts: { suite: string; suiteExit: number; readyAfter?: number }): {
+  status: number;
+  log: string[];
+} {
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-checkscript-"));
+  const bin = join(dir, "stubs");
+  mkdirSync(bin);
+  mkdirSync(join(dir, "bin"));
+  const log = join(dir, "log");
+
+  // `pg_isready` fails the first `readyAfter` times, so the waiting loop
+  // is a loop that genuinely waits rather than one that happens to be
+  // satisfied on its first pass.
+  const stub = (name: string, body: string) => {
+    const path = name === "bin/rails" ? join(dir, name) : join(bin, name);
+    writeFileSync(path, `#!/bin/sh\necho "${name} $*" >> "${log}"\n${body}\n`);
+    chmodSync(path, 0o755);
+  };
+  stub("service", "exit 0");
+  stub(
+    "pg_isready",
+    `tries=$(cat "${join(dir, "tries")}" 2>/dev/null || echo 0)\n` +
+      `echo $((tries + 1)) > "${join(dir, "tries")}"\n` +
+      `[ "$tries" -ge ${opts.readyAfter ?? 0} ]`
+  );
+  stub("redis-server", "exit 0");
+  stub("redis-cli", "exit 0");
+  stub("bin/rails", "exit 0");
+  stub("bundle", `exit ${opts.suiteExit}`);
+
+  writeFileSync(join(dir, "check.sh"), checkScript(opts.suite, railsShape()));
+  chmodSync(join(dir, "check.sh"), 0o755);
+
+  const run = spawnSync("/bin/sh", [join(dir, "check.sh")], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+  });
+
+  return {
+    status: run.status ?? -1,
+    log: (readFileSync(log, "utf8").trim().split("\n") ?? []).filter((line) => line.length > 0),
+  };
+}
+
+test("the generated check.sh really runs: servers up, database prepared, suite run, servers stopped", () => {
+  const { status, log } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit: 0, readyAfter: 2 });
+
+  assert.equal(status, 0, log.join("\n"));
+  assert.deepEqual(
+    log.filter((line) => !line.startsWith("pg_isready")),
+    [
+      "service postgresql start",
+      "redis-server --daemonize yes --save ",
+      "redis-cli ping",
+      "bin/rails db:test:prepare",
+      "bundle exec rspec",
+      "service postgresql stop",
+      "redis-cli shutdown nosave",
+    ]
+  );
+  // The wait is a real wait: pg_isready refused twice before answering,
+  // and the script kept asking rather than carrying on regardless.
+  assert.equal(log.filter((line) => line.startsWith("pg_isready")).length, 3, log.join("\n"));
+});
+
+// The half a `set -e` script gets wrong on its own: a failing suite
+// exits before any cleanup, leaving both servers running - and a trap
+// that cleans up can just as easily swallow the failure.
+test("the generated check.sh stops the servers after a failing suite, and still fails", () => {
+  const { status, log } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit: 3 });
+
+  assert.equal(status, 3, "the suite's own status is the check's status");
+  assert.ok(log.includes("service postgresql stop"), log.join("\n"));
+  assert.ok(log.includes("redis-cli shutdown nosave"), log.join("\n"));
 });
