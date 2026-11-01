@@ -50,6 +50,8 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     workerNetworks: async () => ok("worker networks"),
     workerToken: () => ok("worker token"),
     githubApp: async () => ok("github app"),
+    // Issue #331: no test may ask the machine running it for a gh login.
+    ghPublish: async () => ({ kind: "ok" as const }),
     inspector: () => ok("inspector"),
     live: async () => ok("worker token (live)"),
     ...overrides,

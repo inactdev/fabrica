@@ -137,7 +137,10 @@ function describeOrigin(project: string): string {
  * repository. An App not installed where the issue lives refuses by
  * name, which is the honest answer. A project's own token is the
  * Client's to scope, and a fine-grained one covering only that project's
- * repository will refuse a cross-repository issue the same way.
+ * repository will refuse a cross-repository issue the same way; a
+ * project publishing with the `gh` login (issue #331) reads the issue
+ * with that login, which can see whatever the account it belongs to
+ * can.
  *
  * The token is never logged, printed, or recorded - only the fact that
  * one was minted or used (`github-token.ts`). */

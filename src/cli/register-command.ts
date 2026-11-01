@@ -179,8 +179,9 @@ export function registerSummary(result: RegisterResult): string[] {
         `a REPLACE-ME-with-... left in one of them refuses the task.`
     );
     lines.push(
-      `A repository Fabrica cannot commit to usually needs its own GitHub token too: add ` +
-        `githubTokenVar = "<NAME>" to that entry, naming the brain.env variable holding it.`
+      `A repository Fabrica cannot commit to usually needs its own GitHub credential too: add ` +
+        `githubTokenVar = "<NAME>" to that entry, naming the brain.env variable holding its token - or ` +
+        `githubToken = "gh" to publish with the login \`gh\` already holds on this machine.`
     );
   } else {
     lines.push(

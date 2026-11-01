@@ -248,6 +248,10 @@ src/foreman/delivery.test.ts: src/foreman/delivery.test.ts
 src/foreman/delivery.ts: src/foreman/delivery.test.ts
 src/foreman/do.test.ts: src/foreman/do.test.ts
 src/foreman/do.ts: src/foreman/do.test.ts
+# Hand-added: errors.ts declares the code every refusal in this module
+# branches on and has no colocated test of its own; these are the suites
+# that drive those codes through the real refusals.
+src/foreman/errors.ts: src/foreman/do.test.ts, src/foreman/github-token.test.ts, src/foreman/publish-permissions.test.ts
 src/foreman/fix-rebase.test.ts: src/foreman/fix-rebase.test.ts
 src/foreman/fix-rebase.ts: src/foreman/fix-rebase.test.ts
 src/foreman/follow.test.ts: src/foreman/follow.test.ts
@@ -317,6 +321,12 @@ src/github/fetch-issue.test.ts: src/github/fetch-issue.test.ts
 src/github/fetch-issue.ts: src/github/fetch-issue.test.ts
 src/github/issue-ref.test.ts: src/github/issue-ref.test.ts
 src/github/issue-ref.ts: src/github/issue-ref.test.ts
+# Hand-added: api.ts and index.ts have no colocated test of their own -
+# the two real calls in this module exercise the shared headers, the
+# pinned version and the error-body read, and src/projecttoken's publish
+# check exercises them through the barrel.
+src/github/api.ts: src/github/fetch-issue.test.ts, src/github/fetch-comments.test.ts
+src/github/index.ts: src/github/fetch-issue.test.ts, src/projecttoken/gh-push.test.ts
 src/githubapp/config.test.ts: src/githubapp/config.test.ts
 src/githubapp/config.ts: src/githubapp/config.test.ts, src/githubapp/granted.test.ts
 src/githubapp/doctor-checks.test.ts: src/githubapp/doctor-checks.test.ts
@@ -373,6 +383,17 @@ src/offbooks/blocked-edit.ts: src/offbooks/blocked-edit.test.ts
 src/offbooks/hook-settings.test.ts: src/offbooks/hook-settings.test.ts
 src/projecttoken/resolve.test.ts: src/projecttoken/resolve.test.ts
 src/projecttoken/resolve.ts: src/projecttoken/resolve.test.ts
+src/projecttoken/gh.test.ts: src/projecttoken/gh.test.ts
+src/projecttoken/gh.ts: src/projecttoken/gh.test.ts, src/projecttoken/gh-push.test.ts
+src/projecttoken/gh-push.test.ts: src/projecttoken/gh-push.test.ts
+src/projecttoken/gh-push.ts: src/projecttoken/gh-push.test.ts
+# Hand-added: types.ts and index.ts have no colocated test of their own,
+# the same way src/config's don't - these are the suites that drive every
+# shape they declare, through the real functions. The fake `gh` is a
+# test-only fixture, covered by whatever drives it.
+src/projecttoken/types.ts: src/projecttoken/resolve.test.ts
+src/projecttoken/index.ts: src/projecttoken/resolve.test.ts, src/projecttoken/gh.test.ts, src/projecttoken/gh-push.test.ts
+src/projecttoken/helpers/fake-gh.ts: src/projecttoken/gh.test.ts, src/projecttoken/gh-push.test.ts, src/foreman/github-token.test.ts, src/foreman/publish-permissions.test.ts
 src/quiz/questions.test.ts: src/quiz/questions.test.ts
 src/quiz/questions.ts: src/quiz/questions.test.ts
 src/quiz/recheck.test.ts: src/quiz/recheck.test.ts

@@ -19,17 +19,29 @@ export interface ProjectToken {
 }
 
 /**
- * The three answers "which credential does this project use" can have.
+ * The four answers "which credential does this project use" can have.
  *
- * There is deliberately no fourth answer meaning "its own token, or the
- * App if that is missing" (the issue's own clarification: "never a
- * fallback"). A project that names a variable holding nothing is
- * refused, not quietly published by some other credential - which is
- * the whole difference between a work-mode project and a mistake.
+ * There is deliberately none meaning "its own token, or the App if that
+ * is missing" (issue #314's own clarification: "never a fallback", which
+ * issue #331 repeats for the `gh` login). A project that names a
+ * variable holding nothing is refused, not quietly published by some
+ * other credential - which is the whole difference between a work-mode
+ * project and a mistake.
  */
 export type ProjectTokenResolution =
   | { kind: "app" }
   | { kind: "token"; token: ProjectToken }
+  /** `githubToken = "gh"` (issue #331): this project's GitHub
+   * operations go through the login the GitHub CLI holds on this
+   * machine. Deliberately carries no credential - it says *which*
+   * credential and nothing more, so the only place a gh token exists is
+   * inside the one call that is about to use it
+   * (`src/foreman/github-token.ts`'s `token()`), read then and discarded
+   * when it returns. A kind holding the token instead would mean every
+   * caller that only wants to *describe* a project's credential -
+   * `fabrica doctor` on every registered project, issue #304's start
+   * gate - read a live credential it has no use for. */
+  | { kind: "gh" }
   | {
       kind: "refused";
       /** Which variable was named and could not be read - always known,

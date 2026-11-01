@@ -450,18 +450,88 @@ test("loadConfig: githubTokenVar must be a variable NAME, never the token and ne
 // than two describing parts of them.
 
 test("loadConfig: the unknown-field refusal names githubTokenVar among what is recognized", () => {
+  // The near-miss spelling, now that `githubToken` is itself a setting
+  // (issue #331) and so no longer an unknown field.
   const recordHome = makeTestHome(`
     [projects.dayjob]
     path = "~/work/widgets"
-    githubToken = "github_pat_fake"
+    githubTokenVariable = "DAYJOB_GITHUB_TOKEN"
   `);
 
   assert.throws(
     () => loadConfig(recordHome),
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
-      assert.match(err.message, /unknown field\(s\): githubToken\./);
+      assert.match(err.message, /unknown field\(s\): githubTokenVariable\./);
       assert.match(err.message, /githubTokenVar/);
+      return true;
+    }
+  );
+});
+
+// Issue #331: the second way of naming this project's own credential -
+// the login `gh` already holds on this machine, for an organization
+// where the App cannot be installed and the Client already works
+// through `gh` as himself.
+
+test('loadConfig: a project may publish with the gh login - githubToken = "gh"', () => {
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    check = "bin/ci"
+    githubToken = "gh"
+  `);
+
+  assert.deepEqual(loadConfig(recordHome).projects["dayjob"], {
+    path: join(homedir(), "work/widgets"),
+    check: "bin/ci",
+    githubToken: "gh",
+    onlyTouchedTests: true,
+  });
+});
+
+test('loadConfig: githubToken takes only "gh" - a pasted token is refused, naming githubTokenVar instead', () => {
+  for (const value of [`"github_pat_fake"`, `"GH"`, `"cli"`, `""`, `true`]) {
+    const recordHome = makeTestHome(`
+      [projects.dayjob]
+      path = "~/work/widgets"
+      githubToken = ${value}
+    `);
+
+    assert.throws(
+      () => loadConfig(recordHome),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.equal(err.code, "malformed");
+        assert.match(err.message, /githubToken takes exactly one value/);
+        // The setting he was actually reaching for, when the value is a
+        // token he pasted.
+        assert.match(err.message, /githubTokenVar = "<NAME>"/);
+        return true;
+      },
+      `githubToken = ${value} should have been refused`
+    );
+  }
+});
+
+test("loadConfig: githubTokenVar and githubToken together are refused, not resolved by precedence", () => {
+  // Publishing under whichever credential a precedence rule happened to
+  // pick is the one thing issue #314's "never a fallback" exists to
+  // prevent.
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    githubTokenVar = "DAYJOB_GITHUB_TOKEN"
+    githubToken = "gh"
+  `);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.equal(err.code, "malformed");
+      assert.match(err.message, /sets both githubTokenVar and githubToken/);
+      assert.match(err.message, /Keep exactly one of them/);
       return true;
     }
   );

@@ -1,8 +1,8 @@
 # src/projecttoken
 
 Which GitHub credential one project's operations go through (issue #314,
-the first of three work-mode settings). One question, one answer, in one
-place.
+the first of three work-mode settings; widened by issue #331). One
+question, one answer, in one place.
 
 ## Why this exists
 
@@ -30,13 +30,68 @@ like every other credential on the machine — Fabrica's own environment
 first, then that 600-mode file — and the only half that is ever printed,
 recorded or put in a message is the variable's name.
 
+## The second form: the `gh` login (issue #331)
+
+At the same day job, the Client already works in that repository through
+the GitHub CLI, logged in as himself. Copying *that* token into
+`brain.env` would be a second copy of one secret on disk, and it goes
+stale every time `gh` refreshes the login. So a project may name the
+login instead of a variable:
+
+```toml
+[projects.dayjob]
+path        = "~/work/widgets"
+check       = "./check.sh"
+githubToken = "gh"
+```
+
+Every GitHub operation for such a project runs `gh auth token --hostname
+github.com` **at the moment of that one call**, uses the answer for that
+call, and discards it. Nothing is cached, written to disk, logged, or put
+on the record — the record says `gh` was asked and what for
+(`"project-token-used"` with `source: "gh"`), and nothing else.
+
+`githubToken` and `githubTokenVar` are mutually exclusive, refused
+together by the loader (`src/config/load.ts`) rather than resolved by a
+precedence rule: publishing under whichever credential a precedence rule
+happened to pick is exactly what rule 1 below exists to prevent.
+
+Two files, two questions:
+
+| file | answers |
+|---|---|
+| `gh.ts` | can this machine produce a github.com token from `gh` at all - and the two sharp edges of asking: `gh auth token` prints the credential on **stdout** (so every message is built from `stderr` only), and "not installed" (ENOENT) is a different finding, with a different fix, from "not logged in" (gh's own exit code 4) |
+| `gh-push.ts` | can the account that login belongs to actually push here - `GET /repos/{owner}/{repo}`'s `permissions.push`, read from GitHub's own answer rather than inferred from the login working |
+
+`gh-push.ts` has **three** answers, not two, and the third one matters:
+a definite no (no `gh`, no login, GitHub saying this login cannot push,
+including 401/403/404) refuses a task and FAILs the doctor line; a
+question that could not be asked at all (network down, a 500, a body
+that will not parse) is `unknown`, which the doctor line says out loud
+and passes, and which starts the task. That is the ruling issue #304's
+own gate was built on — evidence versus the absence of it — and without
+it every offline minute would refuse work on a correctly configured
+project.
+
+### What this form gets back
+
+Issue #304's start gate is *available* again here, by a different route:
+an OAuth login's write access to one repository is readable where a
+fine-grained token's own scopes are not. And a login with the `repo`
+scope can read a pull request's check runs, so such a project's CI
+result shows up in `fabrica status` again.
+
 ## The three rules this module exists to keep
 
+All three hold for the `gh` form above word for word; read "its own
+credential" for "a token" throughout.
+
 1. **Never a fallback, in either direction** (the issue's own
-   clarification). A project names a token or it uses the App. A named
-   variable holding nothing is a refusal, never a quiet mint off the
-   App; and a machine with no App configured at all is not an error for
-   a project that names a token.
+   clarification). A project names a credential of its own or it uses
+   the App. A named variable holding nothing, or a `gh` that is not
+   logged in, is a refusal, never a quiet mint off the App; and a
+   machine with no App configured at all is not an error for a project
+   that has its own.
 2. **Every GitHub operation, not just the push** (the Client's
    clarification on the issue). The push, the pull request, the issue a
    task names, and the checks on that pull request.
@@ -51,10 +106,10 @@ recorded or put in a message is the variable's name.
 
 | caller | what it does with it |
 |---|---|
-| `src/foreman/github-token.ts`'s `taskGithubCredential` | the chokepoint: returns the App's recording minter or this project's own token, for all three purposes (`publish`, `read-issue`, `read-checks`) |
-| `src/foreman/publish-permissions.ts` | issue #304's start gate reads what GitHub *granted* on a minted App token; a token project mints none, so the gate is skipped for it (see below) |
-| `src/cli/doctor-command.ts` | the per-project line: which path this project uses, and a FAIL when the named variable holds nothing or `brain.env` is readable by others |
-| `src/githubapp/doctor-checks.ts` | the App's own line asks nothing about a token project, and passes with no App at all when every registered project has one |
+| `src/foreman/github-token.ts`'s `taskGithubCredential` | the chokepoint: returns the App's recording minter, this project's own token, or a token read from `gh` right then, for all three purposes (`publish`, `read-issue`, `read-checks`) |
+| `src/foreman/publish-permissions.ts` | issue #304's start gate reads what GitHub *granted* on a minted App token; a token project mints none, so the gate is skipped for it (see below) — a `gh` project gets it back through `ghPublishAnswer` |
+| `src/cli/doctor-command.ts` | the per-project line: which path this project uses, and a FAIL when the named variable holds nothing, `brain.env` is readable by others, or the `gh` login cannot push here |
+| `src/githubapp/doctor-checks.ts` | the App's own line asks nothing about either kind, and passes with no App at all when every registered project has a credential of its own |
 
 ### What a project token gives up, and why that is not hidden
 
@@ -76,7 +131,9 @@ A project token is not minted, so it leaves no `"token-minted"` event.
 It leaves `"project-token-used"` instead (declared in
 `src/inspector/types.ts`'s widening, details in
 `src/foreman/github-token.ts`'s `ProjectTokenUsedDetails`): what the
-call was for, the repository, and the variable's name. Never the token.
+call was for, the repository, and where the credential came from —
+`source: "brain.env"` with the variable's name, or `source: "gh"` with
+no name to give. Never the token.
 
 A separate event name rather than a flag on the existing one, because
 nothing was minted: there is no installation, no granted-permission map
@@ -93,3 +150,11 @@ App never being reached, the event, the refusal) is
 `src/foreman/github-token.test.ts`, with `src/githubapp`'s fake minter
 standing in for the App: a fake that was never asked records nothing,
 which is exactly the assertion.
+
+`gh.test.ts` and `gh-push.test.ts` follow the same rule one step
+further: they spawn a **real** stand-in `gh` (`helpers/fake-gh.ts`
+writes one and hands back a PATH holding only it), because what is
+being tested is how an exit code, a stdout and a stderr are read — a
+function-shaped seam standing in for the spawn would test neither. The
+machine's own `gh` is never reached, or the tester's GitHub login would
+decide whether a test passes.

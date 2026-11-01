@@ -207,7 +207,8 @@ committed to the company's repository at all. There is no pull request
 to open for them. So `--terms <folder>` writes them into a folder of the
 Client's own instead, and `projects.toml` records where (`terms`) plus
 `noStamp = true` — two of issue #316's three work-mode settings, beside
-issue #314's `githubTokenVar` (`src/projecttoken/`). Both are read, on
+issue #314's `githubTokenVar` and issue #331's `githubToken = "gh"`
+(`src/projecttoken/`). Both are read, on
 every round, by `src/workmode/`; this command is the one place that
 writes them. The third, `pullRequestTemplate`, is the Client's own
 choice per repository and is not written here.
