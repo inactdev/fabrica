@@ -283,6 +283,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     maxRequestBytes,
     maxCallsPerTask,
     githubTokenVar,
+    githubToken,
     terms,
     noStamp,
     pullRequestTemplate,
@@ -297,8 +298,8 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     throw new ConfigError(
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
-        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, githubTokenVar, terms, noStamp, ` +
-        `pullRequestTemplate, reviewer, reader, knowledge and onlyTouchedTests are recognized.`
+        `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, githubTokenVar, githubToken, terms, ` +
+        `noStamp, pullRequestTemplate, reviewer, reader, knowledge and onlyTouchedTests are recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -333,8 +334,26 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
         ? true
         : requireFlag(onlyTouchedTests, `${path}: [projects.${name}].onlyTouchedTests`),
   };
+  // Issue #331: the two ways of naming this project's own GitHub
+  // credential are mutually exclusive, and refused together here rather
+  // than resolved by a precedence rule. A precedence rule would mean
+  // publishing under whichever credential this file happened to pick,
+  // which is the one thing issue #314's "never a fallback" exists to
+  // prevent - and an entry carrying both can only be a half-finished
+  // edit, so the only honest answer is to say so.
+  if (githubTokenVar !== undefined && githubToken !== undefined) {
+    throw new ConfigError(
+      "malformed",
+      `${path}: [projects.${name}] sets both githubTokenVar and githubToken. They are the two alternatives ` +
+        `for the same question - a token of your own named in brain.env, or the login \`gh\` already holds - ` +
+        `and neither is a fallback for the other. Keep exactly one of them.`
+    );
+  }
   if (githubTokenVar !== undefined) {
     project.githubTokenVar = requireEnvVarName(githubTokenVar, `${path}: [projects.${name}].githubTokenVar`);
+  }
+  if (githubToken !== undefined) {
+    project.githubToken = requireGithubTokenSource(githubToken, `${path}: [projects.${name}].githubToken`);
   }
   // Issue #316, work mode. Only the shape is checked here; whether the
   // folder exists, is a directory and holds the two files Inspector
@@ -541,6 +560,30 @@ function requireEnvVarName(value: unknown, label: string): string {
     );
   }
   return value.trim();
+}
+
+/**
+ * Where this project's GitHub token comes from, when it is not a
+ * variable in `brain.env` (issue #331). Exactly one value is accepted:
+ * `"gh"`, the login the GitHub CLI already holds on this machine.
+ *
+ * An unrecognized value is refused rather than read as "no setting" or
+ * as the name of some other source. The whole point of this setting is
+ * that a project either publishes with a credential the Client chose or
+ * it refuses, so a typo must never resolve to a different credential -
+ * and the refusal names both of the two real answers, since getting
+ * here means he was reaching for one of them.
+ */
+function requireGithubTokenSource(value: unknown, label: string): "gh" {
+  if (value !== "gh") {
+    throw new ConfigError(
+      "malformed",
+      `${label} takes exactly one value - githubToken = "gh", meaning every GitHub operation for this project ` +
+        `goes through the login \`gh\` already holds on this machine - not ${JSON.stringify(value)}. To publish ` +
+        `with a token of your own instead, name the brain.env variable holding it: githubTokenVar = "<NAME>".`
+    );
+  }
+  return "gh";
 }
 
 /**

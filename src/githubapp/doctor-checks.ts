@@ -73,18 +73,21 @@ export interface ProjectRepo {
   noStamp?: boolean;
 }
 
-/** A registered project that reaches GitHub with a token of its own
- * instead of the App (issue #314, work mode) - the name in
+/** A registered project that reaches GitHub with a credential of its
+ * own instead of the App (issue #314, work mode) - the name in
  * projects.toml, and the name of the brain.env variable holding the
  * token. Never the token.
  *
  * This line asks nothing about such a project: it is the App's line, and
  * the App is not that project's credential. Its own per-project doctor
- * line reports which path it uses and whether the variable is set
+ * line reports which path it uses and whether the credential works
  * (src/cli/doctor-command.ts). */
 export interface ProjectOwnToken {
   name: string;
-  variable: string;
+  /** Absent for a project that publishes with the GitHub CLI's own
+   * login (issue #331's `githubToken = "gh"`): there is no variable to
+   * name, and nothing about that login is this line's business either. */
+  variable?: string;
 }
 
 export const GITHUB_APP_LABEL = "github app";
@@ -124,7 +127,7 @@ export async function githubAppStatus(
   // still the FAIL it has always been, because the next project
   // registered will need one.
   if (repos.length === 0 && ownTokens.length > 0) {
-    const named = ownTokens.map(({ name, variable }) => `${name} (${variable})`).join(", ");
+    const named = ownTokens.map(describeOwnToken).join(", ");
     const configured = appSettings(env, recordHome);
     const unused =
       configured.appId === undefined && configured.keyPath === undefined
@@ -133,7 +136,7 @@ export async function githubAppStatus(
     return {
       ok: true,
       label,
-      detail: `not used - every registered project reaches GitHub with its own token: ${named}`,
+      detail: `not used - every registered project reaches GitHub with its own credential: ${named}`,
       ...(unused || note ? { note: [unused, note].filter(Boolean).join(" - ") } : {}),
     };
   }
@@ -231,16 +234,37 @@ export async function githubAppStatus(
   // Issue #314: the projects this line did not ask about, said out loud.
   // A reader counting projects would otherwise be left to work out why
   // the number here is smaller than the registry's.
+  //
+  // One clause per project rather than one phrase for all of them
+  // (issue #331): two projects can now be here for different reasons -
+  // a token of its own, or the `gh` login - and a single phrase would
+  // have to be wrong about one of them.
+  const clauses = ownTokens.map((own) => `${own.name} reaches GitHub with ${ownCredentialPhrase(own)}`);
   const aside =
-    ownTokens.length === 0
+    clauses.length === 0
       ? ""
-      : `; ${ownTokens.map(({ name }) => name).join(", ")} ${ownTokens.length === 1 ? "reaches" : "reach"} ` +
-        `GitHub with ${ownTokens.length === 1 ? "a token of its own" : "tokens of their own"} and ` +
-        `${ownTokens.length === 1 ? "was" : "were"} not checked here`;
+      : clauses.length === 1
+        ? `; ${clauses[0]} and was not checked here`
+        : `; ${clauses.join(", ")} - none of them were checked here`;
   const detail = `${named}, ${identity.installations === 1 ? "1 installation" : `${identity.installations} installations`}, ${reached}${aside}`;
   const notes = [...(unanswered.length > 0 ? [`could not check ${unanswered.join("; ")}`] : []), ...(note ? [note] : [])];
 
   return { ok: true, label, detail, ...(notes.length > 0 ? { note: notes.join(" - ") } : {}) };
+}
+
+/** How one project that does not use the App is named on this line -
+ * with the variable holding its token, or as the `gh` login (issue
+ * #331). The CLI's name is a literal here rather than imported from
+ * `src/projecttoken`: this module's whole arrangement is that it knows
+ * about GitHub Apps and is *handed* every fact about a project, and one
+ * word of wording is not worth a dependency to carry. */
+function describeOwnToken(own: ProjectOwnToken): string {
+  return own.variable === undefined ? `${own.name} (gh login)` : `${own.name} (${own.variable})`;
+}
+
+/** The same distinction inside a sentence. */
+function ownCredentialPhrase(own: ProjectOwnToken): string {
+  return own.variable === undefined ? "the gh login" : "a token of its own";
 }
 
 /** Every permission short on any project, once each, at the strongest

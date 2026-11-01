@@ -13,15 +13,17 @@
 // What the record carries is the repository, the installation, the
 // permissions GitHub granted, the expiry, and what the token was for.
 //
-// There are two credentials a task can have, decided per project and
-// never one as the other's fallback (issue #314, work mode). The App is
-// the default. A project whose projects.toml entry names the
+// There are three credentials a task can have, decided per project and
+// never one as another's fallback (issue #314, work mode; issue #331).
+// The App is the default. A project whose projects.toml entry names the
 // brain.env variable holding its own GitHub token - for an organization
 // the App cannot be installed on - uses that token for EVERY GitHub
-// operation, and `taskGithubCredential` below is the one function that
-// knows which: every GitHub call in Fabrica gets its token from there,
-// so a call added later cannot accidentally get the App for a project
-// that has its own token. Which credential a project uses is
+// operation; a project that says `githubToken = "gh"` instead asks the
+// GitHub CLI's own login for one, at the moment of each call. And
+// `taskGithubCredential` below is the one function that knows which:
+// every GitHub call in Fabrica gets its token from there, so a call
+// added later cannot accidentally get the App for a project that has a
+// credential of its own. Which credential a project uses is
 // src/projecttoken/'s answer; what a call does with it is here.
 
 import { appendEvent } from "../record/index.ts";
@@ -35,7 +37,7 @@ import {
 } from "../githubapp/index.ts";
 import { projectWorkMode } from "../workmode/index.ts";
 import type { GithubScope, MintPurpose, MintedToken, ScopedToken, TokenMinter } from "../githubapp/index.ts";
-import { resolveProjectToken } from "../projecttoken/index.ts";
+import { ghAuthToken, ghLoginRefusal, resolveProjectToken } from "../projecttoken/index.ts";
 import { hostFromOriginUrl, originUrl, ownerRepoFromOriginUrl } from "../register/index.ts";
 import { ForemanError } from "./errors.ts";
 
@@ -104,19 +106,33 @@ export function taskTokenMinter(
   return recordingMinter(recordHome, taskId, minter ?? defaultTokenMinter({ recordHome, env }));
 }
 
-/** `"project-token-used"`'s own details (issue #314). Never the token -
- * `variable` is its *name*, which is the half that is safe to print and
- * the half anyone reading the record actually needs. */
-export interface ProjectTokenUsedDetails {
+/** `"project-token-used"`'s own details (issue #314, widened by #331).
+ * Never the token - what is recorded is where it came from: the *name*
+ * of the variable, or the fact that `gh` was asked. Both are safe to
+ * print and are the half anyone reading the record actually needs. */
+export type ProjectTokenUsedDetails = {
   /** What the call was for: `publish`, `read-issue`, `read-checks` -
    * the same vocabulary the App's own event uses, since it describes
    * the call rather than the credential. */
   purpose: MintPurpose;
   /** `owner/repo` - the repository this call was against. */
   repo: string;
-  /** The name of the `brain.env` variable the token was read from. */
-  variable: string;
-}
+} & (
+  | {
+      /** The token was read from `brain.env` (issue #314). */
+      source: "brain.env";
+      /** The name of the `brain.env` variable the token was read from. */
+      variable: string;
+    }
+  | {
+      /** The token came from the GitHub CLI's own login, asked for this
+       * one call (issue #331). There is no variable to name - and
+       * deliberately nothing else either: which account that login
+       * belongs to is a question for `gh auth status`, not a fact
+       * Fabrica writes down about a credential it does not own. */
+      source: "gh";
+    }
+);
 
 /**
  * One GitHub credential for one call, however this project gets one
@@ -128,10 +144,18 @@ export interface ProjectTokenUsedDetails {
  */
 export interface TaskGithubCredential {
   /**
-   * Everything answerable without the network: the App configured and
-   * its key usable, or this project's own token present. Throws with
-   * the Client's own next step, so a caller that must refuse before it
-   * starts anything (`Inspector.prepare()`) can do so synchronously.
+   * Everything answerable off this machine alone: the App configured
+   * and its key usable, this project's own token present, or `gh`
+   * installed and logged in. Throws with the Client's own next step, so
+   * a caller that must refuse before it starts anything
+   * (`Inspector.prepare()`) can do so synchronously.
+   *
+   * "Off this machine alone" rather than "without the network": `gh
+   * auth token` refreshes a token close to expiry before printing it,
+   * which is its own call to GitHub and deliberately not suppressed (a
+   * refreshed login is the point of that setting). Nothing *here* asks
+   * GitHub anything, and whether the login can push is a separate
+   * question asked at task start (./publish-permissions.ts).
    */
   check(): void;
   /** The token for one call, recorded on the task and discarded by the
@@ -141,9 +165,10 @@ export interface TaskGithubCredential {
 
 /**
  * Which credential this task's GitHub calls go through: this project's
- * own token when its projects.toml entry names one, otherwise a token
- * minted from the GitHub App. Never both, and never one as the other's
- * fallback (issue #314's clarification).
+ * own token when its projects.toml entry names one, the GitHub CLI's
+ * login when it says `githubToken = "gh"` (issue #331), otherwise a
+ * token minted from the GitHub App. Never two of them, and never one as
+ * another's fallback (issue #314's clarification).
  *
  * The decision is taken per call rather than cached, so a `githubTokenVar`
  * added to projects.toml between two rounds of the same task is read the
@@ -177,12 +202,34 @@ export function taskGithubCredential(
   let app: TokenMinter | undefined;
   const appMinter = () => (app ??= taskTokenMinter(recordHome, taskId, minter, env));
 
+  /** The `gh` login, or this project's own refusal about it. Asks this
+   * machine only - is `gh` there, is it logged in - and nothing of
+   * GitHub: whether that login can actually push is the start gate's
+   * and `fabrica doctor`'s question (src/projecttoken/gh-push.ts). */
+  const ghToken = () => {
+    // Spawned with Fabrica's own environment - which is `process.env`
+    // in production, exactly as the Client's own shell would run it, and
+    // a PATH carrying a stand-in `gh` in a test.
+    const read = ghAuthToken({ env });
+    if (read.kind === "problem") {
+      throw new ForemanError("gh-login-unavailable", ghLoginRefusal(recordHome, project, read));
+    }
+    return read.token;
+  };
+
   return {
     check() {
       const resolution = resolve();
       if (resolution.kind === "refused") throw new ForemanError("project-token-unavailable", resolution.message);
-      // A project with its own token never asks whether the App is
-      // configured: on the machine this setting exists for, it cannot
+      // Issue #331: the same question for a project that publishes with
+      // the `gh` login - asked of `gh` rather than of brain.env, and
+      // here rather than at the push, so a machine that is logged out
+      // refuses before a worker is started. The token this reads is
+      // discarded unused: `token()` below asks again at the moment of
+      // the call that needs one.
+      if (resolution.kind === "gh") ghToken();
+      // A project with its own credential never asks whether the App is
+      // configured: on the machine these settings exist for, it cannot
       // be, and that is not an error (issue #314's clarification).
       if (resolution.kind === "app") appMinter().requireConfigured();
     },
@@ -190,13 +237,18 @@ export function taskGithubCredential(
       const resolution = resolve();
       if (resolution.kind === "refused") throw new ForemanError("project-token-unavailable", resolution.message);
       if (resolution.kind === "app") return (await appMinter().mint(purpose, scope)).token;
-      const details: ProjectTokenUsedDetails = {
-        purpose,
-        repo: `${scope.owner}/${scope.repo}`,
-        variable: resolution.token.variable,
-      };
+      const repo = `${scope.owner}/${scope.repo}`;
+      // Issue #331: read at the moment of this one call - never held
+      // between calls, never put on the record, never logged - so a
+      // login `gh` has refreshed since the last call is the one used,
+      // and nothing of it outlives the call that asked.
+      const token = resolution.kind === "gh" ? ghToken() : resolution.token.token;
+      const details: ProjectTokenUsedDetails =
+        resolution.kind === "gh"
+          ? { purpose, repo, source: "gh" }
+          : { purpose, repo, source: "brain.env", variable: resolution.token.variable };
       appendEvent(recordHome, { taskId, name: "project-token-used", details });
-      return resolution.token.token;
+      return token;
     },
   };
 }
@@ -249,8 +301,9 @@ export function githubRepoOf(project: string): { owner: string; repo: string } |
 /** The publishing token for one round's Inspector handoff: this task's
  * repository alone, and - when it comes from the App - only `contents:
  * write`, `pull_requests: write` and `statuses: write`. A project that
- * names its own token in projects.toml publishes with that instead, and
- * no App token is minted for it at all (issue #314).
+ * names its own token in projects.toml publishes with that instead, or
+ * with the GitHub CLI's own login when it says `githubToken = "gh"`
+ * (issue #331), and no App token is minted for it at all (issue #314).
  *
  * `statuses: write` is dropped for a project Inspector posts no commit
  * status for (issue #316's `noStamp`): a handoff that will not stamp
@@ -265,13 +318,23 @@ export function githubRepoOf(project: string): { owner: string; repo: string } |
  * refuses through `Inspector.prepare()`'s own path - one refusal, before
  * any worker starts - instead of throwing while the round is being
  * assembled. */
-export function publishToken(recordHome: string, taskId: string, project: string, minter?: TokenMinter): ScopedToken {
-  const credential = taskGithubCredential(recordHome, taskId, project, minter);
+export function publishToken(
+  recordHome: string,
+  taskId: string,
+  project: string,
+  minter?: TokenMinter,
+  /** Fabrica's own environment - where a project's own token is read
+   * from, and the PATH `gh` is found on (issue #331). Only a test ever
+   * passes anything but the real one. */
+  env: NodeJS.ProcessEnv = process.env
+): ScopedToken {
+  const credential = taskGithubCredential(recordHome, taskId, project, minter, env);
   return {
     check() {
       // Both halves, cheapest first: a project with no GitHub remote can
       // never publish, and a credential this machine does not have can
-      // never be used. Neither needs the network.
+      // never be used. Neither asks GitHub anything (see
+      // `TaskGithubCredential.check()` on `gh`'s own token refresh).
       projectRepo(project);
       credential.check();
     },

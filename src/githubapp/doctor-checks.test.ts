@@ -349,6 +349,42 @@ test("a project with its own token is named on the App's line as not checked the
   }
 });
 
+// Issue #331: a project may reach GitHub with the GitHub CLI's own
+// login instead. This line asks nothing about that either - and it
+// carries no variable to name, so it is named as what it is.
+
+const WORK_VIA_GH = { name: "work" };
+
+test("a gh-login project also leaves nothing for the App's line to check", async () => {
+  const recordHome = mkdtempSync(join(tmpdir(), "fabrica-gh-app-doctor-gh-login-"));
+
+  const check = await githubAppStatus({}, recordHome, [], { ownTokens: [WORK_VIA_GH] });
+
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /not used/);
+  assert.match(check.detail, /work \(gh login\)/);
+  assert.equal(check.fix, undefined);
+});
+
+test("two projects here for different reasons each get their own clause", async () => {
+  const github = await stub();
+  const { recordHome, env } = configured();
+  try {
+    const check = await githubAppStatus(env, recordHome, [WIDGETS], {
+      apiRoot: github.baseUrl,
+      ownTokens: [DAYJOB, WORK_VIA_GH],
+    });
+
+    assert.equal(check.ok, true);
+    // One phrase for both would have to be wrong about one of them.
+    assert.match(check.detail, /dayjob reaches GitHub with a token of its own/);
+    assert.match(check.detail, /work reaches GitHub with the gh login/);
+    assert.match(check.detail, /none of them were checked here/);
+  } finally {
+    await github.close();
+  }
+});
+
 test("GITHUB_TOKEN is not a leftover when a project names it as its own publish token", async () => {
   const github = await stub();
   const { recordHome, env } = configured();

@@ -91,6 +91,21 @@ export interface ProjectConfig {
    * uses the App, and a machine with no App configured at all is not an
    * error for a project that names a token. See src/projecttoken/. */
   githubTokenVar?: string;
+  /** `githubToken = "gh"` — this project's GitHub operations go through
+   * the login the GitHub CLI already holds on this machine (issue #331,
+   * work mode). The alternative to `githubTokenVar` for an organization
+   * the Client's GitHub App cannot be installed on *and* where he
+   * already works through `gh` as himself: copying that token into
+   * `brain.env` would put a second copy of a secret on disk, and it
+   * goes stale whenever `gh` refreshes its login.
+   *
+   * Set, every GitHub operation for this project asks `gh` for a token
+   * at the moment of that one call. `"gh"` is the only value; anything
+   * else is refused rather than read as "some other source".
+   *
+   * **Mutually exclusive with `githubTokenVar`**, and neither is ever a
+   * fallback for the other or for the App. See src/projecttoken/. */
+  githubToken?: "gh";
   /** `terms = "<folder>"` — the folder on this machine holding this
    * project's own `.inspector.json`, `Dockerfile.inspector` and check
    * script, for a repository none of the three may be committed to

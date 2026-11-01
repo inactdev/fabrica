@@ -12,12 +12,14 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { createForeman } from "./foreman.ts";
 import { ForemanError } from "./errors.ts";
 import { requirePublishPermissions } from "./publish-permissions.ts";
 import { fakeMinter } from "../githubapp/helpers/fake-minter.ts";
 import { PUBLISH_PERMISSIONS } from "../githubapp/index.ts";
+import { fakeGh, noGh } from "../projecttoken/helpers/fake-gh.ts";
+import type { HttpFetch } from "../github/index.ts";
 import { fakeBrain } from "../brain/helpers/fake-brain.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { readEvents, registerTask } from "../record/index.ts";
@@ -191,6 +193,128 @@ test("a project that publishes with its own token is let through, and nothing is
 
   assert.equal(minter.calls.length, 0);
   assert.deepEqual(readEvents(recordHome).filter((e) => e.name === "token-minted"), []);
+});
+
+// Issue #331: a project that publishes with the GitHub CLI's own login
+// gets this gate back, by a different route - an OAuth login's write
+// access to one repository IS readable (`permissions.push`), where a
+// fine-grained token's own scopes are not. Driven with a real stand-in
+// `gh` and a stand-in GitHub, so no test asks the machine running it for
+// a login.
+
+function ghHome(project: string): string {
+  const recordHome = home();
+  writeFileSync(
+    join(recordHome, "projects.toml"),
+    `[projects.dayjob]\npath = ${JSON.stringify(project)}\ncheck = "./check.sh"\ngithubToken = "gh"\n`
+  );
+  return recordHome;
+}
+
+/** A GitHub that answers one status and one body for the repository
+ * read, and counts the calls. */
+function stubRepoRead(status: number, body: string) {
+  const calls: string[] = [];
+  const fetchImpl: HttpFetch = async (url) => {
+    calls.push(url);
+    return { status, text: async () => body };
+  };
+  return { fetchImpl, calls };
+}
+
+test("a gh login that can push lets the task through, and mints nothing", async () => {
+  const project = githubProject();
+  const recordHome = ghHome(project);
+  const { id: taskId } = registerTask(recordHome, "small change");
+  const gh = fakeGh("printf 'gho_from_the_cli\\n'");
+  const minter = fakeMinter({ granted: WITHOUT_STATUSES });
+  const github = stubRepoRead(200, JSON.stringify({ permissions: { push: true } }));
+
+  await requirePublishPermissions(recordHome, taskId, project, minter, {}, { env: gh.env, fetchImpl: github.fetchImpl });
+
+  assert.deepEqual(github.calls, ["https://api.github.com/repos/acme/widgets"]);
+  assert.equal(minter.calls.length, 0, "the App was asked for a token for a gh-login project");
+  assert.deepEqual(readEvents(recordHome).filter((e) => e.name === "token-minted"), []);
+});
+
+test("a gh login that cannot push refuses at task start, naming the gh command that fixes it", async () => {
+  const project = githubProject();
+  const recordHome = ghHome(project);
+  const { id: taskId } = registerTask(recordHome, "small change");
+  const gh = fakeGh("printf 'gho_from_the_cli\\n'");
+  const github = stubRepoRead(200, JSON.stringify({ permissions: { push: false } }));
+
+  await assert.rejects(
+    () =>
+      requirePublishPermissions(recordHome, taskId, project, fakeMinter(), {}, { env: gh.env, fetchImpl: github.fetchImpl }),
+    (err: unknown) =>
+      err instanceof ForemanError &&
+      err.code === "gh-login-unavailable" &&
+      /cannot push to acme\/widgets/.test(err.message) &&
+      /gh auth login --hostname github\.com/.test(err.message)
+  );
+});
+
+test("a machine with no gh at all refuses at task start, without asking GitHub anything", async () => {
+  const project = githubProject();
+  const recordHome = ghHome(project);
+  const { id: taskId } = registerTask(recordHome, "small change");
+  const github = stubRepoRead(200, JSON.stringify({ permissions: { push: true } }));
+
+  await assert.rejects(
+    () =>
+      requirePublishPermissions(recordHome, taskId, project, fakeMinter(), {}, { env: noGh(), fetchImpl: github.fetchImpl }),
+    (err: unknown) => err instanceof ForemanError && err.code === "gh-login-unavailable" && /not installed/.test(err.message)
+  );
+  assert.deepEqual(github.calls, []);
+});
+
+test("fabrica do refuses a gh-login project at task start, with doctor's own words", async (t) => {
+  // The whole wiring, with no seam passed in: `foreman.do` reaches the
+  // real `ghAuthToken`, which spawns whatever `gh` is on PATH. A logged
+  // out one, so nothing is asked of GitHub and no network is touched.
+  const project = githubProject();
+  const recordHome = ghHome(project);
+  const gh = fakeGh("echo 'not logged in' >&2\nexit 4");
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${gh.dir}${delimiter}${priorPath ?? ""}`;
+  t.after(() => {
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
+  });
+  const brain = fakeBrain();
+
+  await assert.rejects(
+    () => createForeman({ recordHome, minter: fakeMinter() }).do("small change", { project, brain }),
+    (err: unknown) => err instanceof ForemanError && err.code === "gh-login-unavailable"
+  );
+
+  assert.equal(brain.calls, 0, "a worker ran on a task that could never be published");
+  const events = readEvents(recordHome);
+  assert.ok(!events.some((event) => event.name === "work-started"), "work started before the refusal");
+  const failed = events.find((event) => event.name === "task-failed");
+  assert.ok(failed !== undefined, "the refusal left no trace on the record");
+  // The same sentence `fabrica doctor`'s project line prints, so the
+  // Client never meets two accounts of one problem.
+  assert.match(String((failed.details as { message?: unknown }).message), /not logged in to github\.com/);
+  assert.match(String((failed.details as { message?: unknown }).message), /gh auth login --hostname github\.com/);
+});
+
+test("a question GitHub could not answer lets the task through, exactly as an unreachable App does", async () => {
+  // Evidence versus the absence of it (this file's own header): refusing
+  // on an unasked question would stop work on a correctly configured
+  // project every time the machine is offline.
+  const project = githubProject();
+  const recordHome = ghHome(project);
+  const { id: taskId } = registerTask(recordHome, "small change");
+  const gh = fakeGh("printf 'gho_from_the_cli\\n'");
+  const fetchImpl: HttpFetch = async () => {
+    throw new Error("getaddrinfo ENOTFOUND api.github.com");
+  };
+
+  await requirePublishPermissions(recordHome, taskId, project, fakeMinter(), {}, { env: gh.env, fetchImpl });
+
+  assert.ok(true, "nothing was thrown");
 });
 
 // Work mode (issue #316): a project Inspector posts no commit status

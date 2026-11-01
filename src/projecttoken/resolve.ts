@@ -27,18 +27,33 @@
 //    goes into one child process's environment or one request's header.
 //    Everything a message, a doctor line or the record says names the
 //    variable instead.
+//
+// Issue #331 adds the second way of saying the same thing, for a machine
+// where the Client already works through the GitHub CLI as himself:
+//
+//   [projects.dayjob]
+//   path        = "~/work/widgets"
+//   githubToken = "gh"
+//
+// All three rules above hold for it unchanged - and it carries no
+// credential at all through this module: the answer is `{ kind: "gh" }`,
+// and the token is read from `gh` by the one call about to use it. See
+// ./gh.ts.
 
 import { realpathSync } from "node:fs";
 import { brainEnvPath, brainEnvValue } from "../brain/index.ts";
 import { projectsTomlPath } from "../config/index.ts";
 import type { FabricaConfig } from "../config/index.ts";
+import { GH_COMMAND } from "./gh.ts";
 import type { ProjectTokenResolution } from "./types.ts";
 
 /**
  * The variable this project names, or undefined when it names none and
- * so uses the GitHub App. Unlike `[reviewer]`/`[reader]`, there is no
- * global table to fall back to: a token is scoped to one repository, so
- * "every project's token" is not a thing that could exist.
+ * so uses the GitHub App - or the `gh` login, which names no variable
+ * either (`projectUsesGhLogin` below is that question). Unlike
+ * `[reviewer]`/`[reader]`, there is no global table to fall back to: a
+ * token is scoped to one repository, so "every project's token" is not a
+ * thing that could exist.
  *
  * Matched by resolved path for the same reason `readerFor` and
  * `reviewerFor` are - projects.toml's loader only expands a leading
@@ -46,8 +61,20 @@ import type { ProjectTokenResolution } from "./types.ts";
  * /var -> /private/var) makes one registration look like two.
  */
 export function projectTokenVarFor(config: FabricaConfig, projectPath: string): string | undefined {
-  const registered = Object.values(config.projects).find((p) => realpath(p.path) === realpath(projectPath));
-  return registered?.githubTokenVar;
+  return registeredEntry(config, projectPath)?.githubTokenVar;
+}
+
+/** Whether this project's GitHub operations go through the login the
+ * GitHub CLI holds on this machine (issue #331's `githubToken = "gh"`).
+ * The loader has already refused an entry that sets both this and
+ * `githubTokenVar`, so the two can never both be true here. */
+export function projectUsesGhLogin(config: FabricaConfig, projectPath: string): boolean {
+  return registeredEntry(config, projectPath)?.githubToken === "gh";
+}
+
+function registeredEntry(config: FabricaConfig, projectPath: string) {
+  const resolved = realpath(projectPath);
+  return Object.values(config.projects).find((p) => realpath(p.path) === resolved);
 }
 
 function realpath(path: string): string {
@@ -81,6 +108,14 @@ export function resolveProjectToken(opts: {
 }): ProjectTokenResolution {
   const { recordHome, config, projectPath, env } = opts;
   const label = opts.projectLabel ?? projectPath;
+  // Issue #331, asked first of the three: a project that publishes with
+  // the `gh` login reads nothing from brain.env and nothing from this
+  // machine at all here. Whether that login exists and can push is a
+  // question about `gh` and about GitHub, answered where it can be acted
+  // on (./gh.ts, ./gh-push.ts) - this function only ever says *which*
+  // credential, so that a caller which merely wants to describe a
+  // project never touches a credential.
+  if (projectUsesGhLogin(config, projectPath)) return { kind: "gh" };
   const variable = projectTokenVarFor(config, projectPath);
   if (variable === undefined) return { kind: "app" };
 
@@ -132,6 +167,7 @@ export function missingProjectTokenMessage(recordHome: string, label: string, va
  * value. */
 export function describeProjectCredential(resolution: ProjectTokenResolution): string {
   if (resolution.kind === "app") return "reaches GitHub with the GitHub App";
+  if (resolution.kind === "gh") return `reaches GitHub with the ${GH_COMMAND} login`;
   if (resolution.kind === "token") return `reaches GitHub with its own token (${resolution.token.variable})`;
   return resolution.message;
 }

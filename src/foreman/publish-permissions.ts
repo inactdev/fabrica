@@ -14,26 +14,34 @@
 // the task's record as `"token-minted"` like every other, and the token
 // is discarded.
 //
-// It refuses on exactly one finding: a mint that succeeded and came back
-// short. Everything else - no App configured, a project with no
-// github.com origin, a key GitHub rejects, GitHub unreachable - leaves
-// the task to proceed exactly as it does today. That is deliberate, and
-// it is the difference between evidence and the absence of it: a project
-// with no `.inspector.json` at its base commit publishes nothing at all
-// (judge.ts's `chooseCheckMode` self-test mode) and legitimately has
-// neither an App nor a github.com remote, so refusing those here would
-// stop work that has always worked and that issue #304 says nothing
-// about. Each of them already refuses loudly at the point publishing is
-// actually about to happen - `publishToken`'s `check()`, from
-// `Inspector.prepare()`, before any push - and `fabrica doctor`'s own
-// github-app line reports the could-not-ask cases to the one person who
-// can act on them.
+// Issue #331 gives the same gate a second route, for a project that
+// publishes with the GitHub CLI's login (`githubToken = "gh"`): GitHub
+// reports what that login may do on the repository itself
+// (`permissions.push`), which is readable where a fine-grained token's
+// own scopes are not. Same place, same rule - a definite no refuses, an
+// unanswerable question does not. See ./gh-push.ts.
+//
+// For the App, it refuses on exactly one finding: a mint that succeeded
+// and came back short. Everything else - no App configured, a project
+// with no github.com origin, a key GitHub rejects, GitHub unreachable -
+// leaves the task to proceed exactly as it does today. That is
+// deliberate, and it is the difference between evidence and the absence
+// of it: a project with no `.inspector.json` at its base commit
+// publishes nothing at all (judge.ts's `chooseCheckMode` self-test
+// mode) and legitimately has neither an App nor a github.com remote, so
+// refusing those here would stop work that has always worked and that
+// issue #304 says nothing about. Each of them already refuses loudly at
+// the point publishing is actually about to happen - `publishToken`'s
+// `check()`, from `Inspector.prepare()`, before any push - and `fabrica
+// doctor`'s own github-app line reports the could-not-ask cases to the
+// one person who can act on them.
 
 import { githubRepoOf, taskTokenMinter } from "./github-token.ts";
 import { loadConfigOrProblem } from "../config/index.ts";
 import { publishPermissionGap, publishPermissionsFor } from "../githubapp/index.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
-import { resolveProjectToken } from "../projecttoken/index.ts";
+import { ghLoginRefusal, ghPublishAnswer, resolveProjectToken } from "../projecttoken/index.ts";
+import type { GhPublishOptions } from "../projecttoken/index.ts";
 import { workModeFor } from "../workmode/index.ts";
 import { ForemanError } from "./errors.ts";
 
@@ -53,7 +61,11 @@ export async function requirePublishPermissions(
   minter?: TokenMinter,
   /** Fabrica's own environment, for reading this project's own token if
    * it names one. */
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  /** Issue #331's seam, only reached for a project that publishes with
+   * the `gh` login: a stand-in `gh` and a stand-in GitHub, so no test
+   * depends on this machine's own login (see src/projecttoken/gh.ts). */
+  gh: GhPublishOptions = {}
 ): Promise<void> {
   // No github.com repository behind this project means no App token is
   // involved in anything it does, so there is no grant to read.
@@ -73,6 +85,26 @@ export async function requirePublishPermissions(
   // `publishToken`'s `check()` through `Inspector.prepare()`.
   const config = loadConfigOrProblem(recordHome).config;
   const resolution = resolveProjectToken({ recordHome, config, projectPath: project, env });
+
+  // Issue #331: a project that publishes with the GitHub CLI's own login
+  // has the gate back, by a different route - an OAuth login's write
+  // access to one repository is readable (`permissions.push` on `GET
+  // /repos/{owner}/{repo}`), which a fine-grained token's own scopes are
+  // not. So it is asked here, in the same place and for the same reason
+  // the App's grant is: a task whose work could never be published must
+  // never be worked.
+  //
+  // Refused on a definite no only - no `gh`, no login, or GitHub saying
+  // this login cannot push. A read that could not be taken at all is
+  // left to proceed, exactly as an unreachable GitHub is for the App
+  // above; see ./gh-push.ts's header for that split in full.
+  if (resolution.kind === "gh") {
+    const answer = await ghPublishAnswer(repo.owner, repo.repo, gh);
+    if (answer.kind === "problem") {
+      throw new ForemanError("gh-login-unavailable", ghLoginRefusal(recordHome, project, answer));
+    }
+    return;
+  }
   if (resolution.kind !== "app") return;
 
   let gap;

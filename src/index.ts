@@ -236,8 +236,14 @@ export type {
 // it and none through the App. `fabrica doctor` reports which path each
 // project uses off the same resolution a round's own start reads, so the
 // two can never disagree.
-export { describeProjectCredential, resolveProjectToken } from "./projecttoken/index.ts";
-export type { ProjectToken, ProjectTokenResolution } from "./projecttoken/index.ts";
+// Issue #331 adds the second form of the same setting, for a machine
+// where the Client already works through the GitHub CLI as himself:
+// `githubToken = "gh"`, which asks `gh` for a token at the moment of
+// each GitHub call. `ghPublishAnswer` is the one question `fabrica
+// doctor`'s project line and `fabrica do`'s start gate both read - gh
+// installed, logged in, and able to push to that repository.
+export { describeProjectCredential, ghPublishAnswer, resolveProjectToken } from "./projecttoken/index.ts";
+export type { GhPublishAnswer, ProjectToken, ProjectTokenResolution } from "./projecttoken/index.ts";
 // Which GitHub repository a registered project's pull requests go to,
 // for the one caller that reports on every project at once
 // (`fabrica doctor`) rather than minting for one.

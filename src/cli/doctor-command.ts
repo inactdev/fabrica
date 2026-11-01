@@ -13,6 +13,7 @@ import {
   describeProjectCredential,
   describeUnmeasured,
   eventsByTask,
+  ghPublishAnswer,
   githubAppStatus,
   githubRepoOf,
   inspectorBranchStatus,
@@ -37,7 +38,14 @@ import {
   NO_WORK_MODE,
   WORKER_NETWORK_PREFIX,
 } from "../index.ts";
-import type { ProjectOwnToken, ProjectRepo, ProjectTokenResolution, WorkerNetwork, WorkMode } from "../index.ts";
+import type {
+  GhPublishAnswer,
+  ProjectOwnToken,
+  ProjectRepo,
+  ProjectTokenResolution,
+  WorkerNetwork,
+  WorkMode,
+} from "../index.ts";
 import { CliError } from "./errors.ts";
 import { dockerDaemonUp, DOCKER_LABEL } from "./docker-daemon.ts";
 import { repairImages, type ImageCommand } from "./image-repair.ts";
@@ -84,12 +92,18 @@ here rather than after a round has been spent on it. Fabrica never
 edits either file; the fix is always a hand change.
 
 Each project's line ends with which GitHub credential it uses: the
-GitHub App, or its own token when its projects.toml entry names one
-(githubTokenVar). A named variable that holds nothing, or a brain.env
+GitHub App, its own token when its projects.toml entry names one
+(githubTokenVar), or the login the GitHub CLI holds on this machine
+(githubToken = "gh"). A named variable that holds nothing, or a brain.env
 other users can read, is a FAIL on that project's line - nothing it
-works on could be published. The github app line asks nothing about such
-a project, and passes with no App configured at all when every
-registered project has a token of its own.
+works on could be published. For a gh project the same line asks gh and
+GitHub: installed, logged in to github.com, and that account able to
+push to this repository - a no is a FAIL naming the gh command that
+fixes it, and \`fabrica do\` refuses at task start with the same
+sentence. A question GitHub could not answer at all is said on the line
+and passes. The github app line asks nothing about either kind of
+project, and passes with no App configured at all when every registered
+project has a credential of its own.
 
 The github app line also warns, without failing, while a personal
 GITHUB_TOKEN is still set in the environment or sitting in brain.env:
@@ -207,6 +221,18 @@ export interface DoctorProbes {
    * no App configured at all. Its own project line carries whether that
    * token is actually there. */
   githubApp(recordHome: string): Promise<DoctorCheck>;
+  /** Whether the GitHub CLI's login on this machine can publish one
+   * project's work (issue #331): `gh` installed, logged in to
+   * github.com, and GitHub itself reporting that the account it is
+   * logged in as can push to that repository. Asked only for a project
+   * whose entry says `githubToken = "gh"`, and reported on that
+   * project's own line rather than a line of its own, because what it
+   * answers is about one project.
+   *
+   * A probe like the machine checks above - it spawns `gh` and makes one
+   * GitHub call - so that no test depends on the login the machine
+   * running it happens to hold. */
+  ghPublish(repo: { owner: string; repo: string }): Promise<GhPublishAnswer>;
   /** Inspector on PATH, taking -branch, and not behind its own main -
    * which is a real FAIL, so `fabrica up` stops on a stale Inspector
    * (src/inspector/doctor-checks.ts). */
@@ -687,6 +713,7 @@ export const realProbes: DoctorProbes = {
     githubAppStatus(process.env, recordHome, registeredProjectRepos(recordHome), {
       ownTokens: registeredOwnTokens(recordHome),
     }),
+  ghPublish: ({ owner, repo }) => ghPublishAnswer(owner, repo),
   inspector: () => inspectorBranchStatus(process.env),
   live: (recordHome) => probeWorkerToken(process.env, recordHome),
 };
@@ -704,7 +731,10 @@ function registeredProjectRepos(recordHome: string): ProjectRepo[] {
   const { config, problem } = loadConfigOrProblem(recordHome);
   if (problem) return [];
   return Object.entries(config.projects).flatMap(([name, project]) => {
-    if (project.githubTokenVar !== undefined) return [];
+    // Issue #331: a project publishing with the `gh` login is left out
+    // for exactly the same reason as one naming its own token - the App
+    // is not its credential.
+    if (project.githubTokenVar !== undefined || project.githubToken !== undefined) return [];
     const repo = githubRepoOf(project.path);
     // `noStamp` rides along (issue #316) because what this line checks
     // has to be exactly what the project's own handoff will ask GitHub
@@ -716,15 +746,17 @@ function registeredProjectRepos(recordHome: string): ProjectRepo[] {
 }
 
 /** The other half of the same split: every registered project that
- * reaches GitHub with a token of its own. Named on the App's line
- * (never asked about there) so the two numbers add up to the registry
- * for anyone reading them. */
+ * reaches GitHub with a credential of its own - a token named in
+ * brain.env, or the `gh` login (issue #331, which carries no variable to
+ * name). Named on the App's line (never asked about there) so the two
+ * numbers add up to the registry for anyone reading them. */
 function registeredOwnTokens(recordHome: string): ProjectOwnToken[] {
   const { config, problem } = loadConfigOrProblem(recordHome);
   if (problem) return [];
-  return Object.entries(config.projects).flatMap(([name, project]) =>
-    project.githubTokenVar === undefined ? [] : [{ name, variable: project.githubTokenVar }]
-  );
+  return Object.entries(config.projects).flatMap(([name, project]) => {
+    if (project.githubTokenVar !== undefined) return [{ name, variable: project.githubTokenVar }];
+    return project.githubToken === undefined ? [] : [{ name }];
+  });
 }
 
 /** Which GitHub credential one project uses, as its own doctor line
@@ -743,7 +775,13 @@ function projectCheck(
    * project for being exactly what it is. `fabrica up` stops on any
    * blocking FAIL, so getting this wrong would make Fabrica unusable on
    * the machine this setting exists for. */
-  workMode: WorkMode = NO_WORK_MODE
+  workMode: WorkMode = NO_WORK_MODE,
+  /** Issue #331: what the `gh` login can do for this project, for a
+   * project that publishes with it. Undefined for every other project,
+   * and for a `gh` project with no GitHub repository behind it yet -
+   * which this line has already failed on, above, for a reason that
+   * comes first. */
+  gh?: GhPublishAnswer
 ): DoctorCheck {
   const label = `project ${name}`;
   try {
@@ -813,6 +851,15 @@ function projectCheck(
   if (credential.kind === "refused") {
     return { ok: false, label, detail: `${path}: ${firstSentence(credential.message)}`, fix: credential.fix };
   }
+  // Issue #331: the same question for a project that publishes with the
+  // `gh` login - is there a login at all, and can the account it belongs
+  // to push here. A definite no is a FAIL carrying the `gh` command that
+  // fixes it, and it is the same sentence `fabrica do` refuses with at
+  // task start (src/foreman/publish-permissions.ts), so the Client never
+  // meets two accounts of one problem.
+  if (gh?.kind === "problem") {
+    return { ok: false, label, detail: `${path}: ${gh.detail}`, fix: gh.fix };
+  }
   // "Known to refuse", not "would accept": the refusals checked above
   // are the ones Inspector documents today, not the whole of its own
   // validation, and a config that would not even parse has its key
@@ -827,8 +874,24 @@ function projectCheck(
     label,
     detail:
       `${path}: git root, has a check, has origin${inspected}, ${describeProjectCredential(credential)}` +
+      describeGhPublish(gh) +
       describeWorkMode(workMode, path),
+    // A push check that could not be taken is said out loud and passes
+    // (issue #331): refusing to start a session because GitHub was
+    // unreachable this minute would stop work on a project that is
+    // configured correctly. `fabrica up` prints this above the session.
+    ...(gh?.kind === "unknown" ? { note: gh.detail } : {}),
   };
+}
+
+/** What the `gh` login was found able to do, on the tail of a passing
+ * project line - nothing at all for a project that does not use it. */
+function describeGhPublish(gh: GhPublishAnswer | undefined): string {
+  if (gh === undefined) return "";
+  // "not checked", never silence: a line that said only which
+  // credential this project uses would read as though the push question
+  // had been answered yes.
+  return gh.kind === "ok" ? ", which can push here" : ", push access not checked";
 }
 
 /** What work mode this project is in, for the tail of its own line
@@ -959,6 +1022,12 @@ export async function collectDoctorChecks(opts: {
     }
     for (const name of names) {
       const path = config.projects[name].path;
+      // Issue #331: asked only for a project that publishes with the
+      // `gh` login, and only once its repository is known - the probe
+      // needs an owner/repo to ask GitHub about, and a project with no
+      // github.com origin has already failed this line for a reason
+      // that comes first.
+      const ghRepo = config.projects[name].githubToken === undefined ? null : githubRepoOf(path);
       checks.push(
         projectCheck(
           name,
@@ -971,7 +1040,8 @@ export async function collectDoctorChecks(opts: {
           // Issue #316: read off the same config, so what this line
           // reports about a work-mode project and what a round actually
           // does are one answer.
-          workModeFor(config, path)
+          workModeFor(config, path),
+          ghRepo === null ? undefined : await probes.ghPublish(ghRepo)
         )
       );
     }

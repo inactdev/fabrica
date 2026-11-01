@@ -511,9 +511,10 @@ registered project's own repository, plus a `note` while a personal
 `GITHUB_TOKEN` is still in the configuration; the registered projects it
 asks GitHub about are resolved here, by `registeredProjectRepos`, since
 `src/githubapp` knows about Apps and not about projects.toml - and a
-project that reaches GitHub with its own token is left out of that list
-and named on the line as not checked there, so with every registered
-project in work mode the line passes with no App configured at all),
+project that reaches GitHub with a credential of its own - a token, or
+the `gh` login - is left out of that list and named on the line as not
+checked there, so with every registered project in work mode the line
+passes with no App configured at all),
 `inspector` on PATH taking `-branch` and
 not behind its own `origin main` (see "The inspector line" below, and
 `src/inspector/README.md` for which builds fail and which only report),
@@ -529,7 +530,15 @@ away and the line that should have said so cannot disagree; and - issue
 of its own, naming the `brain.env` variable and never its value, a FAIL
 when that variable holds nothing or when `brain.env` can be read by
 anyone else, again off the same `resolveProjectToken` a round's own
-start reads; and - issue #316 - which of work mode's three settings it
+start reads; and - issue #331 - for a project publishing with the `gh`
+login (`githubToken = "gh"`), whether `gh` is installed, logged in to
+github.com, and the account it is logged in as can push to that
+repository, a definite no being a FAIL carrying the `gh` command that
+fixes it and `fabrica do`'s own refusal carrying the same sentence,
+while a question GitHub could not answer at all is said on the line and
+passes - asked through the injected `ghPublish` probe, like every other
+check that touches this machine, so no test depends on the tester's own
+login; and - issue #316 - which of work mode's three settings it
 carries, where a project whose terms live in a folder outside its
 repository is asked about **that folder** instead of about the
 repository's own files, which it may carry none of by design: the terms

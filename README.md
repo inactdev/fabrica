@@ -276,6 +276,46 @@ so for a project using one, a permission you forgot shows up as a failed
 publish at the end of the round instead. Grant all six above and that
 does not arise.
 
+#### Or publish with the `gh` login you already have
+
+If you already work in that repository through the GitHub CLI — logged
+in as yourself, with the `repo` scope — there is nothing to copy
+anywhere. Name the login instead of a variable:
+
+    [projects.dayjob]
+    path        = "~/work/widgets"
+    check       = "./check.sh"
+    githubToken = "gh"
+
+Every GitHub operation for that project then runs `gh auth token
+--hostname github.com` **at the moment of that one call** — the
+Inspector handoff's token, the issue a task names, the checks on its
+pull request — and uses it for that call only. Nothing is written to
+disk, to the record, to a log or to an event: what the record says is
+that `gh` was asked, and what for.
+
+Two reasons to prefer this over copying that token into `brain.env`: it
+is not a second copy of a secret sitting on disk, and it never goes
+stale — `gh` refreshes its own login, and the next call picks the fresh
+one up.
+
+`githubToken` and `githubTokenVar` are **mutually exclusive**, and
+neither is a fallback for the other or for the App. An entry carrying
+both is refused when it is read, rather than one of them quietly
+winning.
+
+`fabrica doctor` checks, on that project's own line, that `gh` is
+installed, that it is logged in to github.com, and that the account it
+is logged in as can actually push to the repository (GitHub's own
+`permissions.push`). If not, the line FAILs naming the `gh` command that
+fixes it, and `fabrica do` refuses at task start with the same sentence.
+If GitHub could not be asked at all — no network this minute — the line
+says the push question was not checked, and passes.
+
+And one thing this gets back that a fine-grained token does not: an
+OAuth login with the `repo` scope can read a pull request's check runs,
+so `fabrica status` shows that project's CI result again.
+
 ### When nothing may be added to the repository
 
 The other half of a company repository: not just the credential, but the
@@ -287,7 +327,7 @@ allowed, three project settings move all of it out of the way:
     [projects.dayjob]
     path                = "~/work/widgets"
     check               = "./check.sh"
-    githubTokenVar      = "DAYJOB_GITHUB_TOKEN"
+    githubTokenVar      = "DAYJOB_GITHUB_TOKEN"   # or githubToken = "gh"
     terms               = "~/fabrica-terms/widgets"
     noStamp             = true
     pullRequestTemplate = true
@@ -626,8 +666,9 @@ Use `--terms` on its own: it refuses `--check`, `--image`, `--timeout`
 and `--protected`, which only describe the route that writes into the
 repository, rather than accepting one and quietly ignoring it. A
 repository Fabrica cannot commit to usually also needs its own GitHub
-token - `githubTokenVar = "<NAME>"` on the same entry, naming the
-`brain.env` variable holding it.
+credential - `githubTokenVar = "<NAME>"` on the same entry, naming the
+`brain.env` variable holding its token, or `githubToken = "gh"` to
+publish with the login `gh` already holds.
 
 ## Running a task
 

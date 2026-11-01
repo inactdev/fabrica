@@ -60,6 +60,18 @@ export type ForemanErrorCode =
    * that names a token. Carries the line to add, or the `chmod`. See
    * src/projecttoken/. */
   | "project-token-unavailable"
+  /** A project reaches GitHub with the GitHub CLI's own login
+   * (projects.toml's `githubToken = "gh"`, issue #331) and that login
+   * cannot be used: `gh` is not installed, it is not logged in to
+   * github.com, or GitHub itself reports that the account it is logged
+   * in as cannot push to the project's repository. Raised at task start
+   * (publish-permissions.ts) and again at the handoff
+   * (github-token.ts's `check()`), carrying the same sentence and the
+   * same `gh` command `fabrica doctor`'s own project line prints.
+   * Refused rather than published with some other credential - neither
+   * a stored token nor the App is ever a fallback for it. See
+   * src/projecttoken/gh.ts. */
+  | "gh-login-unavailable"
   | "inspector-not-ready"
   /** The installed Inspector is known to refuse this project's
    * configuration (issue #306): `.inspector.json` still carries a

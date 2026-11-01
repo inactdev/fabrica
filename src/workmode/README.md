@@ -7,6 +7,7 @@ ours may be added to, and whose CI nothing of ours may touch:
 [projects.dayjob]
 path                = "~/work/widgets"
 githubTokenVar      = "DAYJOB_GITHUB_TOKEN"   # issue #314, the same machine
+                                              # (or githubToken = "gh", issue #331)
 terms               = "~/fabrica-terms/widgets"
 noStamp             = true
 pullRequestTemplate = true

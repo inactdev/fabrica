@@ -33,6 +33,10 @@ function okProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes & { liveC
     workerNetworks: async () => ok("worker networks"),
     workerToken: () => ok("worker token"),
     githubApp: async () => ok("github app"),
+    // Issue #331: asked only for a project that publishes with the `gh`
+    // login, and never of the machine running this suite - a tester's
+    // own gh login must not decide whether a test passes.
+    ghPublish: async () => ({ kind: "ok" as const }),
     inspector: () => ok("inspector"),
     async live() {
       probes.liveCalls += 1;
@@ -254,6 +258,84 @@ test("fabrica doctor: a brain.env other users can read FAILs that project's line
   const { code, lines } = await doctor(home, okProbes());
   assert.equal(code, 1);
   assert.match(lines.join("\n"), /FAIL project dayjob: .*can be read by other users.*fix: chmod 600/);
+});
+
+// Issue #331: the other work-mode credential - the login the GitHub CLI
+// holds on this machine. The probe is injected like every other machine
+// check, so no test here depends on the login of whoever runs it.
+
+/** A healthy project whose `origin` is a github.com repository - the
+ * default fixture's origin is not, and the gh check needs an owner/repo
+ * to ask GitHub about. */
+function githubProject(): string {
+  const project = makeFixtureRepo("exit 0", { origin: false });
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/widgets.git"], { cwd: project });
+  acceptToInspector(project);
+  return project;
+}
+
+function ghHome(project = githubProject()): string {
+  return recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${project}"\ncheck = "./check.sh"\ngithubToken = "gh"\n`
+  );
+}
+
+test("fabrica doctor: a gh-login project says so, and that the login can push here", async () => {
+  const { code, lines } = await doctor(ghHome(), okProbes());
+  const text = lines.join("\n");
+  assert.equal(code, 0, text);
+  assert.match(text, /OK {3}project dayjob: .*reaches GitHub with the gh login, which can push here/);
+});
+
+test("fabrica doctor: a gh login that cannot be used FAILs that project's line, naming the gh command", async () => {
+  const probes = okProbes({
+    ghPublish: async () => ({ kind: "problem", detail: "`gh` is installed but not logged in to github.com", fix: "gh auth login --hostname github.com" }),
+  });
+
+  const { code, lines } = await doctor(ghHome(), probes);
+  const text = lines.join("\n");
+  assert.equal(code, 1);
+  assert.match(text, /FAIL project dayjob: .*not logged in to github\.com/);
+  assert.match(text, /fix: gh auth login --hostname github\.com/);
+  // One line per check, as everywhere else.
+  assert.equal(text.split("\n").filter((l) => l.includes("project dayjob")).length, 1);
+});
+
+test("fabrica doctor: a push question GitHub could not answer is said on the line and still passes", async () => {
+  // Refusing to start a session because GitHub was unreachable this
+  // minute would stop work on a project that is configured correctly.
+  const probes = okProbes({
+    ghPublish: async () => ({ kind: "unknown", detail: "GitHub could not be reached to check whether the gh login can push to acme/widgets" }),
+  });
+
+  const { code, lines } = await doctor(ghHome(), probes);
+  const text = lines.join("\n");
+  assert.equal(code, 0, text);
+  assert.match(text, /OK {3}project dayjob: .*reaches GitHub with the gh login, push access not checked/);
+});
+
+test("fabrica doctor: the gh check is asked only for a gh project with a github.com repository", async () => {
+  const asked: string[] = [];
+  const probes = okProbes({
+    async ghPublish(repo) {
+      asked.push(`${repo.owner}/${repo.repo}`);
+      return { kind: "ok" };
+    },
+  });
+
+  // A project on the App: never asked.
+  await doctor(healthyHome(), probes);
+  assert.deepEqual(asked, []);
+
+  // A gh project whose origin is not a github.com repository: nothing to
+  // ask GitHub about, and its line has no push claim to make either.
+  const { lines } = await doctor(ghHome(healthyProject()), probes);
+  assert.deepEqual(asked, []);
+  assert.doesNotMatch(lines.join("\n"), /can push here/);
+
+  // And the real case.
+  await doctor(ghHome(), probes);
+  assert.deepEqual(asked, ["acme/widgets"]);
 });
 
 // Client ruling: doctor fails non-zero with the parse error as a FAIL

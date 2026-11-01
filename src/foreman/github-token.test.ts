@@ -25,6 +25,7 @@ import {
   taskGithubCredential,
 } from "./github-token.ts";
 import { fakeMinter } from "../githubapp/helpers/fake-minter.ts";
+import { fakeGh, noGh } from "../projecttoken/helpers/fake-gh.ts";
 import { PUBLISH_PERMISSIONS, PUBLISH_WITHOUT_STAMP_PERMISSIONS } from "../githubapp/index.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { readEvents } from "../record/index.ts";
@@ -273,7 +274,15 @@ test("`project-token-used` carries the variable's name and never the token", asy
 
   const events = readEvents(recordHome).filter((e) => e.name === "project-token-used");
   assert.equal(events.length, 1);
-  assert.deepEqual(events[0].details, { purpose: "publish", repo: "acme/widgets", variable: TOKEN_VAR });
+  // `source` since issue #331: there are two places a project's own
+  // credential can come from, and a record that did not say which would
+  // leave anyone reading it to guess.
+  assert.deepEqual(events[0].details, {
+    purpose: "publish",
+    repo: "acme/widgets",
+    source: "brain.env",
+    variable: TOKEN_VAR,
+  });
   assert.ok(!JSON.stringify(events).includes("github_pat_secret_value"), "the record carried the token itself");
   assert.equal(events[0].taskId, "task-1");
 });
@@ -304,6 +313,97 @@ test("a work-mode project asks nothing of the GitHub App's own configuration", (
   const minter = fakeMinter({ refuse: new Error("No GitHub App is configured") });
 
   publishToken(recordHome, "task-1", project, minter).check();
+});
+
+// Issue #331: the other work-mode credential - the login the GitHub CLI
+// already holds on this machine. A real stand-in `gh` is spawned on a
+// PATH of its own (src/projecttoken/helpers/fake-gh.ts); the machine's
+// own login is never reached, and neither is the App.
+
+/** A record home registering `project` as publishing with the `gh`
+ * login. Nothing is written to brain.env: that is the whole point of
+ * this setting - no second copy of the credential on disk. */
+function ghHome(project: string): string {
+  const recordHome = home();
+  writeFileSync(
+    join(recordHome, "projects.toml"),
+    `[projects.dayjob]\npath = ${JSON.stringify(project)}\ncheck = "./check.sh"\ngithubToken = "gh"\n`
+  );
+  return recordHome;
+}
+
+test("a gh-login project publishes with gh's token, and no App token is minted at all", async () => {
+  const project = projectOn("https://github.com/acme/widgets.git");
+  const recordHome = ghHome(project);
+  const gh = fakeGh("printf 'gho_from_the_cli\\n'");
+  const minter = fakeMinter({ refuse: new Error("No GitHub App is configured") });
+  const token = publishToken(recordHome, "task-1", project, minter, gh.env);
+
+  token.check();
+  const published = await token.mint();
+
+  assert.equal(published.token, "gho_from_the_cli");
+  assert.deepEqual(minter.calls, [], "the GitHub App was asked for a token for a gh-login project");
+  assert.deepEqual(readEvents(recordHome).filter((e) => e.name === "token-minted"), []);
+});
+
+test("every GitHub operation asks gh again, at the moment of that one call", async () => {
+  const project = projectOn("https://github.com/acme/widgets.git");
+  const recordHome = ghHome(project);
+  const gh = fakeGh("printf 'gho_from_the_cli\\n'");
+  const credential = taskGithubCredential(recordHome, "task-1", project, fakeMinter(), gh.env);
+
+  for (const scope of [
+    { purpose: "publish" as const, scope: { owner: "acme", repo: "widgets", permissions: PUBLISH_PERMISSIONS } },
+    { purpose: "read-issue" as const, scope: readIssueScope("acme", "widgets") },
+    { purpose: "read-checks" as const, scope: readChecksScope("acme", "widgets") },
+  ]) {
+    assert.equal(await credential.token(scope.purpose, scope.scope), "gho_from_the_cli");
+  }
+
+  // Three calls, three asks - never one token held across them. A login
+  // gh has refreshed in between is the one that gets used.
+  assert.equal(gh.calls().length, 3);
+  assert.deepEqual(
+    readEvents(recordHome)
+      .filter((e) => e.name === "project-token-used")
+      .map((e) => e.details),
+    [
+      { purpose: "publish", repo: "acme/widgets", source: "gh" },
+      { purpose: "read-issue", repo: "acme/widgets", source: "gh" },
+      { purpose: "read-checks", repo: "acme/widgets", source: "gh" },
+    ]
+  );
+});
+
+test("`project-token-used` for a gh project names no variable and never the token", async () => {
+  const project = projectOn("https://github.com/acme/widgets.git");
+  const recordHome = ghHome(project);
+  const gh = fakeGh("printf 'gho_secret_value\\n'");
+
+  await publishToken(recordHome, "task-1", project, fakeMinter(), gh.env).mint();
+
+  const events = readEvents(recordHome).filter((e) => e.name === "project-token-used");
+  assert.equal(events.length, 1);
+  assert.ok(!JSON.stringify(events).includes("gho_secret_value"), "the record carried the token itself");
+});
+
+test("a machine with no gh login refuses before any worker starts, and never falls back to the App", async () => {
+  const project = projectOn("https://github.com/acme/widgets.git");
+  const recordHome = ghHome(project);
+  const minter = fakeMinter();
+  const token = publishToken(recordHome, "task-1", project, minter, noGh());
+
+  assert.throws(
+    () => token.check(),
+    (err: unknown) =>
+      err instanceof ForemanError &&
+      err.code === "gh-login-unavailable" &&
+      /not installed/.test(err.message) &&
+      /does not fall back/.test(err.message)
+  );
+  await assert.rejects(() => token.mint(), (err: unknown) => err instanceof ForemanError);
+  assert.deepEqual(minter.calls, [], "the GitHub App was reached for a project that publishes with gh");
 });
 
 // Work mode (issue #316): a project Inspector posts no commit status

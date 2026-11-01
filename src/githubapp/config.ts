@@ -221,7 +221,9 @@ export function requireAppCredentials(env: NodeJS.ProcessEnv, recordHome: string
  *
  * `gh auth token` is deliberately not probed. A `gh` login on this
  * machine is the Client's own, not Fabrica's configuration, and warning
- * about it would be warning about the wrong thing. */
+ * about it would be warning about the wrong thing - all the more since
+ * issue #331, where a project may name that login as its credential and
+ * something therefore does read it. */
 export function leftoverPersonalToken(env: NodeJS.ProcessEnv, recordHome: string): string | null {
   const name = "GITHUB_TOKEN";
   if (env[name] !== undefined && env[name]!.trim().length > 0) return "the environment";
