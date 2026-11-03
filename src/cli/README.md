@@ -1057,11 +1057,15 @@ Two changes close it, and they belong on different sides of the seam:
   never fails the whole update) while making sure it can never *read*
   as success.
 
-The install directory is the directory the PATH lookup landed in, with
-no `realpath`: if it holds a symlink into Go's GOBIN, installing there
-replaces the symlink with a real binary, which is the state asked for.
-Following the link would put the install straight back into the
-directory the host deliberately pointed away from.
+The install directory is the directory the PATH lookup landed in, spelled
+absolutely (a relative `PATH` entry is legal, and `go install` refuses a
+relative `GOBIN` outright) and with no `realpath`. If that directory
+holds a symlink into Go's GOBIN, the install is still aimed at the
+directory `PATH` reads: following the link would aim it straight back
+into the directory the host deliberately pointed away from. Whether Go
+then leaves a real binary in place of the link or rewrites the link's own
+target isn't assumed either way - the read-back above is what settles
+whether the install took.
 
 For the same reason, every `FAIL` on `fabrica doctor`'s inspector line
 now prints `fabrica update` as its fix, not a raw `go install` - that

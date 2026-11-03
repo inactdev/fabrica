@@ -696,6 +696,53 @@ test("runUpdateCommand: an install into Go's own GOBIN with no inspector on PATH
   assert.match(io.err.join("\n"), /Go's own GOBIN, which is NOT on PATH/);
 });
 
+// The read-back is about the commit, not about the directory: an install
+// aimed at PATH's own directory that still doesn't leave the asked-for
+// commit there - a write that didn't land, a binary whose build record
+// can't be read back - is the same failure and says the same thing. The
+// only honest answer about a commit that can't be read is that it
+// wasn't, never "already at main's tip".
+test("runUpdateCommand: an install into PATH's own directory that still didn't land the commit is the same reported failure", async () => {
+  const io = captureIo();
+  // Behind main to begin with, so the install really is asked for; the
+  // binary that is there afterwards records no commit at all.
+  let build: InspectorBuild = installedAt(INSPECTOR_OLD_COMMIT);
+  const inspector = inspectorProbes({
+    build: () => build,
+    install: () => {
+      build = { version: "unknown", commit: null, fromCheckout: false, dirty: false, unreadable: null };
+      return { ok: true, message: "", target: { kind: "path", dir: PATH_BIN_DIR } };
+    },
+  });
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes: devCheckoutProbes({ inspector }), ...live.opts, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.match(io.out.join("\n"), /inspector INSTALL DID NOT TAKE/);
+  assert.match(io.err.join("\n"), new RegExp(`it was installed into ${PATH_BIN_DIR}`));
+  assert.match(io.err.join("\n"), new RegExp(`the inspector in ${PATH_BIN_DIR} records no commit`));
+});
+
+// The install still runs when nothing here could name Go's own GOBIN
+// (Go knows its own default even where this cannot read it), so a miss
+// in that state has a directory to report and no name for it. Saying so
+// beats printing "undefined".
+test("runUpdateCommand: a miss whose install directory could not be named says that, rather than naming nothing", async () => {
+  const io = captureIo();
+  const inspector = behindInspectorProbes({
+    install: () => ({ ok: true, message: "", target: { kind: "unknown" } }),
+  });
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes: devCheckoutProbes({ inspector }), ...live.opts, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.match(io.out.join("\n"), /INSTALL DID NOT TAKE: 4f297d8be50e went into a directory this could not name/);
+  assert.doesNotMatch(io.out.join("\n"), /undefined/);
+  assert.match(io.err.join("\n"), /installed into Go's own GOBIN, which could not be read to name it/);
+});
+
 // The whole point of pointing GOBIN at PATH's own directory: the
 // read-back then passes, and the ordinary before-and-after is honest.
 test("runUpdateCommand: an install into the directory PATH resolves reports an ordinary before and after", async () => {

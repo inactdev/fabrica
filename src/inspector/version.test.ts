@@ -10,9 +10,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join, relative as relativePath } from "node:path";
 import { inspectorInstallArgs, inspectorInstallCommand } from "./doctor-checks.ts";
 import {
   directoryIsOnPath,
@@ -216,14 +216,30 @@ test("a PATH entry and the same directory spelled differently are one directory,
   assert.equal(directoryIsOnPath(dir, { PATH: "/usr/bin:/bin" }), false);
 
   // The directory reported is the PATH entry the binary was found in,
-  // not whatever a symlink there points at: a host that symlinked around
-  // Go's GOBIN must not have the install sent back into it.
+  // not the directory a symlink there points into: a host that symlinked
+  // around Go's GOBIN must not have the install sent back into it.
   const linkDir = scratch("linked");
   const realDir = scratch("real");
   script(realDir, "inspector", "exit 0");
-  writeFileSync(join(linkDir, "inspector"), "");
-  chmodSync(join(linkDir, "inspector"), 0o755);
+  symlinkSync(join(realDir, "inspector"), join(linkDir, "inspector"));
   assert.equal(inspectorDirectoryOnPath("inspector", { PATH: `${linkDir}${delimiter}${realDir}` }), linkDir);
+});
+
+// `go install` refuses a relative GOBIN outright ("cannot install, GOBIN
+// must be an absolute path"), so a PATH entry the shell is perfectly
+// happy with - a bare `bin`, a `.` - must never become the GOBIN this
+// aims an install at as-is, or the whole step fails on Go's
+// configuration instead of installing where PATH points.
+test("a relative PATH entry still names an absolute install directory, which is the only kind go install accepts", () => {
+  const dir = scratch("relative-entry");
+  script(dir, "inspector", "exit 0");
+  const relative = relativePath(process.cwd(), dir);
+
+  const found = inspectorDirectoryOnPath("inspector", { PATH: relative });
+
+  assert.equal(found, dir, "the same directory the shell would have run it out of, spelled absolutely");
+  assert.equal(isAbsolute(found ?? ""), true);
+  assert.deepEqual(inspectorInstallTarget({ PATH: relative }), { kind: "path", dir });
 });
 
 // The one spelling: what every message prints and what this actually

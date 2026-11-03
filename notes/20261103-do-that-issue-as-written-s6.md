@@ -55,13 +55,16 @@ a wrong guess fails loudly (`go install` refuses a GOBIN it cannot write)
 instead of succeeding into a directory nobody reads.
 
 A second, narrower judgment: the install directory is
-`dirname(<the path PATH resolved>)` with **no** `realpath`. If
-`~/.local/bin/inspector` is a symlink into `~/go/bin`, installing into
-`~/.local/bin` replaces the symlink with a real binary - which is the
+`dirname(<the path PATH resolved>)` with **no** `realpath`, which is the
 state the issue asks for ("the directory holding the inspector that PATH
-resolves today") and is self-healing afterwards. Following the symlink
-would reintroduce the bug on precisely the host that symlinked around
-it.
+resolves today"). Following the symlink would reintroduce the bug on
+precisely the host that symlinked around it. What a symlinked host ends
+up with - a real binary in place of the link, or the link's own target
+rewritten - is deliberately **not** claimed anywhere: that is Go's own
+file-replacement behavior, it is not documented, and no real toolchain
+was available here to observe it. Either way the binary PATH resolves
+ends up at the new commit, and the round-trip read is what says so, so
+nothing in this change depends on knowing which.
 
 ## Sharp edges
 
@@ -71,11 +74,24 @@ it.
   environment, so reading `process.env.GOPATH` would miss it. That is
   why the fallback shells out to `go env GOBIN GOPATH` instead of
   reading the environment directly.
-- `go install` with a GOBIN that does not exist or is not writable fails
-  with `go install: no install location for directory` / a permission
-  error. That is reported, never swallowed - and it can still never fail
-  `fabrica update` as a whole (standing ruling), only read as a failure
-  in its summary line.
+- **A relative `GOBIN` is refused outright** - `cannot install, GOBIN
+  must be an absolute path`, which the Go toolchain keeps a regression
+  test of its own for
+  (`src/cmd/go/testdata/script/install_relative_gobin_fail.txt`, which
+  sets `GOBIN=.` and asserts that message). A PATH entry may legally be
+  relative (`bin`, `.`), and the shell resolves it against the current
+  directory, so the directory handed to GOBIN is always spelled
+  absolutely (`resolve`) - otherwise a host the shell is perfectly happy
+  with would fail every install on Go's configuration instead. The
+  fallback's directory, by contrast, is passed exactly as `go env`
+  reported it: that is Go's own answer about its own default, so a
+  relative one is Go's refusal to make, not something to resolve to
+  somewhere Go would not have written.
+- A GOBIN that cannot be written fails the install with Go's own words
+  (whatever they are - not reproduced here, since no real toolchain was
+  available to record them). That is reported, never swallowed - and it
+  can still never fail `fabrica update` as a whole (standing ruling),
+  only read as a failure in its summary line.
 - The same "installed somewhere, ran from somewhere else" shape exists
   for Fabrica's own global npm install, and is already handled the other
   way round there: `npm-prefix.ts`'s `prefixOfGlobalInstall` derives the

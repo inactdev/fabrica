@@ -75,14 +75,30 @@ export function realInspectorVersionProbes(
  * the binary the next health check reads can never be two different
  * things.
  *
- * Deliberately no `realpath`: if this directory holds a symlink into
- * Go's own GOBIN, installing *here* replaces that symlink with a real
- * binary, which is the state issue #339 asks for. Following the link
- * would put the install back in the directory the host deliberately
- * symlinked around. */
+ * Absolute, always: a PATH may hold a relative entry (`bin`, `.`), and
+ * `go install` refuses a relative GOBIN outright - "cannot install,
+ * GOBIN must be an absolute path", the Go toolchain's own documented
+ * behavior, with a regression test of its own
+ * (`src/cmd/go/testdata/script/install_relative_gobin_fail.txt`). So a
+ * directory the shell is perfectly happy to run `inspector` out of
+ * would otherwise fail every install with a message about Go's
+ * configuration rather than installing where PATH points. `resolve`
+ * spells it against the current directory, which is what the shell
+ * itself does with a relative PATH entry.
+ *
+ * Deliberately no `realpath`: whatever this directory holds - a real
+ * binary or a symlink pointing into Go's own GOBIN - it is the
+ * directory PATH reads, and an install aimed at it updates the binary
+ * PATH resolves. Following the link would instead aim the install at
+ * the directory the host deliberately pointed away from, which is the
+ * state issue #339 is about. Which of the two a symlinked host ends up
+ * with - a real binary in place of the link, or the link's own target
+ * rewritten - is Go's business, not something assumed here: the
+ * read-back `fabrica update` does afterwards is what settles whether
+ * the install took. */
 export function inspectorDirectoryOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
   const binaryPath = resolveCommandPath(command, env);
-  return binaryPath === null ? null : dirname(binaryPath);
+  return binaryPath === null ? null : resolve(dirname(binaryPath));
 }
 
 /** Where a `go install` of Inspector is being pointed, and how that was
@@ -114,7 +130,14 @@ export type InspectorInstallTarget =
  * either variable may be set in Go's own config file (`go env -w`)
  * rather than in the process environment, where nothing here would see
  * it. GOPATH may itself be a list, in which case Go installs into the
- * first entry's `bin`, so only the first is taken. */
+ * first entry's `bin`, so only the first is taken.
+ *
+ * Reported exactly as Go reports it, never normalized: this is Go's own
+ * answer about its own default, so an install aimed at it behaves
+ * precisely as a bare `go install` on this machine would - including
+ * refusing a relative GOBIN, which is Go's own refusal to make, not
+ * something to paper over by resolving it to somewhere Go would not
+ * have written. */
 export function goInstallDirectory(env: NodeJS.ProcessEnv): string | null {
   const probe = spawnSync("go", ["env", "GOBIN", "GOPATH"], { env, encoding: "utf8", timeout: 20_000 });
   if (probe.error || probe.status !== 0) return null;
