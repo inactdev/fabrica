@@ -35,7 +35,14 @@
 // `fabrica doctor`'s inspector line prints, so the line that FAILs on a
 // stale binary and the step that replaces it can never disagree. The
 // Inspector step can never fail the update - the worst case warns and
-// leaves the install alone.
+// leaves the install alone. Where that install lands is `src/inspector`'s
+// own business (`goInstallInspector`, issue #339): the directory holding
+// the `inspector` PATH resolves, not Go's default GOBIN, which on a host
+// that puts some other directory on PATH is a directory nothing runs
+// from. What this command adds on top is the read-back - the inspector
+// PATH resolves, asked again after the install - so an install that
+// exited 0 and changed nothing reads as a failure here, naming both
+// directories, instead of as an unchanged version.
 //
 // Every registered project's own machine image comes forward too
 // (`buildRegisteredMachineImages`, src/cli/machine-image.ts): new code
@@ -76,7 +83,10 @@ import {
   inspectorInstallCommand,
   inspectorVersionCheck,
   realInspectorVersionProbes,
+  sameCommit,
   INSPECTOR_MODULE_PATH,
+  type InspectorInstallResult,
+  type InspectorInstallTarget,
   type InspectorVersionProbes,
 } from "../index.ts";
 import { CliError } from "./errors.ts";
@@ -121,10 +131,18 @@ session:
      github.com/inactdev/inspector/cmd/inspector@<that commit>\` when
      the installed one is genuinely behind it, or when none is
      installed at all. One ahead of main, built from a branch, or built
-     from a local source tree is left exactly as it is. There is no
-     flag to skip this. Nothing here can fail the update: no network,
-     or a \`go install\` that fails, warns and leaves the installed
-     Inspector alone.
+     from a local source tree is left exactly as it is. The install
+     goes into the directory holding the \`inspector\` your PATH
+     resolves - not Go's own GOBIN, which on a machine that puts some
+     other directory on PATH is not where anything looks for Inspector
+     - and the binary PATH resolves is read again afterwards, so an
+     install that quietly landed elsewhere is reported as a failure
+     naming both directories. With no \`inspector\` on PATH at all, Go's
+     own GOBIN is the fallback, and the summary says whether that
+     directory is on PATH. There is no flag to skip this. Nothing here
+     can fail the update: no network, a \`go install\` that fails, or
+     one that didn't take, warns and leaves the installed Inspector
+     alone.
   3. Builds every registered project's own machine image that needs
      it - the image that project's worker is written in, its
      \`Dockerfile.inspector\` with Fabrica's own layer on top. New code
@@ -200,9 +218,11 @@ export interface UpdateProbes {
  * ordered - the same three facts `fabrica doctor`'s inspector line
  * reads - plus the one action only `fabrica update` takes. */
 export interface InspectorUpdateProbes extends InspectorVersionProbes {
-  /** Runs `go install github.com/inactdev/inspector/cmd/inspector@<revision>`.
-   * Reported, never thrown. */
-  install(revision: string): { ok: boolean; message: string };
+  /** Runs `go install github.com/inactdev/inspector/cmd/inspector@<revision>`,
+   * into the directory holding the `inspector` PATH resolves (issue
+   * #339 - see `goInstallInspector`). Reported, never thrown; the
+   * result names where it was aimed. */
+  install(revision: string): InspectorInstallResult;
 }
 
 function gitStatusDirty(root: string): boolean {
@@ -400,13 +420,21 @@ export function describeMachineImages(reports: MachineImageBuildReport[]): strin
 
 /** What `fabrica update` did about the installed Inspector. */
 export type InspectorUpdateOutcome =
-  /** `from` is null when nothing was installed before. */
-  | { kind: "installed"; from: string | null; to: string }
+  /** `from` is null when nothing was installed before; `where` names the
+   * directory it went into, when that is known. */
+  | { kind: "installed"; from: string | null; to: string; where?: InspectorInstallTarget }
   | { kind: "current"; commit: string }
   /** Deliberately untouched, for a reason the Client was told in full on
    * stderr; `label` is that reason short enough for the summary line. */
   | { kind: "left-alone"; label: string }
-  | { kind: "install-failed"; from: string | null };
+  | { kind: "install-failed"; from: string | null }
+  /** `go install` exited 0, and the `inspector` PATH resolves is still
+   * not the commit that was asked for - the install landed in a
+   * directory nothing on this machine runs from (issue #339). A
+   * failure, never an unchanged version: `into` is where the install
+   * went, `pathDir` is where the binary PATH resolves lives (null when
+   * none is on PATH at all). */
+  | { kind: "install-missed"; target: string; into: InspectorInstallTarget | undefined; pathDir: string | null };
 
 /** Brings the installed Inspector up to its own main's tip, or says why
  * it didn't. Nothing here can fail `fabrica update` (Client ruling): a
@@ -501,22 +529,70 @@ function install(
     return { kind: "install-failed", from };
   }
 
-  // Read back rather than assume: the installed binary's own record is
-  // what the next `fabrica doctor` will compare, and if the install
-  // somehow landed elsewhere the summary line should say so, not repeat
-  // the request.
-  const installed = probes.build();
-  return { kind: "installed", from, to: installed?.commit ?? target };
+  // Read back rather than assume - and read back the binary *PATH
+  // resolves*, which is the only one any Fabrica task will ever run
+  // (issue #339: an install into Go's own GOBIN on a host that puts some
+  // other directory on PATH exits 0 and changes nothing the machine
+  // uses). The comparison is the same prefix-aware one the freshness
+  // classifier makes, since a pseudo-version carries only the first 12
+  // hex of the sha that was asked for.
+  const nowAt = probes.build()?.commit ?? null;
+  if (nowAt === null || !sameCommit(nowAt, target)) {
+    const pathDir = probes.directoryOnPath();
+    warn(
+      `fabrica update: ${inspectorInstallCommand(target)} exited 0, but the inspector PATH resolves is still not at ` +
+        `${short(target)} - ${describeWhereItWent(result.target)}, while ${describeWhatPathSees(pathDir, nowAt)}. ` +
+        `Nothing was brought forward; put the install directory on PATH, or install Inspector by hand into the ` +
+        `directory PATH already uses. Fabrica itself was still updated.`
+    );
+    return { kind: "install-missed", target, into: result.target, pathDir };
+  }
+  return { kind: "installed", from, to: nowAt, where: result.target };
+}
+
+/** Where an install went, for a message that has to name it. */
+function describeWhereItWent(target: InspectorInstallTarget | undefined): string {
+  if (target === undefined) return "it was installed somewhere this could not name";
+  if (target.kind === "unknown") return "it was installed into Go's own GOBIN, which could not be read to name it";
+  if (target.kind === "path") return `it was installed into ${target.dir}`;
+  return `it was installed into ${target.dir} (Go's own GOBIN, which is ${target.onPath ? "on" : "NOT on"} PATH)`;
+}
+
+/** What PATH's own inspector is, after an install that didn't take. */
+function describeWhatPathSees(pathDir: string | null, commit: string | null): string {
+  if (pathDir === null) return "no inspector is on PATH at all";
+  return commit === null
+    ? `the inspector in ${pathDir} records no commit`
+    : `the inspector PATH resolves is in ${pathDir}, at ${short(commit)}`;
 }
 
 /** The Inspector segment of the one summary line - before and after
- * whenever something moved, and what was left alone otherwise. */
+ * whenever something moved, and what was left alone otherwise. An
+ * install that exited 0 without replacing the binary PATH resolves reads
+ * as the failure it is, naming both directories, never as an unchanged
+ * version (issue #339). */
 function describeInspectorOutcome(outcome: InspectorUpdateOutcome): string {
   const was = (from: string | null) => (from === null ? "not installed" : short(from));
-  if (outcome.kind === "installed") return `inspector ${was(outcome.from)} -> ${short(outcome.to)}`;
+  if (outcome.kind === "installed") {
+    return `inspector ${was(outcome.from)} -> ${short(outcome.to)}${installedWhere(outcome.where)}`;
+  }
   if (outcome.kind === "current") return `inspector ${short(outcome.commit)} unchanged, already current`;
   if (outcome.kind === "install-failed") return `inspector ${was(outcome.from)} unchanged (install failed)`;
+  if (outcome.kind === "install-missed") {
+    const into = outcome.into === undefined || outcome.into.kind === "unknown" ? "a directory this could not name" : outcome.into.dir;
+    const seen = outcome.pathDir === null ? "no inspector is on PATH" : `PATH still resolves inspector in ${outcome.pathDir}`;
+    return `inspector INSTALL DID NOT TAKE: ${short(outcome.target)} went into ${into}, but ${seen}`;
+  }
   return `inspector left as is (${outcome.label})`;
+}
+
+/** The parenthetical on a successful install. Named only for Go's own
+ * GOBIN, where whether that directory is on PATH is the thing worth
+ * saying out loud; an install into the directory PATH already resolves
+ * needs no explanation. */
+function installedWhere(target: InspectorInstallTarget | undefined): string {
+  if (target === undefined || target.kind !== "go-default") return "";
+  return ` (into ${target.dir}, Go's own GOBIN, which is ${target.onPath ? "on" : "NOT on"} PATH)`;
 }
 
 /** The three words this summary line can end on. "started" is its own

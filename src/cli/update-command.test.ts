@@ -38,13 +38,18 @@ const AFTER_COMMIT = "after0000001";
 const OLD_BUILD_COMMIT = "oldbuild0001";
 const NEW_BUILD_COMMIT = "newbuild0001";
 
-/** Inspector's side of the update, all four probes faked: no test reads
- * a real binary's build info, asks GitHub for main's tip, or runs a real
+/** Inspector's side of the update, every probe faked: no test reads a
+ * real binary's build info, asks GitHub for main's tip, or runs a real
  * `go install`. The default is an Inspector already at main's tip, so
  * every test that is about something else says nothing about Inspector
  * and nothing happens to it. */
 const INSPECTOR_MAIN_TIP = "4f297d8be50e4f5b24460b5813ca50729d6413f9";
 const INSPECTOR_OLD_COMMIT = "0835e554d251";
+/** The two directories issue #339 is about: the one PATH resolves
+ * `inspector` in on a host whose dotfiles put it there, and Go's own
+ * default GOBIN, which that host never reads. */
+const PATH_BIN_DIR = "/Users/ari/.local/bin";
+const GO_DEFAULT_BIN_DIR = "/Users/ari/go/bin";
 
 /** What `go version -m` would have been parsed into for a binary
  * installed from `commit` - the same shape doctor's own classifier
@@ -62,7 +67,8 @@ function inspectorProbes(
     build: (): InspectorBuild | null => installedAt(INSPECTOR_MAIN_TIP.slice(0, 12)),
     mainCommit: () => INSPECTOR_MAIN_TIP,
     ancestry: (): CommitAncestry => "behind",
-    install: () => ({ ok: true, message: "" }),
+    directoryOnPath: () => PATH_BIN_DIR,
+    install: () => ({ ok: true, message: "", target: { kind: "path", dir: PATH_BIN_DIR } }),
   };
   const chosen = { ...base, ...overrides };
   // Every install is recorded whatever the override does with it, so no
@@ -86,7 +92,7 @@ function behindInspectorProbes(overrides: Partial<InspectorUpdateProbes> = {}): 
     build: (): InspectorBuild | null => installedAt(commit),
     install: (revision: string) => {
       commit = revision.slice(0, 12);
-      return { ok: true, message: "" };
+      return { ok: true, message: "", target: { kind: "path", dir: PATH_BIN_DIR } };
     },
     ...overrides,
   });
@@ -635,6 +641,99 @@ test("runUpdateCommand: a failed go install warns with what go said, and never f
   assert.match(io.err.join("\n"), new RegExp(`go install github.com/inactdev/inspector/cmd/inspector@${INSPECTOR_MAIN_TIP} failed`));
   assert.match(io.err.join("\n"), /left as it was/);
   assert.match(io.out.join("\n"), new RegExp(`inspector ${INSPECTOR_OLD_COMMIT} unchanged \\(install failed\\)`));
+});
+
+// Issue #339: an install that exits 0 and leaves the binary PATH
+// resolves exactly where it was is the failure that went unnoticed on
+// the work Mac - `go install` put the new Inspector in Go's own GOBIN,
+// which that host's PATH never reads, and the summary reported the
+// unchanged commit as an ordinary before-and-after.
+test("runUpdateCommand: an install that left PATH's inspector behind is reported as a failure, naming both directories", async () => {
+  const io = captureIo();
+  const inspector = behindInspectorProbes({
+    // Exits 0, into a directory nothing on this host runs from, so the
+    // read-back still sees the old binary.
+    install: () => ({ ok: true, message: "", target: { kind: "go-default", dir: GO_DEFAULT_BIN_DIR, onPath: false } }),
+  });
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes: devCheckoutProbes({ inspector }), ...live.opts, ...io });
+
+  assert.equal(code, 0, "the Inspector step still never fails the whole update");
+  const summary = io.out.join("\n");
+  assert.match(summary, /inspector INSTALL DID NOT TAKE/, "never an unchanged version - this is a failure");
+  assert.ok(summary.includes(GO_DEFAULT_BIN_DIR), "names the directory the install went into");
+  assert.ok(summary.includes(PATH_BIN_DIR), "names the directory PATH's own inspector lives in");
+  assert.doesNotMatch(
+    summary,
+    new RegExp(`inspector ${INSPECTOR_OLD_COMMIT} -> `),
+    "the bug this fixes: an install that changed nothing reading as a before-and-after"
+  );
+  const warning = io.err.join("\n");
+  assert.match(warning, /exited 0, but the inspector PATH resolves is still not at 4f297d8be50e/);
+  assert.ok(warning.includes(GO_DEFAULT_BIN_DIR) && warning.includes(PATH_BIN_DIR), "stderr names both too");
+  // Fabrica's own update still happened and still reports itself.
+  assert.match(summary, new RegExp(`${BEFORE_COMMIT} -> ${AFTER_COMMIT}`));
+});
+
+test("runUpdateCommand: an install into Go's own GOBIN with no inspector on PATH at all says so, rather than naming a second directory it hasn't got", async () => {
+  const io = captureIo();
+  const inspector = inspectorProbes({
+    build: () => null,
+    directoryOnPath: () => null,
+    ancestry: neverCalled("ancestry of a commit that does not exist") as () => CommitAncestry,
+    install: () => ({ ok: true, message: "", target: { kind: "go-default", dir: GO_DEFAULT_BIN_DIR, onPath: false } }),
+  });
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes: devCheckoutProbes({ inspector }), ...live.opts, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  const summary = io.out.join("\n");
+  assert.match(summary, /inspector INSTALL DID NOT TAKE/);
+  assert.ok(summary.includes(GO_DEFAULT_BIN_DIR));
+  assert.match(summary, /no inspector is on PATH/);
+  assert.match(io.err.join("\n"), /Go's own GOBIN, which is NOT on PATH/);
+});
+
+// The whole point of pointing GOBIN at PATH's own directory: the
+// read-back then passes, and the ordinary before-and-after is honest.
+test("runUpdateCommand: an install into the directory PATH resolves reports an ordinary before and after", async () => {
+  const io = captureIo();
+  const inspector = behindInspectorProbes();
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes: devCheckoutProbes({ inspector }), ...live.opts, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.match(io.out.join("\n"), new RegExp(`inspector ${INSPECTOR_OLD_COMMIT} -> ${INSPECTOR_MAIN_TIP.slice(0, 12)}`));
+  assert.doesNotMatch(io.out.join("\n"), /DID NOT TAKE/);
+  // Nothing about the install directory needs saying when it is the one
+  // PATH already uses - only Go's own GOBIN gets that parenthetical.
+  assert.doesNotMatch(io.out.join("\n"), /GOBIN/);
+});
+
+test("runUpdateCommand: a fresh install into Go's own GOBIN that IS on PATH says plainly that it is", async () => {
+  const io = captureIo();
+  let build: InspectorBuild | null = null;
+  const inspector = inspectorProbes({
+    build: () => build,
+    directoryOnPath: () => (build === null ? null : GO_DEFAULT_BIN_DIR),
+    ancestry: neverCalled("ancestry of a commit that does not exist") as () => CommitAncestry,
+    install: (revision) => {
+      build = installedAt(revision.slice(0, 12));
+      return { ok: true, message: "", target: { kind: "go-default", dir: GO_DEFAULT_BIN_DIR, onPath: true } };
+    },
+  });
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes: devCheckoutProbes({ inspector }), ...live.opts, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.match(
+    io.out.join("\n"),
+    new RegExp(`inspector not installed -> ${INSPECTOR_MAIN_TIP.slice(0, 12)} \\(into ${GO_DEFAULT_BIN_DIR}, Go's own GOBIN, which is on PATH\\)`)
+  );
 });
 
 // "Update means everything comes forward" (Client ruling): Fabrica

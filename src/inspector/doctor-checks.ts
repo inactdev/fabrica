@@ -158,11 +158,13 @@ export function fetchInspectorMainCommit(env: NodeJS.ProcessEnv = process.env): 
 }
 
 /** The exact command that replaces a stale binary with origin main's
- * tip. Pinned to the sha rather than `@latest`, so what gets installed
- * is the commit this check just compared against, whatever main does
- * next. `latest` is the one honest argument when nothing could be read
- * about main at all - which is all a missing Inspector can be advised
- * with. */
+ * tip, as one string. Pinned to the sha rather than `@latest`, so what
+ * gets installed is the commit this check just compared against,
+ * whatever main does next.
+ *
+ * This is what `fabrica update` *reports having run*, not what any FAIL
+ * line tells the Client to run himself - that is
+ * `INSPECTOR_FIX_COMMAND`, for the reason written there. */
 export function inspectorInstallCommand(mainCommit: string): string {
   return `go install ${INSPECTOR_PACKAGE_PATH}@${mainCommit}`;
 }
@@ -176,13 +178,27 @@ export function inspectorInstallArgs(revision: string): string[] {
   return ["install", `${INSPECTOR_PACKAGE_PATH}@${revision}`];
 }
 
+/** The one fix every Inspector FAIL prints: `fabrica update`, never the
+ * raw `go install` it runs underneath. A bare `go install` puts the
+ * binary in Go's own GOBIN, which on a host whose PATH prefers some
+ * other directory is not where the shell - or any Fabrica task - finds
+ * `inspector` at all, so telling the Client to run it is telling him to
+ * run something that leaves the stale binary exactly where it is (issue
+ * #339). `fabrica update` installs into the directory the `inspector`
+ * on PATH lives in and then checks that it took. */
+export const INSPECTOR_FIX_COMMAND = "fabrica update";
+
 function short(sha: string): string {
   return sha.slice(0, 12);
 }
 
 /** Two shas naming the same commit, one of which may be a 12-hex
- * abbreviation from a pseudo-version rather than a full one. */
-function sameCommit(a: string, b: string): boolean {
+ * abbreviation from a pseudo-version rather than a full one. Exported
+ * because `fabrica update`'s own after-the-install read compares the
+ * same two shapes (a full sha asked for against the abbreviation a
+ * pseudo-version carries), and two notions of "the same commit" is how
+ * the two sides come to disagree. */
+export function sameCommit(a: string, b: string): boolean {
   const shared = Math.min(a.length, b.length);
   return shared >= 12 && a.slice(0, shared) === b.slice(0, shared);
 }
@@ -302,23 +318,15 @@ export function inspectorVersionCheck(
     ok: false,
     state: "behind",
     note: `its commit ${short(build.commit)} is behind origin main, which is at ${short(mainCommit)}`,
-    fix: inspectorInstallCommand(mainCommit),
+    fix: INSPECTOR_FIX_COMMAND,
   };
-}
-
-/** The install to print as the fix for an Inspector that isn't usable at
- * all - missing, or too old for `-branch`. Pinned to main's tip when the
- * remote answers, `@latest` when it doesn't, which is all anyone can
- * honestly advise with nothing read about main. */
-function installFixAtMain(env: NodeJS.ProcessEnv): string {
-  return inspectorInstallCommand(fetchInspectorMainCommit(env) ?? "latest");
 }
 
 /** One line (`fabrica doctor` prints one line per check): on PATH, takes
  * -branch, and installed versus origin main. A missing or stale binary
  * is a real FAIL, so `fabrica up` stops on it (Client ruling) - and
- * every FAIL here prints the same `go install` command `fabrica update`
- * would have run. */
+ * every FAIL here prints the same fix, `fabrica update`, which is the
+ * one install that lands where PATH will actually find it. */
 export function inspectorBranchStatus(
   env: NodeJS.ProcessEnv = process.env,
   command = "inspector",
@@ -332,7 +340,7 @@ export function inspectorBranchStatus(
       ok: false,
       label,
       detail: `${command} is not on PATH - tasks on projects with .inspector.json will be self-tested instead`,
-      fix: installFixAtMain(env),
+      fix: INSPECTOR_FIX_COMMAND,
     };
   }
 
@@ -346,7 +354,7 @@ export function inspectorBranchStatus(
       ok: false,
       label,
       detail: `\`${command} -h\` shows no -branch flag, so every handoff Fabrica makes would be refused`,
-      fix: installFixAtMain(env),
+      fix: INSPECTOR_FIX_COMMAND,
     };
   }
 

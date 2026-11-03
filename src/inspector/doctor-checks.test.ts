@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommitAncestry } from "./ancestry.ts";
 import {
+  INSPECTOR_FIX_COMMAND,
   INSPECTOR_MODULE_PATH,
   inspectorBranchStatus,
   inspectorInstallArgs,
@@ -37,7 +38,12 @@ function pathWith(name: string, body: string): string {
 }
 
 const MAIN_TIP = "4f297d8be50e4f5b24460b5813ca50729d6413f9";
-const INSTALL_FIX = `go install github.com/inactdev/inspector/cmd/inspector@${MAIN_TIP}`;
+// Every FAIL on this line prints the same fix, and it is `fabrica
+// update` rather than the raw `go install` it runs underneath: that
+// command installs into Go's own GOBIN, which on a host whose PATH
+// prefers another directory leaves the stale binary exactly where it is
+// (issue #339).
+const INSTALL_FIX = INSPECTOR_FIX_COMMAND;
 
 /** The ancestry answer, injected: the one probe that would otherwise
  * fetch a commit graph over the network. `never` is the default so a
@@ -104,7 +110,7 @@ test("Inspector: on PATH, -h shows -branch, built from origin main's tip is OK",
   assert.match(status.detail, /commit 4f297d8be50e, up to date with origin main/);
 });
 
-test("Inspector: a binary behind origin main fails, printing the exact install command", () => {
+test("Inspector: a binary behind origin main fails, printing fabrica update as the fix", () => {
   const status = inspectorBranchStatus({ PATH: inspectorOn(INSTALLED_BEHIND_MAIN, MAIN_TIP) }, "inspector", ancestry("behind"));
   assert.equal(status.ok, false);
   assert.match(status.detail, /commit 1a2b3c4d5e6f is behind origin main, which is at 4f297d8be50e/);
@@ -150,7 +156,7 @@ test("Inspector: on PATH but -h has no -branch fails - Fabrica's call would be r
   assert.equal(status.fix, INSTALL_FIX, "the fix is the same install, at main's tip");
 });
 
-test("Inspector: not on PATH fails, saying tasks will be self-tested, with the go install fix", () => {
+test("Inspector: not on PATH fails, saying tasks will be self-tested, with fabrica update as the fix", () => {
   const path = pathWith("git", `printf '%s\\trefs/heads/main\\n' ${MAIN_TIP}`);
   const status = inspectorBranchStatus({ PATH: path }, "inspector", ancestry());
   assert.equal(status.ok, false);
@@ -159,10 +165,14 @@ test("Inspector: not on PATH fails, saying tasks will be self-tested, with the g
   assert.equal(status.fix, INSTALL_FIX);
 });
 
-test("Inspector: nothing installed and no answer from the remote still prints an install fix, at latest", () => {
+// Nothing installed and nothing readable about main used to print `go
+// install ...@latest`, which meant asking the remote for a tip purely to
+// word a fix line. One fix for every state needs no lookup at all, and
+// `fabrica update` resolves main's tip itself when it runs.
+test("Inspector: nothing installed and no answer from the remote prints the same one fix, asking the remote nothing", () => {
   const status = inspectorBranchStatus({ PATH: pathWith("git", "exit 128") }, "inspector", ancestry());
   assert.equal(status.ok, false);
-  assert.equal(status.fix, "go install github.com/inactdev/inspector/cmd/inspector@latest");
+  assert.equal(status.fix, "fabrica update");
 });
 
 test("Inspector build: a pseudo-version carries the commit; a tag carries none", () => {
@@ -239,11 +249,18 @@ test("Inspector version: an unreachable origin main asks no ancestry - there is 
   assert.match(noMain.note, /could not check origin main/);
 });
 
-test("Inspector version: the fix pins the sha it compared against, not @latest", () => {
-  assert.equal(inspectorInstallCommand(MAIN_TIP), INSTALL_FIX);
+// The fix the Client is told to run, and the command `fabrica update`
+// runs underneath it, are deliberately not the same string: the first
+// has to work on a host whose PATH prefers a directory Go would never
+// install into, and only `fabrica update` knows which that is. The
+// second is still pinned to the sha that was compared, never @latest,
+// because it is what gets reported as having run.
+test("Inspector version: the fix is fabrica update, while the install it runs stays pinned to the compared sha", () => {
   const behind = inspectorVersionCheck(BEHIND, MAIN_TIP, ancestry("behind"));
   assert.equal(behind.state, "behind");
-  assert.equal(behind.fix, inspectorInstallCommand(MAIN_TIP));
+  assert.equal(behind.fix, "fabrica update");
+  assert.equal(inspectorInstallCommand(MAIN_TIP), `go install github.com/inactdev/inspector/cmd/inspector@${MAIN_TIP}`);
+  assert.doesNotMatch(behind.fix ?? "", /go install/, "a raw go install on this kind of host installs where nothing reads");
 });
 
 // One spelling of the install: what every message prints and what

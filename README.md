@@ -469,8 +469,10 @@ failed.
 The **inspector** line also reports which build of Inspector you have:
 the commit the installed binary was built from, against the tip of
 Inspector's own `main`. A binary behind `main` is a `FAIL`, and the fix
-is the exact command that replaces it, pinned to that commit - run it
-and the line goes green. Behind means behind: a commit *ahead* of
+is `fabrica update` - which installs into the directory your `PATH`
+actually resolves `inspector` in, where a raw `go install` would use
+Go's own default and might leave the stale binary untouched. Run it and
+the line goes green. Behind means behind: a commit *ahead* of
 `main`, or one built from a branch, passes with that said, and so does a
 binary you built yourself from a checkout, one whose commit can't be
 read, and a run that can't reach GitHub at all (no network is not a
@@ -513,8 +515,8 @@ in the Worker's own box instead - but `fabrica register` writes that
 file into every project it sets up, and `fabrica do` refuses a project
 whose base commit has none, so in practice this step is worth doing.
 Keep it current the same way: `fabrica doctor`'s **inspector** line
-fails once the installed binary is behind Inspector's `main` and prints
-the `go install` that catches it up. Reading the installed binary's own
+fails once the installed binary is behind Inspector's `main`, and the
+fix it prints is `fabrica update`. Reading the installed binary's own
 commit uses `go version -m`, so leaving Go on `PATH` after the install
 is what lets that line say anything; without it the line reports that
 and passes.
@@ -524,9 +526,29 @@ You only run that command by hand once. After that, `fabrica update`
 keeps Inspector current along with Fabrica itself - it installs the tip
 of Inspector's own `main` whenever the installed one is behind it, or
 when none is installed at all - and `fabrica doctor` FAILs on a stale
-one, printing the exact command to fix it. An Inspector you built
+one, printing `fabrica update` as the fix. An Inspector you built
 yourself (from a branch, or from a local source tree) is reported as
 that and left alone, never replaced.
+
+**Where it installs it:** into the directory holding the `inspector`
+your `PATH` resolves today - not necessarily where a bare `go install`
+would put it. Those are the same directory on a machine that leaves
+Go's defaults alone, and different ones the moment your shell prefers
+somewhere else (a `~/.local/bin` your dotfiles put on `PATH`, say,
+while Go still installs into `~/go/bin`). An unpinned install on that
+kind of host writes a perfectly good new binary somewhere nothing ever
+runs it, so `fabrica update` points Go's own `GOBIN` at the directory
+your `PATH` already uses, then reads that binary's version back to
+confirm it really moved. If it didn't, the summary line says so as a
+failure and names both directories, rather than reporting the commit it
+asked for as if it had landed. With no `inspector` on `PATH` at all
+there is nothing to match, so it installs where Go would and tells you
+whether that directory is on your `PATH`.
+
+This is the one Inspector step that still can't fail the update: a
+`go install` that fails, or one that didn't take, is reported and
+leaves whatever you had in place, and `fabrica update` still exits 0
+with Fabrica's own update intact.
 
 `fabrica update` also rebuilds each registered project's own Worker
 image, since new Fabrica code can move the layer every one of them is

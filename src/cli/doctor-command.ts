@@ -84,8 +84,7 @@ pull request, issue read and check read goes through - configured, its
 key usable, and installed on every registered project's repository -
 Inspector itself - on
 PATH, taking -branch, and built from the commit its own origin main is
-at, a stale binary being a FAIL carrying the exact \`go install\` that
-replaces it - every registered project, the caps, and any SPEND UNKNOWN
+at, a stale binary being a FAIL whose fix is \`fabrica update\` - every registered project, the caps, and any SPEND UNKNOWN
 block. One line per check - OK, or FAIL with the exact fix. Exits
 non-zero if anything fails.
 
@@ -126,8 +125,9 @@ unless a project names GITHUB_TOKEN as its own publish token, in which
 case something does and the warning stays off.
 
 The inspector line reports that commit against the tip of its own main
-inline, and FAILs - printing the exact \`go install\` command \`fabrica
-update\` would run - when Inspector is missing or genuinely behind main.
+inline, and FAILs - with \`fabrica update\` as the fix, which installs
+into the directory PATH resolves inspector in rather than Go's own
+default - when Inspector is missing or genuinely behind main.
 Behind is an ancestry answer, not two hashes that differ: one ahead of
 main, one built from a branch, and one built from a local source tree are
 each reported as that and pass, as does a comparison no network could
