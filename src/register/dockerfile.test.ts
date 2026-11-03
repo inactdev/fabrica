@@ -201,6 +201,40 @@ test("inspectorDockerfile: the servers are installed and nothing about them is s
   assert.ok(text.includes("/etc/passwd"), text);
 });
 
+// The one thing the image can do about that uid, as opposed to saying it
+// cannot: leave the two files writable, so check.sh can add an entry for
+// whoever it turns out to be running as. initdb resolves its own
+// effective uid to a user name before it does anything else, and no flag
+// skips it - without an entry there is no cluster to create at all.
+test("inspectorDockerfile: a server that looks the user up gets a writable passwd file", () => {
+  const withPostgres = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK, railsBin: true }),
+  });
+  // Redis alone needs nothing of the sort - it drops no privileges and
+  // looks nothing up - so the image it gets is left alone.
+  const redisOnly = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({
+      packageLock: false,
+      goSum: false,
+      gemfileLock: "GEM\n  specs:\n    redis (5.0.0)\n",
+    }),
+  });
+
+  assert.ok(instructions(withPostgres).includes("RUN chmod a+w /etc/passwd /etc/group"), withPostgres);
+  // Under the USER root that the package install already needed, since
+  // nothing else in the image could do it.
+  assert.ok(
+    instructions(withPostgres).indexOf("USER root") <
+      instructions(withPostgres).indexOf("RUN chmod a+w /etc/passwd /etc/group"),
+    withPostgres
+  );
+  assert.doesNotMatch(redisOnly, /chmod a\+w/, redisOnly);
+});
+
 // Issue #337's third finding: with terms in a folder outside the
 // repository, Inspector resolves the docker build context against that
 // folder, which holds no Gemfile at all. The repository is reachable

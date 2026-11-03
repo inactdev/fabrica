@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -249,6 +257,25 @@ test("checkScript: the cluster is created at check time, and never relies on a u
   // pg_isready through PGBIN too: /usr/bin/pg_isready is Debian's
   // pg_wrapper, which wants a cluster configuration this one is not.
   assert.doesNotMatch(script, /wait_for PostgreSQL pg_isready/, script);
+  // And the uid is given a name of its own before any of that, because
+  // initdb looks its own uid up whatever it is told about roles.
+  assert.ok(script.indexOf(`getent passwd "$fabrica_uid"`) < script.indexOf("PGBIN="), script);
+});
+
+// The box's uid is a property of the box, not of PostgreSQL, so the
+// entry is written once for anything in there that looks a user up - and
+// written by nothing at all for a shape with no such server, since a
+// check that does not need it has no business touching /etc/passwd.
+test("checkScript: only a shape that looks the user up writes a passwd entry", () => {
+  const plain = dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: "GEM\n  specs:\n    redis (5.0.0)\n",
+  });
+
+  assert.ok(checkScript("bundle exec rspec", railsShape()).includes("/etc/passwd"), "the Rails shape needs it");
+  assert.doesNotMatch(checkScript("bundle exec rspec", plain), /etc\/passwd/);
+  assert.doesNotMatch(checkScript("npm test", dependencyShapeFrom({ packageLock: true, goSum: false })), /passwd/);
 });
 
 test("checkScript: a terms folder's script never cds to its own folder, and says why", () => {
@@ -294,7 +321,24 @@ function runGeneratedCheck(opts: {
    * does - the case where the only explanation is in a log file inside
    * the scratch directory the cleanup removes. */
   initdbFails?: boolean;
-}): { status: number; log: string[]; stderr: string; scratchDirs: string[] } {
+  /** Whether the box's own uid is a stranger to `/etc/passwd`, which is
+   * what Inspector's check box really is. Default is a uid with an
+   * entry, so every other test here runs straight past that block and
+   * stays about PostgreSQL. */
+  uidHasNoEntry?: boolean;
+  /** Points the script at a passwd/group pair it cannot write - the box
+   * whose `Dockerfile.inspector` lost its `chmod` line. */
+  passwdUnwritable?: boolean;
+}): {
+  status: number;
+  log: string[];
+  stderr: string;
+  scratchDirs: string[];
+  /** `/etc/passwd` and `/etc/group` as the script left them - a
+   * throwaway pair of files per run, never the machine's own. */
+  passwd: string;
+  group: string;
+} {
   const dir = mkdtempSync(join(tmpdir(), "fabrica-checkscript-"));
   const bin = join(dir, "stubs");
   mkdirSync(bin);
@@ -336,14 +380,47 @@ function runGeneratedCheck(opts: {
   stub("chown", "exit 0");
   stub("su", `shift 4\nexec /bin/sh -c "$1"`);
 
-  // The one line that has to be rewritten rather than stubbed: the
-  // script globs Debian's own /usr/lib/postgresql, which no test may
-  // write into. Everything else about the PostgreSQL block - the
-  // guard, the quoting through pg_as, the backgrounded start, the stop
-  // in the trap - runs exactly as generated.
-  const generated = checkScript(opts.suite, railsShape(), opts.terms ?? "repository").replace(
-    "PGBIN=$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -n 1)",
-    `PGBIN=${pgbin}`
+  // This run's own /etc/passwd and /etc/group - see `userFiles`. An
+  // unwritable pair is one inside a directory that does not exist, which
+  // is unwritable to root as well: this test suite can and does run as
+  // root in a container.
+  const users = opts.passwdUnwritable === true ? join(dir, "no-such-dir") : dir;
+  const passwd = join(users, "passwd");
+  const group = join(users, "group");
+  const uid = opts.uid ?? 1001;
+  if (opts.passwdUnwritable !== true) {
+    writeFileSync(
+      passwd,
+      opts.uidHasNoEntry === true ? `root:x:0:0:root:/root:/bin/sh\n` : `someone:x:${uid}:${uid}::/tmp:/bin/sh\n`
+    );
+    writeFileSync(group, opts.uidHasNoEntry === true ? `root:x:0:\n` : `someone:x:${uid}:\n`);
+  }
+  // The real `getent` would answer from this machine's own users, which
+  // is exactly what no test here may depend on. This one answers from
+  // the pair of files above, and from nothing else.
+  stub(
+    "getent",
+    `case "$1" in\n` +
+      `  passwd) fabrica_file="${passwd}" ;;\n` +
+      `  group) fabrica_file="${group}" ;;\n` +
+      `  *) exit 2 ;;\n` +
+      `esac\n` +
+      `[ -f "$fabrica_file" ] || exit 2\n` +
+      `cut -d: -f3 "$fabrica_file" | grep -qx "$2"`
+  );
+
+  // The lines that have to be rewritten rather than stubbed, because
+  // they name absolute paths belonging to the machine: the glob of
+  // Debian's own /usr/lib/postgresql, which no test may write into, and
+  // the two user files. Everything else - the guard, the quoting through
+  // pg_as, the backgrounded start, the stop in the trap - runs exactly
+  // as generated.
+  const generated = userFiles(
+    checkScript(opts.suite, railsShape(), opts.terms ?? "repository").replace(
+      "PGBIN=$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -n 1)",
+      `PGBIN=${pgbin}`
+    ),
+    { passwd, group }
   );
   writeFileSync(join(dir, "check.sh"), generated);
   chmodSync(join(dir, "check.sh"), 0o755);
@@ -361,14 +438,32 @@ function runGeneratedCheck(opts: {
     // Whatever the script made under the temporary directory it chose -
     // read after it exited, so this is what survived its own cleanup.
     scratchDirs: readdirSync(tmpdir()).filter((name) => name.startsWith("fabrica-check-")),
+    passwd: existsSync(passwd) ? readFileSync(passwd, "utf8") : ``,
+    group: existsSync(group) ? readFileSync(group, "utf8") : ``,
   };
 }
 
+/**
+ * The generated script pointed at a throwaway `/etc/passwd` and
+ * `/etc/group` instead of the machine's own.
+ *
+ * This is not a convenience. The script appends an entry to
+ * `/etc/passwd` when the uid running it has none, which is right inside
+ * Inspector's check box and catastrophic on a developer's machine or a
+ * CI runner - and this suite does run as root in a container, where
+ * nothing would stop it. So every path a test gives the script is a path
+ * under that test's own temporary directory, with no option to use the
+ * real one.
+ */
+function userFiles(script: string, paths: { passwd: string; group: string }): string {
+  return script.replaceAll("/etc/passwd", paths.passwd).replaceAll("/etc/group", paths.group);
+}
+
 /** The order of the real steps, with the readiness polling and the
- * root-only `id`/`chown`/`su` bookkeeping filtered out: those are
+ * `id`/`getent`/`chown`/`su` bookkeeping filtered out: those are
  * asserted separately, by their own tests. */
 function steps(log: string[]): string[] {
-  return log.filter((line) => !/^(?:pgbin\/pg_isready|id|chown|su)\b/.test(line));
+  return log.filter((line) => !/^(?:pgbin\/pg_isready|id|getent|chown|su)\b/.test(line));
 }
 
 test("the generated check.sh really runs: servers up, database prepared, suite run, servers stopped", () => {
@@ -435,17 +530,93 @@ test("the generated check.sh runs the cluster as the postgres user when the box 
   );
 });
 
+// The guard as generated, with nothing stubbed - so the whole script
+// runs, as a box with no PostgreSQL installed runs it.
+//
+// The one thing rewritten is the directory the guard globs, pointed at
+// an empty one of this test's own. Not for tidiness: aimed at the real
+// /usr/lib/postgresql this test passes or fails according to whether the
+// machine running it happens to have PostgreSQL installed - and on a
+// machine that does, the guard is satisfied and the script carries on to
+// the next server, failing with whatever *that* box is missing instead
+// (exit 127, "redis-server: not found", on the CI host). The message
+// below still names the real path, because the generated script does.
 test("the generated check.sh fails loudly, and early, in a box with no PostgreSQL in it", () => {
-  // The guard as generated, with nothing stubbed for it to find: the
-  // real glob of /usr/lib/postgresql, which this machine has none of.
   const dir = mkdtempSync(join(tmpdir(), "fabrica-checkscript-"));
-  writeFileSync(join(dir, "check.sh"), checkScript("bundle exec rspec", railsShape()));
+  const empty = join(dir, "no-postgresql-here");
+  mkdirSync(empty);
+  writeFileSync(join(dir, "passwd"), `someone:x:${process.getuid?.() ?? 0}:0::/tmp:/bin/sh\n`);
+  writeFileSync(join(dir, "group"), `someone:x:0:\n`);
+  const script = userFiles(
+    checkScript("bundle exec rspec", railsShape()).replace("ls -d /usr/lib/postgresql/*/bin", `ls -d ${empty}/*/bin`),
+    { passwd: join(dir, "passwd"), group: join(dir, "group") }
+  );
+  writeFileSync(join(dir, "check.sh"), script);
   chmodSync(join(dir, "check.sh"), 0o755);
   const run = spawnSync("/bin/sh", [join(dir, "check.sh")], { encoding: "utf8", cwd: dir });
 
   assert.equal(run.status, 1, run.stderr);
   assert.match(run.stderr, /no PostgreSQL server binaries under \/usr\/lib\/postgresql/);
   assert.match(run.stderr, /Dockerfile\.inspector/);
+});
+
+// Issue #337, the finding a real Inspector run turned up and no
+// substring assertion could: initdb resolves its own effective uid to a
+// user *name* before it does anything else, with no flag that skips it,
+// and the check box's uid is in no /etc/passwd at all. The run died on
+// "could not look up effective user ID 1001: user does not exist".
+test("the generated check.sh gives the uid it runs as a passwd entry when it has none", () => {
+  const { status, log, passwd, group, stderr } = runGeneratedCheck({
+    suite: "bundle exec rspec",
+    suiteExit: 0,
+    uidHasNoEntry: true,
+  });
+
+  assert.equal(status, 0, stderr);
+  // A real entry, with the uid and gid the box is running as - not a
+  // name that happens to be in the file.
+  assert.match(passwd, /^fabrica:x:1001:1001:[^:]*:\/tmp:\/bin\/sh$/m, passwd);
+  assert.match(group, /^fabrica:x:1001:$/m, group);
+  // And the cluster still got created, after it, in the same order as
+  // any other box.
+  const entry = log.findIndex((line) => line.startsWith("getent passwd"));
+  const initdb = log.findIndex((line) => line.startsWith("pgbin/initdb"));
+  assert.ok(entry >= 0 && entry < initdb, log.join("\n"));
+});
+
+// The other half: a box whose uid does resolve - a rootless Docker
+// daemon's root, or anything run outside Inspector - is left exactly as
+// it is. A second entry for a uid that has one is a worse file than the
+// one it replaced.
+test("the generated check.sh adds nothing when the uid already resolves", () => {
+  const { status, passwd, group, stderr } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit: 0 });
+
+  assert.equal(status, 0, stderr);
+  assert.doesNotMatch(passwd, /fabrica/, passwd);
+  assert.doesNotMatch(group, /fabrica/, group);
+});
+
+// The box that cannot be fixed from inside: Dockerfile.inspector's
+// `chmod a+w` gone, so there is nowhere to write the entry. That has to
+// say so, naming the line that is missing, rather than letting
+// PostgreSQL fail later with a message about user IDs.
+test("the generated check.sh refuses, naming the Dockerfile line, when it cannot write the entry", () => {
+  const { status, stderr, log } = runGeneratedCheck({
+    suite: "bundle exec rspec",
+    suiteExit: 0,
+    uidHasNoEntry: true,
+    passwdUnwritable: true,
+  });
+
+  assert.equal(status, 1, stderr);
+  assert.match(stderr, /uid 1001 has no .* entry/, stderr);
+  assert.match(stderr, /Dockerfile\.inspector has to keep its 'RUN chmod a\+w /, stderr);
+  // Before anything was started, which is the point of doing it here.
+  assert.deepEqual(
+    log.filter((line) => line.startsWith("pgbin/") || line.startsWith("redis-server")),
+    [],
+    log.join("\n")
+  );
 });
 
 // The other half of removing the scratch directory: every server logs in

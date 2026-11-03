@@ -17,8 +17,11 @@ import {
 import {
   DEPS_DIR,
   DOCKERFILE_INSPECTOR,
+  GROUP_FILE,
+  PASSWD_FILE,
   SCRATCH_DIR_VAR,
   SERVICE_WAIT_SECONDS,
+  USER_ENTRY_NAME,
   comment,
   needsScratchDir,
   type BoxService,
@@ -152,8 +155,8 @@ export function checkScript(
   const preamble =
     shape === null
       ? ``
-      : `${linkPreamble(shape)}${scratchPreamble(shape)}${servicePreamble(shape)}` +
-        `${runtimeEnvPreamble(shape)}${preparePreamble(shape)}`;
+      : `${linkPreamble(shape)}${scratchPreamble(shape)}${userEntryPreamble(shape)}` +
+        `${servicePreamble(shape)}${runtimeEnvPreamble(shape)}${preparePreamble(shape)}`;
   if (preamble === ``) return `${header}${command}\n`;
 
   return `${header}${workingDirectory(terms)}${preamble}${command}\n`;
@@ -275,6 +278,73 @@ function serviceLogDump(services: readonly BoxService[]): string {
     `      cat "$fabrica_log" >&2 || true\n` +
     `    done\n` +
     `  fi\n`
+  );
+}
+
+/**
+ * An `/etc/passwd` entry for the uid this check is running as, when it
+ * has none (issue #337).
+ *
+ * Inspector runs the check as `docker run --user <host uid>:<host gid>`,
+ * and that uid is nobody in the image: nothing in `/etc/passwd`
+ * mentions it. Most things do not care. PostgreSQL's `initdb` resolves
+ * its own effective uid to a user *name* before it does anything at all
+ * - `get_user_name_or_exit`, which is `getpwuid` - and there is no flag
+ * that skips it, so with no entry it stops dead on "could not look up
+ * effective user ID". `--username` names the role it creates, which is
+ * a different thing entirely.
+ *
+ * So the entry is written here, by the uid that needs it, which is the
+ * only place it can be written: at build time that uid is unknowable.
+ * `Dockerfile.inspector` leaves the two files writable for exactly this
+ * (`userEntryLines` in dockerfile.ts), and if it has not, this refuses
+ * with a line naming that - a missing entry otherwise surfaces as an
+ * error from whichever server happened to look first.
+ *
+ * It is written once, for any service that needs it, rather than inside
+ * PostgreSQL's own lines: the box's uid is a property of the box, and
+ * anything else in there that looks a user up now finds one.
+ *
+ * Two shell details that are not incidental. The group entry is added
+ * only when the gid has none of its own, because a gid that already
+ * resolves needs nothing and a duplicate name in `/etc/group` would be
+ * a worse file than the one it replaced. And `getent` deciding this,
+ * rather than a `grep` of the file, is what makes a box whose users
+ * come from somewhere other than the file (an `nsswitch.conf` with
+ * anything else in it) answer for itself instead of being read wrong.
+ */
+function userEntryPreamble(shape: DependencyShape): string {
+  const services = shape.services ?? [];
+  const needing = services.filter((service) => service.needsUserEntry);
+  if (needing.length === 0) return ``;
+
+  const labels = needing.map((service) => service.label).join(" and ");
+  return (
+    `\n` +
+    comment(
+      `${labels} looks up the user it is running as, and Inspector runs this check as the uid of whoever ` +
+        `invoked it - which has no ${PASSWD_FILE} entry in the check box. So it gets one here, named ` +
+        `"${USER_ENTRY_NAME}", before anything starts. Nothing is logged into and no password is set: this is ` +
+        `a name for getpwuid to find.`
+    ).join("\n") +
+    `\n` +
+    `fabrica_uid=$(id -u)\n` +
+    `fabrica_gid=$(id -g)\n` +
+    `if ! getent passwd "$fabrica_uid" >/dev/null 2>&1; then\n` +
+    `  if [ ! -w ${PASSWD_FILE} ] || [ ! -w ${GROUP_FILE} ]; then\n` +
+    `    echo "${CHECK_SCRIPT}: uid $fabrica_uid has no ${PASSWD_FILE} entry and ${PASSWD_FILE} is not` +
+    ` writable, so ${labels} cannot look up the user it runs as - ${DOCKERFILE_INSPECTOR} has to keep its` +
+    ` 'RUN chmod a+w ${PASSWD_FILE} ${GROUP_FILE}' line" >&2\n` +
+    `    exit 1\n` +
+    `  fi\n` +
+    `  echo "${USER_ENTRY_NAME}:x:$fabrica_uid:$fabrica_gid:${USER_ENTRY_NAME} check:/tmp:/bin/sh" >>` +
+    ` ${PASSWD_FILE}\n` +
+    `  # Only when the gid has no entry of its own, which it may well\n` +
+    `  # have: a duplicate name in ${GROUP_FILE} would be worse than the\n` +
+    `  # file it replaced.\n` +
+    `  getent group "$fabrica_gid" >/dev/null 2>&1 ||` +
+    ` echo "${USER_ENTRY_NAME}:x:$fabrica_gid:" >> ${GROUP_FILE}\n` +
+    `fi\n`
   );
 }
 

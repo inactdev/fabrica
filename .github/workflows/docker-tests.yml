@@ -300,16 +300,18 @@ jobs:
       # INSPECTOR PIN" at the top of this file for why it is not watched
       # for freshness, and who moves it.
       #
-      # The SHA below is inspector `main` as of 2026-11-03, and is
-      # written once, in the command, so nothing can drift from it. It
-      # does NOT yet carry inspector#81's named `repo` build context, so
-      # src/register/inspector-e2e.test.ts's terms-route test fails
-      # against it - by Client ruling on issue #337 it must fail loudly
-      # rather than skip, until the pin moves to a commit that has it.
+      # The SHA below is inspector#83's merge commit, and is written
+      # once, in the command, so nothing can drift from it. It carries
+      # the named `repo` build context that a terms folder's
+      # `Dockerfile.inspector` copies the repository's own files out of
+      # (`COPY --from=repo`), which is what the terms route needs to
+      # build at all - so both of src/register/inspector-e2e.test.ts's
+      # route tests are expected green against this pin, not merely
+      # expected to fail loudly.
       - name: Install the pinned Inspector
         if: steps.gate.outputs.run_full == 'true'
         run: |
-          go install github.com/inactdev/inspector/cmd/inspector@6b8ce49ed835b4985e1a29c060d6c400407ddc34
+          go install github.com/inactdev/inspector/cmd/inspector@114cfb09cabfe666c261d3080860910e01799ec9
           # `go install` puts it in GOBIN, or GOPATH/bin - neither is on
           # PATH by default on a runner, and the e2e test looks for
           # `inspector` on PATH.

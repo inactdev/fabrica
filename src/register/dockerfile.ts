@@ -91,6 +91,17 @@ export interface BoxService {
    * trap. Each one carries its own redirection and `|| true`: the trap
    * runs even when the server was never started. */
   stop: readonly string[];
+  /**
+   * Whether this server looks the running uid up in `/etc/passwd` and
+   * cannot work without finding it - PostgreSQL does, and the check
+   * box's uid has no entry.
+   *
+   * One service wanting this is enough to make `check.sh` add an entry
+   * for itself before any server starts, and to make
+   * `Dockerfile.inspector` leave `/etc/passwd` writable so it can. See
+   * `userEntryPreamble` in `scaffold.ts` for the whole mechanism.
+   */
+  needsUserEntry?: boolean;
 }
 
 /**
@@ -154,6 +165,18 @@ export function needsScratchDir(shape: DependencyShape | null): boolean {
  * used by the script that makes it and by every service line that
  * writes under it. */
 export const SCRATCH_DIR_VAR = "FABRICA_STATE";
+
+/** The two files the check box's own uid has to appear in before
+ * anything that looks a user up can run. Named in one place because
+ * `Dockerfile.inspector` has to leave them writable and `check.sh` has
+ * to write them. */
+export const PASSWD_FILE = "/etc/passwd";
+/** @see PASSWD_FILE */
+export const GROUP_FILE = "/etc/group";
+
+/** The name `check.sh` gives the uid it adds an entry for. Not an
+ * account and never logged into - something for `getpwuid` to find. */
+export const USER_ENTRY_NAME = "fabrica";
 
 const NPM: DependencyShape = {
   lockfile: PACKAGE_LOCK,
@@ -238,6 +261,10 @@ const POSTGRES: BoxService = {
   // `pg` gem's own build dependency: its native extension wants
   // libpq-fe.h, which is what libpq-dev installs.
   packages: ["postgresql", "libpq-dev"],
+  // initdb resolves its own effective uid to a user *name* before it
+  // does anything else, and there is no flag that skips it. Without an
+  // entry it stops on "could not look up effective user ID".
+  needsUserEntry: true,
   start: [
     `# Debian keeps PostgreSQL's server binaries out of PATH, one`,
     `# directory per major version, so they are found here rather than`,
@@ -255,7 +282,8 @@ const POSTGRES: BoxService = {
     `PGHOST=$${SCRATCH_DIR_VAR}/postgres/socket`,
     `PGUSER=postgres`,
     `# PGUSER because libpq's own default user name comes from the uid's`,
-    `# /etc/passwd entry, and this box's uid has none (see below).`,
+    `# /etc/passwd entry - which above gave the name of an OS user, not`,
+    `# of a role in this cluster. The role initdb creates is this one.`,
     `export PGDATA PGHOST PGUSER`,
     `mkdir -p "$PGDATA" "$PGHOST"`,
     ``,
@@ -266,10 +294,10 @@ const POSTGRES: BoxService = {
     `# here is owned by whoever is running, whoever that turns out to`,
     `# be.`,
     `#`,
-    `# "trust" over the local socket, for the same reason: the default`,
+    `# "trust" over the local socket, for a related reason: the default`,
     `# "peer" authentication asks the kernel which uid opened the socket`,
-    `# and then wants a role of that user's name - and that uid has no`,
-    `# /etc/passwd entry, so there is no name to find on either side.`,
+    `# and then wants a role of that user's name - which is the OS name`,
+    `# added above, and no cluster has a role of it.`,
     `# Nothing outside this container can reach that socket: the check`,
     `# box has no network at all, and this cluster listens on no TCP`,
     `# port (-h '').`,
@@ -653,7 +681,8 @@ function serviceLines(shape: DependencyShape): string[] {
     // unusable at check time for exactly this reason, and read as
     // working right up until a real Inspector ran it.
     ...comment(
-      `Only the packages go in here. Nothing is initialized and nothing is started: Inspector runs the check as ` +
+      `Only the packages, and the one chmod below them, go in here. No server is initialized and none is ` +
+        `started: Inspector runs the check as ` +
         `the uid of whoever invoked it, which is not the user this image is built as and has no /etc/passwd ` +
         `entry of its own, so anything created here would be owned by the wrong user - and PostgreSQL refuses a ` +
         `data directory it does not own. ${CHECK_SCRIPT} creates what it needs, as whoever is running it.`
@@ -662,6 +691,41 @@ function serviceLines(shape: DependencyShape): string[] {
     `RUN apt-get update \\`,
     ` && apt-get install -y --no-install-recommends ${packages.join(" ")} \\`,
     ` && rm -rf /var/lib/apt/lists/*`,
+    ...userEntryLines(services),
+  ];
+}
+
+/**
+ * The one thing this file does about the check box's uid, as opposed to
+ * saying it cannot (issue #337).
+ *
+ * A server that looks the running uid up in `/etc/passwd` - PostgreSQL's
+ * `initdb` resolves its own effective uid to a name before anything
+ * else, with no flag that skips it - cannot run in this box at all,
+ * because that uid has no entry. The entry cannot be written here: the
+ * uid is whoever invokes Inspector, which is unknowable while the image
+ * is being built. So the only thing the image can do is leave the file
+ * writable and let `check.sh` add an entry for itself.
+ *
+ * What that costs, stated rather than hidden: a world-writable
+ * `/etc/passwd` beside a setuid `su` is a way to become root in this
+ * container. It is bounded by what the box is - no network at all, no
+ * credential of any kind in it, the checkout mounted read-only, and
+ * every write discarded with the container - and it buys the only shape
+ * in which a database server runs there.
+ */
+function userEntryLines(services: readonly BoxService[]): string[] {
+  if (!services.some((service) => service.needsUserEntry)) return [];
+  const needing = services.filter((service) => service.needsUserEntry).map((s) => s.label);
+  return [
+    ``,
+    ...comment(
+      `${needing.join(" and ")} looks the running uid up in ${PASSWD_FILE}, and the uid Inspector runs the ` +
+        `check as has no entry there. Which uid that is cannot be known here, so this leaves the two files ` +
+        `writable and ${CHECK_SCRIPT} adds an entry for itself. Dropping this line does not make the check ` +
+        `quietly worse: it refuses, naming this line, before it starts anything.`
+    ),
+    `RUN chmod a+w ${PASSWD_FILE} ${GROUP_FILE}`,
   ];
 }
 

@@ -21,10 +21,11 @@
 //     `.github/workflows/docker-tests.yml`, which runs this). Anything
 //     else - no `inspector` on PATH, a failed image build, a red check -
 //     FAILS, loudly, naming what happened. By Client ruling on issue
-//     #337 this is deliberate: the terms route needs inspector#81's
-//     named build context, so until the pin in that workflow includes
-//     it, the terms test here genuinely fails rather than quietly
-//     skipping.
+//     #337 this is deliberate. The pin now carries the named `repo`
+//     build context a terms folder's Dockerfile copies the repository
+//     out of (inspector#83), so both routes are expected to come back
+//     green; a red one is a real regression, never a version skew to
+//     wait out.
 //   - **The verdict is read from Inspector's own report, never from its
 //     exit code.** `inspector` cannot run a check without publishing:
 //     `-branch` is required, and a missing GITHUB_TOKEN is a refusal
@@ -266,8 +267,9 @@ test("register: the files it commits into a repository pass a real Inspector run
 //     tracks them, and Inspector mounts every tracked top-level path
 //     read-only.
 //   - the check runs as a uid with no /etc/passwd entry, which is the
-//     whole reason the generated check creates its database cluster at
-//     check time with trust authentication.
+//     whole reason the generated check gives that uid an entry of its
+//     own and then creates its database cluster at check time with trust
+//     authentication.
 test("the check box is read-only where git tracks, and runs as a uid with no passwd entry", (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
 
@@ -325,10 +327,13 @@ test("the check box is read-only where git tracks, and runs as a uid with no pas
 
   // Issue #337's fourth finding, which is the one with no visible
   // signature in a red check: the generated PostgreSQL setup exists
-  // because this uid has no name anywhere in the box, so "peer"
-  // authentication has nothing to resolve and nothing may be created for
-  // it at build time. If that premise ever stops holding, this says so
-  // instead of leaving a passing suite to imply it was tested.
+  // because this uid has no name anywhere in the box, so there is
+  // nothing for initdb to look itself up as until the check writes an
+  // entry, "peer" authentication has nothing to resolve, and nothing may
+  // be created for it at build time. This probe is a box of its own, with
+  // no generated check in it, so the premise is read as Inspector leaves
+  // it. If it ever stops holding, this says so instead of leaving a
+  // passing suite to imply it was tested.
   const user = /check box uid (\d+) has (a|no) passwd entry/.exec(output);
   assert.ok(user !== null, `the probe did not report the box's own user:\n${reportDetail(report)}`);
   if (user[1] === "0") {

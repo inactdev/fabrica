@@ -521,9 +521,9 @@ its own:
   either: `chown` needs root, and the directory must be mode 0700.
 - **`initdb --auth=trust`, never `peer`.** `peer` asks the kernel which
   uid opened the socket and then wants a role of **that user's name** —
-  and a uid with no passwd entry has no name, on either side of the
-  socket. `PGUSER` is exported for the same reason: libpq's own default
-  user name also comes from `getpwuid`. Nothing outside the container
+  which is the OS name the next section gives that uid, and no cluster
+  has a role of it. `PGUSER` is exported for the same reason: libpq's own
+  default user name also comes from `getpwuid`. Nothing outside the container
   can reach that socket; the box has no network, and the cluster listens
   on no TCP port at all (`-h ''`).
 - **The server binaries are found, not pinned.** Debian keeps
@@ -540,6 +540,52 @@ its own:
 
 `scaffold.test.ts` executes both branches for real, with `id` stubbed to
 answer 0 for the root one.
+
+### That uid needs a name of its own before anything starts
+
+Creating the cluster at check time was necessary and not sufficient. A
+real Inspector run went red on `initdb: could not look up effective user
+ID 1001: user does not exist`, because `initdb` resolves its own
+effective uid to a user **name** before it does anything else
+(`get_user_name_or_exit`, which is `getpwuid`), and there is no flag that
+skips it. `--username` names the role it creates, which is a different
+thing entirely. A uid with no `/etc/passwd` entry cannot run it at all.
+
+So the generated check gives that uid an entry, for itself, before any
+server starts:
+
+- **`Dockerfile.inspector` leaves `/etc/passwd` and `/etc/group`
+  writable** (`RUN chmod a+w`, under the `USER root` the package install
+  already needed). It cannot write the entry — the uid the check will run
+  as is unknowable while the image is being built — so leaving the file
+  writable is the only thing it can do.
+- **`check.sh` writes it**, when `getent passwd "$(id -u)"` finds
+  nothing: one line in `/etc/passwd` named `fabrica`, and one in
+  `/etc/group` only if the gid has no entry of its own. `getent` decides
+  this, rather than a `grep` of the file, so a box whose users come from
+  somewhere other than the file answers for itself.
+- **A box that lost the `chmod` line refuses, naming it.** The
+  alternative is PostgreSQL failing later with a message about user IDs,
+  which is how this was found in the first place.
+- It is written **once, for any service that needs it** rather than
+  inside PostgreSQL's own lines (`BoxService.needsUserEntry`): the box's
+  uid is a property of the box, and anything else in there that looks a
+  user up now finds something.
+
+What this costs, which is not hidden anywhere: a world-writable
+`/etc/passwd` beside a setuid `su` is a way to become root inside that
+container. It is bounded by what the container is — no network at all, no
+credential of any kind in it, the checkout mounted read-only, and every
+write discarded with the container — and it buys the only shape in which
+a database server runs there at all. The purpose-built alternative,
+`nss_wrapper` (an `LD_PRELOAD` and a passwd file of one's own, leaving
+the image's permissions alone), is the thing to reach for if that trade
+ever stops being acceptable.
+
+`PGUSER` is still exported, for a reason that changed slightly: the
+entry above gives the uid the name of an *OS* user, and no cluster has a
+role of that name. `trust` over the socket is still right for the same
+reason.
 
 ### A failing check has to keep its own explanation
 
