@@ -21,6 +21,7 @@ import {
   SERVICE_WAIT_SECONDS,
   comment,
   needsScratchDir,
+  type BoxService,
   type DependencyShape,
 } from "./dockerfile.ts";
 
@@ -200,6 +201,13 @@ function workingDirectory(terms: TermsLocation): string {
  * suite's own status is still this script's status, and the servers
  * below hang their own stop lines on the same trap rather than
  * installing a second one.
+ *
+ * It also reads the exiting status as its first act, for one reason:
+ * every server below logs into this directory, so removing it on a
+ * *failing* exit would destroy the only explanation of why the check
+ * failed. A cluster that would not initialize, or a server that never
+ * answered, has to say so in the check's own output - see
+ * `serviceLogDump`.
  */
 function scratchPreamble(shape: DependencyShape): string {
   if (!needsScratchDir(shape)) return ``;
@@ -226,10 +234,47 @@ function scratchPreamble(shape: DependencyShape): string {
     ).join("\n") +
     `\n` +
     `fabrica_cleanup() {\n` +
+    `  fabrica_status=$?\n` +
+    serviceLogDump(services) +
     services.flatMap((service) => service.stop).map((line) => `  ${line}\n`).join("") +
     `  rm -rf "$${SCRATCH_DIR_VAR}"\n` +
     `}\n` +
     `trap fabrica_cleanup EXIT\n`
+  );
+}
+
+/**
+ * What the servers wrote about themselves, on a failing exit only.
+ *
+ * Every server above keeps its log in the scratch directory, because the
+ * checkout is read-only - and the `rm -rf` that directory needs would
+ * otherwise take the log with it. A check that went red because
+ * PostgreSQL would not initialize, or because it never answered inside
+ * the wait, would then report sixty seconds of nothing and no reason.
+ *
+ * On a green exit they are not printed at all: a passing check's output
+ * is read by people, and a server's startup chatter is noise there.
+ *
+ * Nothing in here can fail the cleanup under the script's own `set -e`:
+ * a glob that matches nothing stays literal and is skipped by the `-f`
+ * test, and the `cat` carries its own `|| true`.
+ */
+function serviceLogDump(services: readonly BoxService[]): string {
+  if (services.length === 0) return ``;
+  return (
+    comment(
+      `Only on the way out of a failing check: every server above logs in there, and the rm below would take ` +
+        `the one explanation of what went wrong with it. On a green check they are not printed at all.`
+    )
+      .map((line) => `  ${line}\n`)
+      .join("") +
+    `  if [ "$fabrica_status" -ne 0 ]; then\n` +
+    `    for fabrica_log in "$${SCRATCH_DIR_VAR}"/*/*.log; do\n` +
+    `      [ -f "$fabrica_log" ] || continue\n` +
+    `      echo "${CHECK_SCRIPT}: $fabrica_log, after a failing check:" >&2\n` +
+    `      cat "$fabrica_log" >&2 || true\n` +
+    `    done\n` +
+    `  fi\n`
   );
 }
 

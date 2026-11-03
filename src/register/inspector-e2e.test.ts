@@ -254,14 +254,21 @@ test("register: the files it commits into a repository pass a real Inspector run
 
 // ---------------------------------------------- what the box can write
 
-// The specific trap issue #337 names: Rails writes into log/ and tmp/,
-// both of which git tracks in this fixture the way `rails new` tracks
-// them, and Inspector mounts every tracked top-level path read-only. A
-// green check above already depends on this - the fixture boots Rails
-// twice, for db:test:prepare and for the suite - and this asserts it
-// directly, so a regression says what broke rather than only that
-// something did.
-test("the check box cannot write into the Rails directories git tracks, and the check is green anyway", (t) => {
+// The two facts about Inspector's own box that the four findings rest
+// on, asserted from inside it rather than taken from its documentation.
+//
+// Both are already load-bearing for the two green checks above - the
+// fixture boots Rails twice, into read-only log/ and tmp/, as whatever
+// user Inspector picked - but a failure there says only "red". This says
+// which fact changed.
+//
+//   - log/ and tmp/ are tracked in this fixture the way `rails new`
+//     tracks them, and Inspector mounts every tracked top-level path
+//     read-only.
+//   - the check runs as a uid with no /etc/passwd entry, which is the
+//     whole reason the generated check creates its database cluster at
+//     check time with trust authentication.
+test("the check box is read-only where git tracks, and runs as a uid with no passwd entry", (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
 
   const repo = railsRepository();
@@ -299,10 +306,44 @@ test("the check box cannot write into the Rails directories git tracks, and the 
       `    exit 1\n` +
       `  fi\n` +
       `done\n` +
-      `echo "log and tmp are both read-only, as expected"\n`
+      `echo "log and tmp are both read-only, as expected"\n` +
+      `# Reported rather than asserted here, because both answers are\n` +
+      `# real: Inspector resolves the check's user to the uid that\n` +
+      `# invoked it, and to 0:0 under a rootless Docker daemon. The\n` +
+      `# test below is what decides what each one means.\n` +
+      `if getent passwd "$(id -u)" > /dev/null 2>&1; then\n` +
+      `  echo "check box uid $(id -u) has a passwd entry"\n` +
+      `else\n` +
+      `  echo "check box uid $(id -u) has no passwd entry"\n` +
+      `fi\n`
   );
 
   const report = runInspector(repo, terms);
   assert.equal(report.outcome, "green", reportDetail(report));
-  assert.ok((report.output ?? "").includes("both read-only"), reportDetail(report));
+  const output = report.output ?? "";
+  assert.ok(output.includes("both read-only"), reportDetail(report));
+
+  // Issue #337's fourth finding, which is the one with no visible
+  // signature in a red check: the generated PostgreSQL setup exists
+  // because this uid has no name anywhere in the box, so "peer"
+  // authentication has nothing to resolve and nothing may be created for
+  // it at build time. If that premise ever stops holding, this says so
+  // instead of leaving a passing suite to imply it was tested.
+  const user = /check box uid (\d+) has (a|no) passwd entry/.exec(output);
+  assert.ok(user !== null, `the probe did not report the box's own user:\n${reportDetail(report)}`);
+  if (user[1] === "0") {
+    // The rootless-Docker answer. Legitimate, and the generated check
+    // has its own branch for it (dockerfile.ts's `pg_as`), so this is
+    // recorded rather than failed on - but it means this run proved the
+    // root branch and not the other one.
+    t.diagnostic(`the check box ran as root: this run exercised pg_as's root branch, not the uid branch`);
+  } else {
+    assert.equal(
+      user[2],
+      "no",
+      `the check box ran as uid ${user[1]}, and that uid DOES have a passwd entry - so this run did not ` +
+        `exercise the case the generated PostgreSQL setup is written for:\n${reportDetail(report)}`
+    );
+    t.diagnostic(`the check box ran as uid ${user[1]}, with no passwd entry`);
+  }
 });

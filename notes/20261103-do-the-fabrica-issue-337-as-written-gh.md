@@ -108,3 +108,41 @@ knowing before touching it:
   before the repository is committed, not hand-written. A hand-written
   lockfile bundler decided to re-resolve would mean the image installed
   something other than what the test says it pins.
+
+## A scratch directory makes a failing check unexplainable
+
+The scratch directory above is the only writable place a generated check
+has, so every server's log is in it - and the `EXIT` trap that removes it
+runs on the failing path too. A red check whose PostgreSQL never
+initialized therefore reported "PostgreSQL did not answer within 60
+seconds" and nothing whatsoever about why: `initdb.log` and `server.log`
+were deleted by the same cleanup, a second after they were written.
+
+So `fabrica_cleanup` reads `$?` as its first act and, on any non-zero
+exit only, prints every `$FABRICA_STATE/*/*.log` to stderr before the
+`rm -rf`. Inspector's own report is the Client's whole view of a failed
+check, so a diagnosis that is not in the check's own output is not
+anywhere. Three details that are not arbitrary:
+
+- **`fabrica_status=$?` has to be the trap's first line.** The stop lines
+  below it overwrite `$?`.
+- **Nothing in the dump may fail under `set -e`.** A glob matching
+  nothing stays literal, so the `[ -f ] || continue` is load-bearing, and
+  the `cat` carries its own `|| true`.
+- **Green checks print none of it.** A passing check's output is read by
+  people; a server's startup chatter there is noise.
+
+The general rule, for any other throwaway directory a generated script
+is given: whatever diagnoses a failure has to leave the directory before
+the directory does.
+
+## What the end-to-end test can and cannot prove about the uid
+
+`register`'s own tests stub `id -u`, so both branches of `pg_as` really
+run locally. The end-to-end test cannot choose: Inspector resolves the
+check's user from the daemon it finds, so a rootless one gives root and
+exercises the other branch. The probe test therefore *reports* the box's
+uid and whether it has a passwd entry, out of the check's own output, and
+only asserts the no-passwd-entry premise when the uid is not 0. A test
+that silently proved the root branch while claiming to prove the other
+would be worse than no test.

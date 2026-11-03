@@ -541,6 +541,29 @@ its own:
 `scaffold.test.ts` executes both branches for real, with `id` stubbed to
 answer 0 for the root one.
 
+### A failing check has to keep its own explanation
+
+The scratch directory is the only writable place the check has, so every
+server's log is inside it — and the `EXIT` trap removes it on the failing
+path too. That made a red check unexplainable: "PostgreSQL did not answer
+within 60 seconds" and nothing about why, because `initdb.log` and
+`server.log` were deleted a second after they were written.
+
+So `fabrica_cleanup` reads `$?` as its first line and, **on a non-zero
+exit only**, prints every log under the scratch directory to stderr
+before removing it. Inspector's own report is the Client's whole view of
+a failed check, so a diagnosis that is not in the check's output is not
+anywhere. A green check prints none of it — a passing check's output is
+read by people, and startup chatter there is noise.
+
+Three details in that trap are load-bearing rather than incidental:
+`fabrica_status=$?` has to come first, because the stop lines below it
+overwrite `$?`; the `[ -f … ] || continue` is what keeps a glob that
+matches nothing from failing the cleanup under `set -e`; and the `cat`
+carries its own `|| true`. The rule generalizes to any other throwaway
+directory a generated script is given — whatever diagnoses a failure has
+to leave the directory before the directory does.
+
 ### Rails writes into log/ and tmp/, which are read-only there
 
 Inspector mounts **every top-level path the repository tracks**
@@ -579,14 +602,19 @@ The standing rulings call a silent skip a bug, so each of these is a
   the lockfile is named, with what to add and where.
 - **A `package-lock.json` beside the `Gemfile.lock` is not installed**,
   and the note says so plus what to add if the check needs built assets.
-- **Starting those servers needs root**, which the official Ruby image
-  runs as — but `src/containment/run.ts` runs every container as the
-  *host* user, so `register`'s own one proving run cannot start them.
-  This is the one check shape the `--check`/`--image` route cannot prove
-  here, and both the proposal's notes and the `check-failed` refusal say
-  so rather than leaving a permission error to be puzzled over. The
-  `--terms` route and the commit-it-yourself route are unaffected, and a
-  first task's own red-or-green is the proof.
+- **Those servers are installed by `Dockerfile.inspector`, which the one
+  proving run never builds.** It runs the check inside the image
+  `--image` names — the `FROM` line — so the server binaries genuinely
+  are not there, and the check fails on saying so. This is the one check
+  shape the `--check`/`--image` route cannot prove here, and both the
+  proposal's notes and the `check-failed` refusal say so rather than
+  leaving a missing-binary error to be puzzled over. (Before issue #337
+  the reason was root: starting the servers needed it, and
+  `src/containment/run.ts` runs every container as the *host* user. That
+  is no longer the obstacle — the cluster is created at check time by
+  whoever is running — but the conclusion is unchanged.) The `--terms`
+  route and the commit-it-yourself route are unaffected, and a first
+  task's own red-or-green is the proof.
 
 Nothing about PostgreSQL, Redis or Rails themselves is proven by this
 repository's tests: that needs the built image, which is Inspector's to

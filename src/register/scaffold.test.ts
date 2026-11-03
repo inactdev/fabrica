@@ -290,6 +290,10 @@ function runGeneratedCheck(opts: {
    * Inspector runs the check as root inside the container's own user
    * namespace, and `initdb`/`postgres` both refuse to be root. */
   uid?: number;
+  /** Makes `initdb` fail, the way a box with a half-installed PostgreSQL
+   * does - the case where the only explanation is in a log file inside
+   * the scratch directory the cleanup removes. */
+  initdbFails?: boolean;
 }): { status: number; log: string[]; stderr: string; scratchDirs: string[] } {
   const dir = mkdtempSync(join(tmpdir(), "fabrica-checkscript-"));
   const bin = join(dir, "stubs");
@@ -313,7 +317,12 @@ function runGeneratedCheck(opts: {
       `echo $((tries + 1)) > "${join(dir, "tries")}"\n` +
       `[ "$tries" -ge ${opts.readyAfter ?? 0} ]`
   );
-  stub("pgbin/initdb", "exit 0");
+  stub(
+    "pgbin/initdb",
+    opts.initdbFails === true
+      ? `echo "initdb: could not create directory, Permission denied" >&2\nexit 1`
+      : "exit 0"
+  );
   stub("pgbin/postgres", "exit 0");
   stub("pgbin/pg_ctl", "exit 0");
   stub("redis-server", "exit 0");
@@ -439,6 +448,35 @@ test("the generated check.sh fails loudly, and early, in a box with no PostgreSQ
   assert.match(run.stderr, /Dockerfile\.inspector/);
 });
 
+// The other half of removing the scratch directory: every server logs in
+// there, so a failing check would otherwise report that PostgreSQL never
+// came up and nothing at all about why - the one file saying why is
+// removed by the same cleanup that makes the check tidy. Inspector's red
+// report is the Client's whole view of a failed check, so what is not in
+// the check's own output is not anywhere.
+test("the generated check.sh puts a server's own log in the output when the check fails", () => {
+  const { status, stderr } = runGeneratedCheck({
+    suite: "bundle exec rspec",
+    suiteExit: 0,
+    initdbFails: true,
+  });
+
+  assert.notEqual(status, 0, stderr);
+  // The log file's own contents, not merely its path: the path is inside
+  // a directory that no longer exists by the time anyone reads this.
+  assert.match(stderr, /initdb: could not create directory, Permission denied/, stderr);
+  assert.match(stderr, /after a failing check/, stderr);
+});
+
+// The counterpart: a green check's output is read by people, and a
+// server's startup chatter in it is noise.
+test("the generated check.sh prints no server logs when the check passes", () => {
+  const { status, stderr } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit: 0 });
+
+  assert.equal(status, 0, stderr);
+  assert.doesNotMatch(stderr, /after a failing check/, stderr);
+});
+
 // The scratch directory is the whole answer to a read-only checkout, so
 // it has to actually be gone afterwards - on the failing path too, which
 // is the one a trap gets wrong.
@@ -448,4 +486,12 @@ test("the generated check.sh leaves no scratch directory behind, pass or fail", 
     const { scratchDirs } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit });
     assert.deepEqual(scratchDirs, before, `a scratch directory survived an exit ${suiteExit}`);
   }
+  // Including the path where the cleanup reads the logs in there first,
+  // which is the one that touches the directory before removing it.
+  const { scratchDirs } = runGeneratedCheck({
+    suite: "bundle exec rspec",
+    suiteExit: 0,
+    initdbFails: true,
+  });
+  assert.deepEqual(scratchDirs, before, "a scratch directory survived a failing initdb");
 });
