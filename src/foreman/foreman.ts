@@ -15,6 +15,7 @@ import type { Foreman, Inspector } from "../inspector/types.ts";
 import type { Caps } from "../../contract/surface.ts";
 import { recordCost } from "./caps.ts";
 import { readModelChoice } from "./model.ts";
+import { machineImageForTask } from "../projectimage/index.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
 import type { DiffReader } from "./reader-round.ts";
@@ -101,6 +102,19 @@ function modelFor(recordHome: string, taskId: string): { model?: string } {
   return declaredModel === null ? {} : { model: declaredModel };
 }
 
+/** Everything a worker for an already-registered task has to be built
+ * with, re-derived from that task's own record: the model it was
+ * registered with (above), and the image its project's machine works in
+ * (issue #322 - the project's own check image with Fabrica's layer on
+ * top, when it has one). Both for the same reason: a resumed or fix
+ * round that ran a different model, or wrote in a different box, from
+ * the round it continues would be reporting on something other than
+ * what it did. */
+function brainChoiceFor(recordHome: string, taskId: string): { model?: string; image?: string } {
+  const image = machineImageForTask(recordHome, taskId)?.image;
+  return { ...modelFor(recordHome, taskId), ...(image === undefined ? {} : { image }) };
+}
+
 export function createForeman(opts: ForemanOptions): Foreman {
   const { recordHome, caps } = opts;
   // Remembers which brain a do() call on THIS instance used for each
@@ -122,7 +136,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       // remembered its brain by taskId; a fresh process (the real shape
       // of `fabrica do` then `fabrica answer` by hand) falls back the
       // same way verdict() does.
-      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome, modelFor(recordHome, taskId));
+      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome, brainChoiceFor(recordHome, taskId));
       return answerTask(recordHome, taskId, text, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, minter: opts.minter, readDiff: opts.readDiff, caps });
     },
     async deliveryOf(taskId) {
@@ -132,7 +146,7 @@ export function createForeman(opts: ForemanOptions): Foreman {
       return lookupReceipts(recordHome, taskId);
     },
     async verdict(taskId, ruling, note) {
-      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome, modelFor(recordHome, taskId));
+      const brain = brainByTask.get(taskId) ?? opts.brain ?? defaultBrainAdapter(recordHome, brainChoiceFor(recordHome, taskId));
       return recordVerdict(recordHome, taskId, ruling, note, { brain, inspector: opts.inspector, checkBox: opts.checkBox, checksReader: opts.checksReader, minter: opts.minter, readDiff: opts.readDiff, caps });
     },
     async status() {

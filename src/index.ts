@@ -176,9 +176,38 @@ export {
   workerTokenStatus,
   WORKER_CLI_LABEL,
   WORKER_IMAGE_LABEL,
+  // The shared image a project that commits no Dockerfile.inspector
+  // keeps (issue #322) - named here so nothing outside
+  // src/brain/adapters/ has to know what is in it.
+  DEFAULT_MACHINE_IMAGE,
 } from "./brain/index.ts";
 export type { ImageCommand } from "./brain/index.ts";
 export { relayImagePull, relayImageStatus, RELAY_IMAGE_LABEL } from "./relay/index.ts";
+// Issue #322: which image each project's machine works in - the project's
+// own check image with Fabrica's layer on top, or the shared one for a
+// project that commits no Dockerfile.inspector. Read by the round that
+// starts the box, by `fabrica doctor`'s per-project line, and by the
+// build `fabrica doctor --fix` and `fabrica up` run themselves.
+export {
+  isLayered,
+  machineDockerfileFor,
+  machineImageStamp,
+  machineImageBuild,
+  machineImageCurrency,
+  machineImageFor,
+  machineImageForProject,
+  machineImageForTask,
+  machineImageLabel,
+  machineImageStatus,
+  machineImageTag,
+  needsBuilding,
+  MACHINE_IMAGE_PREFIX,
+} from "./projectimage/index.ts";
+export type { MachineImage, MachineImageCheck, MachineImageCurrency } from "./projectimage/index.ts";
+// The one probe those take: what an image's own configuration says it
+// runs as, which is how the user a generated image has to end as is
+// found when the project's own file names none.
+export type { BaseUserProbe } from "./brain/index.ts";
 // The Docker networks tasks run on: what is still open
 // (`fabrica doctor`'s leftover count) and the one command that clears
 // the unused ones, named identically wherever the Client is told about
@@ -294,7 +323,7 @@ export type {
   InspectorVersionProbes,
   InspectorVersionState,
 } from "./inspector/index.ts";
-export { requireGitRoot } from "./foreman/index.ts";
+export { recordTaskFailure, requireGitRoot } from "./foreman/index.ts";
 // Skip rules (issue #204), shadow mode only: nothing here closes or
 // merges anything. `evaluateInShadow` is called by the round itself;
 // what the CLI and the live view need is the read side - the report, and

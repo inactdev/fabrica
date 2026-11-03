@@ -8,7 +8,8 @@
 // everything it needs - project, baseCommit, prior receipts, the note -
 // from recordHome/taskId alone.
 
-import { defaultBrainAdapter, readModelChoice, runRecordedFix } from "../index.ts";
+import { defaultBrainAdapter, readModelChoice, recordTaskFailure, runRecordedFix } from "../index.ts";
+import { requireMachineImageForTask } from "./machine-image.ts";
 import { prefixTaskLog } from "./task-log.ts";
 import { writeTaskPidFile } from "./task-process.ts";
 
@@ -32,8 +33,24 @@ writeTaskPidFile(recordHome, taskId);
 // task was registered with, read back off its own record.
 const declaredModel = readModelChoice(recordHome, taskId).declaredModel ?? undefined;
 
+// Issue #322: and in the same image, re-derived the same way - a fix
+// round must not be written in a different box from the round it fixes.
+// Built here if Fabrica's own layer has moved since, and refused here -
+// on the record, as this task's own failure - if that build fails,
+// before the fix round starts, so a project whose image cannot be built
+// never dies mid-round. The verdict itself is already recorded either
+// way (issue #123), so the task stays open for another try.
+let image: string | undefined;
 try {
-  await runRecordedFix(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel }) });
+  image = await requireMachineImageForTask(recordHome, taskId, { onOutput: (line) => console.error(line) });
+} catch (err) {
+  recordTaskFailure(recordHome, taskId, err);
+  console.error(`fabrica verdict: fix round for "${taskId}" failed: ${(err as Error).message}`);
+  process.exit(1);
+}
+
+try {
+  await runRecordedFix(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel, image }) });
 } catch (err) {
   console.error(`fabrica verdict: fix round for "${taskId}" failed: ${(err as Error).message}`);
   process.exit(1);

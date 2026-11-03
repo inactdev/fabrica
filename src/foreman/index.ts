@@ -82,7 +82,7 @@ export {
   taskSpend,
   unmeasuredSpend,
 } from "./spend.ts";
-export { requireGitRoot } from "./task-failure.ts";
+export { recordTaskFailure, requireGitRoot } from "./task-failure.ts";
 // Issue #199: one retry on a dropped model call, on the same model,
 // recorded. Exported for the one model call Fabrica makes outside a
 // production round (src/quiz's re-check), which is as droppable as any

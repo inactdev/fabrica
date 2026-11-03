@@ -37,6 +37,14 @@
 // Inspector step can never fail the update - the worst case warns and
 // leaves the install alone.
 //
+// Every registered project's own machine image comes forward too
+// (`buildRegisteredMachineImages`, src/cli/machine-image.ts): new code
+// can move Fabrica's own machine layer, which makes every project's
+// image stale at once, and issue #322's amendment asks for that to be
+// closed here rather than by the first task on each project. One
+// project's build failing is named on stderr and fails nothing else -
+// not this command, and not another project.
+//
 // Then the live view is brought in line with the new code -
 // by calling `fabrica up`'s own stale-live-view check (up-command.ts's
 // refreshStaleLiveView), never a second copy of that logic. When the
@@ -76,6 +84,7 @@ import { resolveRecordHome } from "./record-home.ts";
 import { detectCopy, git, short, type CopyInfo } from "./doctor-command.ts";
 import { commandFailureMessage, realGlobalReinstallIo, reinstallGlobalCopy } from "./global-reinstall.ts";
 import { clonePackInstallProcedure, prefixOfGlobalInstall } from "./npm-prefix.ts";
+import { buildRegisteredMachineImages, type MachineImageBuildReport, type MachineImageIo } from "./machine-image.ts";
 import { LIVE_VIEW_PORT, refreshStaleLiveView, type LiveViewStaleOutcome } from "./up-command.ts";
 
 export const UPDATE_USAGE = "fabrica update";
@@ -116,7 +125,18 @@ session:
      flag to skip this. Nothing here can fail the update: no network,
      or a \`go install\` that fails, warns and leaves the installed
      Inspector alone.
-  3. Brings the live view on 127.0.0.1:7777 in line with the code that
+  3. Builds every registered project's own machine image that needs
+     it - the image that project's worker is written in, its
+     \`Dockerfile.inspector\` with Fabrica's own layer on top. New code
+     can move that layer, which makes every project's image stale at
+     once, so they come forward here with the code rather than leaving
+     the first task on each project to wait for a build (or find that
+     one cannot be built). A project with no \`Dockerfile.inspector\`
+     uses the shared image and has nothing to build. One project's
+     build failing never stops another, and never fails this command:
+     it is named on stderr, and tasks on that project are refused -
+     with the build's own error - until it is fixed.
+  4. Brings the live view on 127.0.0.1:7777 in line with the code that
      just landed - the same check and restart \`fabrica up\` itself
      runs. If the commit changed, whatever is listening is restarted
      and one that wasn't running is started; there is no flag to skip
@@ -127,7 +147,7 @@ session:
      No browser tab is ever opened here - the tab you already have
      reconnects by itself, and \`fabrica up\` is the one command that
      opens one.
-  4. Prints one summary line: the commit before and after, the
+  5. Prints one summary line: the commit before and after, the
      installed Inspector before and after, whether the live view was
      restarted, started or left as is, and the exact next step.
 
@@ -219,6 +239,10 @@ export interface RunUpdateCommandOptions {
   /** Test-only: a different port than the documented 7777, the same
    * seam runUpCommand's liveViewPort option provides. */
   liveViewPort?: number;
+  /** Test-only seam for the per-project machine image builds (issue
+   * #322's amendment, requirement 3), which otherwise ask the real
+   * docker daemon. */
+  machineImageIo?: MachineImageIo;
   /** The remaining options below are forwarded verbatim to
    * refreshStaleLiveView (up-command.ts) - see its own
    * RefreshStaleLiveViewOptions for what each replaces. There is
@@ -298,6 +322,28 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
   // do and leave the installed Inspector exactly as it was.
   const inspector = updateInspector(probes.inspector, stderr);
 
+  // Issue #322's amendment, requirement 3: new code can move Fabrica's
+  // own machine layer, which makes every registered project's machine
+  // image stale at once - so they are brought forward here, with the
+  // code, rather than leaving the first task on each project to discover
+  // it (or, as happened when that issue first landed, leaving every
+  // project needing an image that could not be built at all). One
+  // project's build failing is reported against that project and stops
+  // nothing else, including this command, which still succeeds: Fabrica
+  // itself was updated, and a project whose Dockerfile.inspector is
+  // broken is that project's problem to fix.
+  const images = await buildRegisteredMachineImages(recordHome, {
+    onBuilding: (machine) => stdout(`fabrica update: building ${machine.image} from ${machine.inspectorDockerfile}.`),
+    onOutput: (line) => stdout(`  ${line}`),
+    ...opts.machineImageIo,
+  });
+  for (const report of images.filter((one) => one.outcome === "failed")) {
+    stderr(
+      `fabrica update: ${report.name}'s machine image (${report.image}) could not be built - ${report.detail}. ` +
+        `Tasks on ${report.name} will be refused until that is fixed; every other project was still brought forward.`
+    );
+  }
+
   // Client ruling: when the commit actually changed, restart the live
   // view unconditionally, and start one if none was running - no flag to
   // opt out. The ordinary `/api/version` comparison is still what
@@ -332,9 +378,24 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
 
   stdout(
     `fabrica update: ${short(before.commit)} -> ${short(after.commit)} - ${describeInspectorOutcome(inspector)} - ` +
-      `live view ${describeLiveViewOutcome(outcome)}. Resume your session with: fabrica up --continue`
+      `${describeMachineImages(images)} - live view ${describeLiveViewOutcome(outcome)}. ` +
+      `Resume your session with: fabrica up --continue`
   );
   return 0;
+}
+
+/** The machine-image segment of the one summary line: how many projects
+ * were brought forward, and - said first, because it is the half that
+ * needs acting on - how many could not be. */
+export function describeMachineImages(reports: MachineImageBuildReport[]): string {
+  const count = (outcome: MachineImageBuildReport["outcome"]): number =>
+    reports.filter((one) => one.outcome === outcome).length;
+  const failed = count("failed");
+  const built = count("built");
+  if (reports.length === 0) return "no project images to build";
+  if (failed > 0) return `${failed} project image${failed === 1 ? "" : "s"} FAILED to build, ${built} built`;
+  if (built > 0) return `${built} project image${built === 1 ? "" : "s"} built`;
+  return "project images already current";
 }
 
 /** What `fabrica update` did about the installed Inspector. */

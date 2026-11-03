@@ -12,6 +12,11 @@
 //   - `src/brain/adapters/docker/Dockerfile`'s node base image, the
 //     Node a Worker writes and runs the project's check on.
 //
+// A fifth reader is bound here too (issue #322): the layer Fabrica puts
+// on top of a project's own check image installs Node itself, and reads
+// which version out of that same worker Dockerfile rather than carrying
+// a copy of it.
+//
 // A bump that moves some of them and not the rest puts a contributor,
 // CI, the check box and the Worker on different Node builds - which is
 // precisely how a Node-version-specific failure hides (see
@@ -40,6 +45,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pinnedNodeVersion } from "./doctor-command.ts";
+import { machineLayer, pinnedMachineNodeVersion } from "../brain/index.ts";
 
 const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DOCKERFILE = join(CHECKOUT, "src", "brain", "adapters", "docker", "Dockerfile");
@@ -115,6 +121,26 @@ test(".node-version and engines.node name an exact version, never a bare major",
       `${source} must name an exact major.minor.patch version, not ${JSON.stringify(value)}`
     );
   }
+});
+
+test("the per-project machine layer installs that same Node version", () => {
+  // Issue #322: a project carrying its own Dockerfile.inspector gets its
+  // machine image layered on top of it, and that layer installs Node
+  // itself (the project's base may well have none). Its version is read
+  // out of the worker Dockerfile - the one place both pins live - rather
+  // than copied, and this is what makes a half-done bump fail here too:
+  // a machine writing on one Node while the check box runs another is the
+  // same hiding place the four declarations above exist to close.
+  const expected = nodeVersionFile();
+
+  assert.equal(pinnedMachineNodeVersion(), expected, "the machine layer's Node pin has to be the same one");
+  const layer = machineLayer();
+  assert.ok(layer.includes(`version="${expected}"`), `the layer installs Node ${expected}`);
+  assert.deepEqual(
+    [...new Set([...layer.matchAll(/node-v?(\d+\.\d+\.\d+)/gi)].map((m) => m[1]))],
+    [],
+    "the layer must build its tarball name from the pinned version, never from a second literal"
+  );
 });
 
 test("the worker Dockerfile never names a second Node version", () => {

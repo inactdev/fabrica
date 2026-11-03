@@ -7,7 +7,8 @@
 // (runRecordedAnswer, src/foreman/answer.ts), which re-derives
 // everything it needs from recordHome/taskId alone.
 
-import { defaultBrainAdapter, readModelChoice, runRecordedAnswer } from "../index.ts";
+import { defaultBrainAdapter, readModelChoice, recordTaskFailure, runRecordedAnswer } from "../index.ts";
+import { requireMachineImageForTask } from "./machine-image.ts";
 import { prefixTaskLog } from "./task-log.ts";
 import { writeTaskPidFile } from "./task-process.ts";
 
@@ -33,8 +34,26 @@ writeTaskPidFile(recordHome, taskId);
 // like everything else this process needs.
 const declaredModel = readModelChoice(recordHome, taskId).declaredModel ?? undefined;
 
+// Issue #322: the same image this task's first round ran in, re-derived
+// from the project on its own record rather than threaded across the
+// process boundary - the same way the model above is. Built here if
+// Fabrica's own layer has moved since (a merge makes every project's
+// image stale at once), and refused here - on the record, as this task's
+// own failure - if that build fails, so this round is never started in a
+// box that is not there. Before `runRecordedAnswer`, so a refusal costs
+// no round; the answer itself is already recorded either way, and the
+// round stays resumable.
+let image: string | undefined;
 try {
-  await runRecordedAnswer(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel }) });
+  image = await requireMachineImageForTask(recordHome, taskId, { onOutput: (line) => console.error(line) });
+} catch (err) {
+  recordTaskFailure(recordHome, taskId, err);
+  console.error(`fabrica answer: resuming "${taskId}" failed: ${(err as Error).message}`);
+  process.exit(1);
+}
+
+try {
+  await runRecordedAnswer(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel, image }) });
 } catch (err) {
   console.error(`fabrica answer: resuming "${taskId}" failed: ${(err as Error).message}`);
   process.exit(1);

@@ -214,7 +214,30 @@ The one command this issue builds. What it does, in order:
    Whether that folder can be *used* is a different finding with a
    different fix, and belongs to the round's own gate and `fabrica
    doctor` (`src/inspector/terms.ts`).
-5. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
+5. **Refuses a project whose machine image cannot be built**, also
+   before anything is registered (`machine-image.ts`'s
+   `requireMachineImage`; issue #322's amendment, requirement 4). A
+   project that commits a `Dockerfile.inspector` works in an image of
+   its own, and if that image is missing or stale it is built here, now,
+   with docker's own output streaming to stderr and one line first
+   saying what the wait is for. If the build fails, the task is refused
+   with the build's own last line, exit 1, stdout empty - no task id, no
+   record, no round and no attempt.
+
+   Why here rather than inside the round: the first time issue #322
+   landed, every project needed an image that could not be built, and a
+   task on such a project would have discovered that somewhere inside a
+   round, after spending one. Only *this* project's image is ever touched
+   or waited on, so a project with a broken `Dockerfile.inspector` can
+   never hold up work on another. A project on the shared image reaches
+   docker not at all; one whose image is current costs a single
+   `docker image inspect`. The same call sits at the head of each
+   detached round too (`run-task-entry.ts`, `answer-entry.ts`,
+   `verdict-fix-entry.ts`), where a failure lands on the task's own
+   record as `task-failed` rather than on a terminal that has already
+   gone - that is the case where new code moved the layer between a
+   task's rounds. `machineImageIo` is the test-only seam for all of it.
+6. **Spawns the loop, detached** (`spawn-detached.ts`), and learns the
    new task's id the moment it's registered (`watch-for-task-id.ts`).
    The child's argv is three positionals - record home, project path,
    task text - then named flags for whatever is optional
@@ -233,7 +256,7 @@ The one command this issue builds. What it does, in order:
    delimited list in a single flag: a filesystem path is exactly the
    kind of value a delimiter would mangle, with nothing on the far side
    able to tell a mangled path from a deliberate one.
-6. **Waits, bounded, to see whether the task asks, proceeds, or fails**
+7. **Waits, bounded, to see whether the task asks, proceeds, or fails**
    (`wait-for-ask-outcome.ts`, issue #8): the detached process is still
    running `doTask` (`src/foreman/do.ts`), which now does register ->
    ask -> maybe isolate/work in one call (SPEC.md step 2, "Clarify-or-
@@ -293,7 +316,7 @@ depends on that exit code alone to know whether `$id` is worth trusting.
 
 A refusal at steps 1-3 exits non-zero with the message on stderr - safe
 to use in a script (`id=$(fabrica do "..." --project foo) || exit 1`).
-Once step 4 starts, this process's own exit code no longer reflects the
+Once step 6 starts, this process's own exit code no longer reflects the
 task's eventual outcome for the "proceeds" case, which is the nature of
 detachment: by design, nothing is left waiting around to report delivery
 or failure here - `fabrica status`/`log`/`watch` (below) are how you
@@ -547,8 +570,14 @@ refuse FAILs it, `no Inspector stamp` is reported for a `noStamp`
 project, and a project asking for its repository's own pull request
 template is told plainly when there is none to render into - not a FAIL,
 since such a project still works, but this is the one line the Client
-would look at), the caps,
-and any SPEND UNKNOWN block. `--live` adds one
+would look at), **the image each registered project's machine works in**
+on a second line of its own right after that project's
+(issue #322 - the project's `Dockerfile.inspector` with Fabrica's layer
+on top, or the shared image when it commits none; a FAIL when that image
+is missing or either input moved since it was built, plus the worker CLI
+version installed inside it against the one pin, read from the same
+`src/projectimage/` answer the round itself starts its box from), the
+caps, and any SPEND UNKNOWN block. `--live` adds one
 minimal real call with the worker token (a few cents) and reports it
 alive or dead. No check prints a token. The adapter-, relay-, App- and
 Inspector-specific checks live beside those modules
@@ -557,7 +586,7 @@ Inspector-specific checks live beside those modules
 `src/githubapp/doctor-checks.ts`,
 `src/inspector/doctor-checks.ts`); this command only prints them.
 
-### Supplying the two images instead of naming them (`--fix`, and `fabrica up`)
+### Supplying the images instead of naming them (`--fix`, and `fabrica up`)
 
 Two of doctor's lines used to end in a `docker` command for the Client
 to copy and run by hand - the worker image's `docker build` and the
@@ -607,6 +636,31 @@ Four details worth knowing before changing this:
   (BuildKit writes all its progress there), because a build takes
   minutes and a silent terminal for minutes is indistinguishable from a
   hang.
+
+A third kind of image joined those two with issue #322: **the image each
+registered project's own machine works in** - that project's
+`Dockerfile.inspector` with Fabrica's own layer on top, so the box a
+machine writes in carries the project's toolchain and its checks can
+actually run there. One `project <name> image` line per registered
+project, right after that project's own line
+(`src/projectimage/README.md` owns which image and why; this command
+only prints it), and a build `--fix`/`fabrica up` run themselves.
+
+It obeys every rule above, with two differences worth knowing:
+
+- **The decision rides on the check, as `DoctorCheck.needsBuild`.** The
+  two machine-wide plans re-read their own failing line; a per-project
+  line exists once per project, so there is no single probe behind a
+  fixed label to consult. `repairImages` reads that flag and nothing
+  else - a CLI version that disagrees with the pin inside an otherwise
+  current image sets it false, for exactly the `worker CLI` reasoning
+  above.
+- **The fix line is `fabrica doctor --fix`, not a `docker build`.** The
+  other two can print their command because it exists before it runs;
+  this one builds from a Dockerfile Fabrica generates, and generating it
+  is a write - which plain doctor must not do. So the build command is
+  resolved only when a build is actually wanted, and the file lands
+  under `<recordHome>/images/`.
 
 `fabrica doctor --fix` is deliberately **not** free from the chat agent:
 the shipped `skill/<harness>/settings.json` allows the exact string
@@ -1003,11 +1057,35 @@ browser-opener option, a direct spawn of the OS opener behind both their
 backs), and `up-command.test.ts` pins the full set of
 `refreshStaleLiveView` callers this command is one of.
 
+### Every project's machine image comes forward too
+
+Between Inspector and the live view, `fabrica update` builds each
+registered project's own machine image that needs it
+(`machine-image.ts`'s `buildRegisteredMachineImages`; issue #322's
+amendment, requirement 3). New Fabrica code can move the layer every one
+of those images is built with, so a merge makes all of them stale at
+once - and the first time issue #322 landed, it left every project
+needing an image that could not be built at all, which blocked every
+task on every project, including the ones that could have fixed it.
+Bringing them forward with the code is what closes that.
+
+Whether one needs building is `machineImageCurrency`'s answer, the same
+one `fabrica doctor`'s per-project line prints - not a second opinion
+formed here. This path deliberately does **not** go through
+`repairImages`: that starts from a full `collectDoctorChecks` run, which
+asks GitHub about every project's App installation and token, and this
+step has one question that needs no network.
+
+One project's build failing is named on stderr and fails nothing else -
+not this command (which still exits 0: Fabrica itself was updated) and
+not another project. Tasks on that project are refused until it is
+fixed, which is the next section.
+
 Unlike `fabrica up`, which prints a line per step, `fabrica update`
 prints exactly one summary line: the commit before and after, the
-installed Inspector before and after, whether the live view was
-restarted, started or left as is, and the next step, `fabrica up
---continue`.
+installed Inspector before and after, how many project machine images
+were built and how many failed, whether the live view was restarted,
+started or left as is, and the next step, `fabrica up --continue`.
 
 `fabrica update` is denied to the chat agent itself the same way
 `fabrica up` is (`skill-settings.test.ts`'s `NEVER_FROM_CHAT_COMMANDS`):
@@ -1533,8 +1611,9 @@ already recorded, and the response says `signaled: false`.
 | `verdict-fix-entry.ts` | The detached fix round's real entry point: picks the default adapter, writes the task's `worker.pid` (issue #203), calls `runRecordedFix`. |
 | `cost-command.ts` | `fabrica cost <taskId> <usd>` (issue #11): parses the figure strictly and calls `Foreman.recordCost`; `COST_HELP` is `cost --help`'s text. |
 | `load-config.ts` | `loadConfigOrDefault` - `projects.toml`, or no projects and no caps when there is none yet. **Throws** on a file that exists but will not parse, and must keep throwing: every command that reads caps through it (`do`, `answer`, `verdict`, `run-task`) spends real money and must refuse rather than quietly run uncapped. The Client's read-only surfaces - `doctor`, `status`, the live view - read `src/config/`'s `loadConfigOrProblem` instead, which hands back the same empty config plus the problem to print. Readers degrade loudly, spenders refuse. |
-| `doctor-command.ts` | `fabrica doctor`: runs the checks above as injectable `DoctorProbes` (tests never touch this machine's Docker, tokens or PATH) plus the per-project, caps and spend checks; `DOCTOR_HELP` is `doctor --help`'s text. A `projects.toml` that will not parse is one `FAIL projects.toml` line carrying the path, the line the parser stopped on and what it objected to, plus a `fix:` naming that line - every machine check still runs and prints, and only the three checks that genuinely need the file (projects, caps, spend) are skipped, so one broken file is one FAIL and not three. `collectDoctorChecks`'s `repair` hook is where `--fix` and `fabrica up` build the worker image and pull the relay image: it runs after every check except the live one, so that ordering is stated once rather than per caller. |
-| `image-repair.ts` | `repairImages` - the step behind `fabrica doctor --fix` and `fabrica up`'s own unasked version: builds the worker image and pulls the relay image when (and only when) their own doctor lines say they are missing or out of date, forwards docker's output line by line while it works, re-asks the same checks afterwards and reports one outcome per command run. Decides nothing about currency itself, and never throws. See "Supplying the two images instead of naming them" above for the four details that are easy to get wrong. |
+| `doctor-command.ts` | `fabrica doctor`: runs the checks above as injectable `DoctorProbes` (tests never touch this machine's Docker, tokens or PATH) plus the per-project, caps and spend checks; `DOCTOR_HELP` is `doctor --help`'s text. A `projects.toml` that will not parse is one `FAIL projects.toml` line carrying the path, the line the parser stopped on and what it objected to, plus a `fix:` naming that line - every machine check still runs and prints, and only the three checks that genuinely need the file (projects, caps, spend) are skipped, so one broken file is one FAIL and not three. `collectDoctorChecks`'s `repair` hook is where `--fix` and `fabrica up` build the worker image, pull the relay image and build each project's own machine image (issue #322, one `project <name> image` line per registered project): it runs after every check except the live one, so that ordering is stated once rather than per caller. |
+| `machine-image.ts` | Putting one project's machine image on this machine at the two moments `image-repair.ts` does not cover (issue #322's amendment): `requireMachineImage`/`requireMachineImageForTask` build it or throw a refusal carrying the build's own error - called in `fabrica do`'s foreground and at the head of each detached round, so a project whose box cannot be made costs no round and blocks no other project; `buildRegisteredMachineImages` does every registered project at once for `fabrica update`, one report each. Whether a build is needed is `machineImageCurrency`'s answer, never a second opinion formed here, and the `docker build` itself goes through `image-repair.ts`'s own `runImageCommand`. One injected `MachineImageIo` covers both machine-touching probes, so no test here reaches a daemon. |
+| `image-repair.ts` | `repairImages` - the step behind `fabrica doctor --fix` and `fabrica up`'s own unasked version: builds the worker image, pulls the relay image and builds each registered project's own machine image when (and only when) their own doctor lines say they are missing or out of date, forwards docker's output line by line while it works, re-asks the same checks afterwards and reports one outcome per command run. Decides nothing about currency itself, and never throws. See "Supplying the images instead of naming them" above for the details that are easy to get wrong. |
 | `status-command.ts` | The whole of `fabrica status` - it takes no arguments, so `parseStatusArgs` (the refusal) lives here rather than in its own file; `STATUS_HELP` is `status --help`'s text. One `cachedProcessTable` per run backs the worker-liveness reading (issue #99), so a whole listing costs one `ps`, not one per open task. A `projects.toml` that will not parse is printed on the listing's very first line and the listing then runs anyway (Client ruling): tasks come from the record, which needs no config, and the caps silently reading "no cap set" off an unreadable file is exactly what that line exists to prevent. Exit code stays 0 - this is a report, not a check, the same reason a task whose worker is gone doesn't fail it either. Each delivered row also carries `describeRead`'s phrase for the code reader's read of that task's diff (inspector issue #34), and the listing closes with `code reads that failed, on record: N` beside the blocked-edit count - a reader that cannot run is nearly always one fact about this machine rather than N facts about N tasks. |
 | `log-args.ts` | Parses `fabrica log`'s arguments (`<taskId>`, `--transcript`). |
 | `log-command.ts` | Prints one task's event history, and its transcript with `--transcript`; `LOG_HELP` is `log --help`'s text. |

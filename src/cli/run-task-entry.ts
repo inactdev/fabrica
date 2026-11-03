@@ -10,6 +10,7 @@
 // left to print to by the time this can fail).
 
 import { defaultBrainAdapter } from "../index.ts";
+import { requireMachineImage } from "./machine-image.ts";
 import { runTask } from "./run-task.ts";
 import { prefixTaskLog } from "./task-log.ts";
 import { parseTaskEntryArgs } from "./task-entry-args.ts";
@@ -35,10 +36,29 @@ try {
 // working directory, which this process does not share.
 const { recordHome, projectPath, taskText, issue, model, files } = args;
 
+// Issue #322: which image this project's machine works in - its own
+// check image with Fabrica's layer on top when it commits a
+// Dockerfile.inspector, so the box the work is written in carries the
+// project's own toolchain, and the shared image when it does not. Built
+// here if it is missing or stale, and refused here if that build fails
+// (issue #322's amendment, requirement 4), before anything is
+// registered - so a project whose image cannot be built costs no
+// attempt and no round rather than dying somewhere inside one.
+// `fabrica do`'s own foreground asks this first and reports it to the
+// terminal; by the time this process runs, the usual answer is one
+// `docker image inspect`.
+let image: string;
+try {
+  image = await requireMachineImage(recordHome, projectPath, { onOutput: (line) => console.error(line) });
+} catch (err) {
+  console.error(`fabrica do: task on "${projectPath}" failed: ${(err as Error).message}`);
+  process.exit(1);
+}
+
 try {
   // Issue #184: the declared model builds the worker here, and travels
   // on into doTask, which records it on the task and on every receipt.
-  await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome, { model }), {
+  await runTask(recordHome, projectPath, taskText, defaultBrainAdapter(recordHome, { model, image }), {
     // The task id does not exist until registration, and this process
     // is the only party that knows its own pid - so the pid file
     // (issue #203's `stop`) is written here, at the first moment both
