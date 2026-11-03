@@ -1,11 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.ts";
+import {
+  checkCommandFor,
+  checkScript,
+  inspectorConfigJson,
+  protectedPathsFor,
+  type TermsLocation,
+} from "./scaffold.ts";
 import { dependencyShapeFrom } from "./dockerfile.ts";
 import { RAILS_GEMFILE_LOCK } from "./helpers/rails-fixture.ts";
 import { RECORDED_CHECK } from "./origin.ts";
@@ -175,19 +181,92 @@ test("checkScript: a Ruby shape with no servers is still just the command", () =
 test("checkScript: the servers are started, waited for, stopped, and the command still comes last", () => {
   const script = checkScript("bundle exec rspec", railsShape());
 
-  assert.ok(script.includes("service postgresql start\n"), script);
-  assert.ok(script.includes("wait_for PostgreSQL pg_isready -q\n"), script);
-  assert.ok(script.includes(`redis-server --daemonize yes --save ''\n`), script);
+  assert.ok(script.includes(`$PGBIN/initdb' --username='$PGUSER' --auth=trust`), script);
+  assert.ok(script.includes(`wait_for PostgreSQL "$PGBIN/pg_isready" -q -h "$PGHOST"\n`), script);
+  assert.ok(script.includes(`redis-server --daemonize yes --save '' --appendonly no`), script);
   assert.ok(script.includes("wait_for Redis redis-cli ping\n"), script);
   // Stopped however the script ends, including a failing suite - and the
   // trap runs no exit of its own, so the suite's status survives it.
-  assert.ok(script.includes("trap stop_services EXIT\n"), script);
-  assert.ok(script.includes("service postgresql stop"), script);
+  assert.ok(script.includes("trap fabrica_cleanup EXIT\n"), script);
+  assert.ok(script.includes("pg_ctl' -D '$PGDATA' -m fast -w stop"), script);
   assert.ok(script.includes("redis-cli shutdown nosave"), script);
-  assert.ok(!/^\s*exit /m.test(script.split("stop_services() {")[1].split("}")[0]), "the trap must not exit");
+  assert.ok(!/^\s*exit /m.test(script.split("fabrica_cleanup() {")[1].split("}")[0]), "the trap must not exit");
   // The test database, then the suite, in that order and last.
   assert.ok(script.indexOf("bin/rails db:test:prepare") < script.indexOf("bundle exec rspec\n"), script);
   assert.ok(script.endsWith("bundle exec rspec\n"), script);
+});
+
+// ------------------------- issue #337: what the check box actually is
+
+// Every top-level path the repository tracks is mounted read-only in the
+// check box, directories included - so a Rails application's log/ and
+// tmp/ cannot be written at all. Nothing this script writes may be
+// inside the checkout.
+test("checkScript: everything a Rails check writes goes in a scratch directory, removed on the way out", () => {
+  const script = checkScript("bundle exec rspec", railsShape());
+
+  assert.ok(script.includes(`FABRICA_STATE=$(mktemp -d "\${TMPDIR:-/tmp}/fabrica-check-XXXXXX")\n`), script);
+  assert.ok(script.includes(`  rm -rf "$FABRICA_STATE"\n`), script);
+  // The two Rails writes that would otherwise land in the checkout.
+  assert.ok(script.includes(`BOOTSNAP_CACHE_DIR=$FABRICA_STATE/bootsnap\n`), script);
+  assert.ok(script.includes(`TMPDIR=$FABRICA_STATE/tmp\n`), script);
+  // Every path the servers write to is under it too - the data
+  // directory, both sockets, every log and pidfile.
+  for (const path of [
+    `PGDATA=$FABRICA_STATE/postgres/data`,
+    `PGHOST=$FABRICA_STATE/postgres/socket`,
+    `$FABRICA_STATE/postgres/initdb.log`,
+    `$FABRICA_STATE/postgres/server.log`,
+    `--dir "$FABRICA_STATE/redis"`,
+    `--pidfile "$FABRICA_STATE/redis/redis.pid"`,
+    `--logfile "$FABRICA_STATE/redis/redis.log"`,
+  ]) {
+    assert.ok(script.includes(path), `${path} is not under the scratch directory:\n${script}`);
+  }
+  // The environment has to be set before anything boots the
+  // application, and db:test:prepare boots it too.
+  assert.ok(script.indexOf("BOOTSNAP_CACHE_DIR=") < script.indexOf("bin/rails db:test:prepare"), script);
+});
+
+// Inspector runs the check as the uid of whoever invoked it - no
+// /etc/passwd entry - so nothing about PostgreSQL can be settled at
+// build time: the cluster has to be created here, by whoever is running,
+// and authentication cannot be the "peer" default that needs a user
+// name.
+test("checkScript: the cluster is created at check time, and never relies on a user name", () => {
+  const script = checkScript("bundle exec rspec", railsShape());
+
+  assert.ok(script.includes("--auth=trust"), script);
+  assert.doesNotMatch(script, /createuser/, script);
+  assert.doesNotMatch(script, /service postgresql/, script);
+  // PGUSER exported, because libpq's own default comes from the uid's
+  // passwd entry as well.
+  assert.ok(script.includes("export PGDATA PGHOST PGUSER\n"), script);
+  // The server binaries are found, not pinned to a major version, and a
+  // box without them fails here rather than on a connection error.
+  assert.ok(script.includes("PGBIN=$(ls -d /usr/lib/postgresql/*/bin"), script);
+  assert.ok(script.includes(`if [ ! -x "$PGBIN/initdb" ]; then`), script);
+  // pg_isready through PGBIN too: /usr/bin/pg_isready is Debian's
+  // pg_wrapper, which wants a cluster configuration this one is not.
+  assert.doesNotMatch(script, /wait_for PostgreSQL pg_isready/, script);
+});
+
+test("checkScript: a terms folder's script never cds to its own folder, and says why", () => {
+  const script = checkScript("bundle exec rspec", railsShape(), "folder");
+
+  assert.doesNotMatch(script, /cd "\$\(dirname "\$0"\)"\n/, script);
+  assert.ok(script.includes("/terms"), script);
+  assert.ok(script.includes("/workspace"), script);
+  // The repository route is unchanged, and still does cd.
+  assert.ok(checkScript("bundle exec rspec", railsShape()).includes(`cd "$(dirname "$0")"\n`));
+});
+
+test("inspectorConfigJson: a terms folder's check names the script where Inspector mounts it", () => {
+  assert.equal(JSON.parse(inspectorConfigJson({ terms: "folder" })).check, "sh /terms/check.sh");
+  assert.equal(JSON.parse(inspectorConfigJson({ terms: "repository" })).check, RECORDED_CHECK);
+  assert.equal(JSON.parse(inspectorConfigJson()).check, RECORDED_CHECK);
+  assert.equal(checkCommandFor("folder"), "sh /terms/check.sh");
+  assert.equal(checkCommandFor("repository"), RECORDED_CHECK);
 });
 
 /**
@@ -201,69 +280,113 @@ test("checkScript: the servers are started, waited for, stopped, and the command
  * need the built image, which is Inspector's to build. What it does
  * prove is that the script around them is a working script.
  */
-function runGeneratedCheck(opts: { suite: string; suiteExit: number; readyAfter?: number }): {
-  status: number;
-  log: string[];
-} {
+function runGeneratedCheck(opts: {
+  suite: string;
+  suiteExit: number;
+  readyAfter?: number;
+  terms?: TermsLocation;
+  /** What the stubbed `id -u` answers, i.e. which branch of `pg_as` the
+   * script takes for real. `0` is the rootless-Docker case, where
+   * Inspector runs the check as root inside the container's own user
+   * namespace, and `initdb`/`postgres` both refuse to be root. */
+  uid?: number;
+}): { status: number; log: string[]; stderr: string; scratchDirs: string[] } {
   const dir = mkdtempSync(join(tmpdir(), "fabrica-checkscript-"));
   const bin = join(dir, "stubs");
   mkdirSync(bin);
   mkdirSync(join(dir, "bin"));
   const log = join(dir, "log");
+  const pgbin = join(dir, "pgbin");
+  mkdirSync(pgbin);
 
   // `pg_isready` fails the first `readyAfter` times, so the waiting loop
   // is a loop that genuinely waits rather than one that happens to be
   // satisfied on its first pass.
   const stub = (name: string, body: string) => {
-    const path = name === "bin/rails" ? join(dir, name) : join(bin, name);
+    const path = name.includes("/") ? join(dir, name) : join(bin, name);
     writeFileSync(path, `#!/bin/sh\necho "${name} $*" >> "${log}"\n${body}\n`);
     chmodSync(path, 0o755);
   };
-  stub("service", "exit 0");
   stub(
-    "pg_isready",
+    "pgbin/pg_isready",
     `tries=$(cat "${join(dir, "tries")}" 2>/dev/null || echo 0)\n` +
       `echo $((tries + 1)) > "${join(dir, "tries")}"\n` +
       `[ "$tries" -ge ${opts.readyAfter ?? 0} ]`
   );
+  stub("pgbin/initdb", "exit 0");
+  stub("pgbin/postgres", "exit 0");
+  stub("pgbin/pg_ctl", "exit 0");
   stub("redis-server", "exit 0");
   stub("redis-cli", "exit 0");
   stub("bin/rails", "exit 0");
   stub("bundle", `exit ${opts.suiteExit}`);
+  // The two commands only the root branch reaches. `su` runs what it was
+  // given, so the script's own `sh -c` body still executes either way -
+  // which is the point: both branches have to really work.
+  stub("id", `echo ${opts.uid ?? 1001}`);
+  stub("chown", "exit 0");
+  stub("su", `shift 4\nexec /bin/sh -c "$1"`);
 
-  writeFileSync(join(dir, "check.sh"), checkScript(opts.suite, railsShape()));
+  // The one line that has to be rewritten rather than stubbed: the
+  // script globs Debian's own /usr/lib/postgresql, which no test may
+  // write into. Everything else about the PostgreSQL block - the
+  // guard, the quoting through pg_as, the backgrounded start, the stop
+  // in the trap - runs exactly as generated.
+  const generated = checkScript(opts.suite, railsShape(), opts.terms ?? "repository").replace(
+    "PGBIN=$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -n 1)",
+    `PGBIN=${pgbin}`
+  );
+  writeFileSync(join(dir, "check.sh"), generated);
   chmodSync(join(dir, "check.sh"), 0o755);
 
   const run = spawnSync("/bin/sh", [join(dir, "check.sh")], {
     encoding: "utf8",
+    cwd: dir,
     env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
   });
 
   return {
     status: run.status ?? -1,
+    stderr: run.stderr,
     log: (readFileSync(log, "utf8").trim().split("\n") ?? []).filter((line) => line.length > 0),
+    // Whatever the script made under the temporary directory it chose -
+    // read after it exited, so this is what survived its own cleanup.
+    scratchDirs: readdirSync(tmpdir()).filter((name) => name.startsWith("fabrica-check-")),
   };
+}
+
+/** The order of the real steps, with the readiness polling and the
+ * root-only `id`/`chown`/`su` bookkeeping filtered out: those are
+ * asserted separately, by their own tests. */
+function steps(log: string[]): string[] {
+  return log.filter((line) => !/^(?:pgbin\/pg_isready|id|chown|su)\b/.test(line));
 }
 
 test("the generated check.sh really runs: servers up, database prepared, suite run, servers stopped", () => {
   const { status, log } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit: 0, readyAfter: 2 });
 
   assert.equal(status, 0, log.join("\n"));
-  assert.deepEqual(
-    log.filter((line) => !line.startsWith("pg_isready")),
-    [
-      "service postgresql start",
-      "redis-server --daemonize yes --save ",
-      "redis-cli ping",
-      "bin/rails db:test:prepare",
-      "bundle exec rspec",
-      "service postgresql stop",
-      "redis-cli shutdown nosave",
-    ]
-  );
+  // Every real step, in order: the cluster created, the server started,
+  // Redis started and answering, the test database loaded, the suite
+  // run, then both servers stopped by the trap.
+  const expected = [
+    /^pgbin\/initdb --username=postgres --auth=trust -D /,
+    /^pgbin\/postgres -D /,
+    /^redis-server --daemonize yes --save {2}--appendonly no --dir /,
+    /^redis-cli ping$/,
+    /^bin\/rails db:test:prepare$/,
+    /^bundle exec rspec$/,
+    /^pgbin\/pg_ctl -D .* -m fast -w stop$/,
+    /^redis-cli shutdown nosave$/,
+  ];
+  const actual = steps(log);
+  assert.equal(actual.length, expected.length, actual.join("\n"));
+  for (const [index, pattern] of expected.entries()) {
+    assert.match(actual[index], pattern, `step ${index} of:\n${actual.join("\n")}`);
+  }
   // The wait is a real wait: pg_isready refused twice before answering,
   // and the script kept asking rather than carrying on regardless.
-  assert.equal(log.filter((line) => line.startsWith("pg_isready")).length, 3, log.join("\n"));
+  assert.equal(log.filter((line) => line.startsWith("pgbin/pg_isready")).length, 3, log.join("\n"));
 });
 
 // The half a `set -e` script gets wrong on its own: a failing suite
@@ -273,6 +396,56 @@ test("the generated check.sh stops the servers after a failing suite, and still 
   const { status, log } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit: 3 });
 
   assert.equal(status, 3, "the suite's own status is the check's status");
-  assert.ok(log.includes("service postgresql stop"), log.join("\n"));
+  assert.ok(
+    log.some((line) => line.startsWith("pgbin/pg_ctl")),
+    log.join("\n")
+  );
   assert.ok(log.includes("redis-cli shutdown nosave"), log.join("\n"));
+});
+
+// Issue #337. Not a hypothetical branch: under a rootless Docker daemon
+// Inspector resolves the check's user to 0:0, and initdb and postgres
+// both refuse to run as root - so under root the cluster has to be
+// handed to the postgres system user and su'd to. Proven by running it,
+// with `id` answering 0.
+test("the generated check.sh runs the cluster as the postgres user when the box is root", () => {
+  const { status, log } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit: 0, uid: 0 });
+
+  assert.equal(status, 0, log.join("\n"));
+  // Handed over first, su'd to second, and initdb still genuinely ran
+  // through it.
+  const chown = log.findIndex((line) => line.startsWith("chown -R postgres:postgres"));
+  const su = log.findIndex((line) => line.startsWith("su postgres"));
+  const initdb = log.findIndex((line) => line.startsWith("pgbin/initdb"));
+  assert.ok(chown >= 0 && su >= 0 && initdb >= 0, log.join("\n"));
+  assert.ok(chown < su && su < initdb, log.join("\n"));
+  // And the suite still ran, in the same order as any other box.
+  assert.ok(
+    steps(log).some((line) => line === "bundle exec rspec"),
+    log.join("\n")
+  );
+});
+
+test("the generated check.sh fails loudly, and early, in a box with no PostgreSQL in it", () => {
+  // The guard as generated, with nothing stubbed for it to find: the
+  // real glob of /usr/lib/postgresql, which this machine has none of.
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-checkscript-"));
+  writeFileSync(join(dir, "check.sh"), checkScript("bundle exec rspec", railsShape()));
+  chmodSync(join(dir, "check.sh"), 0o755);
+  const run = spawnSync("/bin/sh", [join(dir, "check.sh")], { encoding: "utf8", cwd: dir });
+
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /no PostgreSQL server binaries under \/usr\/lib\/postgresql/);
+  assert.match(run.stderr, /Dockerfile\.inspector/);
+});
+
+// The scratch directory is the whole answer to a read-only checkout, so
+// it has to actually be gone afterwards - on the failing path too, which
+// is the one a trap gets wrong.
+test("the generated check.sh leaves no scratch directory behind, pass or fail", () => {
+  const before = readdirSync(tmpdir()).filter((name) => name.startsWith("fabrica-check-"));
+  for (const suiteExit of [0, 3]) {
+    const { scratchDirs } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit });
+    assert.deepEqual(scratchDirs, before, `a scratch directory survived an exit ${suiteExit}`);
+  }
 });

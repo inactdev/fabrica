@@ -149,6 +149,21 @@ export function registerSummary(result: RegisterResult): string[] {
     lines.push(
       `  read all three, replace anything marked REPLACE-ME-with-..., and keep them beside the repository`
     );
+    // A file this run kept because it was already there, and which
+    // cannot pass a real Inspector run as it stands (issue #337). Said
+    // again, at the end, in its own line: a re-run against a folder
+    // written before that fix otherwise reports "left exactly as it is"
+    // among two other files that were written and reads as a success.
+    const old = (result.termsFiles ?? []).filter((file) => file.outcome === "kept-old-shape");
+    if (old.length > 0) {
+      lines.push(
+        `${old.length === 1 ? `One file` : `${old.length} files`} already in ${result.terms} ` +
+          `${old.length === 1 ? `is` : `are`} the shape \`fabrica register\` wrote before it knew what ` +
+          `Inspector does with a terms folder, and ${old.length === 1 ? `it cannot` : `they cannot`} pass a ` +
+          `check there: ${old.map((file) => file.file).join(", ")}. Nothing was overwritten - see each line ` +
+          `above for what is wrong with it and how to replace it.`
+      );
+    }
   } else if (result.kind === "full") {
     lines.push(`Opened a pull request setting ${result.name} up for Fabrica:`);
     lines.push(`  ${result.pullRequestUrl}`);

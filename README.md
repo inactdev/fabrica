@@ -354,11 +354,26 @@ allowed, three project settings move all of it out of the way:
 
 **`terms`** is a folder on this machine — outside the repository, and
 not inside a folder that contains it — holding those three files.
-Inspector is handed the folder and mounts it read-only into the check
-box; the repository stays exactly as it is, and Fabrica stops looking
-for any of the three in it. Fabrica never writes into the folder, and
-`fabrica register` never touches it: a work-mode project is registered
-by hand. A relative path is read as relative to `projects.toml`.
+Inspector is handed the folder and mounts it read-only at `/terms` in
+the check box, keeps the repository at `/workspace`, and runs the check
+from there; the repository stays exactly as it is, and Fabrica stops
+looking for any of the three in it. A relative path is read as relative
+to `projects.toml`.
+
+That mount is why the three files in a terms folder are not the three
+files a repository would commit. `fabrica register <path> --terms
+<folder>` writes them for you, derived from the repository exactly as
+the proposal it prints is, and in the shape Inspector can actually run:
+`.inspector.json` names `sh /terms/check.sh` rather than `./check.sh`,
+which from there would name a file in the repository; the script does
+not change into its own folder, since that folder is `/terms` and not
+the checkout; and `Dockerfile.inspector` reads the repository's own
+manifest and lockfile through `COPY --from=repo`, the named build
+context Inspector supplies, because the `docker build` context for a
+terms folder is the folder. Nothing already in the folder is ever
+overwritten — a file that is there is kept, and a re-run says plainly
+when a kept file is the older shape that cannot pass a check, and what
+to replace it with.
 
 **`noStamp = true`** means Inspector still pushes the branch and opens
 or updates the pull request on a green result, but posts no commit

@@ -190,7 +190,7 @@ test("register: a Rails project's committed files carry its servers, its gems an
   // The Client's own command, with the preamble the shape needs around
   // it - nothing about --check is paraphrased.
   const script = fileOnOriginBranch(dir, REGISTER_BRANCH, CHECK_SCRIPT);
-  assert.ok(script.includes("service postgresql start"), script);
+  assert.ok(script.includes("--auth=trust"), script);
   assert.ok(script.includes("bin/rails db:test:prepare"), script);
   assert.ok(script.trimEnd().endsWith("bundle exec rspec"), script);
 
@@ -198,10 +198,12 @@ test("register: a Rails project's committed files carry its servers, its gems an
   assert.ok(pr.body.includes("PostgreSQL and Redis are installed in"), pr.body);
 });
 
-// Fabrica's containment runs every container as the host user, and
-// starting those servers needs root - so this one route cannot prove
-// this one check shape, and the refusal has to say which of the two it
-// is rather than leaving a permission error to be puzzled over.
+// The servers are installed by Dockerfile.inspector, and this route's
+// one proving run never builds that file - it runs the check inside the
+// image --image names, where they are not installed at all. So this one
+// route cannot prove this one check shape, and the refusal has to say
+// which of the two it is rather than leaving a missing-server message to
+// be puzzled over.
 test("register: a failing check on a project with servers says why this route cannot prove it", async () => {
   const recordHome = tempHome();
   const dir = project({ inspector: false });
@@ -210,7 +212,11 @@ test("register: a failing check on a project with servers says why this route ca
   git(dir, ["commit", "-qm", "rails app"]);
   git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
   const tools = fakeRegisterTools({
-    check: () => ({ ran: true, exitCode: 1, output: "service postgresql start: Permission denied" }),
+    check: () => ({
+      ran: true,
+      exitCode: 1,
+      output: "check.sh: no PostgreSQL server binaries under /usr/lib/postgresql",
+    }),
   });
 
   await assert.rejects(
@@ -218,7 +224,7 @@ test("register: a failing check on a project with servers says why this route ca
     (err: unknown) => {
       assert.ok(err instanceof RegisterError);
       assert.equal(err.code, "check-failed");
-      assert.match(err.message, /PostgreSQL and Redis inside the box, which needs root/);
+      assert.match(err.message, /PostgreSQL and Redis inside the box, and they are installed by Dockerfile.inspector/);
       assert.match(err.message, /--terms/);
       return true;
     }

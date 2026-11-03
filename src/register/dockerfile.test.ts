@@ -156,15 +156,83 @@ test("inspectorDockerfile: the Ruby shape installs its servers and its gems at b
   // The pg gem's native extension wants libpq-fe.h, which libpq-dev is
   // what installs.
   assert.ok(text.includes("libpq-dev"), text);
-  // A role for the user the check runs as, created while the server is
-  // up at build time: Rails' own database.yml names no user, so a local
-  // socket connection is authenticated as whoever runs the check.
-  assert.ok(
-    ran.some((line) => line.includes(`su postgres -c "createuser -s root"`)),
-    text
-  );
   assert.ok(ran.includes(`COPY Gemfile Gemfile.lock .ruby-version ${DEPS_DIR}/`), text);
   assert.ok(ran.includes(`RUN cd ${DEPS_DIR} && bundle install`), text);
+});
+
+// Issue #337. The packages, and nothing else: Inspector runs the check
+// as the uid of whoever invoked it, which has no /etc/passwd entry and
+// is not the user this image is built as - so a cluster created here,
+// or a role created for the build user, is unusable at check time.
+// PostgreSQL in particular refuses a data directory it does not own.
+// What this replaced read as working right up until a real Inspector
+// ran it.
+test("inspectorDockerfile: the servers are installed and nothing about them is set up at build time", () => {
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({
+      packageLock: false,
+      goSum: false,
+      gemfileLock: RAILS_GEMFILE_LOCK,
+      railsBin: true,
+    }),
+  });
+  const ran = instructions(text);
+
+  assert.ok(
+    ran.some((line) => line.includes("apt-get install") && line.includes("postgresql")),
+    text
+  );
+  for (const line of ran) {
+    // `apt-get install ... redis-server` is the package, not a server
+    // being started, so the starting forms are what is named here.
+    if (line.includes("apt-get")) continue;
+    assert.doesNotMatch(line, /createuser/, `${line} creates a role for a user the check will not be`);
+    assert.doesNotMatch(line, /initdb|pg_createcluster/, `${line} creates a cluster the check cannot own`);
+    assert.doesNotMatch(
+      line,
+      /service postgresql|redis-server --|pg_ctl/,
+      `${line} starts a server at build time`
+    );
+  }
+  // And the file says why, so the next person to read it does not add
+  // one of those back.
+  assert.ok(text.includes("/etc/passwd"), text);
+});
+
+// Issue #337's third finding: with terms in a folder outside the
+// repository, Inspector resolves the docker build context against that
+// folder, which holds no Gemfile at all. The repository is reachable
+// only as the named build context Inspector supplies it as.
+test("inspectorDockerfile: a terms folder's install step copies from the named repo context", () => {
+  const shape = dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: RAILS_GEMFILE_LOCK,
+    rubyVersionFile: true,
+  });
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape,
+    repoFiles: "named-repo-context",
+  });
+
+  assert.ok(
+    instructions(text).includes(`COPY --from=repo Gemfile Gemfile.lock .ruby-version ${DEPS_DIR}/`),
+    text
+  );
+  // ...and says what `repo` is, since there is no multi-stage build
+  // anywhere in the file for a reader to tie it to.
+  assert.ok(text.includes("named build context"), text);
+
+  // The repository route is unchanged - it must not grow a dependency
+  // on inspector#81 it has no need for, since its own build context
+  // genuinely is the repository.
+  const inRepo = inspectorDockerfile({ from: "ruby:3.3.4", reason: "--image said so", shape });
+  assert.ok(instructions(inRepo).includes(`COPY Gemfile Gemfile.lock .ruby-version ${DEPS_DIR}/`), inRepo);
+  assert.doesNotMatch(inRepo, /--from=repo/, inRepo);
 });
 
 // Nothing in a Dockerfile can start a server for the check: a RUN is its
@@ -176,10 +244,6 @@ test("inspectorDockerfile: nothing in it leaves a server running", () => {
     shape: dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK }),
   });
 
-  for (const line of instructions(text)) {
-    if (!line.includes("postgresql start")) continue;
-    assert.ok(line.includes("postgresql stop"), `${line} starts the server and never stops it`);
-  }
   assert.ok(!instructions(text).some((line) => line.startsWith("CMD") || line.startsWith("ENTRYPOINT")), text);
 });
 

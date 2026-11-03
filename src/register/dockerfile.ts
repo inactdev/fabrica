@@ -57,24 +57,40 @@ export interface ShapeStep {
  * so there is no database or cache server to reach over one, and a
  * project whose suite needs them needs them inside the same container
  * (issue #324).
+ *
+ * Everything a service needs happens at **check time**, in `check.sh`,
+ * and nothing but installing its packages happens at build time. That
+ * is issue #337's finding, and it is not a style preference: Inspector
+ * runs the check as the uid of whoever invoked it (`docker run --user
+ * <uid>:<gid>`, its own `internal/container/user.go`), which is not the
+ * user the image was built as and has no `/etc/passwd` entry at all. So
+ * anything created at build time is owned by the wrong user, and
+ * PostgreSQL in particular refuses a data directory it does not own.
+ * The check-time uid is unknowable while the image is being built, and
+ * handing state over afterwards would need a root the check does not
+ * have.
  */
 export interface BoxService {
   /** How the file and the notes name it. */
   label: string;
   /** The Debian packages that install it. */
   packages: readonly string[];
-  /** `check.sh`: what starts it, in the background. */
-  start: string;
+  /**
+   * `check.sh`: the shell lines, in order, that prepare this server's
+   * own state under `$FABRICA_STATE` and start it. Lines, not one
+   * command, because preparing a server to run as an arbitrary uid is
+   * more than one step - and comments among them, because the next
+   * person to read this file will not have been here.
+   */
+  start: readonly string[];
   /** `check.sh`: argv of a command that succeeds once it answers.
    * Waited on rather than slept past - the first connection can be made
    * before the server is accepting one. */
   ready: readonly string[];
-  /** `check.sh`: what stops it again on the way out. */
-  stop: string;
-  /** `Dockerfile.inspector`: setup run as root at build time, once the
-   * packages are installed, for a service that needs any. `user` is the
-   * user the check itself runs as. */
-  buildSetup?: (user: string) => ShapeStep;
+  /** `check.sh`: the shell lines that stop it again, run from the EXIT
+   * trap. Each one carries its own redirection and `|| true`: the trap
+   * runs even when the server was never started. */
+  stop: readonly string[];
 }
 
 /**
@@ -112,10 +128,32 @@ export interface DependencyShape {
   /** Servers `check.sh` starts inside the box, waits for, and stops
    * again, since the box has no network to reach one over. */
   services?: readonly BoxService[];
+  /** Environment this shape's suite needs exported before it runs, and
+   * the reason, written into `check.sh` above it. Implies a scratch
+   * directory, the same way `services` and `prepare` do. */
+  runtimeEnv?: ShapeStep;
   /** One step `check.sh` runs after the services answer and before the
    * suite - the test database. */
   prepare?: ShapeStep;
 }
+
+/**
+ * Whether `check.sh` needs a writable scratch directory of its own for
+ * this shape - which is whenever anything in it writes at all. Nothing
+ * may write inside the checkout: Inspector mounts every top-level path
+ * the repository tracks read-only, and a read-only mount covers its
+ * whole subtree, so a new file in a tracked directory fails exactly as
+ * a modified one does (issue #337).
+ */
+export function needsScratchDir(shape: DependencyShape | null): boolean {
+  if (shape === null) return false;
+  return (shape.services ?? []).length > 0 || shape.runtimeEnv !== undefined || shape.prepare !== undefined;
+}
+
+/** The variable `check.sh` keeps that directory's path in. One name,
+ * used by the script that makes it and by every service line that
+ * writes under it. */
+export const SCRATCH_DIR_VAR = "FABRICA_STATE";
 
 const NPM: DependencyShape = {
   lockfile: PACKAGE_LOCK,
@@ -181,37 +219,97 @@ export const BROWSER_GEMS: readonly string[] = ["capybara", "selenium-webdriver"
  * connect to anything. */
 export const UNSERVED_DATABASE_GEMS: readonly string[] = ["mysql2", "trilogy"];
 
+/** Where Debian keeps PostgreSQL's *server* binaries - one directory
+ * per major version, and deliberately not on `PATH`: only the client
+ * tools get `pg_wrapper` symlinks in `/usr/bin`, and `initdb`,
+ * `postgres` and `pg_ctl` are not among them. */
+const POSTGRES_LIB_DIR = "/usr/lib/postgresql";
+
+/** The shell variable `check.sh` resolves that directory into once, and
+ * calls every PostgreSQL binary through - `pg_isready` included.
+ * `/usr/bin/pg_isready` is `pg_wrapper`, which reads a Debian cluster's
+ * own configuration to find a port, and the cluster `check.sh` creates
+ * is not one of those. */
+const PGBIN = "PGBIN";
+
 const POSTGRES: BoxService = {
   label: "PostgreSQL",
   // The server, its client tools (`pg_isready` among them), and the
   // `pg` gem's own build dependency: its native extension wants
   // libpq-fe.h, which is what libpq-dev installs.
   packages: ["postgresql", "libpq-dev"],
-  // Debian's SysV wrapper, which works in a container: `systemctl` needs
-  // a systemd there is none of, and the server itself may not run as
-  // root - this script su's to the postgres user for us.
-  start: "service postgresql start",
-  ready: ["pg_isready", "-q"],
-  stop: "service postgresql stop",
-  buildSetup: (user) => ({
-    note:
-      `PostgreSQL authenticates a connection over the local socket by asking the kernel which user opened it ` +
-      `(Debian's "peer" default) and then wants a role of that name - and a Rails config/database.yml names no ` +
-      `user at all, so that is whoever runs the check. The role is created here, while the server is up at ` +
-      `build time; it lives in the cluster's data directory, which is part of the image.`,
-    run: `service postgresql start && su postgres -c "createuser -s ${user}" && service postgresql stop`,
-  }),
+  start: [
+    `# Debian keeps PostgreSQL's server binaries out of PATH, one`,
+    `# directory per major version, so they are found here rather than`,
+    `# pinned to a version this file cannot know. A box with none fails`,
+    `# the check right here, naming what is missing, rather than further`,
+    `# down with a connection error.`,
+    `${PGBIN}=$(ls -d ${POSTGRES_LIB_DIR}/*/bin 2>/dev/null | sort -V | tail -n 1)`,
+    `if [ ! -x "$${PGBIN}/initdb" ]; then`,
+    `  echo "${CHECK_SCRIPT}: no PostgreSQL server binaries under ${POSTGRES_LIB_DIR} - the postgresql ` +
+      `package has to be installed in ${DOCKERFILE_INSPECTOR}" >&2`,
+    `  exit 1`,
+    `fi`,
+    ``,
+    `PGDATA=$${SCRATCH_DIR_VAR}/postgres/data`,
+    `PGHOST=$${SCRATCH_DIR_VAR}/postgres/socket`,
+    `PGUSER=postgres`,
+    `# PGUSER because libpq's own default user name comes from the uid's`,
+    `# /etc/passwd entry, and this box's uid has none (see below).`,
+    `export PGDATA PGHOST PGUSER`,
+    `mkdir -p "$PGDATA" "$PGHOST"`,
+    ``,
+    `# The cluster is created here, at check time, rather than baked`,
+    `# into the image: Inspector runs the check as the uid of whoever`,
+    `# invoked it, which is not the user this image was built as, and`,
+    `# PostgreSQL refuses a data directory it does not own. One created`,
+    `# here is owned by whoever is running, whoever that turns out to`,
+    `# be.`,
+    `#`,
+    `# "trust" over the local socket, for the same reason: the default`,
+    `# "peer" authentication asks the kernel which uid opened the socket`,
+    `# and then wants a role of that user's name - and that uid has no`,
+    `# /etc/passwd entry, so there is no name to find on either side.`,
+    `# Nothing outside this container can reach that socket: the check`,
+    `# box has no network at all, and this cluster listens on no TCP`,
+    `# port (-h '').`,
+    `pg_as() {`,
+    `  if [ "$(id -u)" = 0 ]; then`,
+    `    # initdb and postgres both refuse to run as root, so under root`,
+    `    # this hands the cluster to the postgres system user the`,
+    `    # package created. Not a hypothetical branch: under a rootless`,
+    `    # Docker daemon Inspector runs the check as root inside the`,
+    `    # container's own user namespace.`,
+    `    chown -R postgres:postgres "$${SCRATCH_DIR_VAR}/postgres"`,
+    `    su postgres -s /bin/sh -c "$1"`,
+    `  else`,
+    `    sh -c "$1"`,
+    `  fi`,
+    `}`,
+    `pg_as "'$${PGBIN}/initdb' --username='$PGUSER' --auth=trust -D '$PGDATA' > ` +
+      `'$${SCRATCH_DIR_VAR}/postgres/initdb.log' 2>&1"`,
+    `pg_as "'$${PGBIN}/postgres' -D '$PGDATA' -k '$PGHOST' -h '' >> ` +
+      `'$${SCRATCH_DIR_VAR}/postgres/server.log' 2>&1" &`,
+  ],
+  ready: [`"$${PGBIN}/pg_isready"`, `-q`, `-h`, `"$PGHOST"`],
+  stop: [`pg_as "'$${PGBIN}/pg_ctl' -D '$PGDATA' -m fast -w stop" >/dev/null 2>&1 || true`],
 };
 
 const REDIS: BoxService = {
   label: "Redis",
   packages: ["redis-server"],
-  // No config file, so this is the package's default port and no
-  // persistence: a check's Redis is a throwaway cache, and `--save ''`
-  // keeps it from writing a snapshot into the checkout.
-  start: `redis-server --daemonize yes --save ''`,
+  start: [
+    `# Redis needs no privileges and no state of its own, so it runs as`,
+    `# whoever the check runs as with nothing to arrange first.`,
+    `# Persistence is off, and its working directory, its pidfile and`,
+    `# its log are all in this run's scratch directory rather than in`,
+    `# the checkout, which is read-only.`,
+    `mkdir -p "$${SCRATCH_DIR_VAR}/redis"`,
+    `redis-server --daemonize yes --save '' --appendonly no --dir "$${SCRATCH_DIR_VAR}/redis" ` +
+      `--pidfile "$${SCRATCH_DIR_VAR}/redis/redis.pid" --logfile "$${SCRATCH_DIR_VAR}/redis/redis.log"`,
+  ],
   ready: ["redis-cli", "ping"],
-  stop: "redis-cli shutdown nosave",
+  stop: [`redis-cli shutdown nosave >/dev/null 2>&1 || true`],
 };
 
 /**
@@ -249,6 +347,24 @@ export function rubyShape(opts: {
     ...(services.length > 0 ? { services } : {}),
     ...(opts.railsBin === true
       ? {
+          // Issue #337's fourth finding, on the Rails side of it: every
+          // top-level path the repository tracks is mounted read-only in
+          // the check box, and `rails new` tracks both `log/` and
+          // `tmp/` (through `log/.keep` and `tmp/.keep`). Of the two
+          // things that write there, only one stops a boot.
+          runtimeEnv: {
+            note:
+              `A Rails application writes into log/ and tmp/, and both are read-only inside the check box. ` +
+              `Bootsnap is the one that stops a boot dead when its cache directory cannot be written, and it ` +
+              `takes an environment variable - so its cache, and anything else reaching for a temporary ` +
+              `directory, go in the scratch directory above instead. Rails' own logger needs nothing here: it ` +
+              `catches a log file it cannot open and falls back to stderr with a warning.`,
+            run:
+              `BOOTSNAP_CACHE_DIR=$${SCRATCH_DIR_VAR}/bootsnap\n` +
+              `TMPDIR=$${SCRATCH_DIR_VAR}/tmp\n` +
+              `export BOOTSNAP_CACHE_DIR TMPDIR\n` +
+              `mkdir -p "$BOOTSNAP_CACHE_DIR" "$TMPDIR"`,
+          },
           prepare: {
             note:
               `The test database, dropped and loaded from this repository's own schema. A Rails suite checks the ` +
@@ -408,20 +524,76 @@ function copiedFiles(shape: DependencyShape): string {
   return [shape.manifest, shape.lockfile, ...(shape.extraCopies ?? [])].join(" ");
 }
 
+/**
+ * The named build context Inspector hands every image build the
+ * repository under check as (inspector#81). Fixed, with no
+ * configuration key, in the same spirit as `/workspace` and `/terms`.
+ */
+export const REPO_BUILD_CONTEXT = "repo";
+
+/**
+ * How the install step's `COPY` reaches the repository's own manifest
+ * and lockfile.
+ *
+ * `"build-context"` is the plain `COPY`, for terms committed in the
+ * repository: the build context *is* the repository there, so those
+ * files are in it.
+ *
+ * `"named-repo-context"` is `COPY --from=repo`, for terms in a folder
+ * outside the repository (issue #337's third finding). Inspector
+ * resolves the `docker build` context against the terms folder, which
+ * holds no `Gemfile` and no `package-lock.json` - a plain `COPY` there
+ * fails the build on a file that is not missing from the repository at
+ * all, only from the folder. The repository is reachable from that
+ * build as the named context above, and only that way.
+ */
+export type RepoFilesSource = "build-context" | "named-repo-context";
+
+/** The `COPY` flag that reads from the repository, for a build whose own
+ * context is somewhere else. Empty for the in-repository case, which
+ * needs none. */
+function copyFrom(source: RepoFilesSource): string {
+  return source === "named-repo-context" ? `--from=${REPO_BUILD_CONTEXT} ` : ``;
+}
+
+/** The comment the named-context form needs above it - a reader meeting
+ * `--from=repo` with no multi-stage build anywhere in the file would
+ * otherwise have nothing to go on. */
+function copyFromNote(source: RepoFilesSource): string[] {
+  if (source === "build-context") return [];
+  return [
+    `#`,
+    ...comment(
+      `--from=${REPO_BUILD_CONTEXT}, not a plain COPY: this project's terms live in a folder outside the ` +
+        `repository, and Inspector resolves the docker build context against that folder - which holds none of ` +
+        `the files below. "${REPO_BUILD_CONTEXT}" is the named build context Inspector hands every build the ` +
+        `repository under check as, and the only way to reach it from here.`
+    ),
+  ];
+}
+
 /** The install step's own lines, with the ownership dance a non-root
  * image needs around them. `rooted` says the service lines above already
  * selected `USER root`, so the guidance about the image's default user
  * would be describing something that is no longer true. */
-function installLines(shape: DependencyShape, from: string, rooted: boolean): string[] {
+function installLines(
+  shape: DependencyShape,
+  from: string,
+  rooted: boolean,
+  repoFiles: RepoFilesSource
+): string[] {
   const user = knownNonRootUser(from);
   const caveat = shape.buildNote === undefined ? [] : [`#`, ...comment(shape.buildNote)];
+  const copy = copyFrom(repoFiles);
+  const note = copyFromNote(repoFiles);
   if (user !== null) {
     return [
       ...caveat,
+      ...note,
       `USER root`,
       `RUN mkdir -p ${DEPS_DIR} && chown -R ${user}:${user} ${DEPS_DIR}`,
       `USER ${user}`,
-      `COPY --chown=${user}:${user} ${copiedFiles(shape)} ${DEPS_DIR}/`,
+      `COPY ${copy}--chown=${user}:${user} ${copiedFiles(shape)} ${DEPS_DIR}/`,
       `RUN cd ${DEPS_DIR} && ${shape.install}`,
     ];
   }
@@ -430,7 +602,8 @@ function installLines(shape: DependencyShape, from: string, rooted: boolean): st
       ...caveat,
       `#`,
       ...comment(`This installs as root, which the USER root above selected.`),
-      `COPY ${copiedFiles(shape)} ${DEPS_DIR}/`,
+      ...note,
+      `COPY ${copy}${copiedFiles(shape)} ${DEPS_DIR}/`,
       `RUN cd ${DEPS_DIR} && ${shape.install}`,
     ];
   }
@@ -443,7 +616,8 @@ function installLines(shape: DependencyShape, from: string, rooted: boolean): st
     `#   USER root`,
     `#   RUN mkdir -p ${DEPS_DIR} && chown -R <user>:<user> ${DEPS_DIR}`,
     `#   USER <user>`,
-    `COPY ${copiedFiles(shape)} ${DEPS_DIR}/`,
+    ...note,
+    `COPY ${copy}${copiedFiles(shape)} ${DEPS_DIR}/`,
     `RUN cd ${DEPS_DIR} && ${shape.install}`,
   ];
 }
@@ -458,40 +632,37 @@ function installLines(shape: DependencyShape, from: string, rooted: boolean): st
  * check time - `check.sh` starts them, and this file only has to make
  * them installable.
  */
-function serviceLines(shape: DependencyShape, from: string): string[] {
+function serviceLines(shape: DependencyShape): string[] {
   const services = shape.services ?? [];
   if (services.length === 0) return [];
 
-  // The user the *check* runs as, which is who a build-time role or
-  // permission has to be created for. `root` is the assumption
-  // everywhere else in this file for an image this does not know, and
-  // the official Ruby image is one that genuinely runs as root.
-  const user = knownNonRootUser(from) ?? "root";
   const labels = services.map((service) => service.label).join(" and ");
   const one = services.length === 1;
   const them = one ? `it` : `them`;
   const packages = services.flatMap((service) => service.packages);
 
-  const lines = [
+  return [
     `#`,
     ...comment(
       `${labels} run inside the check box itself: it has no network, so there is no server to reach over one. ` +
-        `${CHECK_SCRIPT} starts ${them}, waits until ${one ? `it` : `each`} answers, and stops ${them} again. ` +
-        `Starting ${them} needs this box to run as root, which the image above does.`
+        `${CHECK_SCRIPT} starts ${them}, waits until ${one ? `it` : `each`} answers, and stops ${them} again.`
+    ),
+    `#`,
+    // Issue #337's fourth finding. What used to be here - a cluster
+    // started at build time and a superuser role created in it - was
+    // unusable at check time for exactly this reason, and read as
+    // working right up until a real Inspector ran it.
+    ...comment(
+      `Only the packages go in here. Nothing is initialized and nothing is started: Inspector runs the check as ` +
+        `the uid of whoever invoked it, which is not the user this image is built as and has no /etc/passwd ` +
+        `entry of its own, so anything created here would be owned by the wrong user - and PostgreSQL refuses a ` +
+        `data directory it does not own. ${CHECK_SCRIPT} creates what it needs, as whoever is running it.`
     ),
     `USER root`,
     `RUN apt-get update \\`,
     ` && apt-get install -y --no-install-recommends ${packages.join(" ")} \\`,
     ` && rm -rf /var/lib/apt/lists/*`,
   ];
-
-  for (const service of services) {
-    const setup = service.buildSetup?.(user);
-    if (setup === undefined) continue;
-    lines.push(`#`, ...comment(setup.note), `RUN ${setup.run}`);
-  }
-
-  return lines;
 }
 
 /**
@@ -509,16 +680,25 @@ export function inspectorDockerfile(opts: {
   from: string;
   reason: string;
   shape: DependencyShape | null;
+  /** Where the install step's `COPY` reads the repository's own manifest
+   * and lockfile from. Defaults to the plain build context, which is
+   * what terms committed in the repository want; a terms *folder* needs
+   * `"named-repo-context"` - see `RepoFilesSource`. */
+  repoFiles?: RepoFilesSource;
 }): string {
+  const repoFiles = opts.repoFiles ?? "build-context";
   const lines = [
     ...comment(
-      `The image Inspector builds and runs ./check.sh in. The check container has no network, so everything ` +
-        `that check needs is installed here, at build time, or already ships in the image below.`
+      `The image Inspector builds and runs this project's check in. The check container has no network, so ` +
+        `everything that check needs is installed here, at build time, or already ships in the image below.`
     ),
     `#`,
     ...comment(
-      `Written by \`fabrica register\`. Edit it here, in the repository, rather than anywhere in Fabrica - ` +
-        `Inspector rebuilds the box from this file.`
+      `Written by \`fabrica register\`. Edit it here, ` +
+        (repoFiles === "named-repo-context"
+          ? `in this project's own terms folder`
+          : `in the repository`) +
+        `, rather than anywhere in Fabrica - Inspector rebuilds the box from this file.`
     ),
     `#`,
     ...comment(`FROM: ${opts.reason}.`),
@@ -526,12 +706,12 @@ export function inspectorDockerfile(opts: {
   ];
 
   if (opts.shape !== null) {
-    const services = serviceLines(opts.shape, opts.from);
+    const services = serviceLines(opts.shape);
     lines.push(
       ...services,
       `#`,
       ...comment(`${opts.shape.note}.`),
-      ...installLines(opts.shape, opts.from, services.length > 0)
+      ...installLines(opts.shape, opts.from, services.length > 0, repoFiles)
     );
   } else {
     lines.push(

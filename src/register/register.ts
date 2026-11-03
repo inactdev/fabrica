@@ -319,23 +319,26 @@ export function registerWarnings(command: string, shape: DependencyShape | null)
 
 /**
  * The one likely cause this command can name for itself when a check
- * that starts its own servers fails the proving run (issue #324):
- * Fabrica's containment runs every container as the *host* user
- * (`src/containment/run.ts`'s `--user`), and starting PostgreSQL or
- * Redis needs root. Inspector's own box runs the image's own user, which
- * for the official Ruby image is root, so this is a limit of the proving
- * run rather than of the check - and a sentence saying so is worth more
- * than leaving a permission error to be puzzled over.
+ * that starts its own servers fails the proving run (issue #324, reason
+ * corrected by issue #337): the proving run runs the check inside the
+ * image `--image` names - the `FROM` line - and never builds
+ * `Dockerfile.inspector`, which is the file that installs PostgreSQL
+ * and Redis. So they are not there, and `check.sh` says so and stops.
+ *
+ * That is a limit of this route, not of the check: the script itself is
+ * written to work as whatever uid the check box runs as, which is what
+ * Inspector's own box needs.
  */
 function servicesCaveat(shape: DependencyShape | null): string {
   const services = shape?.services ?? [];
   if (services.length === 0) return ``;
   return (
-    ` This check starts ${services.map((service) => service.label).join(" and ")} inside the box, which needs ` +
-    `root - and this one proving run is deliberately run as your own user, not as root, so a permission error ` +
-    `below is this route's limit rather than a fault in the check. Commit ${INSPECTOR_CONFIG}, ${CHECK_SCRIPT} ` +
-    `and ${DOCKERFILE_INSPECTOR} yourself and register the repository again, or register it with --terms, and ` +
-    `let the first task's own red-or-green be the proof.`
+    ` This check starts ${services.map((service) => service.label).join(" and ")} inside the box, and they are ` +
+    `installed by ${DOCKERFILE_INSPECTOR} - which this one proving run does not build: it runs the check ` +
+    `inside the image --image names, where they are simply not installed, so a message below about a missing ` +
+    `server is this route's limit rather than a fault in the check. Commit ${INSPECTOR_CONFIG}, ` +
+    `${CHECK_SCRIPT} and ${DOCKERFILE_INSPECTOR} yourself and register the repository again, or register it ` +
+    `with --terms, and let the first task's own red-or-green be the proof.`
   );
 }
 

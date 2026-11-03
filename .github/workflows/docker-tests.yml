@@ -31,6 +31,22 @@
 # fails loudly instead of letting a Docker-less runner report a hollow
 # pass.
 #
+# THE INSPECTOR PIN (issue #337). This job also installs the real
+# `inspector` at one pinned commit, because src/register/inspector-e2e
+# .test.ts hands what `fabrica register` writes to the real thing and
+# reads its verdict out of its own report. That test does not skip for a
+# missing `inspector` - it fails - so a runner without it would turn
+# this job red for a reason that has nothing to do with the pull
+# request, which is why the install lives here and not in a contributor's
+# instructions.
+#
+# The pin is a full commit SHA, in the step below and nowhere else. It is
+# deliberately NOT watched by .github/workflows/pin-freshness.yml: the
+# point of a pin here is to hold one known build of Inspector still while
+# both sides of a paired change land, so an issue every week saying it is
+# behind `main` would be noise, not a finding. It moves when the Client
+# sends a round naming the commit to move it to.
+#
 # Runs on the ordinary `pull_request` trigger, not `pull_request_target`:
 # this job's whole purpose is to execute the pull request's own proposed
 # code, and it touches no secrets, so none of `pull_request_target`'s
@@ -121,8 +137,11 @@ jobs:
           # src/containment (the worker box itself), src/relay (the
           # switchboard's own container and network), src/line (worktree
           # git mounts, proven from inside a box), src/brain/adapters
-          # (the worker image and the adapter that runs in it), and
-          # Docker's own build inputs anywhere in the repository.
+          # (the worker image and the adapter that runs in it),
+          # src/register (the three files a check box is built and run
+          # from, handed to the real Inspector by
+          # src/register/inspector-e2e.test.ts), and Docker's own build
+          # inputs anywhere in the repository.
           #
           # One pattern per line, read with `read -r` rather than
           # word-split, exactly as rule9-gate.yml's own pattern lists
@@ -138,6 +157,7 @@ jobs:
             src/relay/*
             src/line/*
             src/brain/adapters/*
+            src/register/*
             Dockerfile
             */Dockerfile
             Dockerfile.*
@@ -266,6 +286,44 @@ jobs:
             echo "::error::Docker is not available on this runner. This job exists specifically to run Fabrica's Docker-dependent tests for real instead of letting them skip - a runner without Docker makes it a hollow pass, so failing loudly instead of reporting one."
             exit 1
           fi
+
+      # Inspector is a Go tool, not an npm package - README's own
+      # "Installing Inspector" section is the human-facing version of
+      # these two steps. The Go version is the minimum that section
+      # states Inspector needs.
+      - uses: actions/setup-go@v5
+        if: steps.gate.outputs.run_full == 'true'
+        with:
+          go-version: "1.22"
+
+      # THE PIN. One full commit SHA, here and nowhere else - see "THE
+      # INSPECTOR PIN" at the top of this file for why it is not watched
+      # for freshness, and who moves it.
+      #
+      # The SHA below is inspector `main` as of 2026-11-03, and is
+      # written once, in the command, so nothing can drift from it. It
+      # does NOT yet carry inspector#81's named `repo` build context, so
+      # src/register/inspector-e2e.test.ts's terms-route test fails
+      # against it - by Client ruling on issue #337 it must fail loudly
+      # rather than skip, until the pin moves to a commit that has it.
+      - name: Install the pinned Inspector
+        if: steps.gate.outputs.run_full == 'true'
+        run: |
+          go install github.com/inactdev/inspector/cmd/inspector@6b8ce49ed835b4985e1a29c060d6c400407ddc34
+          # `go install` puts it in GOBIN, or GOPATH/bin - neither is on
+          # PATH by default on a runner, and the e2e test looks for
+          # `inspector` on PATH.
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm the pinned Inspector is actually on PATH
+        if: steps.gate.outputs.run_full == 'true'
+        run: |
+          if ! command -v inspector > /dev/null 2>&1; then
+            echo "::error::\`inspector\` is not on PATH after installing it. src/register/inspector-e2e.test.ts fails rather than skips without it, so this would read as a Fabrica failure - failing here instead, where the cause is."
+            exit 1
+          fi
+          inspector --help > /dev/null 2>&1 || true
+          go version -m "$(command -v inspector)" | head -20
 
       - run: npm ci
         if: steps.gate.outputs.run_full == 'true'

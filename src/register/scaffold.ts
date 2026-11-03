@@ -7,14 +7,38 @@
 // `image` key and no `network` key: the check box is built from
 // `Dockerfile.inspector` (see dockerfile.ts) and has no network.
 
-import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK } from "./origin.ts";
+import {
+  CHECK_SCRIPT,
+  INSPECTOR_CONFIG,
+  RECORDED_CHECK,
+  TERMS_MOUNT,
+  TERMS_RECORDED_CHECK,
+} from "./origin.ts";
 import {
   DEPS_DIR,
   DOCKERFILE_INSPECTOR,
+  SCRATCH_DIR_VAR,
   SERVICE_WAIT_SECONDS,
   comment,
+  needsScratchDir,
   type DependencyShape,
 } from "./dockerfile.ts";
+
+/**
+ * Where this project's terms live, which decides two things about the
+ * files written for it: what `.inspector.json` may name as the check,
+ * and whether `check.sh` may `cd` to its own folder.
+ *
+ * `"repository"` - committed at the repository root, so `./check.sh` is
+ * the script and the script's own folder *is* the repository.
+ *
+ * `"folder"` - a folder outside the repository that Inspector mounts at
+ * `/terms` (work mode, issue #316). The check is `sh /terms/check.sh`,
+ * and `/terms` is emphatically not the repository: Inspector runs the
+ * check with the repository at `/workspace`, as its working directory,
+ * which is where the suite has to run from.
+ */
+export type TermsLocation = "repository" | "folder";
 
 /**
  * The paths a Worker may never quietly change. `check.sh`,
@@ -33,17 +57,35 @@ export function protectedPathsFor(extra: readonly string[]): string[] {
   return paths;
 }
 
+/**
+ * The check command `.inspector.json` names for terms in that place.
+ *
+ * The two are not interchangeable, and getting it wrong is silent until
+ * a real Inspector run (issue #337's first finding): `./check.sh`
+ * resolves against the check's working directory, which is the
+ * repository at `/workspace`, so from a terms folder it names
+ * `/workspace/check.sh` - a file a work-mode repository does not have
+ * and may never be given.
+ */
+export function checkCommandFor(terms: TermsLocation): string {
+  return terms === "folder" ? TERMS_RECORDED_CHECK : RECORDED_CHECK;
+}
+
 /** `.inspector.json`'s contents, pretty-printed with a trailing newline -
  * a file a human reads and edits later, not a blob. Key order follows
  * this repository's own .inspector.json, the one live example of the
  * schema in reach. */
 export function inspectorConfigJson(
   opts: {
-    /** The command that must pass. `./check.sh` unless told otherwise -
-     * which only `propose.ts` ever does, for a repository whose own
-     * evidence names an indirect command (`npm test`) and that has no
-     * check.sh for `register` to point at. */
+    /** The command that must pass. Defaults to whatever `terms` means:
+     * `./check.sh` in the repository, `sh /terms/check.sh` from a terms
+     * folder. Passing it explicitly is only `propose.ts`, for a
+     * repository whose own evidence names an indirect command (`npm
+     * test`) and that has no check.sh for `register` to point at. */
     check?: string;
+    /** Where this project's terms live, which decides the default
+     * `check` - see `TermsLocation`. Defaults to the repository. */
+    terms?: TermsLocation;
     /** Omitted from the document entirely when `undefined` - which is
      * not the same as an empty list: `[]` is "nothing is protected",
      * stated, and is what `register` writes when `protectedPathsFor`
@@ -56,7 +98,7 @@ export function inspectorConfigJson(
 ): string {
   return `${JSON.stringify(
     {
-      check: opts.check ?? RECORDED_CHECK,
+      check: opts.check ?? checkCommandFor(opts.terms ?? "repository"),
       // Written only when asked for. "Off" is the absence of the key,
       // never `timeoutSeconds: 0`: no live config shows that spelling,
       // and a value nothing has been seen to accept is not one to write
@@ -91,20 +133,104 @@ export function inspectorConfigJson(
  * that the box has no network to reach anything over. The command the
  * Client named still goes in verbatim, as the last line.
  */
-export function checkScript(command: string, shape: DependencyShape | null = null): string {
+export function checkScript(
+  command: string,
+  shape: DependencyShape | null = null,
+  terms: TermsLocation = "repository"
+): string {
   const header =
     `#!/bin/sh\n` +
     `# The one command that must pass for work on this project to be green.\n` +
     `# Written by \`fabrica register\`. Inspector runs this file, and so does\n` +
-    `# a worker's own box when no Inspector is installed - edit it here, in\n` +
-    `# the repository, rather than anywhere in Fabrica.\n` +
+    `# a worker's own box when no Inspector is installed - edit it here,\n` +
+    (terms === "folder"
+      ? `# in this project's own terms folder, rather than anywhere in Fabrica.\n`
+      : `# in the repository, rather than anywhere in Fabrica.\n`) +
     `set -e\n`;
 
   const preamble =
-    shape === null ? `` : `${linkPreamble(shape)}${servicePreamble(shape)}${preparePreamble(shape)}`;
+    shape === null
+      ? ``
+      : `${linkPreamble(shape)}${scratchPreamble(shape)}${servicePreamble(shape)}` +
+        `${runtimeEnvPreamble(shape)}${preparePreamble(shape)}`;
   if (preamble === ``) return `${header}${command}\n`;
 
-  return `${header}cd "$(dirname "$0")"\n${preamble}${command}\n`;
+  return `${header}${workingDirectory(terms)}${preamble}${command}\n`;
+}
+
+/**
+ * Getting this script into the repository, which is where every command
+ * below it runs.
+ *
+ * In the repository that is `cd "$(dirname "$0")"`: the script's own
+ * folder is the repository root, and a `cd` there makes the check
+ * independent of where it was invoked from.
+ *
+ * From a terms folder it is nothing at all, and that is issue #337's
+ * second finding: `$0` is `/terms/check.sh` there, so the same `cd`
+ * lands in the mounted terms folder, where there is no checkout, no
+ * `Gemfile` and no suite. Inspector already runs the check from
+ * `/workspace` - so what this needs is not a different `cd` but none,
+ * plus the sentence saying so.
+ */
+function workingDirectory(terms: TermsLocation): string {
+  if (terms === "repository") return `cd "$(dirname "$0")"\n`;
+  return (
+    `# There is deliberately no \`cd "$(dirname "$0")"\` here. This file\n` +
+    `# lives in this project's terms folder, which Inspector mounts at\n` +
+    `# ${TERMS_MOUNT} - not in the repository. Inspector runs the check with the\n` +
+    `# repository at /workspace and that as the working directory, which is\n` +
+    `# where everything below belongs; a cd to this file's own folder would\n` +
+    `# land outside the checkout. Run it from the repository root anywhere\n` +
+    `# else.\n`
+  );
+}
+
+/**
+ * The scratch directory everything this check writes goes in, removed
+ * again however the script ends (issue #337).
+ *
+ * It exists because the checkout is not writable: Inspector mounts every
+ * top-level path the repository tracks read-only, and a read-only mount
+ * covers its whole subtree - so even creating a new file in a tracked
+ * directory fails. A Rails application writing `log/test.log` is the
+ * case that found this.
+ *
+ * The cleanup is an `EXIT` trap that runs no `exit` of its own, so the
+ * suite's own status is still this script's status, and the servers
+ * below hang their own stop lines on the same trap rather than
+ * installing a second one.
+ */
+function scratchPreamble(shape: DependencyShape): string {
+  if (!needsScratchDir(shape)) return ``;
+  const services = shape.services ?? [];
+  return (
+    `\n` +
+    comment(
+      `Everything this check writes goes in here, and it is removed again on the way out. Nothing may write ` +
+        `inside the checkout: Inspector mounts every top-level path this repository tracks read-only, and that ` +
+        `covers whole directories - log/ and tmp/ included.`
+    ).join("\n") +
+    `\n` +
+    `${SCRATCH_DIR_VAR}=$(mktemp -d "\${TMPDIR:-/tmp}/fabrica-check-XXXXXX")\n` +
+    comment(
+      `Traversable by anyone, because a server started below may drop to a system user of its own (see ` +
+        `PostgreSQL). It holds no secrets - a throwaway database and a log.`
+    ).join("\n") +
+    `\n` +
+    `chmod 755 "$${SCRATCH_DIR_VAR}"\n` +
+    `\n` +
+    comment(
+      `However this script ends, including a failing suite below. The trap runs no exit of its own, so the ` +
+        `suite's status is still this script's status.`
+    ).join("\n") +
+    `\n` +
+    `fabrica_cleanup() {\n` +
+    services.flatMap((service) => service.stop).map((line) => `  ${line}\n`).join("") +
+    `  rm -rf "$${SCRATCH_DIR_VAR}"\n` +
+    `}\n` +
+    `trap fabrica_cleanup EXIT\n`
+  );
 }
 
 /** The `node_modules` half of the `/deps` mechanism - this repository's
@@ -148,16 +274,12 @@ function servicePreamble(shape: DependencyShape): string {
   const labels = services.map((service) => service.label).join(" and ");
   return (
     `\n` +
-    `# ${labels} run inside this same container: the check box has no\n` +
-    `# network, so there is no server to reach over one. See\n` +
-    `# ${DOCKERFILE_INSPECTOR} for how they got here.\n` +
-    `stop_services() {\n` +
-    services.map((service) => `  ${service.stop} >/dev/null 2>&1 || true\n`).join("") +
-    `}\n` +
-    `# However this script ends, including a failing suite below. The trap\n` +
-    `# runs no exit of its own, so the suite's status is still this\n` +
-    `# script's status.\n` +
-    `trap stop_services EXIT\n` +
+    comment(
+      `${labels} run inside this same container: the check box has no network, so there is no server to reach ` +
+        `over one. See ${DOCKERFILE_INSPECTOR} for how they got here, and the trap above for what stops them ` +
+        `again.`
+    ).join("\n") +
+    `\n` +
     `\n` +
     `# Waits for a server to answer rather than sleeping a fixed time: a\n` +
     `# connection can be made before the server is accepting one.\n` +
@@ -174,12 +296,23 @@ function servicePreamble(shape: DependencyShape): string {
     `    sleep 1\n` +
     `  done\n` +
     `}\n` +
-    `\n` +
     services
-      .map((service) => `${service.start}\nwait_for ${service.label} ${service.ready.join(" ")}\n`)
+      .map(
+        (service) =>
+          `\n${service.start.join("\n")}\nwait_for ${service.label} ${service.ready.join(" ")}\n`
+      )
       .join("") +
     `\n`
   );
+}
+
+/** What the suite needs in its environment before anything runs it -
+ * for a Rails application, the writable directories it would otherwise
+ * look for inside the read-only checkout. Before `preparePreamble`,
+ * since `bin/rails db:test:prepare` boots the application too. */
+function runtimeEnvPreamble(shape: DependencyShape): string {
+  if (shape.runtimeEnv === undefined) return ``;
+  return `${comment(shape.runtimeEnv.note).join("\n")}\n${shape.runtimeEnv.run}\n\n`;
 }
 
 /** The one step between the servers answering and the suite running -

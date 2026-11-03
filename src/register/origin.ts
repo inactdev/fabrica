@@ -29,9 +29,33 @@ export const CHECK_SCRIPT = "check.sh";
  * and refuse, rather than quietly opening a second pull request. */
 export const REGISTER_BRANCH = "fabrica/register";
 
-/** The check command recorded in projects.toml and named by
- * .inspector.json - `./check.sh`, whichever path register took. */
+/** The check command recorded in projects.toml, and the one
+ * `.inspector.json` names when the terms are committed in the
+ * repository: `./check.sh`, resolved against the repository, which
+ * Inspector puts at `/workspace` and makes the check's own working
+ * directory. */
 export const RECORDED_CHECK = `./${CHECK_SCRIPT}`;
+
+/**
+ * Where Inspector mounts a terms folder: read-only, at this one fixed
+ * path, with no configuration key pointing anywhere else (Inspector's
+ * README, terms section - the same kind of fixed path `/workspace`
+ * itself is).
+ */
+export const TERMS_MOUNT = "/terms";
+
+/**
+ * The check `.inspector.json` names when this project's terms live in a
+ * folder outside the repository - `sh /terms/check.sh` (issue #337).
+ *
+ * Never `./check.sh` there: that resolves against the check's working
+ * directory, which is the repository, and a work-mode repository is one
+ * nothing may be committed to - so `/workspace/check.sh` is a file it
+ * does not have. The script Inspector is meant to run is the one in the
+ * mounted folder, and the only way to name it is by its path inside the
+ * box.
+ */
+export const TERMS_RECORDED_CHECK = `sh ${TERMS_MOUNT}/${CHECK_SCRIPT}`;
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();

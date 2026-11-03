@@ -22,7 +22,21 @@
 //     this task: "keep existing files, write only what's missing"). The
 //     write is a `wx` open per file, so "already there" is the
 //     filesystem's own answer rather than a question asked before a
-//     write that could race it.
+//     write that could race it. A kept file is still *read*, for one
+//     question: whether it is the shape this route wrote before issue
+//     #337, which cannot pass a real Inspector run. That is reported in
+//     the file's own line and again as its own sentence - see
+//     `oldShapeProblem` below.
+//
+// What Inspector does with this folder is the whole reason the three
+// files differ from the ones committed into a repository (issue #337).
+// It mounts the folder read-only at `/terms`, keeps the repository at
+// `/workspace`, runs the check from there, and resolves the `docker
+// build` context against the folder. So: the config names
+// `sh /terms/check.sh`, the script does not `cd` to its own folder, and
+// the Dockerfile reaches the repository's own manifest and lockfile
+// through the named `repo` build context. Each of the three is derived
+// by the same code the repository route uses, told where the terms are.
 //
 // What it deliberately does NOT do: prove the check. The repository
 // route runs `./check.sh` inside `--image` before it pushes anything,
@@ -32,13 +46,23 @@
 // nothing, and says so rather than implying a setup that has been
 // tested.
 
-import { chmodSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { RegisterError } from "./errors.ts";
-import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK } from "./origin.ts";
-import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
+import { CHECK_SCRIPT, INSPECTOR_CONFIG, TERMS_MOUNT, TERMS_RECORDED_CHECK } from "./origin.ts";
+import {
+  DOCKERFILE_INSPECTOR,
+  GEMFILE,
+  GEMFILE_LOCK,
+  GO_MOD,
+  GO_SUM,
+  PACKAGE_JSON,
+  PACKAGE_LOCK,
+  REPO_BUILD_CONTEXT,
+  RUBY_VERSION_FILE,
+} from "./dockerfile.ts";
 import { IMAGE_PLACEHOLDER_PREFIX, deriveProposal, type ProposalSignals } from "./propose.ts";
-import { checkScript, inspectorConfigJson } from "./scaffold.ts";
+import { checkCommandFor, checkScript, inspectorConfigJson } from "./scaffold.ts";
 
 /**
  * The marker a file carries where no signal could supply the value - the
@@ -55,6 +79,14 @@ export type TermsFileOutcome =
   | "written"
   /** It was already in the folder, and was left exactly as it is. */
   | "kept"
+  /**
+   * It was already in the folder, was left exactly as it is, **and is
+   * the shape `fabrica register` wrote before issue #337** - which
+   * cannot pass a real Inspector run. Still kept, because nothing here
+   * overwrites a file the Client may have edited; named loudly instead,
+   * with what is wrong with it and how to replace it.
+   */
+  | "kept-old-shape"
   /** `check.sh` only: the repository carries its own at its root, which
    * is the file `.inspector.json` names, so writing a second one here
    * would be a silent fork of it. */
@@ -151,15 +183,28 @@ export function writeTerms(opts: {
   signals: ProposalSignals;
   projectPath: string;
 }): TermsResult {
-  const derived = deriveProposal(opts.signals);
+  // Derived for a terms *folder*, which is what changes two of the three
+  // files (issue #337): Inspector resolves the check command, the
+  // script's own location and the docker build context against this
+  // folder rather than against the repository.
+  const derived = deriveProposal(opts.signals, { terms: "folder" });
   const { check, dependencies, image, protectedPaths } = derived;
 
-  // `.inspector.json` names `./check.sh` here whatever the signals said,
-  // unlike the printed proposal, which can name `npm test` because it
-  // writes no script for that command to live in. This route does write
-  // one, so the derived command goes inside it and the config, the
-  // script and projects.toml all name the same thing.
+  // Which of the two spellings the config names follows the one thing
+  // that decides it: where the script Inspector has to run actually is.
+  // Almost always this folder, so `sh /terms/check.sh`. The exception is
+  // a repository that already carries its own `check.sh` at its root -
+  // nothing is written here then, and that file is at /workspace in the
+  // check box, which is exactly what `./check.sh` names.
+  const scriptIn = check.source === "repository-script" ? "repository" : "folder";
+
+  // The config names the script, never the command, unlike the printed
+  // proposal, which can name `npm test` because it writes no script for
+  // that command to live in. This route does write one, so the derived
+  // command goes inside it and the config, the script and the folder all
+  // name the same thing.
   const config = inspectorConfigJson({
+    terms: scriptIn,
     ...(derived.timeoutSeconds !== undefined ? { timeoutSeconds: derived.timeoutSeconds } : {}),
     ...(protectedPaths.paths !== undefined ? { protectedPaths: protectedPaths.paths } : {}),
   });
@@ -170,7 +215,9 @@ export function writeTerms(opts: {
   try {
     files.push(
       writeIfMissing(opts.terms, INSPECTOR_CONFIG, config, written, {
-        written: `asks Inspector to judge work on this repository, and names ${RECORDED_CHECK}`,
+        written:
+          `asks Inspector to judge work on this repository, and names ` +
+          `${checkCommandFor(scriptIn)}`,
         kept: `was already in this folder - left exactly as it is`,
       })
     );
@@ -185,7 +232,8 @@ export function writeTerms(opts: {
         outcome: "repository-has-its-own",
         detail:
           `not written: ${opts.projectPath} already carries its own ${CHECK_SCRIPT} at its root, which is the ` +
-          `file ${RECORDED_CHECK} names - a second one here would be a silent fork of it`,
+          `file ${checkCommandFor("repository")} names inside the check box - a second one here would be a ` +
+          `silent fork of it`,
       });
     } else {
       const declared = check.source === "declared-command";
@@ -199,7 +247,7 @@ export function writeTerms(opts: {
           `echo "${CHECK_SCRIPT}: no command has been written here yet - nothing in the repository named ` +
           `one." >&2\n` +
           `exit 1`;
-      const result = writeIfMissing(opts.terms, CHECK_SCRIPT, checkScript(body, dependencies.shape), written, {
+      const result = writeIfMissing(opts.terms, CHECK_SCRIPT, checkScript(body, dependencies.shape, "folder"), written, {
         written: declared
           ? `holds the one command that has to pass: ${check.scriptCommand ?? check.command}`
           : `fails until you write the command in it - nothing in the repository named one, and a stub that ` +
@@ -249,7 +297,12 @@ export function writeTerms(opts: {
 
 /** One file, written only if the folder does not already have it. The
  * `wx` flag is what makes that a single operation rather than a question
- * followed by a write that could race the answer. */
+ * followed by a write that could race the answer.
+ *
+ * A file that was already there is read back for exactly one question -
+ * whether it is the shape that cannot pass Inspector (see
+ * `oldShapeProblem`). Still never overwritten; named instead.
+ */
 function writeIfMissing(
   terms: string,
   file: string,
@@ -262,10 +315,134 @@ function writeIfMissing(
     writeFileSync(path, contents, { flag: "wx" });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      const problem = oldShapeProblem(file, readFileOrNull(path));
+      if (problem !== null) {
+        return {
+          file,
+          outcome: "kept-old-shape",
+          detail:
+            `left exactly as it is, and it cannot pass Inspector as it stands: ${problem} Delete ` +
+            `${join(terms, file)} and run this command again to have the current one written in its place - ` +
+            `remove this project's own entry from projects.toml first if it is already registered, since ` +
+            `\`fabrica register\` refuses a project it has already recorded.`,
+        };
+      }
       return { file, outcome: "kept", detail: detail.kept };
     }
     throw err;
   }
   written.push(path);
   return { file, outcome: "written", detail: detail.written };
+}
+
+/**
+ * Why a file already in a terms folder cannot pass a real Inspector run,
+ * or `null` when nothing here can see anything wrong with it.
+ *
+ * All three answers are the shape `fabrica register --terms` wrote
+ * before issue #337, and every one of them was silent: the folder looked
+ * complete, `fabrica doctor` passed it, and the failure arrived as a red
+ * or refused first task. One sentence each, saying what Inspector does
+ * with the file rather than what Fabrica would have written instead.
+ *
+ * Deliberately conservative - it answers from one fact per file, not
+ * from a diff against today's output. A Client who has edited his own
+ * terms must not be told they are "the old shape" because a comment
+ * moved, and a folder nothing is wrong with must not be rewritten.
+ */
+export function oldShapeProblem(file: string, contents: string | null): string | null {
+  if (contents === null) return null;
+
+  if (file === INSPECTOR_CONFIG) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents);
+    } catch {
+      // An unparseable config is Inspector's own refusal to make, and
+      // `config-check.ts` already names it on every round - not this
+      // function's finding to claim as the old shape.
+      return null;
+    }
+    const check = (parsed as { check?: unknown } | null)?.check;
+    if (typeof check !== "string" || check.trim().length === 0) return null;
+    // Anything naming a path inside the mount is this folder's own
+    // script, however it is spelled (`sh /terms/check.sh`, `/terms/
+    // check.sh`, `bash /terms/suite.sh`).
+    if (check.includes(`${TERMS_MOUNT}/`)) return null;
+    // And anything that does not name this route's own script is the
+    // Client's own call: `npm test` as a terms check works perfectly
+    // well, since Inspector runs it from the repository. The one broken
+    // shape is a `check.sh` resolved against the repository, which is
+    // what this route used to write and what the repository has none of.
+    if (!check.includes(CHECK_SCRIPT)) return null;
+    return (
+      `its "check" is ${JSON.stringify(check)}, which Inspector resolves against the repository at /workspace, ` +
+      `not against this folder - and this repository has no ${CHECK_SCRIPT} of its own, which is why its terms ` +
+      `are here. It needs to name the script where Inspector actually mounts it: ` +
+      `${JSON.stringify(TERMS_RECORDED_CHECK)}.`
+    );
+  }
+
+  if (file === CHECK_SCRIPT) {
+    if (!/\bcd\s+"\$\(dirname\s+"\$0"\)"/.test(contents)) return null;
+    return (
+      `it begins by changing into its own folder (\`cd "$(dirname "$0")"\`), which inside the check box is ` +
+      `${TERMS_MOUNT} - the mounted terms folder, where there is no checkout and no suite. Inspector already ` +
+      `runs the check from /workspace, the repository, so that line has to go rather than be corrected.`
+    );
+  }
+
+  if (file === DOCKERFILE_INSPECTOR) {
+    // Only a `COPY` of a file the *repository* supplies. A terms
+    // Dockerfile copying one of its own siblings is legitimate and
+    // common - that folder genuinely is the build context - so a bare
+    // "has a COPY with no --from" would flag a working file.
+    const plainCopy = contents
+      .split("\n")
+      .map((line) => line.trim())
+      .find(
+        (line) =>
+          /^(?:COPY|ADD)\s/i.test(line) &&
+          !/--from=/i.test(line) &&
+          REPOSITORY_SUPPLIED_FILES.some((name) => line.split(/\s+/).includes(name))
+      );
+    if (plainCopy === undefined) return null;
+    return (
+      `it reads the repository's own files straight from the build context (\`${plainCopy}\`), and for a terms ` +
+      `folder that context is this folder - Inspector resolves the build against it, so those files are not ` +
+      `there and the image build fails on them. They have to come through the \`${REPO_BUILD_CONTEXT}\` build ` +
+      `context Inspector supplies the repository as: \`--from=${REPO_BUILD_CONTEXT}\`.`
+    );
+  }
+
+  return null;
+}
+
+/**
+ * The repository-root files an install step copies in - every manifest,
+ * lockfile and extra copy any shape this module recognizes names. These
+ * are exactly the paths a terms folder does not have, and so exactly the
+ * `COPY` sources that have to come through the named `repo` build
+ * context.
+ */
+const REPOSITORY_SUPPLIED_FILES: readonly string[] = [
+  PACKAGE_JSON,
+  PACKAGE_LOCK,
+  GO_MOD,
+  GO_SUM,
+  GEMFILE,
+  GEMFILE_LOCK,
+  RUBY_VERSION_FILE,
+];
+
+/** A file's contents, or `null` when it cannot be read. A folder entry
+ * that exists but is unreadable is not an old-shape finding: nothing can
+ * be said about a file nobody can read, and saying it anyway would be a
+ * guess. */
+function readFileOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
 }
