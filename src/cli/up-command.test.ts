@@ -1115,6 +1115,7 @@ function updateProbesMoving(world: ReturnType<typeof liveViewWorld>, to: string 
       build: () => null,
       mainCommit: () => null,
       ancestry: () => "unknown",
+      directoryOnPath: () => null,
       install: () => {
         throw new Error("must not install an Inspector in a live-view test");
       },

@@ -371,6 +371,11 @@ src/inspector/consumer-contract.json: src/inspector/run.test.ts
 src/inspector/contract-sync-workflow.test.ts: src/inspector/contract-sync-workflow.test.ts
 src/inspector/doctor-checks.test.ts: src/inspector/doctor-checks.test.ts
 src/inspector/doctor-checks.ts: src/inspector/doctor-checks.test.ts
+# Hand-added: the barrel has no colocated test of its own, so the
+# generator left it out - but a capability dropped from it fails
+# somewhere under src/cli/ instead, far from the edit. These two are the
+# suites that read what it re-exports.
+src/inspector/index.ts: src/inspector/doctor-checks.test.ts, src/inspector/version.test.ts
 src/inspector/run.test.ts: src/inspector/run.test.ts
 src/inspector/run.ts: src/inspector/run.test.ts
 src/inspector/terms.test.ts: src/inspector/terms.test.ts

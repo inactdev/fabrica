@@ -310,16 +310,23 @@ export type { ReadFinding, ReaderOnDelivery, ReaderResolution, ResolvedReader } 
 // installed Inspector's own build, main's tip, how the two are ordered,
 // and the one classifier doctor's inspector line branches on too, so
 // neither can call a binary current that the other just replaced.
+// It also owns where that install lands (issue #339): Go's own GOBIN is
+// not the directory PATH resolves `inspector` in on every host, so the
+// install is pointed at the one that is, and read back afterwards.
 export {
   goInstallInspector,
   inspectorInstallCommand,
+  inspectorInstallTarget,
   inspectorVersionCheck,
   realInspectorVersionProbes,
+  sameCommit,
   INSPECTOR_MODULE_PATH,
 } from "./inspector/index.ts";
 export type {
   CommitAncestry,
   InspectorBuild,
+  InspectorInstallResult,
+  InspectorInstallTarget,
   InspectorVersionProbes,
   InspectorVersionState,
 } from "./inspector/index.ts";

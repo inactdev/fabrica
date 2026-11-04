@@ -1020,6 +1020,60 @@ untouched, and still exits 0 with Fabrica's own update intact. The
 summary line reports what really happened to it either way - `inspector
 <before> -> <after>`, or what was left alone and why.
 
+#### Where that install lands, and why it is checked afterwards
+
+`go install` puts its binary in **Go's own GOBIN** (`$GOBIN`, else
+`$(go env GOPATH)/bin`), which has nothing to do with which `inspector`
+`PATH` resolves. On a host whose dotfiles install Inspector into a
+directory of their own and put *that* on `PATH`, those are two different
+places: the install exits 0, writes a perfectly good binary into a
+directory nothing on the machine ever runs from, and leaves every
+Fabrica task still calling the old one. That was issue #339, observed on
+a real host - and the summary line reported it as `inspector <sha> ->
+<same sha>`, an ordinary result, because the "after" read came from the
+binary `PATH` resolves, which nothing had touched.
+
+Two changes close it, and they belong on different sides of the seam:
+
+- **Aim.** `src/inspector/version.ts`'s `goInstallInspector` resolves
+  `inspector` on `PATH` the same way `fabrica doctor`'s own inspector
+  line does, and runs the install with `GOBIN` set to the directory that
+  binary lives in. GOBIN is Go's documented first choice of install
+  directory, honoured by the `pkg@version` form like every other, so
+  this *pins* the destination rather than working around it. A GOBIN
+  that can't be written fails the install loudly, with Go's own words -
+  which is strictly better than succeeding into a directory nobody
+  reads. Only when there is no `inspector` on `PATH` at all does it fall
+  back to Go's own GOBIN (read with `go env GOBIN GOPATH`, because
+  either may live in Go's own config file rather than the environment),
+  and the summary then says plainly whether that directory is on `PATH`.
+- **Check.** `update-command.ts` re-reads the build of the inspector
+  `PATH` resolves after the install and compares it against the commit
+  that was asked for, with the same prefix-aware `sameCommit` the
+  freshness classifier uses (a pseudo-version carries only the first 12
+  hex). Not reaching it is its own outcome - `inspector INSTALL DID NOT
+  TAKE: <sha> went into <dir>, but PATH still resolves inspector in
+  <other dir>` - which keeps the existing ruling (the Inspector step
+  never fails the whole update) while making sure it can never *read*
+  as success.
+
+The install directory is the directory the PATH lookup landed in, spelled
+absolutely (a relative `PATH` entry is legal, and `go install` refuses a
+relative `GOBIN` outright) and with no `realpath`. If that directory
+holds a symlink into Go's GOBIN, the install is still aimed at the
+directory `PATH` reads: following the link would aim it straight back
+into the directory the host deliberately pointed away from. Whether Go
+then leaves a real binary in place of the link or rewrites the link's own
+target isn't assumed either way - the read-back above is what settles
+whether the install took.
+
+For the same reason, every `FAIL` on `fabrica doctor`'s inspector line
+now prints `fabrica update` as its fix, not a raw `go install` - that
+command has exactly the flaw above on exactly the host that needs the
+fix. One consequence worth knowing: a missing Inspector no longer costs
+a `git ls-remote` just to word that line, since the fix no longer names
+a commit.
+
 Once updated, it calls `refreshStaleLiveView` - the exact function
 `fabrica up`'s own Step 2 uses, pulled out of `runUpCommand` for this
 reuse rather than duplicated - to bring the live view in line with the
@@ -1628,7 +1682,7 @@ already recorded, and the response says `signaled: false`.
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). Issue #99 adds the reporting side on top of that same verification, for `status`/`watch`: `probeTaskWorker` (`alive`/`not-found`/`unknown`), `cachedProcessTable`, and `WORKER_PROBE_INTERVAL_MS`. |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
-| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); reinstalling an installed copy is `global-reinstall.ts`'s clone, pack and install steps, whose own failure message names the step that failed, printed through verbatim rather than reconstructed here; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
+| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); reinstalling an installed copy is `global-reinstall.ts`'s clone, pack and install steps, whose own failure message names the step that failed, printed through verbatim rather than reconstructed here; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update) and reading the inspector `PATH` resolves back afterwards, so an install that landed in a directory nothing runs from reads as a failure naming both directories rather than as an unchanged version (issue #339); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
 | `tests-map-args.ts` | Parses `fabrica tests-map`'s arguments (one optional path, `--force`). |
 | `tests-map-command.ts` | `fabrica tests-map`: generates `<project>/tests.map` from the colocated `foo.ts`/`foo.test.ts` convention (`src/testmap/`). Refuses rather than writing in two cases, both for the same reason - a map that says less than the truth is worse than none, since every brief and delivery then reports from it as if it were complete: an existing file is never replaced without `--force` (the file is meant to be hand-edited afterwards), and a project where the convention finds nothing gets no file at all. Denied to the chat agent (`skill-settings.test.ts`'s `NEVER_FROM_CHAT_COMMANDS`): it writes into the Client's own checkout, which is the off-the-books edit the shipped `settings.json` templates exist to prevent. `TESTS_MAP_HELP` is `tests-map --help`'s text. |
 | `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus every command those prefixes are for, each spelled exactly once: `UPSTREAM_GIT_URL`/`UPSTREAM_BRANCH`, the three steps that install a copy which knows its own commit (`cloneCommandArgs`, `packInCloneCommandArgs`, `installTarballCommandArgs`, with `isPackedTarball` for the tarball name between them), and `clonePackInstallProcedure`, those same three built into one pasteable line for every message that prints them - so the procedure advised and the procedure run cannot drift. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |

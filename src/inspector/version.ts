@@ -10,8 +10,14 @@
 // are looking at. This module adds only the seam: one injectable
 // interface, so `fabrica update`'s own tests run no real `go`, no real
 // `git`, and no real install.
+//
+// What this module does own, because nothing else needs to know it, is
+// *where* that install lands: Go's own GOBIN has nothing to do with
+// which `inspector` PATH resolves, so the install is aimed at the
+// directory holding the binary this machine really runs (issue #339).
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { commitAncestry, type CommitAncestry } from "./ancestry.ts";
 import {
   fetchInspectorMainCommit,
@@ -36,6 +42,13 @@ export interface InspectorVersionProbes {
   /** Whether `commit` is in origin main's history. Only ever called with
    * a commit already known to differ from the tip. */
   ancestry(commit: string): CommitAncestry;
+  /** The directory holding the `inspector` PATH resolves today, or
+   * `null` when none is on PATH - the one directory that decides which
+   * binary every task actually runs, and so the one an install has to
+   * land in (issue #339). Read again after an install, which is how
+   * `fabrica update` can tell an install that took from one that landed
+   * somewhere nothing reads. */
+  directoryOnPath(): string | null;
 }
 
 /** The real probes, against the real `inspector` on PATH and Inspector's
@@ -51,24 +64,158 @@ export function realInspectorVersionProbes(
     },
     mainCommit: () => fetchInspectorMainCommit(env),
     ancestry: (commit) => commitAncestry(commit, { repoUrl: INSPECTOR_REPO_URL, ref: INSPECTOR_MAIN_REF, env }),
+    directoryOnPath: () => inspectorDirectoryOnPath(command, env),
   };
 }
 
+/** The directory holding the `inspector` PATH resolves today, or `null`
+ * when none is on PATH. Resolved exactly the way `fabrica doctor`'s own
+ * inspector line resolves the binary it reports on
+ * (`resolveCommandPath`), so the directory an install is aimed at and
+ * the binary the next health check reads can never be two different
+ * things.
+ *
+ * Absolute, always: a PATH may hold a relative entry (`bin`, `.`), and
+ * `go install` refuses a relative GOBIN outright - "cannot install,
+ * GOBIN must be an absolute path", the Go toolchain's own documented
+ * behavior, with a regression test of its own
+ * (`src/cmd/go/testdata/script/install_relative_gobin_fail.txt`). So a
+ * directory the shell is perfectly happy to run `inspector` out of
+ * would otherwise fail every install with a message about Go's
+ * configuration rather than installing where PATH points. `resolve`
+ * spells it against the current directory, which is what the shell
+ * itself does with a relative PATH entry.
+ *
+ * Deliberately no `realpath`: whatever this directory holds - a real
+ * binary or a symlink pointing into Go's own GOBIN - it is the
+ * directory PATH reads, and an install aimed at it updates the binary
+ * PATH resolves. Following the link would instead aim the install at
+ * the directory the host deliberately pointed away from, which is the
+ * state issue #339 is about. Which of the two a symlinked host ends up
+ * with - a real binary in place of the link, or the link's own target
+ * rewritten - is Go's business, not something assumed here: the
+ * read-back `fabrica update` does afterwards is what settles whether
+ * the install took. */
+export function inspectorDirectoryOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
+  const binaryPath = resolveCommandPath(command, env);
+  return binaryPath === null ? null : resolve(dirname(binaryPath));
+}
+
+/** Where a `go install` of Inspector is being pointed, and how that was
+ * decided - the two facts a summary line has to be able to name when an
+ * install lands somewhere nothing on PATH reads (issue #339). */
+export type InspectorInstallTarget =
+  /** The directory holding the `inspector` PATH resolves today: the one
+   * binary every task actually runs, so the only directory worth
+   * replacing. */
+  | { kind: "path"; dir: string }
+  /** No `inspector` on PATH at all, so Go's own GOBIN is all there is
+   * to aim at - named, together with whether it is on PATH, since a
+   * directory nothing reads is an install nobody gets. */
+  | { kind: "go-default"; dir: string; onPath: boolean }
+  /** No `inspector` on PATH and Go itself could not say where it would
+   * put one. The install still runs (Go knows its own default even when
+   * this cannot read it), it just cannot be named. */
+  | { kind: "unknown" };
+
+/** Go's own install directory, asked of Go rather than guessed:
+ * `GOBIN` when set, otherwise `$GOPATH/bin` (`go help install`). `go
+ * env` prints each named variable on its own line, and prints GOBIN
+ * *empty* when it is unset - its `$GOPATH/bin` default is resolved
+ * internally and never reported as GOBIN's own value, which is why both
+ * are asked for in one call and the first empty line falls through to
+ * the second.
+ *
+ * Asked of `go env` rather than read out of `env` directly because
+ * either variable may be set in Go's own config file (`go env -w`)
+ * rather than in the process environment, where nothing here would see
+ * it. GOPATH may itself be a list, in which case Go installs into the
+ * first entry's `bin`, so only the first is taken.
+ *
+ * Reported exactly as Go reports it, never normalized: this is Go's own
+ * answer about its own default, so an install aimed at it behaves
+ * precisely as a bare `go install` on this machine would - including
+ * refusing a relative GOBIN, which is Go's own refusal to make, not
+ * something to paper over by resolving it to somewhere Go would not
+ * have written. */
+export function goInstallDirectory(env: NodeJS.ProcessEnv): string | null {
+  const probe = spawnSync("go", ["env", "GOBIN", "GOPATH"], { env, encoding: "utf8", timeout: 20_000 });
+  if (probe.error || probe.status !== 0) return null;
+  const [gobin = "", gopath = ""] = (probe.stdout ?? "").split("\n").map((line) => line.trim());
+  if (gobin !== "") return gobin;
+  const first = gopath.split(delimiter).filter(Boolean)[0];
+  return first === undefined ? null : join(first, "bin");
+}
+
+/** Whether `dir` is one of PATH's own entries. Compared normalized
+ * (`resolve`), so a trailing slash or a `.` segment doesn't make the
+ * same directory look like a different one, but never through the
+ * filesystem - this answers "would the shell find a binary here",
+ * which is a question about PATH's text, not about symlinks. */
+export function directoryIsOnPath(dir: string, env: NodeJS.ProcessEnv): boolean {
+  const target = resolve(dir);
+  return (env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .some((entry) => resolve(entry) === target);
+}
+
+/** Where an install of Inspector should go on this machine: the
+ * directory holding the `inspector` PATH resolves today, and only
+ * failing that, Go's own GOBIN (issue #339 - on a host whose PATH
+ * prefers some other directory, Go's default is a directory nothing
+ * ever runs from). */
+export function inspectorInstallTarget(
+  env: NodeJS.ProcessEnv,
+  command = "inspector"
+): InspectorInstallTarget {
+  const onPath = inspectorDirectoryOnPath(command, env);
+  if (onPath !== null) return { kind: "path", dir: onPath };
+  const goDefault = goInstallDirectory(env);
+  return goDefault === null ? { kind: "unknown" } : { kind: "go-default", dir: goDefault, onPath: directoryIsOnPath(goDefault, env) };
+}
+
+/** What an attempted install did, and where it was aimed. */
+export interface InspectorInstallResult {
+  ok: boolean;
+  message: string;
+  /** Where this install was pointed - carried out so the caller can
+   * name the directory, and say whether it is one PATH reads, without
+   * resolving any of it a second time. */
+  target?: InspectorInstallTarget;
+}
+
 /** Runs the documented install, spelled exactly as every message prints
- * it (`inspectorInstallCommand`). Reported, never thrown: a failed
- * install leaves whatever was there before it in place, and `fabrica
- * update` warns rather than failing on it (Client ruling). */
-export function goInstallInspector(revision: string, env: NodeJS.ProcessEnv = process.env): { ok: boolean; message: string } {
+ * it (`inspectorInstallCommand`), with `GOBIN` pointed at the directory
+ * holding the `inspector` PATH resolves today (issue #339): Go's own
+ * default GOBIN is not where the shell - or any Fabrica task - looks for
+ * Inspector on a host that puts some other directory on PATH, so an
+ * unpinned install there is a silent no-op. GOBIN is Go's own
+ * documented first choice of install directory, honoured by the
+ * `pkg@version` form like every other, so this pins the destination
+ * rather than working around it.
+ *
+ * Reported, never thrown: a failed install leaves whatever was there
+ * before it in place, and `fabrica update` warns rather than failing on
+ * it (Client ruling). A GOBIN that cannot be written is one of those
+ * failures, reported with Go's own words - loudly wrong beats quietly
+ * installed where nothing reads it. */
+export function goInstallInspector(revision: string, env: NodeJS.ProcessEnv = process.env): InspectorInstallResult {
+  const target = inspectorInstallTarget(env);
+  // "unknown" means nothing here could name Go's own GOBIN - Go still
+  // knows it, so the install runs with the environment untouched rather
+  // than being refused over a directory this could not read.
+  const installEnv = target.kind === "unknown" ? env : { ...env, GOBIN: target.dir };
   try {
     const out = execFileSync("go", inspectorInstallArgs(revision), {
-      env,
+      env: installEnv,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return { ok: true, message: out.trim() };
+    return { ok: true, message: out.trim(), target };
   } catch (err) {
     const failure = err as { stderr?: Buffer | string; message?: string };
     const said = failure?.stderr ? failure.stderr.toString().trim() : (failure?.message ?? String(err));
-    return { ok: false, message: said };
+    return { ok: false, message: said, target };
   }
 }

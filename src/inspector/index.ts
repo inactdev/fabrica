@@ -21,6 +21,8 @@ export {
   inspectorInstallArgs,
   inspectorInstallCommand,
   inspectorVersionCheck,
+  sameCommit,
+  INSPECTOR_FIX_COMMAND,
   INSPECTOR_MODULE_PATH,
   INSPECTOR_PACKAGE_PATH,
   INSPECTOR_REPO_URL,
@@ -44,5 +46,12 @@ export type { DockerfileState, InspectorConfigFacts, InspectorConfigProblem, Ins
 export { termsProblem, termsSetup, TERMS_REQUIRED_FILES } from "./terms.ts";
 export { commitAncestry } from "./ancestry.ts";
 export type { CommitAncestry } from "./ancestry.ts";
-export { goInstallInspector, realInspectorVersionProbes } from "./version.ts";
-export type { InspectorVersionProbes } from "./version.ts";
+export {
+  directoryIsOnPath,
+  goInstallDirectory,
+  goInstallInspector,
+  inspectorDirectoryOnPath,
+  inspectorInstallTarget,
+  realInspectorVersionProbes,
+} from "./version.ts";
+export type { InspectorInstallResult, InspectorInstallTarget, InspectorVersionProbes } from "./version.ts";
