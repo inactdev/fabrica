@@ -136,6 +136,13 @@ export interface DependencyShape {
    * installer needs nothing else - a `COPY` of a file the repository may
    * not have fails the build. */
   extraCopies?: readonly string[];
+  /** What the manifest names that the repository itself supplies, each
+   * copied to its own relative path under `/deps` rather than flattened
+   * in beside the manifest - a `path:` gem's directory is the case that
+   * found this. Separate from `extraCopies` because each one needs a
+   * `COPY` of its own: a `COPY` with several sources puts them all in
+   * one destination directory. */
+  pathCopies?: readonly GemfileReference[];
   /** Servers `check.sh` starts inside the box, waits for, and stops
    * again, since the box has no network to reach one over. */
   services?: readonly BoxService[];
@@ -222,6 +229,124 @@ export function gemsIn(lockfile: string): Set<string> {
     if (spec !== null) names.add(spec[1]);
   }
   return names;
+}
+
+/**
+ * One thing the `Gemfile` names that lives in the repository itself, and
+ * so has to be copied into `/deps` before `bundle install` reads it.
+ *
+ * `source` is kept exactly as the Gemfile spells it, because that is
+ * what bundler will look for: a relative path in a Gemfile resolves
+ * against **the directory holding the Gemfile**, which at build time is
+ * `/deps`. So `path: "engines/prototypes"` has to be at
+ * `/deps/engines/prototypes`, not flattened into `/deps` beside the
+ * manifest.
+ */
+export interface GemfileReference {
+  /** The directive that named it, written into the Dockerfile's own
+   * comment so the next reader knows which line to look at. */
+  directive: "path" | "eval_gemfile" | "gemspec";
+  /** What to copy, relative to the repository root, as the Gemfile
+   * spells it. A directory for `path:`, a file for `eval_gemfile`, and
+   * `*.gemspec` for a bare `gemspec`. */
+  source: string;
+  /** Where it lands - the same relative path under `/deps`. A directory
+   * `COPY` copies the directory's *contents*, so a directory's
+   * destination is its own path; a file's is the directory holding it.
+   */
+  dest: string;
+}
+
+/** Whether a `path:` value is one a `COPY` can honestly reproduce.
+ * Docker strips parent-directory navigation from a source path, so
+ * `../sibling` would copy something else entirely rather than fail -
+ * and `.` is the whole repository. Both are named in the file instead of
+ * copied (see `pathCopyLines`). */
+function copyableRepoPath(path: string): boolean {
+  if (path.startsWith("/") || path === "." || path === "") return false;
+  return !path.split("/").includes("..");
+}
+
+/** The `Gemfile` with its comments removed, so a `#`-commented-out
+ * `path:` gem is not copied and a sentence mentioning one is not
+ * mistaken for a directive. Quotes are tracked, since a `#` inside a
+ * string is not a comment. */
+function withoutComments(gemfile: string): string {
+  return gemfile
+    .split("\n")
+    .map((line) => {
+      let quote: string | null = null;
+      for (let i = 0; i < line.length; i += 1) {
+        const char = line[i];
+        if (quote !== null) {
+          if (char === `\\`) i += 1;
+          else if (char === quote) quote = null;
+        } else if (char === `"` || char === `'`) quote = char;
+        else if (char === `#`) return line.slice(0, i);
+      }
+      return line;
+    })
+    .join("\n");
+}
+
+/** `path: "x"` and the older `:path => "x"`, which are the same option. */
+const PATH_OPTION = /(?:\bpath:\s*|:path\s*=>\s*)(['"])([^'"]+)\1/g;
+/** The same pattern without `g`, for asking a single line whether it
+ * carries the option. A `g` regexp's `test` moves its own `lastIndex`,
+ * which makes the answer depend on the previous question. */
+const HAS_PATH_OPTION = new RegExp(PATH_OPTION.source);
+/** `eval_gemfile "x"`, with or without parentheses. */
+const EVAL_GEMFILE = /\beval_gemfile\s*\(?\s*(['"])([^'"]+)\1/g;
+/** A `gemspec` directive and whatever options follow it on the line. */
+const GEMSPEC_DIRECTIVE = /^[ \t]*gemspec\b(.*)$/gm;
+
+/**
+ * Everything a `Gemfile` names that `bundle install` will read out of
+ * the repository, in the order the file names it and with duplicates
+ * dropped.
+ *
+ * Three directives, because three can point at a file the repository
+ * supplies: a `path:` gem, an `eval_gemfile`, and a `gemspec`. A
+ * `gemspec` carrying `path:` needs nothing of its own - the `path:` rule
+ * already copies the directory its gemspec is inside - and neither does
+ * a `gemspec name:`, since the `*.gemspec` a bare one copies is a
+ * superset of whichever file `name:` meant.
+ *
+ * One limit, and it fails loudly rather than quietly: a `path:` gem
+ * named *inside* an `eval_gemfile`'d file is not followed. The file
+ * itself is copied, bundler then evaluates it, and a path it names that
+ * is not there stops the image build by name.
+ */
+export function gemfileReferences(gemfile: string): GemfileReference[] {
+  const found = new Map<string, GemfileReference>();
+  const text = withoutComments(gemfile);
+
+  const add = (reference: GemfileReference): void => {
+    if (!found.has(reference.source)) found.set(reference.source, reference);
+  };
+
+  for (const match of text.matchAll(PATH_OPTION)) {
+    add({ directive: "path", source: match[2], dest: `${DEPS_DIR}/${match[2]}/` });
+  }
+  for (const match of text.matchAll(EVAL_GEMFILE)) {
+    add({ directive: "eval_gemfile", source: match[2], dest: holdingDirectory(match[2]) });
+  }
+  for (const match of text.matchAll(GEMSPEC_DIRECTIVE)) {
+    // A `path:` on this line was already read above, and the directory
+    // it named carries the gemspec with it.
+    if (HAS_PATH_OPTION.test(match[1])) continue;
+    add({ directive: "gemspec", source: `*.gemspec`, dest: `${DEPS_DIR}/` });
+  }
+
+  return [...found.values()];
+}
+
+/** Where under `/deps` a *file* at this repository-relative path has to
+ * land: the directory holding it, with the trailing slash a `COPY`
+ * destination needs. */
+function holdingDirectory(path: string): string {
+  const cut = path.lastIndexOf("/");
+  return cut === -1 ? `${DEPS_DIR}/` : `${DEPS_DIR}/${path.slice(0, cut)}/`;
 }
 
 /** The gem that names a Postgres dependency. */
@@ -354,6 +479,11 @@ const REDIS: BoxService = {
 export function rubyShape(opts: {
   /** `Gemfile.lock`'s contents. */
   lockfile: string;
+  /** `Gemfile`'s own contents, or absent when it could not be read.
+   * Read for one question the lockfile cannot answer: which paths in
+   * the repository `bundle install` will go looking for (see
+   * `gemfileReferences`). */
+  gemfile?: string | null;
   /** Whether `.ruby-version` is at the root - a Gemfile may read its
    * `ruby` line out of that file, so it is copied in when it exists. */
   rubyVersionFile?: boolean;
@@ -365,6 +495,8 @@ export function rubyShape(opts: {
   const services: BoxService[] = [];
   if (gems.has(PG_GEM)) services.push(POSTGRES);
   if (REDIS_GEMS.some((gem) => gems.has(gem))) services.push(REDIS);
+  const pathCopies =
+    opts.gemfile === null || opts.gemfile === undefined ? [] : gemfileReferences(opts.gemfile);
 
   return {
     lockfile: GEMFILE_LOCK,
@@ -372,6 +504,7 @@ export function rubyShape(opts: {
     install: "bundle install",
     linksNodeModules: false,
     ...(opts.rubyVersionFile === true ? { extraCopies: [RUBY_VERSION_FILE] } : {}),
+    ...(pathCopies.length > 0 ? { pathCopies } : {}),
     ...(services.length > 0 ? { services } : {}),
     ...(opts.railsBin === true
       ? {
@@ -382,15 +515,20 @@ export function rubyShape(opts: {
           // things that write there, only one stops a boot.
           runtimeEnv: {
             note:
-              `A Rails application writes into log/ and tmp/, and both are read-only inside the check box. ` +
-              `Bootsnap is the one that stops a boot dead when its cache directory cannot be written, and it ` +
-              `takes an environment variable - so its cache, and anything else reaching for a temporary ` +
-              `directory, go in the scratch directory above instead. Rails' own logger needs nothing here: it ` +
-              `catches a log file it cannot open and falls back to stderr with a warning.`,
+              `RAILS_ENV, because this is a test run and nothing below says so on its own: the test-database ` +
+              `step further down boots the application to do its work, and with no RAILS_ENV set it boots in ` +
+              `development - a different environment, a different database and a different set of gems from ` +
+              `the one the suite then runs in. Then the two writable directories: a Rails application writes ` +
+              `into log/ and tmp/, and both are read-only inside the check box. Bootsnap is the one that stops ` +
+              `a boot dead when its cache directory cannot be written, and it takes an environment variable - ` +
+              `so its cache, and anything else reaching for a temporary directory, go in the scratch directory ` +
+              `above instead. Rails' own logger needs nothing here: it catches a log file it cannot open and ` +
+              `falls back to stderr with a warning.`,
             run:
+              `RAILS_ENV=test\n` +
               `BOOTSNAP_CACHE_DIR=$${SCRATCH_DIR_VAR}/bootsnap\n` +
               `TMPDIR=$${SCRATCH_DIR_VAR}/tmp\n` +
-              `export BOOTSNAP_CACHE_DIR TMPDIR\n` +
+              `export RAILS_ENV BOOTSNAP_CACHE_DIR TMPDIR\n` +
               `mkdir -p "$BOOTSNAP_CACHE_DIR" "$TMPDIR"`,
           },
           prepare: {
@@ -411,11 +549,13 @@ export function rubyShape(opts: {
         : `, and ${services.map((service) => service.label).join(" and ")} ` +
           `${services.length === 1 ? `is` : `are`} installed in the box too, for ${CHECK_SCRIPT} to start`),
     buildNote:
-      `\`bundle install\` sees only the files copied below, which is enough for a Gemfile that names gems and ` +
-      `nothing more. One that reads another file - a \`gemspec\`, an \`eval_gemfile\`, a \`path:\` gem - needs ` +
-      `a COPY for that file too. A committed \`.bundle/config\` naming a path of its own is the other half of ` +
-      `the same trap: at check time it would point bundler at the checkout rather than at the gems installed ` +
-      `here, where there is no network to install them again.`,
+      `\`bundle install\` sees only what is copied below. The three things a Gemfile can name that live in ` +
+      `the repository itself - a \`path:\` gem, an \`eval_gemfile\`, a \`gemspec\` - are copied for you, each ` +
+      `at the relative path bundler resolves it against. Anything else it reads needs a COPY of its own added ` +
+      `here, and so does a path named *inside* an \`eval_gemfile\`'d file, which is not followed. A committed ` +
+      `\`.bundle/config\` naming a path of its own is a trap of the same kind: at check time it would point ` +
+      `bundler at the checkout rather than at the gems installed here, where there is no network to install ` +
+      `them again.`,
   };
 }
 
@@ -436,12 +576,16 @@ export function dependencyShapeFrom(present: {
    * Read in full rather than as presence alone, unlike the other two:
    * which servers the check box needs is written inside it. */
   gemfileLock?: string | null;
+  /** `Gemfile`'s own contents - read for the paths in the repository
+   * `bundle install` will look for, which the lockfile does not say. */
+  gemfile?: string | null;
   rubyVersionFile?: boolean;
   railsBin?: boolean;
 }): DependencyShape | null {
   if (present.gemfileLock !== null && present.gemfileLock !== undefined) {
     return rubyShape({
       lockfile: present.gemfileLock,
+      gemfile: present.gemfile,
       rubyVersionFile: present.rubyVersionFile,
       railsBin: present.railsBin,
     });
@@ -458,6 +602,7 @@ export function dependencyShapeInTree(dir: string): DependencyShape | null {
     packageLock: existsSync(join(dir, PACKAGE_LOCK)),
     goSum: existsSync(join(dir, GO_SUM)),
     gemfileLock: fileIn(dir, GEMFILE_LOCK),
+    gemfile: fileIn(dir, GEMFILE),
     rubyVersionFile: existsSync(join(dir, RUBY_VERSION_FILE)),
     railsBin: existsSync(join(dir, RAILS_BIN)),
   });
@@ -600,6 +745,50 @@ function copyFromNote(source: RepoFilesSource): string[] {
   ];
 }
 
+/**
+ * The `COPY` lines for what the manifest names inside the repository -
+ * a `path:` gem's directory and the two other Gemfile directives that
+ * read a committed file (see `gemfileReferences`).
+ *
+ * One `COPY` each, rather than one carrying them all: a `COPY` with
+ * several sources puts every one of them in the single destination
+ * directory, and the whole point here is that each has to keep the
+ * relative path the manifest resolves it against.
+ *
+ * A path a `COPY` cannot honestly reproduce - absolute, or climbing out
+ * of the repository with `..`, which Docker silently strips - is named
+ * in a comment instead of copied wrong. The install then fails on it by
+ * name, which is the loud answer; a `COPY` of a path that is not the one
+ * the Gemfile meant would be the quiet one.
+ */
+function pathCopyLines(shape: DependencyShape, user: string | null, repoFiles: RepoFilesSource): string[] {
+  const references = shape.pathCopies ?? [];
+  if (references.length === 0) return [];
+
+  const copyable = references.filter((reference) => copyableRepoPath(reference.source));
+  const outside = references.filter((reference) => !copyableRepoPath(reference.source));
+  const chown = user === null ? `` : `--chown=${user}:${user} `;
+
+  return [
+    `#`,
+    ...comment(
+      `What this project's ${shape.manifest} names inside the repository itself. A relative path there ` +
+        `resolves against the directory holding ${shape.manifest} - which during this build is ${DEPS_DIR} - so ` +
+        `each one is copied to its own path under ${DEPS_DIR} rather than in beside the manifest. Add a line ` +
+        `here for anything else \`${shape.install}\` reads out of the repository.`
+    ),
+    ...outside.flatMap((reference) =>
+      comment(
+        `Not copied: ${shape.manifest}'s ${reference.directive} names "${reference.source}", which is not a ` +
+          `path inside this repository. Nothing here can reach it, and \`${shape.install}\` below will say so.`
+      )
+    ),
+    ...copyable.map(
+      (reference) => `COPY ${copyFrom(repoFiles)}${chown}${reference.source} ${reference.dest}`
+    ),
+  ];
+}
+
 /** The install step's own lines, with the ownership dance a non-root
  * image needs around them. `rooted` says the service lines above already
  * selected `USER root`, so the guidance about the image's default user
@@ -614,6 +803,9 @@ function installLines(
   const caveat = shape.buildNote === undefined ? [] : [`#`, ...comment(shape.buildNote)];
   const copy = copyFrom(repoFiles);
   const note = copyFromNote(repoFiles);
+  // Always between the manifest's own COPY and the install, since the
+  // install is what reads them.
+  const paths = pathCopyLines(shape, user, repoFiles);
   if (user !== null) {
     return [
       ...caveat,
@@ -622,6 +814,7 @@ function installLines(
       `RUN mkdir -p ${DEPS_DIR} && chown -R ${user}:${user} ${DEPS_DIR}`,
       `USER ${user}`,
       `COPY ${copy}--chown=${user}:${user} ${copiedFiles(shape)} ${DEPS_DIR}/`,
+      ...paths,
       `RUN cd ${DEPS_DIR} && ${shape.install}`,
     ];
   }
@@ -632,6 +825,7 @@ function installLines(
       ...comment(`This installs as root, which the USER root above selected.`),
       ...note,
       `COPY ${copy}${copiedFiles(shape)} ${DEPS_DIR}/`,
+      ...paths,
       `RUN cd ${DEPS_DIR} && ${shape.install}`,
     ];
   }
@@ -646,6 +840,7 @@ function installLines(
     `#   USER <user>`,
     ...note,
     `COPY ${copy}${copiedFiles(shape)} ${DEPS_DIR}/`,
+    ...paths,
     `RUN cd ${DEPS_DIR} && ${shape.install}`,
   ];
 }

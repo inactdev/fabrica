@@ -625,15 +625,87 @@ and only one of them needed solving:
   it cannot open and falls back to stderr with a warning. So nothing is
   done about `log/`, deliberately.
 
+### A gem the repository keeps itself
+
+Found on a real work repository: its `Gemfile` names a gem that lives in
+the repository, `gem "prototypes", path: "engines/prototypes"`, and
+`bundle install` stopped dead on `/deps/engines/prototypes does not
+exist` before installing anything at all.
+
+Bundler's own rule is the whole explanation: *"relative paths are
+resolved relative to the directory containing the Gemfile"* — and during
+this build that directory is `/deps`. So the path has to be reproduced
+**under `/deps`**, not flattened in beside the manifest the way
+`.ruby-version` is. `dockerfile.ts`'s `gemfileReferences` reads the
+`Gemfile` for the three directives that name something in the
+repository, and `installLines` writes one `COPY` each, above the
+install:
+
+```
+COPY --from=repo engines/prototypes /deps/engines/prototypes/
+```
+
+- **`path:` / `:path =>`** — the directory, copied to the same relative
+  path. A directory source copies its *contents*, which is why the
+  destination repeats the path rather than being `/deps/engines/`.
+- **`eval_gemfile "gemfiles/extra.rb"`** — the file, so the destination
+  is the directory holding it (a destination with no trailing slash
+  would write the file *as* that path). A `path:` named **inside** that
+  file is not followed: nothing in bundler's documentation in reach
+  settles what a nested relative path resolves against, and the
+  generated note says to add a line by hand.
+- **`gemspec`** — `*.gemspec` beside the `Gemfile`, which the manifest's
+  own `COPY` does not bring. A `gemspec path:` is already covered by the
+  first rule, and the directory carries its gemspec with it, so that
+  line is skipped rather than also asking for a root `*.gemspec` that is
+  not there.
+
+One `COPY` per path, never one `COPY` with several sources: Docker puts
+all the sources of a multi-source `COPY` into the one destination
+directory, which would flatten two gems into the same place.
+
+A path a build context cannot reach — absolute, or with `../` in it — is
+**named in a comment and not copied**. Docker strips `../` navigation
+from a source silently, so emitting the `COPY` would produce a working
+build of the wrong thing; `bundle install` then says what is missing, by
+name. Everything else here fails the build loudly for the same reason:
+the input is the repository's own `Gemfile`, and a `COPY` of a path that
+is not there is a failed build naming the path.
+
+This was chosen over reading `Gemfile.lock`'s `PATH` sections, which
+would also have found them: a root-level `gemspec` resolves there to
+`remote: .`, and a `COPY` of `.` copies the **entire repository** into
+`/deps`, quietly. The limits of what is here fail loudly; that one would
+have succeeded and been wrong.
+
+### `RAILS_ENV=test`
+
+`check.sh` exports it, because nothing else in the generated script says
+which environment this is and `bin/rails db:test:prepare` **boots the
+application** to do its work. With no `RAILS_ENV` set it boots in
+development — a different database and a different gem group from the
+one the suite then runs in. The suite's own `spec_helper` defaulting
+`RAILS_ENV` is too late and in the wrong process.
+
+One red is expected right now and nothing here works around it: Rails
+writes `tmp/local_secret.txt` when it has no configured
+`secret_key_base`, and `tmp/` is read-only in the check box, so the
+end-to-end tests fail on `Errno::EROFS`. That is Inspector's to fix
+(inactdev/inspector#84 makes the paths git would ignore writable), by
+Client ruling — no copying `/workspace`, no redirecting Rails' writes —
+and the tests stay red on exactly that error, naming it, until the pin
+moves to #84's merge commit.
+
 ### And all of it is run, not asserted
 
 `inspector-e2e.test.ts` registers a Rails application that really boots
 (`helpers/rails-app-fixture.ts`: `pg`, `redis` and `rspec`, a tracked
-`log/` and `tmp/`, one spec that uses the database and one that uses
-Redis) both ways, hands each to the real `inspector`, and reads
-`outcome: "green"` out of Inspector's own report. It skips only when
-Docker is absent; a missing `inspector` is a failure, not a skip. See
-that file's header for the pin, and why the verdict comes from the
+`log/` and `tmp/`, a `path:` gem under `engines/`, one spec that uses
+the database, one that uses Redis and one that uses the path gem) both
+ways, hands each to the real `inspector`, and reads `outcome: "green"`
+out of Inspector's own report. It skips only when Docker is absent; a
+missing `inspector` is a failure, not a skip. See that file's header for
+the pin, the one expected red above, and why the verdict comes from the
 report rather than from an exit code.
 
 ### What it says it has not done

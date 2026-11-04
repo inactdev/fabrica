@@ -202,6 +202,90 @@ went on to the next server. It globs an empty directory of the test's own
 now. The generalization: a test that runs generated code has to supply
 every absolute path that code names, or it is a test about the machine.
 
+## Copying a `path:` gem's own directory (the decision, written first)
+
+The second real end-to-end run, against the Client's own work repository,
+failed earlier than any of the above: its `Gemfile` names a gem kept in
+the repository itself (`gem "...", path: "engines/prototypes"`), and
+`bundle install` stopped with `/deps/engines/prototypes does not exist`.
+That message is the whole diagnosis. Bundler resolves a `path:` gem
+**relative to the directory holding the Gemfile**, and at build time that
+directory is `/deps` - so the install step has to put every such
+directory at its own relative path under `/deps`, not just the manifest
+and the lockfile.
+
+The chosen fix is to read the `Gemfile` for the paths it names and emit
+one `COPY --from=repo <path> /deps/<path>/` per path, above
+`bundle install`:
+
+- `path:` and `:path =>` give a directory. A directory `COPY` copies the
+  directory's *contents* into the destination, so the destination is the
+  same relative path - which is exactly what bundler will look for.
+- `eval_gemfile` gives a file the Gemfile reads while it is being
+  evaluated, so it is copied for the same reason.
+- A bare `gemspec` reads `*.gemspec` beside the Gemfile. One carrying a
+  `path:` option is already covered by the rule above, and so is a
+  `name:` one - `*.gemspec` is a superset of whichever file it meant.
+
+Why this one, safest first: the input is the repository's own `Gemfile`,
+the output is a `COPY` of a path that file itself names, and a path that
+is not there fails the image build loudly, by name, instead of producing
+a box that is quietly missing a gem. Nothing is inferred about what a
+project *probably* has.
+
+**The alternative rejected: reading `Gemfile.lock`'s `PATH` sections.**
+Bundler records every resolved path gem as a `PATH` block with its own
+`remote:` line, so the lockfile is the *resolved* truth and needs no Ruby
+parsed at all - it would even catch a path gem named inside an
+`eval_gemfile`'d file, which the chosen design does not follow. It was
+rejected on what it does to the one case it cannot distinguish: a
+root-level `gemspec` resolves to `remote: .`, and a `COPY` of `.` copies
+the entire repository into `/deps` - a build that is slower on every
+project, for a case a Rails application does not have. The limits of the
+chosen design fail loudly; that one would succeed and be wrong.
+
+Two facts behind the `COPY` lines, read from Docker's current Dockerfile
+reference rather than recalled: a directory source copies its contents
+and not the directory itself, and multiple sources or a wildcard require
+a destination ending in `/`. This repository's own `Dockerfile.inspector`
+is the live example of the nested form (`COPY ... scripts/x.mjs
+/deps/scripts/`).
+
+## `RAILS_ENV=test`, and the one failure deliberately left red
+
+The generated check now exports `RAILS_ENV=test` alongside
+`BOOTSNAP_CACHE_DIR` and `TMPDIR`. Without it `bin/rails
+db:test:prepare` boots the application in *development* to do its work,
+which is why the fixture needs a `config/environments/development.rb` it
+otherwise has no use for.
+
+What is **not** done, by Client ruling: nothing about
+`Errno::EROFS: Read-only file system - /workspace/tmp/local_secret.txt`.
+Rails writes that file when it needs a `secret_key_base` and has no
+configured one, and `tmp/` is read-only in the check box. Copying the
+checkout somewhere writable, or redirecting Rails' writes, would both
+work and both be wrong: the real fix is Inspector making the paths git
+would ignore writable (inspector#84), and `tmp/*` is git-ignored in any
+`rails new` application. So the end-to-end tests stay red on exactly that
+error until the pin moves to #84's merge commit - loudly, naming it,
+never skipped. `inspector-e2e.test.ts`'s `EXPECTED_RED` is what says so
+in the failure message, so the next reader does not have to go looking
+for whether this is the known one.
+
+### A generated file's own comments are part of what a test searches
+
+Adding `RAILS_ENV=test` to `runtimeEnv` broke an existing, unrelated
+assertion, and the way it broke generalizes: `scaffold.test.ts` proves
+ordering with `script.indexOf(a) < script.indexOf(b)`, and the note I
+first wrote named `` `bin/rails db:test:prepare` `` in prose *above* the
+line it was asserting came first - so `indexOf` found the comment, and
+the comparison was between a comment and an assignment. The fix was in
+the generated file, not the test: the note says "the test-database step
+further down" instead of spelling the command. The rule for any `note:`
+added here - a generated script's comments are searched by exactly the
+same `indexOf` its instructions are, so a note that quotes a command
+appearing later in the same file will shadow it.
+
 ## What the end-to-end test can and cannot prove about the uid
 
 `register`'s own tests stub `id -u`, so both branches of `pg_as` really

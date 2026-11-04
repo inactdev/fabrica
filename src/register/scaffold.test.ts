@@ -236,6 +236,23 @@ test("checkScript: everything a Rails check writes goes in a scratch directory, 
   assert.ok(script.indexOf("BOOTSNAP_CACHE_DIR=") < script.indexOf("bin/rails db:test:prepare"), script);
 });
 
+// Nothing else in the generated script says which environment this is,
+// and `bin/rails db:test:prepare` boots the application to do its work:
+// with no RAILS_ENV set it boots in development, which is a different
+// database and a different gem group from the one the suite then runs
+// in. The suite's own spec_helper only defaults RAILS_ENV for its own
+// process, well after db:test:prepare has already run in another.
+test("checkScript: a Rails check says it is a test run, before anything boots the application", () => {
+  const script = checkScript("bundle exec rspec", railsShape());
+
+  assert.ok(script.includes(`RAILS_ENV=test\n`), script);
+  assert.ok(/^export .*\bRAILS_ENV\b/m.test(script), `RAILS_ENV has to be exported to reach bin/rails:\n${script}`);
+  assert.ok(script.indexOf("RAILS_ENV=test") < script.indexOf("bin/rails db:test:prepare"), script);
+  // A non-Rails shape has no environment to name, and must not grow one.
+  const node = checkScript("npm test", dependencyShapeFrom({ packageLock: true, goSum: false }));
+  assert.doesNotMatch(node, /RAILS_ENV/, node);
+});
+
 // Inspector runs the check as the uid of whoever invoked it - no
 // /etc/passwd entry - so nothing about PostgreSQL can be settled at
 // build time: the cluster has to be created here, by whoever is running,
@@ -338,6 +355,10 @@ function runGeneratedCheck(opts: {
    * throwaway pair of files per run, never the machine's own. */
   passwd: string;
   group: string;
+  /** What `RAILS_ENV` actually was in `bin/rails`'s own environment,
+   * recorded by the stub rather than read off the script's text: an
+   * assignment that is never exported reaches nothing. */
+  railsEnv: string;
 } {
   const dir = mkdtempSync(join(tmpdir(), "fabrica-checkscript-"));
   const bin = join(dir, "stubs");
@@ -371,7 +392,10 @@ function runGeneratedCheck(opts: {
   stub("pgbin/pg_ctl", "exit 0");
   stub("redis-server", "exit 0");
   stub("redis-cli", "exit 0");
-  stub("bin/rails", "exit 0");
+  // Records its own environment on the side rather than in the shared
+  // log, which other tests match line by line.
+  const railsEnvFile = join(dir, "rails-env");
+  stub("bin/rails", `printf '%s' "$RAILS_ENV" > "${railsEnvFile}"\nexit 0`);
   stub("bundle", `exit ${opts.suiteExit}`);
   // The two commands only the root branch reaches. `su` runs what it was
   // given, so the script's own `sh -c` body still executes either way -
@@ -440,6 +464,7 @@ function runGeneratedCheck(opts: {
     scratchDirs: readdirSync(tmpdir()).filter((name) => name.startsWith("fabrica-check-")),
     passwd: existsSync(passwd) ? readFileSync(passwd, "utf8") : ``,
     group: existsSync(group) ? readFileSync(group, "utf8") : ``,
+    railsEnv: existsSync(railsEnvFile) ? readFileSync(railsEnvFile, "utf8") : ``,
   };
 }
 
@@ -491,6 +516,16 @@ test("the generated check.sh really runs: servers up, database prepared, suite r
   // The wait is a real wait: pg_isready refused twice before answering,
   // and the script kept asking rather than carrying on regardless.
   assert.equal(log.filter((line) => line.startsWith("pgbin/pg_isready")).length, 3, log.join("\n"));
+});
+
+// Read out of the environment `bin/rails` was really given, not off the
+// script's text: a `RAILS_ENV=test` that was assigned and never exported
+// reads identically in the file and reaches nothing.
+test("the generated check.sh really hands RAILS_ENV=test to bin/rails", () => {
+  const { status, railsEnv, log } = runGeneratedCheck({ suite: "bundle exec rspec", suiteExit: 0 });
+
+  assert.equal(status, 0, log.join("\n"));
+  assert.equal(railsEnv, "test", log.join("\n"));
 });
 
 // The half a `set -e` script gets wrong on its own: a failing suite

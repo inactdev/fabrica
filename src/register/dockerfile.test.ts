@@ -18,11 +18,17 @@ import {
   dependencyInstallerIn,
   dependencyShapeFrom,
   dependencyShapeInTree,
+  gemfileReferences,
   gemsIn,
   inspectorDockerfile,
   knownNonRootUser,
 } from "./dockerfile.ts";
-import { RAILS_GEMFILE_LOCK, writeRailsFixture } from "./helpers/rails-fixture.ts";
+import {
+  RAILS_GEMFILE,
+  RAILS_GEMFILE_LOCK,
+  railsFixtureFiles,
+  writeRailsFixture,
+} from "./helpers/rails-fixture.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -267,6 +273,176 @@ test("inspectorDockerfile: a terms folder's install step copies from the named r
   const inRepo = inspectorDockerfile({ from: "ruby:3.3.4", reason: "--image said so", shape });
   assert.ok(instructions(inRepo).includes(`COPY Gemfile Gemfile.lock .ruby-version ${DEPS_DIR}/`), inRepo);
   assert.doesNotMatch(inRepo, /--from=repo/, inRepo);
+});
+
+// ------------------------- what the Gemfile names inside the repository
+//
+// Issue #337's fix round. Found on the Client's own work repository:
+// its Gemfile names a gem kept in the repository (`path:
+// "engines/prototypes"`), and `bundle install` stopped on
+// "/deps/engines/prototypes does not exist" before installing anything.
+// A relative path in a Gemfile resolves against the directory holding
+// the Gemfile, which during this build is /deps - so the path has to be
+// reproduced under /deps, not flattened in beside the manifest.
+
+test("gemfileReferences: the three directives that name a path in the repository", () => {
+  const found = gemfileReferences(
+    `source "https://rubygems.org"\n` +
+      `gem "rails"\n` +
+      `gem "prototypes", path: "engines/prototypes"\n` +
+      `gem "legacy", :path => "vendor/legacy"\n` +
+      `eval_gemfile "gemfiles/extra.rb"\n`
+  );
+
+  assert.deepEqual(found, [
+    { directive: "path", source: "engines/prototypes", dest: `${DEPS_DIR}/engines/prototypes/` },
+    { directive: "path", source: "vendor/legacy", dest: `${DEPS_DIR}/vendor/legacy/` },
+    // The file itself, so the destination is the directory holding it -
+    // a COPY of a file into a path with no trailing slash would write
+    // the file *as* that path.
+    { directive: "eval_gemfile", source: "gemfiles/extra.rb", dest: `${DEPS_DIR}/gemfiles/` },
+  ]);
+});
+
+// A bare `gemspec` reads a *.gemspec beside the Gemfile, which the
+// manifest's own COPY does not bring. A `gemspec path:` names a
+// directory instead, and the generic path: rule above already copies it
+// with its gemspec inside - so it must not also ask for a *.gemspec at
+// the root that is not there, which would fail the build.
+test("gemfileReferences: a bare gemspec wants the one beside the Gemfile, a gemspec path: does not", () => {
+  assert.deepEqual(gemfileReferences(`gemspec\n`), [
+    { directive: "gemspec", source: "*.gemspec", dest: `${DEPS_DIR}/` },
+  ]);
+  assert.deepEqual(gemfileReferences(`gemspec path: "engines/thing"\n`), [
+    { directive: "path", source: "engines/thing", dest: `${DEPS_DIR}/engines/thing/` },
+  ]);
+});
+
+test("gemfileReferences: a commented-out directive is not one, and the same path is copied once", () => {
+  assert.deepEqual(gemfileReferences(`# gem "old", path: "engines/old"\ngem "x" # path: "engines/x"\n`), []);
+  // A `#` inside a quoted string is part of it, not the start of a
+  // comment - so the path before one is still read.
+  assert.deepEqual(gemfileReferences(`gem "x", path: "engines/a" # a gem we keep\n`), [
+    { directive: "path", source: "engines/a", dest: `${DEPS_DIR}/engines/a/` },
+  ]);
+  // Two gems in one directory are one COPY.
+  assert.deepEqual(gemfileReferences(`gem "x", path: "engines/a"\ngem "y", path: "engines/a"\n`), [
+    { directive: "path", source: "engines/a", dest: `${DEPS_DIR}/engines/a/` },
+  ]);
+});
+
+test("dependencyShapeFrom: pathCopies comes from the Gemfile, and is absent when there is nothing to copy", () => {
+  const withPath = dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: RAILS_GEMFILE_LOCK,
+    gemfile: `gem "prototypes", path: "engines/prototypes"\n`,
+  });
+  const without = dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: RAILS_GEMFILE_LOCK,
+    gemfile: RAILS_GEMFILE,
+  });
+
+  assert.deepEqual(withPath?.pathCopies?.map((reference) => reference.source), ["engines/prototypes"]);
+  assert.equal(without?.pathCopies, undefined);
+  // And a shape derived with no Gemfile read at all asks for nothing,
+  // rather than guessing at what a manifest it never saw might name.
+  assert.equal(
+    dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK })?.pathCopies,
+    undefined
+  );
+});
+
+test("inspectorDockerfile: each path the Gemfile names is copied to its own path, before the install", () => {
+  const shape = dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: RAILS_GEMFILE_LOCK,
+    gemfile: `gem "prototypes", path: "engines/prototypes"\ngem "legacy", path: "vendor/legacy"\n`,
+  });
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape,
+    repoFiles: "named-repo-context",
+  });
+  const ran = instructions(text);
+
+  // One COPY each, not one COPY with two sources: several sources go
+  // into one destination directory, which would flatten both gems into
+  // the same place under a name bundler is not looking for.
+  assert.ok(ran.includes(`COPY --from=repo engines/prototypes ${DEPS_DIR}/engines/prototypes/`), text);
+  assert.ok(ran.includes(`COPY --from=repo vendor/legacy ${DEPS_DIR}/vendor/legacy/`), text);
+  // Before the install, which is the step that reads them.
+  assert.ok(
+    ran.indexOf(`COPY --from=repo engines/prototypes ${DEPS_DIR}/engines/prototypes/`) <
+      ran.indexOf(`RUN cd ${DEPS_DIR} && bundle install`),
+    text
+  );
+  // ...and after the manifest's own COPY, so a reader sees what named
+  // them before what they are.
+  assert.ok(
+    ran.indexOf(`COPY --from=repo Gemfile Gemfile.lock ${DEPS_DIR}/`) <
+      ran.indexOf(`COPY --from=repo engines/prototypes ${DEPS_DIR}/engines/prototypes/`),
+    text
+  );
+});
+
+// The repository route needs the same copies: the path is relative to
+// the Gemfile either way, and /deps is the Gemfile's directory in both
+// builds. Only the `--from=repo` differs.
+test("inspectorDockerfile: the in-repository route copies the same paths, from its own context", () => {
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({
+      packageLock: false,
+      goSum: false,
+      gemfileLock: RAILS_GEMFILE_LOCK,
+      gemfile: `gem "prototypes", path: "engines/prototypes"\n`,
+    }),
+  });
+
+  assert.ok(instructions(text).includes(`COPY engines/prototypes ${DEPS_DIR}/engines/prototypes/`), text);
+  assert.doesNotMatch(text, /--from=repo/, text);
+});
+
+// A path a build context cannot reach: Docker strips `../` navigation
+// from a COPY source silently, and an absolute source is not a context
+// path at all. Saying so in the file is the loud answer; emitting a COPY
+// Docker then rewrites is the quiet one.
+test("inspectorDockerfile: a path outside the repository is named in a comment, never copied", () => {
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({
+      packageLock: false,
+      goSum: false,
+      gemfileLock: RAILS_GEMFILE_LOCK,
+      gemfile: `gem "outside", path: "../sibling"\ngem "rooted", path: "/opt/gem"\n`,
+    }),
+  });
+
+  assert.doesNotMatch(text, /COPY \.\.\/sibling/, text);
+  assert.doesNotMatch(text, /COPY \/opt\/gem/, text);
+  assert.ok(text.includes(`Not copied`), text);
+  assert.ok(text.includes(`"../sibling"`), text);
+  assert.ok(text.includes(`"/opt/gem"`), text);
+});
+
+test("dependencyShapeInTree reads the Gemfile for the paths it names, not just the lockfile", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fabrica-dockerfile-path-gem-"));
+  writeRailsFixture(dir, {
+    ...railsFixtureFiles(),
+    Gemfile: `${RAILS_GEMFILE}gem "prototypes", path: "engines/prototypes"\n`,
+  });
+
+  assert.deepEqual(
+    dependencyShapeInTree(dir)?.pathCopies?.map((reference) => reference.dest),
+    [`${DEPS_DIR}/engines/prototypes/`]
+  );
 });
 
 // Nothing in a Dockerfile can start a server for the check: a RUN is its
