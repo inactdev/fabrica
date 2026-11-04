@@ -14,7 +14,7 @@
 // (`helpers/rails-app-fixture.ts`), registers it both ways, and hands
 // each one to the installed `inspector`.
 //
-// THREE THINGS TO KNOW BEFORE CHANGING ANYTHING HERE:
+// FOUR THINGS TO KNOW BEFORE CHANGING ANYTHING HERE:
 //
 //   - **It skips only when Docker is absent**, which is the one thing
 //     genuinely unavailable on a machine (and is guaranteed present in
@@ -263,36 +263,160 @@ test("register: the files it commits into a repository pass a real Inspector run
 
 // ---------------------------------------------- what the box can write
 
-// The two facts about Inspector's own box that the four findings rest
-// on, asserted from inside it rather than taken from its documentation.
+/** A file the fixture tracks inside a directory git would not ignore a
+ * new file in - `helpers/rails-app-fixture.ts` writes it. Asserted to be
+ * tracked below, so a fixture that dropped it says so. */
+const TRACKED_FILE = "app/models/widget.rb";
+
+/** A new file in that same directory, which git would not ignore - so
+ * the box must refuse to create it. */
+const NEW_TRACKED_DIR_FILE = "app/models/fabrica-probe.rb";
+
+/** Whether git would ignore this path - the question inspector#85's rule
+ * turns on, asked of git itself rather than read off `.gitignore`.
+ * `check-ignore -q` exits 0 for an ignored path and 1 for any other. */
+function gitIgnores(repo: string, path: string): boolean {
+  const run = spawnSync("git", ["check-ignore", "-q", "--", path], { cwd: repo, encoding: "utf8" });
+  assert.ok(
+    run.status === 0 || run.status === 1,
+    `git check-ignore could not answer for ${path}: ${run.status} ${run.stderr}`
+  );
+  return run.status === 0;
+}
+
+/**
+ * The check that reports on the box rather than passing in it.
+ *
+ * Every rule prints one line the test looks for, or exits 1 naming what
+ * it found instead - so a rule can neither fail silently nor go
+ * unproven behind a green verdict.
+ */
+const PROBE_SCRIPT = `#!/bin/sh
+# Issue #337's premises about Inspector's own check box, read from
+# inside the box. Deliberately without \`set -e\`: half of this is
+# commands that are supposed to fail.
+
+fail() {
+  echo "PROBE FAILED: $1" >&2
+  exit 1
+}
+
+# Writable where git would ignore a new file (inspector#85). Written and
+# read back rather than \`touch\`ed: the rule is about creating a file,
+# and touching one that is already there succeeds for another reason.
+for dir in log tmp; do
+  new="$dir/fabrica-probe-new"
+  if ! ( printf 'fabrica' > "$new" ) 2>/dev/null; then
+    fail "$dir/ refused a new file, and git ignores new files there"
+  fi
+  if [ "$(cat "$new" 2>/dev/null)" != "fabrica" ]; then
+    fail "$dir/ took a new file without keeping its contents"
+  fi
+  echo "$dir/ accepts a new file"
+done
+
+# A tracked file is immutable even so, in all three of the ways it could
+# stop being: modified, removed, replaced. Each is attempted and must
+# fail, and the file is re-read afterwards - so an attempt that
+# succeeded and was undone can never read as a refusal.
+immutable() {
+  path="$1"
+  before="$(cat "$path" 2>/dev/null)" || fail "$path is not even readable in the check box"
+  if ( printf 'x' >> "$path" ) 2>/dev/null; then
+    fail "$path could be appended to, and a tracked file must be immutable"
+  fi
+  if rm -f "$path" 2>/dev/null; then
+    fail "$path could be removed, and a tracked file must be immutable"
+  fi
+  # A rename over it, from the one directory already proven writable.
+  if mv tmp/fabrica-probe-new "$path" 2>/dev/null; then
+    fail "$path could be replaced, and a tracked file must be immutable"
+  fi
+  [ -e "$path" ] || fail "$path is gone after the attempts above"
+  [ "$(cat "$path" 2>/dev/null)" = "$before" ] || fail "$path changed after the attempts above"
+  echo "$path is immutable"
+}
+
+# Read-only where git would NOT ignore a new file: both for a file that
+# is not there yet, and for one that is.
+if ( printf 'x' > "${NEW_TRACKED_DIR_FILE}" ) 2>/dev/null; then
+  fail "${NEW_TRACKED_DIR_FILE} could be created, and git would not ignore it"
+fi
+echo "${NEW_TRACKED_DIR_FILE} cannot be created"
+immutable ${TRACKED_FILE}
+immutable log/.keep
+immutable tmp/.keep
+
+rm -f log/fabrica-probe-new tmp/fabrica-probe-new 2>/dev/null
+
+# Reported rather than asserted here, because both answers are real:
+# Inspector resolves the check's user to the uid that invoked it, and to
+# 0:0 under a rootless Docker daemon. The test is what decides what each
+# one means.
+if getent passwd "$(id -u)" > /dev/null 2>&1; then
+  echo "check box uid $(id -u) has a passwd entry"
+else
+  echo "check box uid $(id -u) has no passwd entry"
+fi
+`;
+
+// The facts about Inspector's own box that the four findings rest on,
+// asserted from inside it rather than taken from its documentation.
 //
-// Both are already load-bearing for the two green checks above - the
-// fixture boots Rails twice, into read-only log/ and tmp/, as whatever
-// user Inspector picked - but a failure there says only "red". This says
-// which fact changed.
+// All of them are already load-bearing for the two green checks above -
+// the fixture boots Rails twice, writing into `log/` and `tmp/`, as
+// whatever user Inspector picked - but a failure there says only "red".
+// This says which fact changed.
 //
-//   - log/ and tmp/ are tracked in this fixture the way `rails new`
-//     tracks them, and Inspector mounts every tracked top-level path
-//     read-only.
+//   - the box is writable where git would ignore a new file
+//     (inspector#85), which in this fixture means `log/` and `tmp/`: a
+//     `rails new` application ignores `/log/*` and `/tmp/*` and tracks a
+//     `.keep` inside each. That is what lets Rails write
+//     `tmp/local_secret.txt` without turning the check red.
+//   - a tracked file is still immutable, `.keep` included: writable
+//     where a *new* file would be ignored is not writable generally, and
+//     a check that could rewrite the repository under itself would make
+//     every verdict meaningless.
+//   - a tracked directory git would not ignore a new file in - `app/`
+//     here - is read-only for new files as well as existing ones.
 //   - the check runs as a uid with no /etc/passwd entry, which is the
 //     whole reason the generated check gives that uid an entry of its
 //     own and then creates its database cluster at check time with trust
 //     authentication.
-test("the check box is read-only where git tracks, and runs as a uid with no passwd entry", (t) => {
+//
+// One probe, one box, four facts: they are all properties of the same
+// mount layout, and a separate Inspector run for each would cost a real
+// image build apiece and prove nothing more.
+test("the check box is writable only where git would ignore a new file, and runs as a uid with no passwd entry", (t) => {
   if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
 
   const repo = railsRepository();
-  for (const path of ["log/.keep", "tmp/.keep"]) {
+  // The fixture's premises, checked here so a fixture that drifted says
+  // so instead of quietly making the probe trivial.
+  for (const path of ["log/.keep", "tmp/.keep", TRACKED_FILE]) {
     assert.equal(
       git(repo, ["ls-files", "--", path]),
       path,
-      `${path} has to be tracked for this fixture to be the shape rails new leaves - without it, log/ and ` +
-        `tmp/ are untracked and writable in the check box, and nothing here is being tested`
+      `${path} has to be tracked for this fixture to be the shape rails new leaves - without it there is ` +
+        `nothing here for the immutability half to be about`
     );
   }
+  for (const dir of ["log", "tmp"]) {
+    assert.equal(
+      gitIgnores(repo, `${dir}/fabrica-probe`),
+      true,
+      `git has to ignore a new file in ${dir}/ for this fixture to be the shape rails new leaves - without ` +
+        `it the writable half is not about the rule inspector#85 introduced`
+    );
+  }
+  assert.equal(
+    gitIgnores(repo, NEW_TRACKED_DIR_FILE),
+    false,
+    `git must NOT ignore ${NEW_TRACKED_DIR_FILE}, or the read-only half of this test has nothing to prove`
+  );
 
-  // Proven in the box the check actually runs in - the one place the
-  // read-only mounts exist.
+  // Proven in the box the check actually runs in - the one place these
+  // mounts exist.
   const terms = tempDir("fabrica-e2e-terms-");
   const probe = join(terms, "probe.sh");
 
@@ -305,33 +429,24 @@ test("the check box is read-only where git tracks, and runs as a uid with no pas
     `${JSON.stringify({ check: "sh /terms/probe.sh" }, null, 2)}\n`
   );
   writeFileSync(join(terms, "Dockerfile.inspector"), `FROM ${FIXTURE_IMAGE}\n`);
-  writeFileSync(
-    probe,
-    `#!/bin/sh\n` +
-      `# Fails if either directory turns out to be writable, since then\n` +
-      `# this fixture is not the shape the read-only finding is about.\n` +
-      `for dir in log tmp; do\n` +
-      `  if touch "$dir/fabrica-probe" 2>/dev/null; then\n` +
-      `    echo "$dir is writable inside the check box" >&2\n` +
-      `    exit 1\n` +
-      `  fi\n` +
-      `done\n` +
-      `echo "log and tmp are both read-only, as expected"\n` +
-      `# Reported rather than asserted here, because both answers are\n` +
-      `# real: Inspector resolves the check's user to the uid that\n` +
-      `# invoked it, and to 0:0 under a rootless Docker daemon. The\n` +
-      `# test below is what decides what each one means.\n` +
-      `if getent passwd "$(id -u)" > /dev/null 2>&1; then\n` +
-      `  echo "check box uid $(id -u) has a passwd entry"\n` +
-      `else\n` +
-      `  echo "check box uid $(id -u) has no passwd entry"\n` +
-      `fi\n`
-  );
+  writeFileSync(probe, PROBE_SCRIPT);
 
   const report = runInspector(repo, terms);
   assert.equal(report.outcome, "green", reportDetail(report));
   const output = report.output ?? "";
-  assert.ok(output.includes("both read-only"), reportDetail(report));
+  // Each rule prints its own line, and each line is asserted: a probe
+  // that died halfway through would otherwise be a green check with a
+  // rule silently unproven.
+  for (const line of [
+    "log/ accepts a new file",
+    "tmp/ accepts a new file",
+    "log/.keep is immutable",
+    "tmp/.keep is immutable",
+    `${NEW_TRACKED_DIR_FILE} cannot be created`,
+    `${TRACKED_FILE} is immutable`,
+  ]) {
+    assert.ok(output.includes(line), `the probe never reported "${line}":\n${reportDetail(report)}`);
+  }
 
   // Issue #337's fourth finding, which is the one with no visible
   // signature in a red check: the generated PostgreSQL setup exists

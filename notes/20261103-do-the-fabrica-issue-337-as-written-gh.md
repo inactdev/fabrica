@@ -349,6 +349,43 @@ purpose, never the working tree, so that would make what the terms say
 depend on whatever is checked out and uncommitted at the time - and it
 would leave one shape with two sources of truth.
 
+## The check box's write rule, restated (the decision, written first)
+
+inspector#85 replaced "read-only wherever git tracks" with "writable
+where git would ignore a new file". The probe test asserted the old rule,
+which is now deliberately false, so by Client ruling it asserts the new
+one: a new file can be created in `log/` and `tmp/`; the tracked
+`log/.keep` and `tmp/.keep` cannot be modified, removed or replaced; a
+tracked directory git would *not* ignore a new file in - `app/` in the
+fixture - stays read-only for both new and existing files; and the box
+still runs as a uid with no passwd entry.
+
+Four facts, one box, one probe. The alternative was a separate Inspector
+run per rule, which reads cleaner and was rejected: each run is a real
+image build plus a real container, the slowest thing in this suite, and
+it buys no accuracy at all - all four are properties of the same mount
+layout and are observable from inside one check. Also rejected, on
+accuracy rather than speed: reading the mounts from the host with
+`docker inspect`, or from Inspector's own configuration. That asserts
+how the box was *asked* to be built; this test exists because four
+separate mistakes all read as correct until something actually ran the
+check.
+
+The safety requirement is that the probe cannot pass by accident, which
+shapes how each half is written:
+
+- a writable claim writes real content and reads it back, rather than
+  `touch`ing: `touch` on an existing file succeeds for a different
+  reason than creating one does, and the ruling is about creating.
+- an immutable claim attempts all three forms the ruling names - append
+  to it, `rm` it, and `mv` another file over it - and then confirms the
+  file is still there with its original content. An attempt that
+  succeeded and was undone can therefore never read as a refusal.
+- every rule prints one definite line, and the test asserts each line is
+  present rather than asserting green alone. A probe that died halfway
+  leaves lines missing, so a partial run fails instead of passing on
+  Inspector's verdict.
+
 ## What the end-to-end test can and cannot prove about the uid
 
 `register`'s own tests stub `id -u`, so both branches of `pg_as` really
