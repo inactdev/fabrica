@@ -22,20 +22,15 @@
 //     else - no `inspector` on PATH, a failed image build, a red check -
 //     FAILS, loudly, naming what happened. By Client ruling on issue
 //     #337 this is deliberate.
-//   - **One red is expected right now, and it is not Fabrica's to
-//     fix.** The pin carries the named `repo` build context a terms
-//     folder's Dockerfile copies the repository out of (inspector#83),
-//     so both routes get as far as running the suite - and then Rails
-//     writes `tmp/local_secret.txt`, because it needs a
-//     `secret_key_base` and has no configured one, into a `tmp/` that is
-//     read-only in the check box. `Errno::EROFS` is what both routes
-//     report until the pin moves to inspector#84's merge commit, which
-//     makes the paths git would ignore writable. By Client ruling
-//     nothing here works around it: copying the checkout somewhere
-//     writable, or redirecting Rails' writes, would both hide the thing
-//     #84 fixes. So these two tests stay red, by name, rather than being
-//     skipped or weakened - and `EXPECTED_RED` below is what says so in
-//     the failure.
+//   - **Both routes are expected green**, and two facts about the pinned
+//     Inspector are what make that reachable: the named `repo` build
+//     context a terms folder's Dockerfile copies the repository out of
+//     (inspector#83), and a check box that is writable where git would
+//     ignore a new file (inspector#85) - Rails writes
+//     `tmp/local_secret.txt` when it has no configured
+//     `secret_key_base`, and `tmp/*` is git-ignored in any `rails new`
+//     application. Nothing here works around either: an older pin is a
+//     red naming its own cause, which is the point.
 //   - **The verdict is read from Inspector's own report, never from its
 //     exit code.** `inspector` cannot run a check without publishing:
 //     `-branch` is required, and a missing GITHUB_TOKEN is a refusal
@@ -202,31 +197,11 @@ function runInspector(repo: string, terms?: string): InspectorReport {
   return JSON.parse(readFileSync(path, "utf8")) as InspectorReport;
 }
 
-/**
- * The one red these two tests are currently expected to report, named in
- * the failure so nobody has to go looking for whether it is the known
- * one - see the header's second bullet. It goes away when the pin in
- * `.github/workflows/docker-tests.yml` moves to inspector#84's merge
- * commit, and nothing in this repository is supposed to make it go away
- * sooner.
- */
-const EXPECTED_RED =
-  `If the output below is \`Errno::EROFS\` on a path under /workspace/tmp, this is the known red: Rails ` +
-  `writes tmp/local_secret.txt when it has no configured secret_key_base, and tmp/ is read-only in the ` +
-  `check box. It is inspector#84's to fix (it makes the paths git would ignore writable), and by Client ` +
-  `ruling nothing here works around it. Anything else in the output is a real regression.`;
-
 /** The lines worth putting in a failure message: a red check's own
  * output is the only thing that says which of the four findings came
  * back. */
 function reportDetail(report: InspectorReport): string {
   return `outcome=${report.outcome} check=${report.checkCommand}\n${report.output ?? "(no output recorded)"}`;
-}
-
-/** A green assertion's failure message: the report, plus the one red
- * that is known and expected. */
-function greenDetail(report: InspectorReport): string {
-  return `${reportDetail(report)}\n\n${EXPECTED_RED}`;
 }
 
 // --------------------------------------------------- the terms route
@@ -242,7 +217,7 @@ test("register --terms: the terms it writes pass a real Inspector run", async (t
 
   const report = runInspector(repo, terms);
 
-  assert.equal(report.outcome, "green", greenDetail(report));
+  assert.equal(report.outcome, "green", reportDetail(report));
   // The two facts about this run that make the green mean what it is
   // supposed to mean: the check Inspector ran is the one in the folder,
   // and the folder is the one register wrote.
@@ -279,7 +254,7 @@ test("register: the files it commits into a repository pass a real Inspector run
 
   const report = runInspector(repo);
 
-  assert.equal(report.outcome, "green", greenDetail(report));
+  assert.equal(report.outcome, "green", reportDetail(report));
   assert.equal(report.checkCommand, "./check.sh", reportDetail(report));
   // In-repository terms, so there is no terms folder on the record -
   // which is the one way this run differs from the one above.

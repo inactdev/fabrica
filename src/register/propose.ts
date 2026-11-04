@@ -104,7 +104,10 @@ export interface ProposalSignals {
    * application, so reading it costs nothing like a `package-lock.json`
    * would. */
   gemfileLock: string | null;
-  /** `Gemfile` at the repository root - read for its own `ruby` line. */
+  /** `Gemfile` at the repository root - read for its own `ruby` line,
+   * and for the paths inside the repository it names with `path:`,
+   * `gemspec` or `eval_gemfile`, which the lockfile does not say and
+   * `bundle install` will go looking for. */
   gemfile: string | null;
   /** `.ruby-version` at the repository root. */
   rubyVersion: string | null;
@@ -571,6 +574,13 @@ function proposeDependencies(
     packageLock: signals.packageLock,
     goSum: signals.goSum,
     gemfileLock: signals.gemfileLock,
+    // The manifest as well as the lockfile: only the `Gemfile` says
+    // which paths inside the repository `bundle install` will go
+    // looking for (a `path:` gem's own directory). Forgetting it here
+    // is how the terms route came to build a Dockerfile with no copy
+    // for one, while the in-repository route - which derives its shape
+    // from the working tree instead - had them.
+    gemfile: signals.gemfile,
     rubyVersionFile: signals.rubyVersion !== null,
     railsBin: signals.railsBin,
   });

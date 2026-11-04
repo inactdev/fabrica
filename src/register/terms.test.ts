@@ -29,7 +29,7 @@ import {
 } from "./origin.ts";
 import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
-import { railsFixtureFiles } from "./helpers/rails-fixture.ts";
+import { RAILS_GEMFILE, railsFixtureFiles } from "./helpers/rails-fixture.ts";
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-terms-home-"));
@@ -243,6 +243,36 @@ test("register --terms: a Rails repository gets its servers, its gems and a long
     assert.equal(existsSync(join(dir, file)), false, `${file} must never land in the repository`);
   }
   assert.equal(result.check, RECORDED_CHECK);
+});
+
+// A real bug this route shipped: the copies for a gem the repository
+// keeps itself landed for the in-repository route and not for this one,
+// because the two derive the same shape through two different callers
+// and only one passed the Gemfile along. `bundle install` then failed on
+// `The path /deps/engines/prototypes does not exist`, and every unit
+// test of the Dockerfile passed straight through it - the renderer was
+// right, nothing proved this route fed it. So this asks the route.
+test("register --terms: a Gemfile naming a gem in the repository gets a COPY for its directory", async () => {
+  const recordHome = tempHome();
+  const dir = project();
+  dropCheckScript(dir);
+  commit(dir, {
+    ...railsFixtureFiles(),
+    Gemfile: `${RAILS_GEMFILE}gem "prototypes", path: "engines/prototypes"\n`,
+    "engines/prototypes/prototypes.gemspec": `Gem::Specification.new { |s| s.name = "prototypes" }\n`,
+  });
+  const terms = termsFolder();
+
+  await registerProject({ recordHome, path: dir, terms }, { tools: fakeRegisterTools() });
+
+  const dockerfile = readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8");
+  // Through the named repo context, like every other copy on this
+  // route, and above the install that reads it.
+  assert.match(dockerfile, /^COPY --from=repo engines\/prototypes \/deps\/engines\/prototypes\/$/m, dockerfile);
+  assert.ok(
+    dockerfile.indexOf("COPY --from=repo engines/prototypes") < dockerfile.indexOf("RUN cd /deps && bundle install"),
+    dockerfile
+  );
 });
 
 // Client ruling on this task: keep existing files, write only what's

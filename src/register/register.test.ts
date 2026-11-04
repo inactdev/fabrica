@@ -22,7 +22,7 @@ import { registerProject } from "./register.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, REGISTER_BRANCH } from "./origin.ts";
 import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
-import { writeRailsFixture } from "./helpers/rails-fixture.ts";
+import { RAILS_GEMFILE, railsFixtureFiles, writeRailsFixture } from "./helpers/rails-fixture.ts";
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-register-home-"));
@@ -196,6 +196,40 @@ test("register: a Rails project's committed files carry its servers, its gems an
 
   const [pr] = tools.pullRequestCalls;
   assert.ok(pr.body.includes("PostgreSQL and Redis are installed in"), pr.body);
+});
+
+// The companion of terms.test.ts's own: the two routes derive one shape
+// through two different callers, and a gem the repository keeps itself
+// reached only this one for a while. Here the Dockerfile is committed
+// into the repository, so the build context *is* the repository and the
+// copy is a plain one - the same references, through the form this route
+// uses.
+test("register: a Gemfile naming a gem in the repository gets a COPY for its directory", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  writeRailsFixture(dir, {
+    ...railsFixtureFiles(),
+    Gemfile: `${RAILS_GEMFILE}gem "prototypes", path: "engines/prototypes"\n`,
+    "engines/prototypes/prototypes.gemspec": `Gem::Specification.new { |s| s.name = "prototypes" }\n`,
+  });
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-qm", "rails app with a gem of its own"]);
+  git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
+
+  await registerProject(
+    { recordHome, path: dir, check: "bundle exec rspec", image: "ruby:3.3.4" },
+    { tools: fakeRegisterTools() }
+  );
+
+  const dockerfile = fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR);
+  assert.match(dockerfile, /^COPY engines\/prototypes \/deps\/engines\/prototypes\/$/m, dockerfile);
+  // The whole instruction, not the words `bundle install`: those appear
+  // in the generated note above this very copy, and `indexOf` does not
+  // know a comment from an instruction.
+  assert.ok(
+    dockerfile.indexOf("COPY engines/prototypes") < dockerfile.indexOf("RUN cd /deps && bundle install"),
+    dockerfile
+  );
 });
 
 // The servers are installed by Dockerfile.inspector, and this route's

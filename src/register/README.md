@@ -687,14 +687,16 @@ development — a different database and a different gem group from the
 one the suite then runs in. The suite's own `spec_helper` defaulting
 `RAILS_ENV` is too late and in the wrong process.
 
-One red is expected right now and nothing here works around it: Rails
-writes `tmp/local_secret.txt` when it has no configured
-`secret_key_base`, and `tmp/` is read-only in the check box, so the
-end-to-end tests fail on `Errno::EROFS`. That is Inspector's to fix
-(inactdev/inspector#84 makes the paths git would ignore writable), by
-Client ruling — no copying `/workspace`, no redirecting Rails' writes —
-and the tests stay red on exactly that error, naming it, until the pin
-moves to #84's merge commit.
+One thing the check box has to supply for this to pass at all, and
+nothing here works around it: Rails writes `tmp/local_secret.txt` when
+it has no configured `secret_key_base`, and `tmp/*` is git-ignored in
+any `rails new` application. Under a check box with that path read-only
+the end-to-end tests fail on `Errno::EROFS`. That was Inspector's to fix
+(inactdev/inspector#85 makes the box writable where git would ignore a
+new file), by Client ruling — no copying `/workspace`, no redirecting
+Rails' writes — and the pin in `.github/workflows/docker-tests.yml` now
+names that merge commit. An older pin is a red naming its own cause,
+which is the point.
 
 ### And all of it is run, not asserted
 
@@ -704,9 +706,18 @@ moves to #84's merge commit.
 the database, one that uses Redis and one that uses the path gem) both
 ways, hands each to the real `inspector`, and reads `outcome: "green"`
 out of Inspector's own report. It skips only when Docker is absent; a
-missing `inspector` is a failure, not a skip. See that file's header for
-the pin, the one expected red above, and why the verdict comes from the
+missing `inspector` is a failure, not a skip. Both routes are expected
+green. See that file's header for the two facts about the pinned
+Inspector that make that reachable, and why the verdict comes from the
 report rather than from an exit code.
+
+What those two end-to-end tests catch that no unit test here can: the
+shape is derived at two call sites, one per route, and the renderer is
+route-agnostic. A caller that drops a signal — which is exactly how the
+`path:` gem's copies reached the in-repository route and not the terms
+one — leaves every test of `inspectorDockerfile` green. So each route
+also has a test of its own, in `register.test.ts` and `terms.test.ts`,
+asserting the copy is in the Dockerfile that route actually wrote.
 
 ### What it says it has not done
 

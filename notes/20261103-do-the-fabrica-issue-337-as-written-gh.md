@@ -251,7 +251,7 @@ a destination ending in `/`. This repository's own `Dockerfile.inspector`
 is the live example of the nested form (`COPY ... scripts/x.mjs
 /deps/scripts/`).
 
-## `RAILS_ENV=test`, and the one failure deliberately left red
+## `RAILS_ENV=test`, and the read-only `tmp/` that was Inspector's to fix
 
 The generated check now exports `RAILS_ENV=test` alongside
 `BOOTSNAP_CACHE_DIR` and `TMPDIR`. Without it `bin/rails
@@ -264,13 +264,14 @@ What is **not** done, by Client ruling: nothing about
 Rails writes that file when it needs a `secret_key_base` and has no
 configured one, and `tmp/` is read-only in the check box. Copying the
 checkout somewhere writable, or redirecting Rails' writes, would both
-work and both be wrong: the real fix is Inspector making the paths git
-would ignore writable (inspector#84), and `tmp/*` is git-ignored in any
-`rails new` application. So the end-to-end tests stay red on exactly that
-error until the pin moves to #84's merge commit - loudly, naming it,
-never skipped. `inspector-e2e.test.ts`'s `EXPECTED_RED` is what says so
-in the failure message, so the next reader does not have to go looking
-for whether this is the known one.
+work and both be wrong: the real fix was Inspector making the box
+writable where git would ignore a new file, and `tmp/*` is git-ignored in
+any `rails new` application. That landed as inspector#85, and the pin in
+`.github/workflows/docker-tests.yml` now names its merge commit
+(`8cc11fd`), so both routes are expected green rather than expected to
+fail loudly. The interim `EXPECTED_RED` constant that named this error in
+`inspector-e2e.test.ts`'s failure message is gone with it - leaving it
+would be a false statement about a run that now passes.
 
 ### A generated file's own comments are part of what a test searches
 
@@ -285,6 +286,68 @@ further down" instead of spelling the command. The rule for any `note:`
 added here - a generated script's comments are searched by exactly the
 same `indexOf` its instructions are, so a note that quotes a command
 appearing later in the same file will shadow it.
+
+## One shape, two routes, one of them not fed (the decision, written first)
+
+The path-gem copies landed for the in-repository route and not for the
+terms route, and the terms end-to-end run refused on exactly the error
+they were added to fix: `The path /deps/engines/prototypes does not
+exist`. The cause is that the two routes derive the same
+`DependencyShape` through two different callers of `dependencyShapeFrom`,
+and only one of them was taught the new input:
+
+- the in-repository route calls `dependencyShapeInTree(worktree)`
+  (`register.ts`), which reads the working tree and passes `gemfile`;
+- the terms route uses the *proposal's* shape,
+  `propose.ts`'s `proposeDependencies(signals)`, which reads every signal
+  off a git ref and forwards five of the six to `dependencyShapeFrom` -
+  `gemfile` was already on `ProposalSignals` and already read off the
+  ref for the Ruby-version derivation, and simply was not passed on.
+
+So the fix is one line at the site that drops it, not a second
+code path. That is the safest of the options: the renderer
+(`inspectorDockerfile`/`installLines`) is already route-agnostic and
+already proven to emit the copies for both the plain and the
+`--from=repo` form, so nothing about what is generated changes - only
+whether the one signal reaches it.
+
+What makes it stay fixed is a **route-level** test per route, which is
+the layer that was missing: every unit test of `inspectorDockerfile`
+passed through this bug, because the renderer was right and nothing
+proved either route fed it. `terms.test.ts` and `register.test.ts` now
+register a Rails repository whose Gemfile names a `path:` gem and assert
+the `COPY` is in the `Dockerfile.inspector` that route actually wrote -
+each in the form its own route uses, since only the terms route builds
+from a named context: `COPY --from=repo engines/prototypes
+/deps/engines/prototypes/` there, a plain `COPY` of the same reference in
+the repository route, whose committed Dockerfile has the repository as
+its build context already.
+
+Writing the second of those walked straight into the sharp edge recorded
+two sections up, which is why it is recorded: asserting the copy comes
+before `bundle install` with `indexOf("bundle install")` compared the
+copy against the *generated note* above it, which names the command in
+prose. Both route tests order against the whole instruction, `RUN cd
+/deps && bundle install`. A note that quotes a command is findable by
+anything searching for that command, every time.
+
+Rejected alternative: making `gemfile` a **required** parameter of
+`dependencyShapeFrom`, so a caller that forgets it is a compile error.
+It is a genuinely stronger guard against this one mistake, and it was
+turned down on scope - it forces an explicit `gemfile: null` through
+every npm and Go call site in two test files that are a protected path,
+for a class of bug the route-level tests above catch more broadly (they
+would also catch a renderer branch that dropped the copies, which is a
+real risk: `installLines` has three return branches and each had to be
+changed). Worth revisiting if a third caller of `dependencyShapeFrom`
+ever appears; with two, the tests are the better value.
+
+Also rejected: having `terms.ts` call `dependencyShapeInTree` against
+the repository's working tree, which would have fixed it with no change
+to `propose.ts`. The terms route reads every signal off a git ref on
+purpose, never the working tree, so that would make what the terms say
+depend on whatever is checked out and uncommitted at the time - and it
+would leave one shape with two sources of truth.
 
 ## What the end-to-end test can and cannot prove about the uid
 
