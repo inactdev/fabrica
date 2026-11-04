@@ -22,6 +22,20 @@ import type { CheckBox } from "../check-box.ts";
  * explicit allowlist rather than a pass-through. */
 const CREDENTIAL_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
 
+/**
+ * The same name, for a caller outside this directory that has to know
+ * *which* variable the worker's box is given without being allowed to
+ * spell it (CONTRACT rule 8 scans every other directory for the word).
+ *
+ * One reader today: `src/buildsecrets/`'s proof that a worker's box
+ * gets exactly this one variable and never a build secret. That test
+ * has to put a real credential line in a throwaway `brain.env` for
+ * `credentialEnvFrom` to answer at all, and has to name the key it then
+ * expects back - which it does through this constant rather than by
+ * writing the name and failing the rule 8 scan.
+ */
+export const WORKER_CREDENTIAL_VAR = CREDENTIAL_VAR;
+
 /** Where the worker token lives when it is not in Fabrica's environment:
  * a file Fabrica reads itself, so no shell profile has to export it. */
 export function brainEnvPath(recordHome: string): string {

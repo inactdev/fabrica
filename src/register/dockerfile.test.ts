@@ -24,8 +24,11 @@ import {
   knownNonRootUser,
 } from "./dockerfile.ts";
 import {
+  PAID_SOURCE_VARIABLE,
   RAILS_GEMFILE,
   RAILS_GEMFILE_LOCK,
+  RAILS_GEMFILE_LOCK_PAID_SOURCE,
+  RAILS_GEMFILE_PAID_SOURCE,
   railsFixtureFiles,
   writeRailsFixture,
 } from "./helpers/rails-fixture.ts";
@@ -657,4 +660,116 @@ test("dependencyInstallerIn names the fetching command as the text spells it", (
   assert.equal(dependencyInstallerIn("pip3  install -r requirements.txt"), "pip3 install");
   assert.equal(dependencyInstallerIn("go mod tidy && go test ./..."), "go mod tidy");
   assert.equal(dependencyInstallerIn("npm test"), null);
+});
+
+// ------------------------------------- build secrets (issue #342)
+
+test("rubyShape: a lockfile with a paid gem source carries bundler's variable for it", () => {
+  const shape = dependencyShapeFrom({
+    packageLock: false,
+    goSum: false,
+    gemfileLock: RAILS_GEMFILE_LOCK_PAID_SOURCE,
+    gemfile: RAILS_GEMFILE_PAID_SOURCE,
+  });
+  assert.deepEqual(shape?.buildSecrets, [PAID_SOURCE_VARIABLE]);
+  // The public-source fixture is the control: almost every project is
+  // this one, and it must carry no key and no mount at all.
+  assert.equal(
+    dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE, gemfile: RAILS_GEMFILE })
+      ?.buildSecrets,
+    undefined
+  );
+});
+
+// The exact line, because every character of it is load-bearing: the
+// file form rather than `env=` (which needs a newer Dockerfile frontend
+// than some installs have), `mode=0444` so a non-root install step can
+// read it, the mount on the same RUN as the install, and the value read
+// into the variable bundler itself looks for.
+test("inspectorDockerfile: each build secret is mounted on the install step, in the file form", () => {
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({
+      packageLock: false,
+      goSum: false,
+      gemfileLock: RAILS_GEMFILE_LOCK_PAID_SOURCE,
+      gemfile: RAILS_GEMFILE_PAID_SOURCE,
+    }),
+  });
+
+  const install = instructions(text).find((line) => line.includes("bundle install"));
+  assert.equal(
+    install,
+    `RUN --mount=type=secret,id=${PAID_SOURCE_VARIABLE},mode=0444 cd ${DEPS_DIR} && ` +
+      `${PAID_SOURCE_VARIABLE}="$(cat /run/secrets/${PAID_SOURCE_VARIABLE})" bundle install`
+  );
+  // The `env=` form is the one spelling that must never appear here.
+  assert.ok(!text.includes("env="), `the env= mount form needs a newer Dockerfile frontend: ${install}`);
+  // And the name is explained where it is used, since a Dockerfile is
+  // read by whoever has to edit it next.
+  assert.ok(text.includes("build secret"), text);
+});
+
+test("inspectorDockerfile: two build secrets are two mounts on the one install line", () => {
+  const lockfile = `GEM
+  remote: https://gems.a.example.com/
+  specs:
+    a (1.0.0)
+
+GEM
+  remote: https://gems.b.example.com/
+  specs:
+    b (1.0.0)
+
+DEPENDENCIES
+  a
+  b
+`;
+  const text = inspectorDockerfile({
+    from: "ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: lockfile }),
+  });
+
+  const install = instructions(text).find((line) => line.includes("bundle install"));
+  assert.equal(
+    install,
+    `RUN --mount=type=secret,id=BUNDLE_GEMS__A__EXAMPLE__COM,mode=0444 ` +
+      `--mount=type=secret,id=BUNDLE_GEMS__B__EXAMPLE__COM,mode=0444 cd ${DEPS_DIR} && ` +
+      `BUNDLE_GEMS__A__EXAMPLE__COM="$(cat /run/secrets/BUNDLE_GEMS__A__EXAMPLE__COM)" ` +
+      `BUNDLE_GEMS__B__EXAMPLE__COM="$(cat /run/secrets/BUNDLE_GEMS__B__EXAMPLE__COM)" bundle install`
+  );
+});
+
+test("inspectorDockerfile: a project with no paid source has no mount anywhere in it", () => {
+  for (const shape of [
+    dependencyShapeFrom({ packageLock: true, goSum: false }),
+    dependencyShapeFrom({ packageLock: false, goSum: false, gemfileLock: RAILS_GEMFILE_LOCK, gemfile: RAILS_GEMFILE }),
+  ]) {
+    const text = inspectorDockerfile({ from: "ruby:3.3.4", reason: "--image said so", shape });
+    assert.ok(!text.includes("--mount"), `nothing to mount, so nothing is mounted:\n${text}`);
+    assert.ok(!text.includes("/run/secrets"), text);
+  }
+});
+
+// A non-root install step is the case `mode=0444` exists for: Docker
+// mounts a secret as mode 0400 owned by root, which `circleci` cannot
+// read, and the failure would be a `cat: Permission denied` inside an
+// image build.
+test("inspectorDockerfile: a cimg image's own install step can still read the secret", () => {
+  const text = inspectorDockerfile({
+    from: "cimg/ruby:3.3.4",
+    reason: "--image said so",
+    shape: dependencyShapeFrom({
+      packageLock: false,
+      goSum: false,
+      gemfileLock: RAILS_GEMFILE_LOCK_PAID_SOURCE,
+      gemfile: RAILS_GEMFILE_PAID_SOURCE,
+    }),
+  });
+
+  const install = instructions(text).find((line) => line.includes("bundle install"));
+  assert.match(install ?? "", /mode=0444/);
+  assert.ok(instructions(text).includes("USER circleci"), instructions(text).join("\n"));
 });

@@ -19,7 +19,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CHECK_SCRIPT } from "./origin.ts";
+import { buildSecretsFor } from "../buildsecrets/index.ts";
+import { CHECK_SCRIPT, INSPECTOR_CONFIG } from "./origin.ts";
 
 /** The file Inspector builds the check box from, at the repository root.
  * One name, used by the writer, the scaffolded `protectedPaths` list and
@@ -146,6 +147,25 @@ export interface DependencyShape {
   /** Servers `check.sh` starts inside the box, waits for, and stops
    * again, since the box has no network to reach one over. */
   services?: readonly BoxService[];
+  /**
+   * Credential variables the install step itself needs, mounted on it as
+   * Docker build secrets (issue #342) - a paid gem source's own, derived
+   * from the lockfile by `src/buildsecrets/derive.ts`. Names only: the
+   * value never appears in this file, in the image, or in anything
+   * Fabrica writes.
+   *
+   * Empty (and absent) for every project whose dependencies all come
+   * from a public source, which is almost every project.
+   */
+  buildSecrets?: readonly string[];
+  /**
+   * What the lockfile named that a credential variable could *not* be
+   * derived for - a gem source with a port in it, say. Written into
+   * `fabrica register`'s own notes rather than dropped: a missing name
+   * is a build that fails at the install step with nothing said about
+   * what it was missing.
+   */
+  buildSecretNotes?: readonly string[];
   /** Environment this shape's suite needs exported before it runs, and
    * the reason, written into `check.sh` above it. Implies a scratch
    * directory, the same way `services` and `prepare` do. */
@@ -497,6 +517,11 @@ export function rubyShape(opts: {
   if (REDIS_GEMS.some((gem) => gems.has(gem))) services.push(REDIS);
   const pathCopies =
     opts.gemfile === null || opts.gemfile === undefined ? [] : gemfileReferences(opts.gemfile);
+  // Issue #342: a gem source other than the public one needs a
+  // credential at install time, and the lockfile is what names the
+  // sources. Derived by `src/buildsecrets/`, which owns the whole
+  // concept - this file only writes the mount.
+  const secrets = buildSecretsFor(opts.lockfile);
 
   return {
     lockfile: GEMFILE_LOCK,
@@ -506,6 +531,8 @@ export function rubyShape(opts: {
     ...(opts.rubyVersionFile === true ? { extraCopies: [RUBY_VERSION_FILE] } : {}),
     ...(pathCopies.length > 0 ? { pathCopies } : {}),
     ...(services.length > 0 ? { services } : {}),
+    ...(secrets.names.length > 0 ? { buildSecrets: secrets.names } : {}),
+    ...(secrets.notes.length > 0 ? { buildSecretNotes: secrets.notes } : {}),
     ...(opts.railsBin === true
       ? {
           // Issue #337's fourth finding, on the Rails side of it: every
@@ -789,6 +816,76 @@ function pathCopyLines(shape: DependencyShape, user: string | null, repoFiles: R
   ];
 }
 
+/** Where Docker mounts a build secret by default: one file per secret
+ * id, readable for the length of the one `RUN` that mounts it and in no
+ * layer afterwards. Docker's own documented path, not a choice of
+ * ours. */
+export const SECRET_MOUNT_DIR = "/run/secrets";
+
+/**
+ * The `--mount` flags that put this project's build secrets on its
+ * install step, and the shell prefix that reads each one into the
+ * variable bundler looks for (issue #342).
+ *
+ * Two deliberate choices in the spelling, both of which a different
+ * answer would get silently wrong somewhere:
+ *
+ *   - **The file form, never `--mount=...,env=NAME`.** The `env` option
+ *     hands the value straight to the step as a variable and would need
+ *     no `cat` at all, but it is a newer Dockerfile frontend feature -
+ *     Docker's own documentation puts it behind a `# syntax=` pin - and
+ *     some installs read this file with an older frontend. The file form
+ *     works on any Docker with BuildKit, which is the only requirement
+ *     either side of this has.
+ *   - **`mode=0444`.** A secret mounts as mode 0400 owned by root by
+ *     default, so a `cat` of it fails for any install step that does not
+ *     run as root - which is exactly what a `cimg/*` base image's step
+ *     does (see `knownNonRootUser`). The file exists only inside this
+ *     one `RUN`, on a tmpfs, in a container with nothing else in it, and
+ *     is in no layer afterwards.
+ *
+ * One mount per name, all on the same `RUN` as the install, because a
+ * secret is readable only by the step that mounts it.
+ */
+export function secretMountFlags(names: readonly string[]): string {
+  return names.map((name) => `--mount=type=secret,id=${name},mode=0444 `).join("");
+}
+
+/** @see secretMountFlags - the variable assignments in front of the
+ * install command itself. */
+export function secretReadPrefix(names: readonly string[]): string {
+  return names.map((name) => `${name}="$(cat ${SECRET_MOUNT_DIR}/${name})" `).join("");
+}
+
+/** The install `RUN`, with its build secrets mounted on it when this
+ * project has any. One place builds this line, so the flags, the reads
+ * and the command can never drift apart. */
+function installRun(shape: DependencyShape): string {
+  const names = shape.buildSecrets ?? [];
+  return `RUN ${secretMountFlags(names)}cd ${DEPS_DIR} && ${secretReadPrefix(names)}${shape.install}`;
+}
+
+/** The comment above an install step that mounts credentials - a reader
+ * meeting `--mount=type=secret` has to know where the value comes from
+ * and that nothing here holds one. */
+function secretNote(shape: DependencyShape): string[] {
+  const names = shape.buildSecrets ?? [];
+  if (names.length === 0) return [];
+  return [
+    `#`,
+    ...comment(
+      `${names.join(", ")}: this project installs from a gem source other than the public one, so ` +
+        `\`${shape.install}\` needs that source's credential - and ${GEMFILE_LOCK} is what named the source. ` +
+        `${names.length === 1 ? `The name is` : `The names are`} bundler's own for it. Only the ` +
+        `${names.length === 1 ? `name lives` : `names live`} here: the value is mounted as a Docker build ` +
+        `secret, which is a file that exists for this one RUN and is in no image layer, and comes from ` +
+        `whoever runs the build (Fabrica reads it from its own brain.env; Inspector reads it from its own ` +
+        `environment, which is what ${INSPECTOR_CONFIG}'s buildSecrets list is for). A build run without ` +
+        `${names.length === 1 ? `it` : `them`} fails here rather than quietly installing something else.`
+    ),
+  ];
+}
+
 /** The install step's own lines, with the ownership dance a non-root
  * image needs around them. `rooted` says the service lines above already
  * selected `USER root`, so the guidance about the image's default user
@@ -803,6 +900,7 @@ function installLines(
   const caveat = shape.buildNote === undefined ? [] : [`#`, ...comment(shape.buildNote)];
   const copy = copyFrom(repoFiles);
   const note = copyFromNote(repoFiles);
+  const secrets = secretNote(shape);
   // Always between the manifest's own COPY and the install, since the
   // install is what reads them.
   const paths = pathCopyLines(shape, user, repoFiles);
@@ -810,12 +908,13 @@ function installLines(
     return [
       ...caveat,
       ...note,
+      ...secrets,
       `USER root`,
       `RUN mkdir -p ${DEPS_DIR} && chown -R ${user}:${user} ${DEPS_DIR}`,
       `USER ${user}`,
       `COPY ${copy}--chown=${user}:${user} ${copiedFiles(shape)} ${DEPS_DIR}/`,
       ...paths,
-      `RUN cd ${DEPS_DIR} && ${shape.install}`,
+      installRun(shape),
     ];
   }
   if (rooted) {
@@ -824,9 +923,10 @@ function installLines(
       `#`,
       ...comment(`This installs as root, which the USER root above selected.`),
       ...note,
+      ...secrets,
       `COPY ${copy}${copiedFiles(shape)} ${DEPS_DIR}/`,
       ...paths,
-      `RUN cd ${DEPS_DIR} && ${shape.install}`,
+      installRun(shape),
     ];
   }
   return [
@@ -839,9 +939,10 @@ function installLines(
     `#   RUN mkdir -p ${DEPS_DIR} && chown -R <user>:<user> ${DEPS_DIR}`,
     `#   USER <user>`,
     ...note,
+    ...secrets,
     `COPY ${copy}${copiedFiles(shape)} ${DEPS_DIR}/`,
     ...paths,
-    `RUN cd ${DEPS_DIR} && ${shape.install}`,
+    installRun(shape),
   ];
 }
 

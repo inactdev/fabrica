@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   capsActive,
+  describeBuildSecrets,
   describeProjectCredential,
   describeUnmeasured,
   eventsByTask,
@@ -29,6 +30,7 @@ import {
   readPullRequestTemplate,
   requireGitRoot,
   PULL_REQUEST_TEMPLATE_PATH,
+  resolveProjectBuildSecrets,
   resolveProjectToken,
   stateOf,
   termsProblem,
@@ -43,6 +45,7 @@ import {
 } from "../index.ts";
 import type {
   BaseUserProbe,
+  BuildSecretsResolution,
   GhPublishAnswer,
   MachineImage,
   ProjectOwnToken,
@@ -815,7 +818,13 @@ function projectCheck(
    * and for a `gh` project with no GitHub repository behind it yet -
    * which this line has already failed on, above, for a reason that
    * comes first. */
-  gh?: GhPublishAnswer
+  gh?: GhPublishAnswer,
+  /** Issue #342: whether every credential this project's image build
+   * needs is on this machine. `{ kind: "none" }` for a project that
+   * lists none, which is almost every project. Resolved by
+   * `collectDoctorChecks`, which already holds the config, rather than
+   * read again here - the same arrangement `credential` has. */
+  buildSecrets: BuildSecretsResolution = { kind: "none" }
 ): DoctorCheck {
   const label = `project ${name}`;
   try {
@@ -894,6 +903,18 @@ function projectCheck(
   if (gh?.kind === "problem") {
     return { ok: false, label, detail: `${path}: ${gh.detail}`, fix: gh.fix };
   }
+  // Issue #342: a credential this project's image build needs and this
+  // machine does not have. A FAIL, and one that stops a task: both
+  // builds of that project's `Dockerfile.inspector` - Inspector's check
+  // box and this machine's own machine image - mount it on their install
+  // step, so without it nothing on this project can be built or judged.
+  // Named here, before a round, because the alternative is a `bundle
+  // install` failing inside an image on an authentication error that
+  // says nothing about which variable is missing. The variable's name;
+  // never its value.
+  if (buildSecrets.kind === "refused") {
+    return { ok: false, label, detail: `${path}: ${firstSentence(buildSecrets.message)}`, fix: buildSecrets.fix };
+  }
   // "Known to refuse", not "would accept": the refusals checked above
   // are the ones Inspector documents today, not the whole of its own
   // validation, and a config that would not even parse has its key
@@ -909,7 +930,10 @@ function projectCheck(
     detail:
       `${path}: git root, has a check, has origin${inspected}, ${describeProjectCredential(credential)}` +
       describeGhPublish(gh) +
-      describeWorkMode(workMode, path),
+      describeWorkMode(workMode, path) +
+      // Issue #342: names only, and nothing at all for a project that
+      // lists none - which is almost every project.
+      describeBuildSecrets(buildSecrets),
     // A push check that could not be taken is said out loud and passes
     // (issue #331): refusing to start a session because GitHub was
     // unreachable this minute would stop work on a project that is
@@ -1079,7 +1103,12 @@ export async function collectDoctorChecks(opts: {
           // reports about a work-mode project and what a round actually
           // does are one answer.
           workModeFor(config, path),
-          ghRepo === null ? undefined : await probes.ghPublish(ghRepo)
+          ghRepo === null ? undefined : await probes.ghPublish(ghRepo),
+          // Issue #342: the same question, asked off the same config,
+          // that both of this project's image builds ask before they
+          // run - so a missing credential is named here rather than
+          // discovered inside a build.
+          resolveProjectBuildSecrets({ recordHome, config, projectPath: path, projectLabel: name, env: process.env })
         )
       );
       // Issue #322: which image this project's machine works in - its

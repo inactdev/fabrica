@@ -185,6 +185,16 @@ cannot read a proposal as a successful registration.
   holding it, the lockfile, all three) is a judgment about his
   repository. `.inspector.json` and the CI workflow files are **never**
   listed: the gate protects those on its own.
+- **`buildSecrets`** (issue #342) — the credential variables this
+  project's own install step needs, derived from every `GEM` remote in
+  `Gemfile.lock` other than rubygems.org by bundler's own naming rule
+  (`BUNDLE_` + the host uppercased, `.` → `__`, `-` → `___`). Omitted
+  for almost every project; when there is one, the field's own line says
+  where the **value** goes — `~/.fabrica/brain.env`, mode 600, never the
+  repository — because JSON has nowhere to say it. The derivation lives
+  in `src/buildsecrets/`, which owns the whole concept; see its README.
+  A gem source this cannot name a variable for (a port in the host, say)
+  is a `note:` line rather than a silent omission.
 
 That last point is a deliberate disagreement with `protectedPathsFor`
 below, which always lists `.inspector.json` and `Dockerfile.inspector`
@@ -354,9 +364,10 @@ not be told they are "the old shape" because a comment moved.
 
 ## `.inspector.json`'s schema, and where it came from
 
-Up to three keys: `check` (the project's own script — `./check.sh`, or
+Up to four keys: `check` (the project's own script — `./check.sh`, or
 `sh /terms/check.sh` from a terms folder, see work mode above),
-`protectedPaths`, and — only when asked for — `timeoutSeconds`.
+`protectedPaths`, and — only when asked for — `timeoutSeconds` and
+`buildSecrets`.
 
 There used to be two more, `image` and `network`. **inspector#47
 (inspector PR #64) retired both, with any value**: the check box is
@@ -371,8 +382,19 @@ reach: this repository's own `/.inspector.json`, a live config the real
 Inspector acts on in this repo's CI. `scaffold.test.ts` pins that
 provenance — it fails if a key is written that this repository's own
 config doesn't use, which is exactly how the two retired keys were
-caught. A fourth key should not be added here on a guess; read
-Inspector's docs first. (`contract/helpers/fixture.ts`'s
+caught. Another key should not be added here on a guess; read
+Inspector's docs first.
+
+`buildSecrets` is the one deliberate exception to that provenance rule,
+and it took a ruling to make: issue #342 asks for it by name as the
+Fabrica half of **inspector#86**, the Inspector side of the same pair.
+Until that merges the installed Inspector reads past the key (its config
+decodes the fields it knows and ignores the rest — read from its own
+`internal/inspector/config.go`), so a project needing a credential goes
+red there with its own authentication error rather than being refused
+for the key. That is why writing it ahead of the other side is safe, and
+`scaffold.test.ts` pins the narrower thing that can be pinned instead:
+the key appears only when a project actually has one. (`contract/helpers/fixture.ts`'s
 `FIXTURE_INSPECTOR_CONFIG` still carries an `image` key. It is a fixture
 no real Inspector ever reads — every test faking the check box or
 Inspector supplies its own answer — so it is evidence of nothing about
@@ -385,6 +407,30 @@ the check, or not the image the check runs in, would protect nothing,
 which is CONTRACT rule 9's whole subject. (`Dockerfile.inspector` joined
 that list with issue #303's clarification, matching what this
 repository's own config now protects.)
+
+## A credential the install step needs (issue #342)
+
+A project that installs from a gem source other than rubygems.org needs
+that source's password at **build** time. The name of the variable
+bundler reads it from goes in `.inspector.json`'s `buildSecrets` (above)
+and the install step gets one `--mount` per name:
+
+    RUN --mount=type=secret,id=BUNDLE_ENTERPRISE__CONTRIBSYS__COM,mode=0444 cd /deps && \
+        BUNDLE_ENTERPRISE__CONTRIBSYS__COM="$(cat /run/secrets/BUNDLE_ENTERPRISE__CONTRIBSYS__COM)" bundle install
+
+Two things in that line are choices, not noise. **The file form, not
+`--mount=...,env=NAME`**: the `env` option would need no `cat` at all,
+but it is a newer Dockerfile frontend feature (Docker's own docs put it
+behind a `# syntax=` pin) and some installs read this file with an older
+one; the file form works on any Docker with BuildKit, which is all
+either side of this needs. And **`mode=0444`**: a secret mounts as 0400
+owned by root, so a `cat` of it fails for any install step that does not
+run as root - which is exactly what a `cimg/*` base image's step does.
+The file exists only inside that one `RUN`, on a tmpfs, and is in no
+layer afterwards.
+
+The value itself is never in this file, never in the image, and never in
+anything `register` writes. See `src/buildsecrets/README.md`.
 
 ## `Dockerfile.inspector`, and why `/deps`
 

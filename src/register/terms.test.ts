@@ -29,7 +29,12 @@ import {
 } from "./origin.ts";
 import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
-import { RAILS_GEMFILE, railsFixtureFiles } from "./helpers/rails-fixture.ts";
+import {
+  PAID_SOURCE_VARIABLE,
+  RAILS_GEMFILE,
+  railsFixtureFiles,
+  railsFixtureFilesWithPaidSource,
+} from "./helpers/rails-fixture.ts";
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-terms-home-"));
@@ -544,4 +549,54 @@ test("register --terms: a project already registered still refuses, before anyth
     (err: unknown) => err instanceof RegisterError && err.code === "already-registered"
   );
   assert.equal(existsSync(join(secondTerms, INSPECTOR_CONFIG)), false);
+});
+
+// Issue #342's own case, and the route it exists for: a day job's
+// repository, whose paid gem source's credential was never going to be
+// committed to it. Both files have to agree - the config lists the name
+// Inspector reads its environment for, and the Dockerfile mounts that
+// same name on the one step that needs it.
+test("register --terms: a paid gem source is listed in the config and mounted on the install step", async () => {
+  const recordHome = tempHome();
+  const dir = project();
+  dropCheckScript(dir);
+  commit(dir, railsFixtureFilesWithPaidSource());
+  const terms = termsFolder();
+
+  await registerProject({ recordHome, path: dir, terms }, { tools: fakeRegisterTools() });
+
+  const config = JSON.parse(readFileSync(join(terms, INSPECTOR_CONFIG), "utf8")) as Record<string, unknown>;
+  assert.deepEqual(config.buildSecrets, [PAID_SOURCE_VARIABLE]);
+
+  const dockerfile = readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8");
+  assert.match(
+    dockerfile,
+    new RegExp(
+      `^RUN --mount=type=secret,id=${PAID_SOURCE_VARIABLE},mode=0444 cd /deps && ` +
+        `${PAID_SOURCE_VARIABLE}="\\$\\(cat /run/secrets/${PAID_SOURCE_VARIABLE}\\)" bundle install$`,
+      "m"
+    ),
+    dockerfile
+  );
+  // No value anywhere near either file - this command never reads one.
+  for (const file of [INSPECTOR_CONFIG, DOCKERFILE_INSPECTOR, CHECK_SCRIPT]) {
+    assert.ok(
+      !readFileSync(join(terms, file), "utf8").includes("brain.env="),
+      `${file} must carry names only`
+    );
+  }
+});
+
+test("register --terms: a project installing only from the public source gets no buildSecrets key", async () => {
+  const recordHome = tempHome();
+  const dir = project();
+  dropCheckScript(dir);
+  commit(dir, railsFixtureFiles());
+  const terms = termsFolder();
+
+  await registerProject({ recordHome, path: dir, terms }, { tools: fakeRegisterTools() });
+
+  const config = JSON.parse(readFileSync(join(terms, INSPECTOR_CONFIG), "utf8")) as Record<string, unknown>;
+  assert.ok(!("buildSecrets" in config), `an empty list would be a key saying nothing: ${JSON.stringify(config)}`);
+  assert.ok(!readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8").includes("--mount"));
 });

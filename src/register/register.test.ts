@@ -22,7 +22,13 @@ import { registerProject } from "./register.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, REGISTER_BRANCH } from "./origin.ts";
 import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
-import { RAILS_GEMFILE, railsFixtureFiles, writeRailsFixture } from "./helpers/rails-fixture.ts";
+import {
+  PAID_SOURCE_VARIABLE,
+  RAILS_GEMFILE,
+  railsFixtureFiles,
+  railsFixtureFilesWithPaidSource,
+  writeRailsFixture,
+} from "./helpers/rails-fixture.ts";
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-register-home-"));
@@ -742,4 +748,37 @@ test("register: origin's default branch is whatever the remote says, not an assu
 
   assert.equal(result.defaultBranch, "trunk");
   assert.equal(result.pullRequestUrl, "https://github.com/fake/repo/pull/1");
+});
+
+// Issue #342 on this route too. The case the issue describes is a work
+// project (`--terms`), but a repository that CAN commit its terms and
+// installs from a paid source needs the same two things - otherwise the
+// two routes would write files that disagree about how one project's
+// gems are installed.
+test("register: a paid gem source is listed in the config and mounted on the install step", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  writeRailsFixture(dir, railsFixtureFilesWithPaidSource());
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-qm", "rails app installing from a paid gem source"]);
+  git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
+
+  await registerProject(
+    { recordHome, path: dir, check: "bundle exec rspec", image: "ruby:3.3.4" },
+    { tools: fakeRegisterTools() }
+  );
+
+  const config = JSON.parse(fileOnOriginBranch(dir, REGISTER_BRANCH, INSPECTOR_CONFIG)) as Record<string, unknown>;
+  assert.deepEqual(config.buildSecrets, [PAID_SOURCE_VARIABLE]);
+
+  const dockerfile = fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR);
+  assert.match(
+    dockerfile,
+    new RegExp(
+      `^RUN --mount=type=secret,id=${PAID_SOURCE_VARIABLE},mode=0444 cd /deps && ` +
+        `${PAID_SOURCE_VARIABLE}="\\$\\(cat /run/secrets/${PAID_SOURCE_VARIABLE}\\)" bundle install$`,
+      "m"
+    ),
+    dockerfile
+  );
 });

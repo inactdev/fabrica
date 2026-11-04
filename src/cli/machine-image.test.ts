@@ -280,3 +280,28 @@ test("the generated Dockerfile is written under the record home, never into the 
   assert.match(readFileSync(written, "utf8"), /^FROM ruby:3\.4$/m, "the project's own file comes first, verbatim");
   assert.ok(!existsSync(join(project, "Dockerfile")), "nothing Fabrica generates belongs in the Client's repository");
 });
+
+// Issue #342: a project whose image build needs a credential this
+// machine does not have. The refusal has to be the credential's own,
+// not the "its Dockerfile.inspector cannot be read" sentence that every
+// other composition failure here gets - that one would send the Client
+// to restore a file that is perfectly fine.
+test("a task on a project whose build credential is missing is refused in the credential's own words", async () => {
+  const project = layeredProject("needs-a-secret");
+  writeFileSync(
+    join(project, ".inspector.json"),
+    `${JSON.stringify({ check: "./check.sh", buildSecrets: ["BUNDLE_GEMS__EXAMPLE__COM"] }, null, 2)}\n`
+  );
+  const home = homeWith({ app: project });
+  const { io, built } = fakeDocker();
+
+  const result = await ensureMachineImage(home, machineImageForProject(home, project), io);
+
+  assert.equal(result.ok, false);
+  assert.match(result.detail, /BUNDLE_GEMS__EXAMPLE__COM/);
+  assert.match(result.detail, /brain\.env/);
+  assert.doesNotMatch(result.detail, /cannot be read/, result.detail);
+  assert.deepEqual(built, [], "nothing is built without the credential - the build would fail inside the image");
+
+  await assert.rejects(() => requireMachineImage(home, project, io), /BUNDLE_GEMS__EXAMPLE__COM/);
+});

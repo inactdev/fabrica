@@ -32,6 +32,7 @@
 //     opinion formed here.
 
 import {
+  BuildSecretsError,
   isLayered,
   loadConfigOrProblem,
   machineImageBuild,
@@ -113,6 +114,14 @@ export async function ensureMachineImage(
     // keeps plain `fabrica doctor` read-only.
     command = machineImageBuild(recordHome, machine, io.baseUser);
   } catch (err) {
+    // Issue #342: a build whose credential cannot be supplied refuses
+    // here, in its own words - it is a different fault from an
+    // unreadable Dockerfile, with a different fix (a line in brain.env,
+    // not a restored file), and wrapping it in the sentence below would
+    // send the Client looking at the wrong thing.
+    if (err instanceof BuildSecretsError) {
+      return { ...base, ok: false, built: false, detail: `${err.message} Fix: ${err.fix}.` };
+    }
     // Composing the generated Dockerfile is the only thing that reads
     // the project's own file, so this is the same failure the
     // `"unreadable"` state above names - reached instead of it whenever

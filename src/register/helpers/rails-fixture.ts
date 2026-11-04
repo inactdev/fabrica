@@ -93,6 +93,66 @@ export function railsFixtureFiles(): Record<string, string> {
   };
 }
 
+// ------------------------------- a second, paid gem source (issue #342)
+
+/** The paid gem source issue #342 is about - Sidekiq's own commercial
+ * server, which is the live case: `sidekiq-pro` and `sidekiq-ent` are
+ * installed from it with a credential that is deliberately not in the
+ * repository. */
+export const PAID_SOURCE = "https://enterprise.contribsys.com/";
+
+/** Bundler's own environment variable for that source, which is what
+ * the derivation has to arrive at: the host uppercased, each dot a
+ * double underscore. */
+export const PAID_SOURCE_VARIABLE = "BUNDLE_ENTERPRISE__CONTRIBSYS__COM";
+
+/**
+ * The same lockfile with a second `GEM` block for the paid source -
+ * bundler's own shape for a scoped `source "..." do ... end` block.
+ *
+ * Two deliberate traps for the parser in here: a `GIT` section whose own
+ * `remote:` is a repository URL (a parser reading every `remote:` would
+ * derive a credential variable for github.com), and the public source
+ * still being there (so the derivation has to exclude one remote rather
+ * than take the last).
+ */
+export const RAILS_GEMFILE_LOCK_PAID_SOURCE = RAILS_GEMFILE_LOCK.replace(
+  `PLATFORMS`,
+  `GEM
+  remote: ${PAID_SOURCE}
+  specs:
+    sidekiq-ent (7.3.1)
+      sidekiq-pro (>= 7.3.0)
+    sidekiq-pro (7.3.0)
+
+GIT
+  remote: https://github.com/example/widget.git
+  revision: 0a1b2c3d4e5f60718293a4b5c6d7e8f901234567
+  specs:
+    widget (1.0.0)
+
+PLATFORMS`
+);
+
+/** `Gemfile`'s own scoped-source form for it, which is what bundler
+ * documents for a paid source. */
+export const RAILS_GEMFILE_PAID_SOURCE = `${RAILS_GEMFILE}
+source "${PAID_SOURCE.replace(/\/$/, "")}" do
+  gem "sidekiq-pro"
+  gem "sidekiq-ent"
+end
+`;
+
+/** The fixture again, installing from a paid gem source as well as the
+ * public one - the project issue #342 exists for. */
+export function railsFixtureFilesWithPaidSource(): Record<string, string> {
+  return {
+    ...railsFixtureFiles(),
+    Gemfile: RAILS_GEMFILE_PAID_SOURCE,
+    "Gemfile.lock": RAILS_GEMFILE_LOCK_PAID_SOURCE,
+  };
+}
+
 /** Writes those files into a directory, creating the directories a
  * nested one needs. Committing them is the caller's business: a test
  * reading signals off a ref has to decide which commit they are on. */

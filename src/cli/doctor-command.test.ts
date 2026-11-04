@@ -1278,3 +1278,54 @@ test("fabrica doctor: a project in no work mode says nothing about any of it", a
     assert.ok(!line.includes(word), `the line mentioned ${word}: ${line}`);
   }
 });
+
+// -------------------------------- build secrets (issue #342)
+
+/** A terms folder whose `.inspector.json` lists a credential variable -
+ * the shape `fabrica register` writes for a project that installs from
+ * a paid gem source. */
+function termsNeedingASecret(variable = "BUNDLE_ENTERPRISE__CONTRIBSYS__COM"): string {
+  const terms = termsFolder();
+  writeFileSync(
+    join(terms, ".inspector.json"),
+    `${JSON.stringify({ check: "sh /terms/check.sh", buildSecrets: [variable] }, null, 2)}\n`
+  );
+  return terms;
+}
+
+test("fabrica doctor: a project needing a build secret this machine has not got FAILs, naming the variable", async () => {
+  const terms = termsNeedingASecret();
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${companyProject()}"\n` +
+      `check = "bin/ci"\nterms = "${terms}"\n`
+  );
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  assert.equal(code, 1, text);
+  assert.match(text, /FAIL project dayjob: .*BUNDLE_ENTERPRISE__CONTRIBSYS__COM/);
+  assert.match(text, /fix: add a line BUNDLE_ENTERPRISE__CONTRIBSYS__COM=<the value> to .*brain\.env/);
+});
+
+test("fabrica doctor: a build secret that is set passes, naming it and never printing it", async () => {
+  const terms = termsNeedingASecret();
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${companyProject()}"\n` +
+      `check = "bin/ci"\nterms = "${terms}"\n`
+  );
+  const brainEnv = join(home, "brain.env");
+  writeFileSync(brainEnv, `BUNDLE_ENTERPRISE__CONTRIBSYS__COM=someone:a-real-looking-password\n`);
+  chmodSync(brainEnv, 0o600);
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  assert.equal(code, 0, text);
+  assert.match(text, /OK {3}project dayjob: .*build secret BUNDLE_ENTERPRISE__CONTRIBSYS__COM set/);
+  assert.ok(!text.includes("a-real-looking-password"), `doctor must never print a value: ${text}`);
+});
+
+test("fabrica doctor: a project listing no build secret says nothing about them at all", async () => {
+  const { code, lines } = await doctor(healthyHome(), okProbes());
+  assert.equal(code, 0, lines.join("\n"));
+  assert.ok(!lines.join("\n").includes("build secret"), lines.join("\n"));
+});

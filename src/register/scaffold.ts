@@ -7,6 +7,7 @@
 // `image` key and no `network` key: the check box is built from
 // `Dockerfile.inspector` (see dockerfile.ts) and has no network.
 
+import { BUILD_SECRETS_KEY } from "../buildsecrets/index.ts";
 import {
   CHECK_SCRIPT,
   INSPECTOR_CONFIG,
@@ -98,6 +99,30 @@ export function inspectorConfigJson(
     protectedPaths?: readonly string[];
     /** `--timeout <seconds>`: writes `timeoutSeconds`. */
     timeoutSeconds?: number;
+    /**
+     * The credential variables this project's image build needs (issue
+     * #342), derived from its own `Gemfile.lock` by
+     * `src/buildsecrets/derive.ts`. Names only - Inspector reads each
+     * one out of its own environment and passes it to the build as a
+     * Docker build secret (inspector#86), and no value is ever written
+     * into this file or anywhere near it.
+     *
+     * Omitted entirely when there are none, which is almost every
+     * project: an empty list would be a key saying nothing, and the one
+     * live example of this schema has no such key.
+     *
+     * The one exception to this file's own provenance rule ("never a key
+     * nothing has been seen to accept"), and a deliberate one: issue
+     * #342 asks for this key by name, as the Fabrica half of
+     * inspector#86, which is the Inspector side of the same pair. Until
+     * that lands the installed Inspector ignores the key (its config
+     * decodes the fields it knows and reads past the rest), so a
+     * project that needs a credential is red there with its own
+     * authentication error rather than refused for the key - which is
+     * the honest intermediate state, and is why writing it early is
+     * safe.
+     */
+    buildSecrets?: readonly string[];
   } = {}
 ): string {
   return `${JSON.stringify(
@@ -110,6 +135,9 @@ export function inspectorConfigJson(
       // repository's own config uses).
       ...(opts.timeoutSeconds !== undefined ? { timeoutSeconds: opts.timeoutSeconds } : {}),
       ...(opts.protectedPaths !== undefined ? { protectedPaths: [...opts.protectedPaths] } : {}),
+      ...(opts.buildSecrets !== undefined && opts.buildSecrets.length > 0
+        ? { [BUILD_SECRETS_KEY]: [...opts.buildSecrets] }
+        : {}),
     },
     null,
     2

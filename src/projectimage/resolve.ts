@@ -40,7 +40,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   DEFAULT_MACHINE_IMAGE,
   installedCliVersionIn,
@@ -51,6 +51,7 @@ import {
   type BaseUserProbe,
   type ImageCommand,
 } from "../brain/index.ts";
+import { BuildSecretsError, resolveBuildSecrets } from "../buildsecrets/index.ts";
 import { loadConfigOrProblem } from "../config/index.ts";
 import type { FabricaConfig } from "../config/index.ts";
 import { INSPECTOR_DOCKERFILE } from "../inspector/index.ts";
@@ -239,12 +240,23 @@ export function machineDockerfilePath(recordHome: string, machine: MachineImage)
 export function machineImageBuild(recordHome: string, machine: MachineImage, baseUser?: BaseUserProbe): ImageCommand {
   const text = machineDockerfileFor(machine, baseUser);
   const path = machineDockerfilePath(recordHome, machine);
+  // Issue #342: this image is the project's own `Dockerfile.inspector`
+  // with Fabrica's layer on top, so a project whose install step mounts
+  // a credential needs that credential here exactly as Inspector's own
+  // build does. Resolved before anything is written, so a build that
+  // cannot be supplied refuses having created nothing.
+  const secrets = buildSecretsForBuild(recordHome, machine);
   mkdirSync(join(recordHome, "images"), { recursive: true });
   writeFileSync(path, text);
   const args = [
     "build",
     "--build-arg",
     `${MACHINE_STAMP_ARG}=${machineImageStamp(text)}`,
+    // One per declared name, in the form that reads the value out of
+    // this command's own environment rather than out of the argv - which
+    // every process on the machine can see. Docker exposes it only to a
+    // RUN step that mounts it, and never in a layer.
+    ...secrets.names.flatMap((name) => ["--secret", `id=${name},env=${name}`]),
     "-t",
     machine.image,
     "-f",
@@ -256,7 +268,45 @@ export function machineImageBuild(recordHome: string, machine: MachineImage, bas
     args,
     image: machine.image,
     shell: `docker ${args.join(" ")}`,
+    ...(secrets.names.length === 0 ? {} : { env: secrets.values }),
   };
+}
+
+/**
+ * This project's build secrets, with their values, for the build about
+ * to run - or a thrown refusal naming the variables that cannot be
+ * supplied (issue #342).
+ *
+ * Throws rather than returns, and every caller already treats a thrown
+ * composition failure as a reported build failure
+ * (`src/cli/machine-image.ts`'s `ensureMachineImage`,
+ * `src/cli/image-repair.ts`'s repair loop) - so the Client reads the
+ * missing variable's name on the project's own line either way. A build
+ * run without the credential would fail inside the image at `bundle
+ * install`, on an authentication error naming nothing about this.
+ *
+ * The config is read out of the folder holding the very
+ * `Dockerfile.inspector` this image is built from, which is the terms
+ * folder for a work-mode project and the repository root for any other -
+ * so the list of names and the mounts that consume it can never come
+ * from two different files.
+ */
+function buildSecretsForBuild(
+  recordHome: string,
+  machine: MachineImage
+): { names: readonly string[]; values: Record<string, string> } {
+  if (machine.inspectorDockerfile === null) return { names: [], values: {} };
+  const resolved = resolveBuildSecrets({
+    recordHome,
+    configDir: dirname(machine.inspectorDockerfile),
+    env: process.env,
+    projectLabel: machine.project,
+  });
+  if (resolved.kind === "none") return { names: [], values: {} };
+  if (resolved.kind === "refused") {
+    throw new BuildSecretsError(resolved.reason, resolved.message, resolved.missing, resolved.fix);
+  }
+  return { names: resolved.names, values: resolved.values };
 }
 
 /**

@@ -523,3 +523,77 @@ test("the fix lines the checks print and the commands the repair runs are the sa
   assert.equal(workerImageStatus(() => null).fix, `run from any folder: ${build.shell}`);
   assert.equal(relayImageStatus(() => false).fix, pull.shell);
 });
+
+// Issue #342: composing a build is itself something that can refuse -
+// a project whose credential is not on this machine. One project's
+// refusal must not take `fabrica doctor --fix` or `fabrica up` down
+// with it, and it must still be reported rather than swallowed.
+test("a project whose build credential is missing is a reported failure, not a thrown one", async (t) => {
+  const { docker } = setUp(t, {
+    images: [
+      { Name: relayImagePull().image, Labels: {} },
+      { Name: workerImageBuild().image, Labels: { [stampLabelFromDockerfile()]: dockerfileHash() } },
+    ],
+  });
+  const project = projectWithDockerfile();
+  writeFileSync(
+    join(project, ".inspector.json"),
+    `${JSON.stringify({ check: "./check.sh", buildSecrets: ["BUNDLE_GEMS__EXAMPLE__COM"] }, null, 2)}\n`
+  );
+  const recordHome = homeWith(project);
+  const machine = machineImageForProject(recordHome, project);
+  const label = machineImageLabel("app");
+  const p = probes({
+    projectImage: (asked, askedLabel) => ({
+      ok: false,
+      label: askedLabel,
+      detail: `${asked.image} is not built`,
+      fix: "fabrica doctor --fix",
+      needsBuild: true,
+    }),
+  });
+
+  const io = captureIo();
+  const { checks, outcomes } = await repairImages({
+    checks: [...collect(p), p.projectImage(machine, label)],
+    probes: p,
+    recordHome,
+    baseUser: () => "",
+    ...io,
+  });
+
+  assert.deepEqual(outcomes.map((o) => [o.label, o.ok]), [[label, false]]);
+  assert.match(outcomes[0].detail, /BUNDLE_GEMS__EXAMPLE__COM/);
+  assert.equal(outcomes[0].image, machine.image, "the image it is about is still named");
+  assert.deepEqual(writes(docker.calls()), [], "no build is attempted without the credential");
+  assert.match(io.err.join("\n"), /BUNDLE_GEMS__EXAMPLE__COM/);
+  // And the project's own line still FAILs, exactly as it would have
+  // without this step - so doctor's exit code and up's blocker list are
+  // unchanged by a repair that could not run.
+  assert.equal(lineOf(checks, label).ok, false);
+});
+
+// The value reaches the build through the child's environment and
+// nowhere else - never argv, which every process on the machine can
+// read.
+test("runImageCommand gives a build its declared environment, on top of Fabrica's own", async (t) => {
+  const docker = installFakeDocker(t, {});
+  const lines: string[] = [];
+  const result = await runImageCommand(
+    {
+      command: "docker",
+      args: ["build", "-t", "fabrica-env-probe:latest", "."],
+      image: "fabrica-env-probe:latest",
+      shell: "docker build -t fabrica-env-probe:latest .",
+      env: { BUNDLE_GEMS__EXAMPLE__COM: "someone:a-real-looking-password" },
+    },
+    (line) => lines.push(line)
+  );
+
+  assert.equal(result.ok, true, lines.join("\n"));
+  assert.deepEqual(writes(docker.calls()).length, 1, "and it really ran the command");
+  assert.ok(
+    !lines.join("\n").includes("a-real-looking-password"),
+    `a build's own output must not be where a value turns up: ${lines.join("\n")}`
+  );
+});

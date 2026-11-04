@@ -28,6 +28,38 @@ one: settling a reviewer needs to know which vendor the Worker is, and
 this module has no business depending on brains. It takes only the
 `ResolvedReviewer` type from there, erased at compile time.
 
+## Build secrets (issue #342)
+
+A project whose image build needs a credential - a paid gem source's -
+lists the environment **variable names** in `.inspector.json`'s
+`buildSecrets`, and Inspector passes each to its own `docker build` as
+`--secret id=NAME,env=NAME`, reading the value out of its own
+environment (inspector#86). Fabrica's side of that is one option on this
+adapter: the names-and-values map goes onto the Inspector child's
+environment, exactly where the reviewer's key and the GitHub token go,
+and for the same reason - argv is world-readable.
+
+Three things about it that are deliberate:
+
+- **The list is read at the task's base commit** for an in-repository
+  config, never out of the worktree (`src/foreman/judge.ts`). The list
+  decides which of `brain.env`'s variables are handed to a build, and a
+  Worker free to add a name to its own copy of that file could name any
+  credential in it and have it mounted into a build whose
+  `Dockerfile.inspector` it had just written. A terms folder needs no
+  pinning: it is never mounted into a worker's box.
+- **A name Fabrica has no value for is simply not passed**, and
+  Inspector refuses by name with its own exit code before any build.
+  Fabrica does not invent a second refusal that could disagree with it -
+  and `fabrica doctor` has already FAILed that project's line.
+- **Not a flag, so not a `flags` entry** in `consumer-contract.json`:
+  the names come from the project's own config, so what is ratified
+  there is its own `buildSecrets` section - the config key, where
+  Inspector reads the values, and what it does with them.
+
+Everything else about the concept - the derivation, the one reader of a
+value, where it may and may not go - is `src/buildsecrets/README.md`.
+
 ## The GitHub token (issue #103, replaced by issue #187)
 
 Inspector still needs `GITHUB_TOKEN` to publish a green result, and still receives it on its own child environment only - never in Fabrica's process environment, never in the worker's box, never printed or logged. `consumer-contract.json` is unchanged: the variable, the flags and the exit codes are exactly what they were.

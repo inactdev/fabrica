@@ -701,3 +701,23 @@ test("the generated check.sh leaves no scratch directory behind, pass or fail", 
   });
   assert.deepEqual(scratchDirs, before, "a scratch directory survived a failing initdb");
 });
+
+// Issue #342. The one key here that this repository's own
+// .inspector.json has no example of - and the one key written for a
+// paired change on Inspector's side (inspector#86) rather than from
+// live evidence. So the test is the narrower one that can be made: it
+// appears only when a project actually needs it, and never with an
+// empty list.
+test("inspectorConfigJson: buildSecrets is written only when a project has one", () => {
+  for (const asked of [undefined, []]) {
+    const config = JSON.parse(inspectorConfigJson({ protectedPaths: ["check.sh"], buildSecrets: asked }));
+    assert.equal(Object.hasOwn(config, "buildSecrets"), false, JSON.stringify(config));
+  }
+  const config = JSON.parse(
+    inspectorConfigJson({ protectedPaths: ["check.sh"], buildSecrets: ["BUNDLE_GEMS__EXAMPLE__COM"] })
+  );
+  assert.deepEqual(config.buildSecrets, ["BUNDLE_GEMS__EXAMPLE__COM"]);
+  // After the keys that were there before it, so the file reads the way
+  // the others do.
+  assert.deepEqual(Object.keys(config), ["check", "protectedPaths", "buildSecrets"]);
+});

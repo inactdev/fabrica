@@ -35,6 +35,7 @@
 // Reading is one function; deriving is a pure one over what it read, so
 // every rule below is testable with no git and no repository.
 
+import { PUBLIC_GEM_HOST } from "../buildsecrets/index.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, fileExistsOnRef, readFileOnRef } from "./origin.ts";
 import { checkScript, inspectorConfigJson, type TermsLocation } from "./scaffold.ts";
 import {
@@ -763,6 +764,12 @@ function rubyNotes(signals: ProposalSignals, dependencies: DependencyField): str
     );
   }
 
+  // Issue #342: a gem source this proposal could not name a credential
+  // variable for. Named here rather than dropped - the install step
+  // would otherwise fail inside the image on an authentication error
+  // that says nothing about which source or which variable.
+  for (const note of shape.buildSecretNotes ?? []) notes.push(`  note: ${note}`);
+
   if ((shape.services ?? []).length > 0) {
     notes.push(
       `  note: those servers are installed by ${DOCKERFILE_INSPECTOR} and started by ${CHECK_SCRIPT}, which is ` +
@@ -777,6 +784,42 @@ function rubyNotes(signals: ProposalSignals, dependencies: DependencyField): str
   }
 
   return notes;
+}
+
+/**
+ * `buildSecrets`'s own note line (issue #342). Three answers, because
+ * three things can be true: this project installs from a gem source that
+ * needs a credential, it has a lockfile and needs none, or it has no
+ * lockfile this derivation reads at all.
+ *
+ * The one with names in it says where the values go, since that is the
+ * step the Client has to take by hand and the file cannot carry a
+ * comment saying so.
+ */
+function buildSecretsReason(signals: ProposalSignals, names: readonly string[]): string {
+  if (names.length > 0) {
+    return (
+      `${GEMFILE_LOCK} installs from a gem source other than ${PUBLIC_GEM_HOST}, and ` +
+      `${names.length === 1 ? `this is bundler's own environment variable` : `these are bundler's own ` +
+        `environment variables`} for ${names.length === 1 ? `it` : `them`}. ${DOCKERFILE_INSPECTOR} mounts ` +
+      `${names.length === 1 ? `it` : `each`} on its install step as a Docker build secret, and Inspector ` +
+      `passes the value from its own environment - put ${names.length === 1 ? `the value` : `the values`} in ` +
+      `~/.fabrica/brain.env (mode 600), never in the repository. Only the ` +
+      `${names.length === 1 ? `name` : `names`} ${names.length === 1 ? `appears` : `appear`} in any file ` +
+      `Fabrica writes`
+    );
+  }
+  if (signals.gemfileLock !== null) {
+    return (
+      `every gem source ${GEMFILE_LOCK} names is ${PUBLIC_GEM_HOST}, which needs no credential, so the install ` +
+      `step needs nothing from this machine`
+    );
+  }
+  return (
+    `nothing here installs from a credentialed source. This is derived from ${GEMFILE_LOCK}'s own gem sources, ` +
+    `and there is no ${GEMFILE_LOCK} at the root; a build that needs a credential for some other reason takes ` +
+    `the variable's name here and the value in ~/.fabrica/brain.env`
+  );
 }
 
 export interface ProtectedPathsField {
@@ -839,6 +882,18 @@ export interface ProposalDerivation {
    * key out entirely and Inspector's own default standing - which is
    * every shape but the one whose check boots its own servers. */
   timeoutSeconds?: number;
+  /**
+   * `.inspector.json`'s `buildSecrets` (issue #342): the credential
+   * variables this project's own install step needs, derived from the
+   * gem sources its lockfile names. Empty for almost every project, and
+   * then the key is left out of the document entirely and no secret is
+   * mounted in `Dockerfile.inspector` either.
+   *
+   * Names, always. The values live in `brain.env` and are read by
+   * nothing on this route - `fabrica register` writes no credential
+   * anywhere.
+   */
+  buildSecrets: string[];
   /** `Dockerfile.inspector`'s contents, with a trailing newline. */
   dockerfile: string;
   /**
@@ -892,12 +947,17 @@ export function deriveProposal(
   const protectedPaths = proposeProtectedPaths(check);
   const timeout = proposeTimeout(dependencies);
   const warning = fetchingCheckWarning(check, dependencies);
+  // Issue #342: derived with the dependency shape, from the same
+  // lockfile, so the key the config lists and the mounts the Dockerfile
+  // writes are one answer rather than two readings of one file.
+  const buildSecrets = [...(dependencies.shape?.buildSecrets ?? [])];
 
   return {
     check,
     image,
     dependencies,
     protectedPaths,
+    buildSecrets,
     ...(timeout.seconds !== undefined ? { timeoutSeconds: timeout.seconds } : {}),
     dockerfile: inspectorDockerfile({
       from: image.value,
@@ -915,6 +975,8 @@ export function deriveProposal(
       `  timeoutSeconds: ${timeout.reason}.`,
       `  protectedPaths: ${protectedPaths.paths === undefined ? "omitted" : protectedPaths.paths.join(", ")} - ` +
         `${protectedPaths.reason}.`,
+      `  buildSecrets: ${buildSecrets.length === 0 ? "omitted" : buildSecrets.join(", ")} - ` +
+        `${buildSecretsReason(signals, buildSecrets)}.`,
       // The check box is built from Dockerfile.inspector since
       // inspector#47, so these two are fields of that file rather than
       // keys of a config - there is no `image` key and no `network` key
@@ -943,6 +1005,7 @@ export function proposeInspectorConfig(
     check: check.command,
     ...(derived.timeoutSeconds !== undefined ? { timeoutSeconds: derived.timeoutSeconds } : {}),
     ...(protectedPaths.paths !== undefined ? { protectedPaths: protectedPaths.paths } : {}),
+    buildSecrets: derived.buildSecrets,
   }).trimEnd();
 
   // Two files for almost every project; three when the derived check

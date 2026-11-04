@@ -398,6 +398,35 @@ there is none to render into.
 A project that carries none of these three behaves exactly as every
 project did before they existed.
 
+### A paid gem source (or any build-time credential)
+
+Some projects install dependencies from a source that needs a password -
+`sidekiq-pro` and `sidekiq-ent` from `https://enterprise.contribsys.com/`
+is the case this was built for. That credential is needed when the
+**image is built**, because the box the check runs in has no network, and
+it is deliberately not in the repository.
+
+`fabrica register` works out which environment variable bundler reads it
+from (`BUNDLE_` plus the host uppercased, each `.` a double underscore -
+so `BUNDLE_ENTERPRISE__CONTRIBSYS__COM`), lists that **name** in
+`.inspector.json`'s `buildSecrets`, and has `Dockerfile.inspector` mount
+it on the `bundle install` step as a Docker build secret. You put the
+value in the one place a secret lives:
+
+    BUNDLE_ENTERPRISE__CONTRIBSYS__COM=username:password
+
+in `~/.fabrica/brain.env` (same file, same `chmod 600`). Nothing else
+has to be configured.
+
+From there the value goes to exactly two places - the `docker build` that
+makes this machine's own image for that project, and the environment of
+the `inspector` process that builds the check box - and it is a mounted
+file inside one `RUN`, so it is in no image layer and in no `docker
+history`. It never reaches the worker's box, the record, a log, a pull
+request or any message; only the name appears in any of those.
+`fabrica doctor` FAILs that project's line, naming the variable, when
+`brain.env` has not got it - before a task is ever started on it.
+
 ### Paying per token instead (optional)
 
 The default Worker is the coding agent above, on the flat-rate
