@@ -266,22 +266,70 @@ a refusal naming both flags — in `register.ts`, not in the argument
 parser, because `registerProject` is also a library entry point and one
 implementation is what keeps the two from disagreeing.
 
-### `.inspector.json` names `./check.sh` here, whatever the signals said
+### `.inspector.json` names a script here, whatever the signals said
 
 The printed proposal can name an indirect command (`npm test`), because
 it writes no script for that command to live in. This route does write
 one, so it keeps "One source of truth for the check" below instead: the
-derived command goes inside `check.sh`, and the config, the script and
-`projects.toml` all name `./check.sh`.
+derived command goes inside `check.sh`, and the config names that
+script.
 
-The one file deliberately not written: a repository that already carries
-its own `check.sh` at its root keeps it, and no second one goes into the
-terms folder — `./check.sh` already means that file, and a copy would be
-a silent fork of it. Reported on the result and printed, never skipped
-quietly. A repository naming no command at all gets a `check.sh` that
-**fails** with an explanation and the usual `REPLACE-ME-with-...`
-marker; a stub exiting 0 would make every task on the project green for
-free.
+**Which spelling of the script, though, is not the same on both routes**
+(issue #337). Inspector mounts a terms folder read-only at `/terms`,
+keeps the repository at `/workspace`, and runs the check from there — so
+`./check.sh` in a terms folder's config names `/workspace/check.sh`, a
+file a work-mode repository does not have and may never be given. The
+config written here names `sh /terms/check.sh` instead
+(`checkCommandFor`, `TERMS_RECORDED_CHECK`).
+
+The one exception is the one file deliberately not written: a repository
+that already carries its own `check.sh` at its root keeps it, no second
+one goes into the terms folder — a copy would be a silent fork of it —
+and the config then names `./check.sh`, because that repository's own
+script really is at `/workspace/check.sh`. Which of the two spellings
+goes in follows that one question, and nothing else. Reported on the
+result and printed, never skipped quietly. A repository naming no
+command at all gets a `check.sh` that **fails** with an explanation and
+the usual `REPLACE-ME-with-...` marker; a stub exiting 0 would make
+every task on the project green for free.
+
+`projects.toml` still records `./check.sh` on both routes: that field is
+what a worker's own box would run if no Inspector were installed, from
+inside the checkout, and is not what Inspector reads.
+
+### The other two files differ too, for the same reason (issue #337)
+
+- **`check.sh` does not `cd "$(dirname "$0")"`.** In the repository that
+  line is right — the script's own folder *is* the repository root. From
+  a terms folder it lands in `/terms`, where there is no checkout and no
+  suite. Inspector already runs the check from `/workspace`, so the fix
+  is to drop the line, and the script says so where it used to be.
+- **`Dockerfile.inspector` copies with `COPY --from=repo`.** Inspector
+  resolves the `docker build` context against the terms folder, which
+  holds no `Gemfile` and no `package-lock.json` — a plain `COPY` there
+  fails the build on files that are not missing from the repository at
+  all. `repo` is the named build context Inspector hands every build the
+  repository as (inspector#81), and the only way to reach it from a
+  terms folder. The in-repository route keeps the plain `COPY`
+  deliberately: its build context genuinely is the repository, so it
+  needs no dependency on that feature.
+
+### A folder written before all of that
+
+Nothing here overwrites a file already in the folder, so a folder
+written before issue #337 keeps three files that cannot pass a real
+Inspector run. `oldShapeProblem` asks one question of each kept file —
+does the config name a path outside `/terms`, does the script `cd` to
+its own folder, does the Dockerfile `COPY` without a `--from` — and a
+yes becomes the `kept-old-shape` outcome, whose detail says what
+Inspector does with the file and how to replace it. Still kept, never
+rewritten; `registerSummary` repeats it as its own sentence at the end,
+because "left exactly as it is" among two files that were written reads
+as a success.
+
+It is deliberately conservative: one fact per file, never a diff against
+what this route writes today. A Client who has edited his own terms must
+not be told they are "the old shape" because a comment moved.
 
 ### What `--terms` does not do
 
@@ -306,8 +354,9 @@ free.
 
 ## `.inspector.json`'s schema, and where it came from
 
-Up to three keys: `check` (always `./check.sh`), `protectedPaths`, and —
-only when asked for — `timeoutSeconds`.
+Up to three keys: `check` (the project's own script — `./check.sh`, or
+`sh /terms/check.sh` from a terms folder, see work mode above),
+`protectedPaths`, and — only when asked for — `timeoutSeconds`.
 
 There used to be two more, `image` and `network`. **inspector#47
 (inspector PR #64) retired both, with any value**: the check box is
@@ -430,15 +479,16 @@ lands where it can actually work:
   `bundle install` into `/deps` at build time — the gems land in the
   image's own `GEM_HOME`, outside the checkout, so there is **nothing
   for `check.sh` to link in**, unlike `node_modules`.
-- **`check.sh`** — starts each server, **waits until it answers**
-  (`pg_isready`, `redis-cli ping`) rather than sleeping a fixed time,
-  creates the test database (`bin/rails db:test:prepare`, only when
-  `bin/rails` is actually there), runs the suite, and stops both again
-  through an `EXIT` trap so a **failing** suite stops them too. The trap
-  runs no `exit` of its own, which is what keeps the suite's status the
-  check's status. `scaffold.test.ts` runs that generated script for real
-  against stubbed servers — the order, the waiting loop, the trap and
-  the exit status are executed, not asserted by substring.
+- **`check.sh`** — creates and starts each server, **waits until it
+  answers** (`pg_isready`, `redis-cli ping`) rather than sleeping a
+  fixed time, creates the test database (`bin/rails db:test:prepare`,
+  only when `bin/rails` is actually there), runs the suite, and stops
+  both again through an `EXIT` trap so a **failing** suite stops them
+  too. The trap runs no `exit` of its own, which is what keeps the
+  suite's status the check's status. `scaffold.test.ts` runs that
+  generated script for real against stubbed servers — the order, the
+  waiting loop, the trap and the exit status are executed, not asserted
+  by substring.
 - **`.inspector.json`** — the usual, plus the longer timeout above.
 - **The suite is named *inside* `check.sh`**, not in the config, which
   names `./check.sh`. `bundle exec rspec` as `.inspector.json`'s `check`
@@ -449,15 +499,225 @@ lands where it can actually work:
   `bundle exec rspec` wins when the lockfile has rspec; `bin/rails test`
   is the fallback for an application that ships `bin/rails`.
 
-Two build-time details that are not guesses. `libpq-dev` is there
-because the `pg` gem's native extension wants `libpq-fe.h`, which is the
-package that installs it. And a **superuser role named after the user
-the check runs as** is created while the server is up at build time
-(`su postgres -c "createuser -s root"`), because Debian authenticates a
-local socket connection by asking the kernel which user opened it
-(`peer`) and then wants a role of that name — while a Rails
-`config/database.yml` names no user at all. The role lives in the
-cluster's data directory, which is part of the image.
+`libpq-dev` is there because the `pg` gem's native extension wants
+`libpq-fe.h`, which is the package that installs it.
+
+### Whoever the check box turns out to run as (issue #337)
+
+Nothing about either server is settled at build time, and that is the
+whole of this. Inspector runs the check as `docker run --user
+<uid>:<gid>` for the uid of whoever invoked it — **not** the user the
+image was built as, and a uid with no `/etc/passwd` entry at all. Root
+happens only under a rootless Docker daemon, where Inspector resolves
+`0:0` because that daemon's own user namespace has already remapped it.
+
+So `Dockerfile.inspector` installs the packages and stops. `check.sh`
+creates the cluster itself, at check time, into a scratch directory of
+its own:
+
+- **The data directory is made by whoever is running.** PostgreSQL
+  refuses one it does not own, and the check-time uid is unknowable
+  while the image is being built. There is no handing it over afterwards
+  either: `chown` needs root, and the directory must be mode 0700.
+- **`initdb --auth=trust`, never `peer`.** `peer` asks the kernel which
+  uid opened the socket and then wants a role of **that user's name** —
+  which is the OS name the next section gives that uid, and no cluster
+  has a role of it. `PGUSER` is exported for the same reason: libpq's own
+  default user name also comes from `getpwuid`. Nothing outside the container
+  can reach that socket; the box has no network, and the cluster listens
+  on no TCP port at all (`-h ''`).
+- **The server binaries are found, not pinned.** Debian keeps
+  `initdb`, `postgres` and `pg_ctl` out of `/usr/bin` — only the client
+  tools get `pg_wrapper` symlinks there — so the script resolves
+  `/usr/lib/postgresql/*/bin` once and calls everything through it,
+  `pg_isready` included (the `/usr/bin` one is `pg_wrapper`, which wants
+  a Debian cluster configuration this one is not). A box with none fails
+  the check right there, naming the missing package.
+- **Root is still handled**, in one shell function: `initdb` and
+  `postgres` both refuse to run as root, so `pg_as` hands the scratch
+  directory to the `postgres` system user and `su`s to it. Redis needs
+  neither branch.
+
+`scaffold.test.ts` executes both branches for real, with `id` stubbed to
+answer 0 for the root one.
+
+### That uid needs a name of its own before anything starts
+
+Creating the cluster at check time was necessary and not sufficient. A
+real Inspector run went red on `initdb: could not look up effective user
+ID 1001: user does not exist`, because `initdb` resolves its own
+effective uid to a user **name** before it does anything else
+(`get_user_name_or_exit`, which is `getpwuid`), and there is no flag that
+skips it. `--username` names the role it creates, which is a different
+thing entirely. A uid with no `/etc/passwd` entry cannot run it at all.
+
+So the generated check gives that uid an entry, for itself, before any
+server starts:
+
+- **`Dockerfile.inspector` leaves `/etc/passwd` and `/etc/group`
+  writable** (`RUN chmod a+w`, under the `USER root` the package install
+  already needed). It cannot write the entry — the uid the check will run
+  as is unknowable while the image is being built — so leaving the file
+  writable is the only thing it can do.
+- **`check.sh` writes it**, when `getent passwd "$(id -u)"` finds
+  nothing: one line in `/etc/passwd` named `fabrica`, and one in
+  `/etc/group` only if the gid has no entry of its own. `getent` decides
+  this, rather than a `grep` of the file, so a box whose users come from
+  somewhere other than the file answers for itself.
+- **A box that lost the `chmod` line refuses, naming it.** The
+  alternative is PostgreSQL failing later with a message about user IDs,
+  which is how this was found in the first place.
+- It is written **once, for any service that needs it** rather than
+  inside PostgreSQL's own lines (`BoxService.needsUserEntry`): the box's
+  uid is a property of the box, and anything else in there that looks a
+  user up now finds something.
+
+What this costs, which is not hidden anywhere: a world-writable
+`/etc/passwd` beside a setuid `su` is a way to become root inside that
+container. It is bounded by what the container is — no network at all, no
+credential of any kind in it, the checkout mounted read-only, and every
+write discarded with the container — and it buys the only shape in which
+a database server runs there at all. The purpose-built alternative,
+`nss_wrapper` (an `LD_PRELOAD` and a passwd file of one's own, leaving
+the image's permissions alone), is the thing to reach for if that trade
+ever stops being acceptable.
+
+`PGUSER` is still exported, for a reason that changed slightly: the
+entry above gives the uid the name of an *OS* user, and no cluster has a
+role of that name. `trust` over the socket is still right for the same
+reason.
+
+### A failing check has to keep its own explanation
+
+The scratch directory is the only writable place the check has, so every
+server's log is inside it — and the `EXIT` trap removes it on the failing
+path too. That made a red check unexplainable: "PostgreSQL did not answer
+within 60 seconds" and nothing about why, because `initdb.log` and
+`server.log` were deleted a second after they were written.
+
+So `fabrica_cleanup` reads `$?` as its first line and, **on a non-zero
+exit only**, prints every log under the scratch directory to stderr
+before removing it. Inspector's own report is the Client's whole view of
+a failed check, so a diagnosis that is not in the check's output is not
+anywhere. A green check prints none of it — a passing check's output is
+read by people, and startup chatter there is noise.
+
+Three details in that trap are load-bearing rather than incidental:
+`fabrica_status=$?` has to come first, because the stop lines below it
+overwrite `$?`; the `[ -f … ] || continue` is what keeps a glob that
+matches nothing from failing the cleanup under `set -e`; and the `cat`
+carries its own `|| true`. The rule generalizes to any other throwaway
+directory a generated script is given — whatever diagnoses a failure has
+to leave the directory before the directory does.
+
+### Rails writes into log/ and tmp/, which are read-only there
+
+Inspector mounts **every top-level path the repository tracks**
+read-only, and a read-only mount covers its whole subtree — so even
+creating a new file in a tracked directory fails. `rails new` tracks
+`log/` and `tmp/` (through a `.keep` in each). Two things write there,
+and only one of them needed solving:
+
+- **Bootsnap stops a boot dead** when its cache directory cannot be
+  written. It takes `BOOTSNAP_CACHE_DIR`, which `check.sh` points into
+  the scratch directory, along with `TMPDIR`.
+- **Rails' own logger does not.** `initialize_logger` catches a log file
+  it cannot open and falls back to stderr with a warning. So nothing is
+  done about `log/`, deliberately.
+
+### A gem the repository keeps itself
+
+Found on a real work repository: its `Gemfile` names a gem that lives in
+the repository, `gem "prototypes", path: "engines/prototypes"`, and
+`bundle install` stopped dead on `/deps/engines/prototypes does not
+exist` before installing anything at all.
+
+Bundler's own rule is the whole explanation: *"relative paths are
+resolved relative to the directory containing the Gemfile"* — and during
+this build that directory is `/deps`. So the path has to be reproduced
+**under `/deps`**, not flattened in beside the manifest the way
+`.ruby-version` is. `dockerfile.ts`'s `gemfileReferences` reads the
+`Gemfile` for the three directives that name something in the
+repository, and `installLines` writes one `COPY` each, above the
+install:
+
+```
+COPY --from=repo engines/prototypes /deps/engines/prototypes/
+```
+
+- **`path:` / `:path =>`** — the directory, copied to the same relative
+  path. A directory source copies its *contents*, which is why the
+  destination repeats the path rather than being `/deps/engines/`.
+- **`eval_gemfile "gemfiles/extra.rb"`** — the file, so the destination
+  is the directory holding it (a destination with no trailing slash
+  would write the file *as* that path). A `path:` named **inside** that
+  file is not followed: nothing in bundler's documentation in reach
+  settles what a nested relative path resolves against, and the
+  generated note says to add a line by hand.
+- **`gemspec`** — `*.gemspec` beside the `Gemfile`, which the manifest's
+  own `COPY` does not bring. A `gemspec path:` is already covered by the
+  first rule, and the directory carries its gemspec with it, so that
+  line is skipped rather than also asking for a root `*.gemspec` that is
+  not there.
+
+One `COPY` per path, never one `COPY` with several sources: Docker puts
+all the sources of a multi-source `COPY` into the one destination
+directory, which would flatten two gems into the same place.
+
+A path a build context cannot reach — absolute, or with `../` in it — is
+**named in a comment and not copied**. Docker strips `../` navigation
+from a source silently, so emitting the `COPY` would produce a working
+build of the wrong thing; `bundle install` then says what is missing, by
+name. Everything else here fails the build loudly for the same reason:
+the input is the repository's own `Gemfile`, and a `COPY` of a path that
+is not there is a failed build naming the path.
+
+This was chosen over reading `Gemfile.lock`'s `PATH` sections, which
+would also have found them: a root-level `gemspec` resolves there to
+`remote: .`, and a `COPY` of `.` copies the **entire repository** into
+`/deps`, quietly. The limits of what is here fail loudly; that one would
+have succeeded and been wrong.
+
+### `RAILS_ENV=test`
+
+`check.sh` exports it, because nothing else in the generated script says
+which environment this is and `bin/rails db:test:prepare` **boots the
+application** to do its work. With no `RAILS_ENV` set it boots in
+development — a different database and a different gem group from the
+one the suite then runs in. The suite's own `spec_helper` defaulting
+`RAILS_ENV` is too late and in the wrong process.
+
+One thing the check box has to supply for this to pass at all, and
+nothing here works around it: Rails writes `tmp/local_secret.txt` when
+it has no configured `secret_key_base`, and `tmp/*` is git-ignored in
+any `rails new` application. Under a check box with that path read-only
+the end-to-end tests fail on `Errno::EROFS`. That was Inspector's to fix
+(inactdev/inspector#85 makes the box writable where git would ignore a
+new file), by Client ruling — no copying `/workspace`, no redirecting
+Rails' writes — and the pin in `.github/workflows/docker-tests.yml` now
+names that merge commit. An older pin is a red naming its own cause,
+which is the point.
+
+### And all of it is run, not asserted
+
+`inspector-e2e.test.ts` registers a Rails application that really boots
+(`helpers/rails-app-fixture.ts`: `pg`, `redis` and `rspec`, a tracked
+`log/` and `tmp/`, a `path:` gem under `engines/`, one spec that uses
+the database, one that uses Redis and one that uses the path gem) both
+ways, hands each to the real `inspector`, and reads `outcome: "green"`
+out of Inspector's own report. It skips only when Docker is absent; a
+missing `inspector` is a failure, not a skip. Both routes are expected
+green. See that file's header for the two facts about the pinned
+Inspector that make that reachable, and why the verdict comes from the
+report rather than from an exit code.
+
+What those two end-to-end tests catch that no unit test here can: the
+shape is derived at two call sites, one per route, and the renderer is
+route-agnostic. A caller that drops a signal — which is exactly how the
+`path:` gem's copies reached the in-repository route and not the terms
+one — leaves every test of `inspectorDockerfile` green. So each route
+also has a test of its own, in `register.test.ts` and `terms.test.ts`,
+asserting the copy is in the Dockerfile that route actually wrote.
 
 ### What it says it has not done
 
@@ -471,14 +731,19 @@ The standing rulings call a silent skip a bug, so each of these is a
   the lockfile is named, with what to add and where.
 - **A `package-lock.json` beside the `Gemfile.lock` is not installed**,
   and the note says so plus what to add if the check needs built assets.
-- **Starting those servers needs root**, which the official Ruby image
-  runs as — but `src/containment/run.ts` runs every container as the
-  *host* user, so `register`'s own one proving run cannot start them.
-  This is the one check shape the `--check`/`--image` route cannot prove
-  here, and both the proposal's notes and the `check-failed` refusal say
-  so rather than leaving a permission error to be puzzled over. The
-  `--terms` route and the commit-it-yourself route are unaffected, and a
-  first task's own red-or-green is the proof.
+- **Those servers are installed by `Dockerfile.inspector`, which the one
+  proving run never builds.** It runs the check inside the image
+  `--image` names — the `FROM` line — so the server binaries genuinely
+  are not there, and the check fails on saying so. This is the one check
+  shape the `--check`/`--image` route cannot prove here, and both the
+  proposal's notes and the `check-failed` refusal say so rather than
+  leaving a missing-binary error to be puzzled over. (Before issue #337
+  the reason was root: starting the servers needed it, and
+  `src/containment/run.ts` runs every container as the *host* user. That
+  is no longer the obstacle — the cluster is created at check time by
+  whoever is running — but the conclusion is unchanged.) The `--terms`
+  route and the commit-it-yourself route are unaffected, and a first
+  task's own red-or-green is the proof.
 
 Nothing about PostgreSQL, Redis or Rails themselves is proven by this
 repository's tests: that needs the built image, which is Inspector's to

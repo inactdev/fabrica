@@ -22,7 +22,7 @@ import { registerProject } from "./register.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, REGISTER_BRANCH } from "./origin.ts";
 import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
-import { writeRailsFixture } from "./helpers/rails-fixture.ts";
+import { RAILS_GEMFILE, railsFixtureFiles, writeRailsFixture } from "./helpers/rails-fixture.ts";
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-register-home-"));
@@ -190,7 +190,7 @@ test("register: a Rails project's committed files carry its servers, its gems an
   // The Client's own command, with the preamble the shape needs around
   // it - nothing about --check is paraphrased.
   const script = fileOnOriginBranch(dir, REGISTER_BRANCH, CHECK_SCRIPT);
-  assert.ok(script.includes("service postgresql start"), script);
+  assert.ok(script.includes("--auth=trust"), script);
   assert.ok(script.includes("bin/rails db:test:prepare"), script);
   assert.ok(script.trimEnd().endsWith("bundle exec rspec"), script);
 
@@ -198,10 +198,46 @@ test("register: a Rails project's committed files carry its servers, its gems an
   assert.ok(pr.body.includes("PostgreSQL and Redis are installed in"), pr.body);
 });
 
-// Fabrica's containment runs every container as the host user, and
-// starting those servers needs root - so this one route cannot prove
-// this one check shape, and the refusal has to say which of the two it
-// is rather than leaving a permission error to be puzzled over.
+// The companion of terms.test.ts's own: the two routes derive one shape
+// through two different callers, and a gem the repository keeps itself
+// reached only this one for a while. Here the Dockerfile is committed
+// into the repository, so the build context *is* the repository and the
+// copy is a plain one - the same references, through the form this route
+// uses.
+test("register: a Gemfile naming a gem in the repository gets a COPY for its directory", async () => {
+  const recordHome = tempHome();
+  const dir = project({ inspector: false });
+  writeRailsFixture(dir, {
+    ...railsFixtureFiles(),
+    Gemfile: `${RAILS_GEMFILE}gem "prototypes", path: "engines/prototypes"\n`,
+    "engines/prototypes/prototypes.gemspec": `Gem::Specification.new { |s| s.name = "prototypes" }\n`,
+  });
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-qm", "rails app with a gem of its own"]);
+  git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
+
+  await registerProject(
+    { recordHome, path: dir, check: "bundle exec rspec", image: "ruby:3.3.4" },
+    { tools: fakeRegisterTools() }
+  );
+
+  const dockerfile = fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR);
+  assert.match(dockerfile, /^COPY engines\/prototypes \/deps\/engines\/prototypes\/$/m, dockerfile);
+  // The whole instruction, not the words `bundle install`: those appear
+  // in the generated note above this very copy, and `indexOf` does not
+  // know a comment from an instruction.
+  assert.ok(
+    dockerfile.indexOf("COPY engines/prototypes") < dockerfile.indexOf("RUN cd /deps && bundle install"),
+    dockerfile
+  );
+});
+
+// The servers are installed by Dockerfile.inspector, and this route's
+// one proving run never builds that file - it runs the check inside the
+// image --image names, where they are not installed at all. So this one
+// route cannot prove this one check shape, and the refusal has to say
+// which of the two it is rather than leaving a missing-server message to
+// be puzzled over.
 test("register: a failing check on a project with servers says why this route cannot prove it", async () => {
   const recordHome = tempHome();
   const dir = project({ inspector: false });
@@ -210,7 +246,11 @@ test("register: a failing check on a project with servers says why this route ca
   git(dir, ["commit", "-qm", "rails app"]);
   git(dir, ["push", "-q", "origin", defaultBranchOf(dir)]);
   const tools = fakeRegisterTools({
-    check: () => ({ ran: true, exitCode: 1, output: "service postgresql start: Permission denied" }),
+    check: () => ({
+      ran: true,
+      exitCode: 1,
+      output: "check.sh: no PostgreSQL server binaries under /usr/lib/postgresql",
+    }),
   });
 
   await assert.rejects(
@@ -218,7 +258,7 @@ test("register: a failing check on a project with servers says why this route ca
     (err: unknown) => {
       assert.ok(err instanceof RegisterError);
       assert.equal(err.code, "check-failed");
-      assert.match(err.message, /PostgreSQL and Redis inside the box, which needs root/);
+      assert.match(err.message, /PostgreSQL and Redis inside the box, and they are installed by Dockerfile.inspector/);
       assert.match(err.message, /--terms/);
       return true;
     }

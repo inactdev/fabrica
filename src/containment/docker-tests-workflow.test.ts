@@ -50,6 +50,7 @@ const WATCHED_PATHS = [
   "src/relay/*",
   "src/line/*",
   "src/brain/adapters/*",
+  "src/register/*",
   "Dockerfile",
   "*/Dockerfile",
   "Dockerfile.*",
@@ -93,6 +94,43 @@ test("docker-tests.yml runs the real test suite with Docker, checks out PR conte
   // locally, not a hand-picked subset of "the Docker tests" that could
   // silently miss a newly added one.
   assert.match(source, /^\s*-\s*run:\s*npm test\s*$/m, "must run the full npm test suite, not a curated subset");
+});
+
+// Issue #337. src/register/inspector-e2e.test.ts hands what `fabrica
+// register` writes to the real `inspector` and reads the verdict out of
+// Inspector's own report. That test fails rather than skips when
+// `inspector` is missing, by Client ruling - so this job has to install
+// it, at one pinned commit, and has to say loudly when the install did
+// not put it on PATH rather than letting the e2e test report it as a
+// Fabrica failure.
+test("docker-tests.yml installs the real Inspector, at one pinned commit, and proves it is on PATH", () => {
+  const source = readFileSync(workflowPath, "utf8");
+
+  const install = stepContaining(source, /^ {6}- name: Install the pinned Inspector$/m);
+
+  // A full 40-character commit SHA, never a tag, a branch or @latest:
+  // the point of a pin is that two sides of a paired change can be held
+  // still against one known build of Inspector.
+  const pinned = /go install github\.com\/inactdev\/inspector\/cmd\/inspector@([0-9a-f]{40})/.exec(install);
+  assert.ok(pinned, `the install step must pin a full commit SHA:\n${install}`);
+  assert.doesNotMatch(install, /cmd\/inspector@(?:latest|main)/, "must never install @latest or @main");
+
+  // The pin lives here and nowhere else - a second copy is a second
+  // source of truth that can silently drift from the one that runs.
+  assert.equal(
+    source.split(pinned[1]).length - 1,
+    1,
+    "the pinned commit must appear exactly once in this workflow, in the install step",
+  );
+
+  // `go install` puts the binary in GOBIN or GOPATH/bin, neither of
+  // which a runner has on PATH - and the test looks for `inspector` on
+  // PATH.
+  assert.match(install, /GITHUB_PATH/, "must put the installed binary on PATH for later steps");
+
+  const guard = stepContaining(source, /^ {6}- name: Confirm the pinned Inspector is actually on PATH$/m);
+  assert.match(guard, /command -v inspector/, "must check for the binary itself, not for the install step's status");
+  assert.match(guard, /exit 1/, "must fail the job when the binary is not there");
 });
 
 test("docker-tests.yml runs that suite only for a Docker-dependent change, and the gate can never fail the job", () => {
@@ -153,6 +191,9 @@ test("docker-tests.yml runs that suite only for a Docker-dependent change, and t
     ["the checkout", /^ {6}- uses: actions\/checkout@/m],
     ["the Node setup", /^ {6}- uses: actions\/setup-node@/m],
     ["the Docker availability guard", /^ {6}- name: Confirm Docker is actually available$/m],
+    ["the Go setup", /^ {6}- uses: actions\/setup-go@/m],
+    ["the Inspector install", /^ {6}- name: Install the pinned Inspector$/m],
+    ["the Inspector-on-PATH guard", /^ {6}- name: Confirm the pinned Inspector is actually on PATH$/m],
     ["npm ci", /^ {6}- run: npm ci$/m],
     ["npm test", /^ {6}- run: npm test$/m],
   ];

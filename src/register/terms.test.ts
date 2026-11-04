@@ -19,10 +19,17 @@ import { fingerprint, makeFixtureRepo, pushToOrigin } from "../../contract/helpe
 import { loadConfig, projectsTomlPath } from "../config/index.ts";
 import { RegisterError } from "./errors.ts";
 import { registerProject } from "./register.ts";
-import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, REGISTER_BRANCH } from "./origin.ts";
+import { oldShapeProblem } from "./terms.ts";
+import {
+  CHECK_SCRIPT,
+  INSPECTOR_CONFIG,
+  RECORDED_CHECK,
+  REGISTER_BRANCH,
+  TERMS_RECORDED_CHECK,
+} from "./origin.ts";
 import { DOCKERFILE_INSPECTOR } from "./dockerfile.ts";
 import { fakeRegisterTools } from "./helpers/fake-register-tools.ts";
-import { railsFixtureFiles } from "./helpers/rails-fixture.ts";
+import { RAILS_GEMFILE, railsFixtureFiles } from "./helpers/rails-fixture.ts";
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-terms-home-"));
@@ -112,7 +119,7 @@ test("register --terms: writes the three files into the folder, and touches the 
 // indirect command, because it writes no script for it to live in. This
 // route writes one, so the command goes inside it and the config names
 // the script.
-test("register --terms: the config names ./check.sh and check.sh holds the derived command", async () => {
+test("register --terms: the config names sh /terms/check.sh and check.sh holds the derived command", async () => {
   const recordHome = tempHome();
   const dir = project();
   dropCheckScript(dir);
@@ -122,9 +129,11 @@ test("register --terms: the config names ./check.sh and check.sh holds the deriv
   const result = await registerProject({ recordHome, path: dir, terms }, { tools: fakeRegisterTools() });
 
   const config = JSON.parse(readFileSync(join(terms, INSPECTOR_CONFIG), "utf8")) as Record<string, unknown>;
-  assert.equal(config.check, RECORDED_CHECK);
+  // Issue #337: `./check.sh` here would name /workspace/check.sh, which
+  // is the repository - a file a work-mode repository does not have.
+  assert.equal(config.check, TERMS_RECORDED_CHECK);
   assert.match(readFileSync(join(terms, CHECK_SCRIPT), "utf8"), /^npm test$/m);
-  assert.equal(result.check, RECORDED_CHECK, "and projects.toml records the same one command");
+  assert.equal(result.check, RECORDED_CHECK, "and projects.toml records the script a self-test would run");
   // Executable, like the one the repository route writes - Inspector and
   // a worker's own box both run it as a program.
   assert.equal(statSync(join(terms, CHECK_SCRIPT)).mode & 0o111, 0o111);
@@ -199,26 +208,32 @@ test("register --terms: a Rails repository gets its servers, its gems and a long
   // .inspector.json: the usual, with the longer timeout (Client ruling,
   // 30 minutes) and check.sh as the one protected path.
   const config = JSON.parse(readFileSync(join(terms, INSPECTOR_CONFIG), "utf8")) as Record<string, unknown>;
-  assert.equal(config.check, RECORDED_CHECK);
+  assert.equal(config.check, TERMS_RECORDED_CHECK);
   assert.equal(config.timeoutSeconds, 1800);
   assert.deepEqual(config.protectedPaths, [CHECK_SCRIPT]);
 
   // check.sh: both servers started inside the box, waited for, the test
-  // database created, the suite run, both stopped again.
+  // database created, the suite run, both stopped again - and no cd into
+  // this file's own folder, which inside the box is /terms rather than
+  // the checkout (issue #337).
   const script = readFileSync(join(terms, CHECK_SCRIPT), "utf8");
-  assert.match(script, /^service postgresql start$/m);
-  assert.match(script, /^wait_for PostgreSQL pg_isready -q$/m);
-  assert.match(script, /^redis-server --daemonize yes --save ''$/m);
+  assert.match(script, /--auth=trust/);
+  assert.match(script, /^wait_for PostgreSQL "\$PGBIN\/pg_isready" -q -h "\$PGHOST"$/m);
+  assert.match(script, /^redis-server --daemonize yes --save '' --appendonly no /m);
   assert.match(script, /^bin\/rails db:test:prepare$/m);
   assert.match(script, /^bundle exec rspec$/m);
-  assert.match(script, /^trap stop_services EXIT$/m);
+  assert.match(script, /^trap fabrica_cleanup EXIT$/m);
+  assert.doesNotMatch(script, /^cd "\$\(dirname "\$0"\)"$/m, script);
   assert.equal(statSync(join(terms, CHECK_SCRIPT)).mode & 0o111, 0o111);
 
   // Dockerfile.inspector: the official Ruby image for the pinned
-  // version, the servers' packages, the gems at build time.
+  // version, the servers' packages, the gems at build time - reached
+  // through the named repo build context, since this folder is the
+  // docker build context and holds none of the repository's own files.
   const dockerfile = readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8");
   assert.match(dockerfile, /^FROM ruby:3\.3\.4$/m);
   assert.match(dockerfile, /postgresql libpq-dev redis-server/);
+  assert.match(dockerfile, /^COPY --from=repo Gemfile Gemfile\.lock \.ruby-version \/deps\/$/m);
   assert.match(dockerfile, /^RUN cd \/deps && bundle install$/m);
 
   // ...and none of it touched the repository, exactly as on every other
@@ -230,6 +245,36 @@ test("register --terms: a Rails repository gets its servers, its gems and a long
   assert.equal(result.check, RECORDED_CHECK);
 });
 
+// A real bug this route shipped: the copies for a gem the repository
+// keeps itself landed for the in-repository route and not for this one,
+// because the two derive the same shape through two different callers
+// and only one passed the Gemfile along. `bundle install` then failed on
+// `The path /deps/engines/prototypes does not exist`, and every unit
+// test of the Dockerfile passed straight through it - the renderer was
+// right, nothing proved this route fed it. So this asks the route.
+test("register --terms: a Gemfile naming a gem in the repository gets a COPY for its directory", async () => {
+  const recordHome = tempHome();
+  const dir = project();
+  dropCheckScript(dir);
+  commit(dir, {
+    ...railsFixtureFiles(),
+    Gemfile: `${RAILS_GEMFILE}gem "prototypes", path: "engines/prototypes"\n`,
+    "engines/prototypes/prototypes.gemspec": `Gem::Specification.new { |s| s.name = "prototypes" }\n`,
+  });
+  const terms = termsFolder();
+
+  await registerProject({ recordHome, path: dir, terms }, { tools: fakeRegisterTools() });
+
+  const dockerfile = readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8");
+  // Through the named repo context, like every other copy on this
+  // route, and above the install that reads it.
+  assert.match(dockerfile, /^COPY --from=repo engines\/prototypes \/deps\/engines\/prototypes\/$/m, dockerfile);
+  assert.ok(
+    dockerfile.indexOf("COPY --from=repo engines/prototypes") < dockerfile.indexOf("RUN cd /deps && bundle install"),
+    dockerfile
+  );
+});
+
 // Client ruling on this task: keep existing files, write only what's
 // missing. A folder the Client has already edited by hand survives a
 // second run byte for byte.
@@ -239,7 +284,7 @@ test("register --terms: files already in the folder are kept byte for byte, and 
   dropCheckScript(dir);
   commit(dir, { "package.json": JSON.stringify({ scripts: { test: "node --test" } }) });
   const terms = termsFolder();
-  writeFileSync(join(terms, INSPECTOR_CONFIG), '{"check":"./check.sh","timeoutSeconds":900}\n');
+  writeFileSync(join(terms, INSPECTOR_CONFIG), '{"check":"sh /terms/check.sh","timeoutSeconds":900}\n');
   writeFileSync(join(terms, CHECK_SCRIPT), "#!/bin/sh\nmy own command\n");
 
   const result = await registerProject({ recordHome, path: dir, terms }, { tools: fakeRegisterTools() });
@@ -252,8 +297,90 @@ test("register --terms: files already in the folder are kept byte for byte, and 
       [DOCKERFILE_INSPECTOR, "written"],
     ]
   );
-  assert.equal(readFileSync(join(terms, INSPECTOR_CONFIG), "utf8"), '{"check":"./check.sh","timeoutSeconds":900}\n');
+  assert.equal(
+    readFileSync(join(terms, INSPECTOR_CONFIG), "utf8"),
+    '{"check":"sh /terms/check.sh","timeoutSeconds":900}\n'
+  );
   assert.equal(readFileSync(join(terms, CHECK_SCRIPT), "utf8"), "#!/bin/sh\nmy own command\n");
+});
+
+// ---------------------------- a folder written before issue #337 (#337)
+
+// The three files `--terms` wrote before issue #337 cannot pass a real
+// Inspector run, and nothing here rewrites a file that is already in the
+// folder. So a re-run has to say, plainly, that they are the old shape -
+// otherwise it reports "left exactly as it is" and reads as a success.
+test("register --terms: a folder written before issue #337 is named as the old shape, not rewritten", async () => {
+  const recordHome = tempHome();
+  const dir = project();
+  dropCheckScript(dir);
+  commit(dir, railsFixtureFiles());
+  const terms = termsFolder();
+  // Exactly what this route used to write, in all three files.
+  const oldConfig = '{"check":"./check.sh","timeoutSeconds":1800}\n';
+  const oldScript = '#!/bin/sh\nset -e\ncd "$(dirname "$0")"\nbundle exec rspec\n';
+  const oldDockerfile = "FROM ruby:3.3.4\nCOPY Gemfile Gemfile.lock /deps/\nRUN cd /deps && bundle install\n";
+  writeFileSync(join(terms, INSPECTOR_CONFIG), oldConfig);
+  writeFileSync(join(terms, CHECK_SCRIPT), oldScript);
+  writeFileSync(join(terms, DOCKERFILE_INSPECTOR), oldDockerfile);
+
+  const result = await registerProject({ recordHome, path: dir, terms }, { tools: fakeRegisterTools() });
+
+  assert.deepEqual(
+    (result.termsFiles ?? []).map((file) => [file.file, file.outcome]),
+    [
+      [INSPECTOR_CONFIG, "kept-old-shape"],
+      [CHECK_SCRIPT, "kept-old-shape"],
+      [DOCKERFILE_INSPECTOR, "kept-old-shape"],
+    ]
+  );
+
+  // Every one of the three says what is wrong with it and how to
+  // replace it, in its own words rather than a shared label.
+  const detail = (file: string) => (result.termsFiles ?? []).find((entry) => entry.file === file)?.detail ?? "";
+  assert.match(detail(INSPECTOR_CONFIG), /\/workspace/);
+  assert.match(detail(INSPECTOR_CONFIG), /sh \/terms\/check\.sh/);
+  assert.match(detail(CHECK_SCRIPT), /dirname/);
+  assert.match(detail(CHECK_SCRIPT), /\/terms/);
+  assert.match(detail(DOCKERFILE_INSPECTOR), /--from=repo/);
+  for (const file of [INSPECTOR_CONFIG, CHECK_SCRIPT, DOCKERFILE_INSPECTOR]) {
+    assert.match(detail(file), /Delete /, `${file}: ${detail(file)}`);
+    assert.match(detail(file), /projects\.toml/, `${file}: ${detail(file)}`);
+  }
+
+  // And not one of them was touched.
+  assert.equal(readFileSync(join(terms, INSPECTOR_CONFIG), "utf8"), oldConfig);
+  assert.equal(readFileSync(join(terms, CHECK_SCRIPT), "utf8"), oldScript);
+  assert.equal(readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8"), oldDockerfile);
+});
+
+// The same question asked of files that are fine, including ones the
+// Client has written himself: nothing may be called "the old shape"
+// because it is not byte-identical to what this route writes today.
+test("oldShapeProblem: a folder that works, however it is spelled, is left unremarked", () => {
+  assert.equal(oldShapeProblem(INSPECTOR_CONFIG, '{"check":"bash /terms/suite.sh"}'), null);
+  assert.equal(oldShapeProblem(INSPECTOR_CONFIG, '{"check":"/terms/check.sh"}'), null);
+  // An indirect command is the Client's own call, and works: Inspector
+  // runs it from the repository.
+  assert.equal(oldShapeProblem(INSPECTOR_CONFIG, '{"check":"npm test"}'), null);
+  assert.equal(oldShapeProblem(INSPECTOR_CONFIG, '{"check":"bundle exec rspec"}'), null);
+  // Unparseable, or naming no check at all: Inspector's own refusal to
+  // make, and config-check.ts already names it on every round.
+  assert.equal(oldShapeProblem(INSPECTOR_CONFIG, "not json"), null);
+  assert.equal(oldShapeProblem(INSPECTOR_CONFIG, "{}"), null);
+
+  assert.equal(oldShapeProblem(CHECK_SCRIPT, "#!/bin/sh\nset -e\nbundle exec rspec\n"), null);
+  assert.equal(oldShapeProblem(DOCKERFILE_INSPECTOR, "FROM ruby:3.3.4\nCOPY --from=repo Gemfile /deps/\n"), null);
+  // A Dockerfile with no COPY at all has nothing to get wrong.
+  assert.equal(oldShapeProblem(DOCKERFILE_INSPECTOR, "FROM ruby:3.3.4\nRUN gem install rake\n"), null);
+  // And a plain COPY of one of this folder's own siblings is right: the
+  // terms folder genuinely is the build context.
+  assert.equal(
+    oldShapeProblem(DOCKERFILE_INSPECTOR, "FROM ruby:3.3.4\nCOPY setup-the-box.sh /usr/local/bin/\n"),
+    null
+  );
+  // Nothing is claimed about a file that cannot be read.
+  assert.equal(oldShapeProblem(INSPECTOR_CONFIG, null), null);
 });
 
 // -------------------------------------------------------- projects.toml

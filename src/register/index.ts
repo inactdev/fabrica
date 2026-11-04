@@ -13,13 +13,15 @@ export type {
   ProposalSignals,
   ProtectedPathsField,
 } from "./propose.ts";
-export { resolveTermsFolder, writeTerms } from "./terms.ts";
+export { oldShapeProblem, resolveTermsFolder, writeTerms } from "./terms.ts";
 export type { TermsFile, TermsFileOutcome, TermsResult } from "./terms.ts";
 export {
   CHECK_SCRIPT,
   INSPECTOR_CONFIG,
   RECORDED_CHECK,
   REGISTER_BRANCH,
+  TERMS_MOUNT,
+  TERMS_RECORDED_CHECK,
   hostFromOriginUrl,
   inspectorConfiguredOnOrigin,
   notSetUpMessage,
@@ -29,7 +31,8 @@ export {
   repoNameFromOriginUrl,
 } from "./origin.ts";
 export type { OriginSetup } from "./origin.ts";
-export { checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.ts";
+export { checkCommandFor, checkScript, inspectorConfigJson, protectedPathsFor } from "./scaffold.ts";
+export type { TermsLocation } from "./scaffold.ts";
 export {
   DEPS_DIR,
   DOCKERFILE_INSPECTOR,

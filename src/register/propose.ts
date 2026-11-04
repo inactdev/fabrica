@@ -36,7 +36,7 @@
 // every rule below is testable with no git and no repository.
 
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, fileExistsOnRef, readFileOnRef } from "./origin.ts";
-import { checkScript, inspectorConfigJson } from "./scaffold.ts";
+import { checkScript, inspectorConfigJson, type TermsLocation } from "./scaffold.ts";
 import {
   BROWSER_GEMS,
   DEPS_DIR,
@@ -104,7 +104,10 @@ export interface ProposalSignals {
    * application, so reading it costs nothing like a `package-lock.json`
    * would. */
   gemfileLock: string | null;
-  /** `Gemfile` at the repository root - read for its own `ruby` line. */
+  /** `Gemfile` at the repository root - read for its own `ruby` line,
+   * and for the paths inside the repository it names with `path:`,
+   * `gemspec` or `eval_gemfile`, which the lockfile does not say and
+   * `bundle install` will go looking for. */
   gemfile: string | null;
   /** `.ruby-version` at the repository root. */
   rubyVersion: string | null;
@@ -571,6 +574,13 @@ function proposeDependencies(
     packageLock: signals.packageLock,
     goSum: signals.goSum,
     gemfileLock: signals.gemfileLock,
+    // The manifest as well as the lockfile: only the `Gemfile` says
+    // which paths inside the repository `bundle install` will go
+    // looking for (a `path:` gem's own directory). Forgetting it here
+    // is how the terms route came to build a Dockerfile with no copy
+    // for one, while the in-repository route - which derives its shape
+    // from the working tree instead - had them.
+    gemfile: signals.gemfile,
     rubyVersionFile: signals.rubyVersion !== null,
     railsBin: signals.railsBin,
   });
@@ -755,11 +765,14 @@ function rubyNotes(signals: ProposalSignals, dependencies: DependencyField): str
 
   if ((shape.services ?? []).length > 0) {
     notes.push(
-      `  note: starting those servers needs the check box to run as root, which the official Ruby image does. ` +
-        `\`fabrica register --check ... --image ...\` runs its own one proving run as *your* user rather than ` +
-        `as root, so this is the one check shape that route cannot prove here - commit the files below ` +
-        `yourself and register the repository again, or use --terms, and let the first task's own red-or-green ` +
-        `be the proof.`
+      `  note: those servers are installed by ${DOCKERFILE_INSPECTOR} and started by ${CHECK_SCRIPT}, which is ` +
+        `written to work as whatever user the check box runs as - Inspector runs it as the uid of whoever ` +
+        `invoked it, which has no /etc/passwd entry, so the database cluster is created at check time rather ` +
+        `than baked into the image. \`fabrica register --check ... --image ...\` runs its own one proving run ` +
+        `inside the image --image names and never builds ${DOCKERFILE_INSPECTOR}, so the servers are simply not ` +
+        `installed there: this is the one check shape that route cannot prove. Commit the files below yourself ` +
+        `and register the repository again, or use --terms, and let the first task's own red-or-green be the ` +
+        `proof.`
     );
   }
 
@@ -857,8 +870,19 @@ export interface ProposalDerivation {
 }
 
 /** Reads nothing and writes nothing: the rules, applied to what was
- * read. */
-export function deriveProposal(signals: ProposalSignals): ProposalDerivation {
+ * read.
+ *
+ * `terms` says where this project's terms will live, which changes two
+ * of the three files it derives and nothing about the rules that derive
+ * them (issue #337): a terms folder needs a different `check` in the
+ * config, no `cd` in the script, and a `COPY --from=repo` in the
+ * Dockerfile, because Inspector resolves all three against that folder
+ * rather than against the repository. */
+export function deriveProposal(
+  signals: ProposalSignals,
+  opts: { terms?: TermsLocation } = {}
+): ProposalDerivation {
+  const terms = opts.terms ?? "repository";
   const pkg = parsedPackageJson(signals.packageJson);
   // The dependency shape first: `check` needs to know whether the
   // command it derives can stand on its own (see proposeCheck).
@@ -879,12 +903,13 @@ export function deriveProposal(signals: ProposalSignals): ProposalDerivation {
       from: image.value,
       reason: image.reason,
       shape: dependencies.shape,
+      repoFiles: terms === "folder" ? "named-repo-context" : "build-context",
     }),
     // The same function the `--terms` route writes its script with, over
     // the same command and the same shape, so the proposal a Client
     // reads and the file that route writes cannot come to differ.
     checkScriptText:
-      check.scriptCommand === undefined ? null : checkScript(check.scriptCommand, dependencies.shape),
+      check.scriptCommand === undefined ? null : checkScript(check.scriptCommand, dependencies.shape, terms),
     fieldNotes: [
       `  check: ${check.command} - ${check.reason}.`,
       `  timeoutSeconds: ${timeout.reason}.`,

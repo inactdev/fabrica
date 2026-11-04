@@ -227,6 +227,10 @@ src/containment/caffeinate.ts: src/containment/caffeinate.test.ts
 src/containment/docker-args.test.ts: src/containment/docker-args.test.ts
 src/containment/docker-args.ts: src/containment/docker-args.test.ts
 src/containment/docker-tests-workflow.test.ts: src/containment/docker-tests-workflow.test.ts
+# Hand-added: CI glue with no colocated source of its own. The job id,
+# both triggers, the path gate and the pinned Inspector install are all
+# proven by one test that reads this workflow's real source.
+.github/workflows/docker-tests.yml: src/containment/docker-tests-workflow.test.ts
 src/containment/egress-network.test.ts: src/containment/egress-network.test.ts
 # Hand-added: the shared `docker` CLI stand-in has no colocated test of
 # its own, so the generator left both files out. These are every suite
@@ -478,20 +482,27 @@ src/register/index.ts: src/register/register.test.ts, src/register/terms.test.ts
 # nothing on its own.
 src/register/helpers/fake-register-tools.ts: src/register/register.test.ts, src/register/terms.test.ts
 src/register/helpers/rails-fixture.ts: src/register/propose.test.ts, src/register/dockerfile.test.ts, src/register/scaffold.test.ts, src/register/terms.test.ts, src/register/register.test.ts
+# Hand-added (issue #337): the three files register writes are now also
+# proven by running them - the real Inspector, over a Rails application
+# that really boots. Every file that decides what those three say maps to
+# that end-to-end test as well as to its own unit test, since a change to
+# any of them can only be wrong in the check box.
+src/register/inspector-e2e.test.ts: src/register/inspector-e2e.test.ts
+src/register/helpers/rails-app-fixture.ts: src/register/inspector-e2e.test.ts
 src/register/terms.test.ts: src/register/terms.test.ts
-src/register/terms.ts: src/register/terms.test.ts
+src/register/terms.ts: src/register/terms.test.ts, src/register/inspector-e2e.test.ts
 src/register/dockerfile.test.ts: src/register/dockerfile.test.ts
-src/register/dockerfile.ts: src/register/dockerfile.test.ts
+src/register/dockerfile.ts: src/register/dockerfile.test.ts, src/register/inspector-e2e.test.ts
 src/register/origin.test.ts: src/register/origin.test.ts
 src/register/origin.ts: src/register/origin.test.ts
 src/register/propose.test.ts: src/register/propose.test.ts
-src/register/propose.ts: src/register/propose.test.ts
+src/register/propose.ts: src/register/propose.test.ts, src/register/inspector-e2e.test.ts
 src/register/register.test.ts: src/register/register.test.ts
-src/register/register.ts: src/register/register.test.ts
+src/register/register.ts: src/register/register.test.ts, src/register/inspector-e2e.test.ts
 src/register/registry-write.test.ts: src/register/registry-write.test.ts
 src/register/registry-write.ts: src/register/registry-write.test.ts
 src/register/scaffold.test.ts: src/register/scaffold.test.ts
-src/register/scaffold.ts: src/register/scaffold.test.ts
+src/register/scaffold.ts: src/register/scaffold.test.ts, src/register/inspector-e2e.test.ts
 src/register/tools.test.ts: src/register/tools.test.ts
 src/register/tools.ts: src/register/tools.test.ts
 src/relay/allowlist.test.ts: src/relay/allowlist.test.ts

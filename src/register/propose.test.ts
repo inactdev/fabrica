@@ -520,11 +520,17 @@ test("propose: a database this shape installs no server for is named", () => {
 // Fabrica's own containment runs every container as the host user, so
 // the one proving run cannot start these servers - said here rather than
 // met as a permission error.
-test("propose: the root a server needs, and the proving run that has none, are both named", () => {
+// The reason changed with issue #337 and the conclusion did not: the
+// servers are installed by Dockerfile.inspector, which the proving run
+// never builds, so they are simply not in the image --image names. What
+// this used to say - that starting them needs root - is no longer true
+// of the generated check.sh at all.
+test("propose: the one check shape the proving run cannot prove says why, in terms that are still true", () => {
   const { stderr } = propose(RAILS);
 
-  assert.ok(stderr.includes("needs the check box to run as root"), stderr);
-  assert.ok(stderr.includes("cannot prove here"), stderr);
+  assert.ok(stderr.includes("never builds Dockerfile.inspector"), stderr);
+  assert.ok(stderr.includes("cannot prove"), stderr);
+  assert.ok(!stderr.includes("needs the check box to run as root"), stderr);
 });
 
 // The proposal is three files for this shape, and still exactly one
@@ -750,7 +756,7 @@ test("readProposalSignals reads a Rails repository's four signals off the ref", 
   // ...and the proposal built from them is the Rails one, end to end.
   const proposal = proposeInspectorConfig(signals, { projectPath: dir, defaultBranch: "main" });
   assert.ok(proposal.dockerfile.includes("FROM ruby:3.3.4"), proposal.dockerfile);
-  assert.ok(proposal.checkScript?.includes("service postgresql start"), proposal.checkScript ?? "");
+  assert.ok(proposal.checkScript?.includes("--auth=trust"), proposal.checkScript ?? "");
 });
 
 test("readProposalSignals: a repository with no Ruby in it has none of those signals", () => {
