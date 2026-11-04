@@ -26,13 +26,12 @@
 //   - **It skips only when Docker is absent**, exactly like
 //     `inspector-e2e.test.ts`: anything else - no `inspector` on PATH, a
 //     failed build, a red check - FAILS, naming what happened.
-//   - **The Inspector half is expected to FAIL until inspector#86 is
-//     merged and `.github/workflows/docker-tests.yml`'s pin moves to its
-//     merge commit.** `buildSecrets` is a key the pinned Inspector does
-//     not know: it reads past it, passes no `--secret`, and the mount
-//     hands the step an empty file. That failure is the honest signal
-//     that the other half of the pair has not landed, and it is what
-//     moving the pin turns green. Nothing here works around it.
+//   - **The Inspector half needs an Inspector that knows the
+//     `buildSecrets` key**, which is the commit
+//     `.github/workflows/docker-tests.yml` pins. An older Inspector
+//     reads past the key, passes no `--secret`, and the mount hands the
+//     step an empty file - a failure here naming a length of 0 is that,
+//     and the fix is the pin, never a workaround in this file.
 //   - **The fake value is a fake.** It never leaves this file, and the
 //     searches below are for exactly it, so a test that found it would
 //     be reporting a real leak path and not a real credential.
@@ -78,8 +77,25 @@ function dir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), `fabrica-${prefix}-`));
 }
 
-function docker(args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const run = spawnSync("docker", args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+/**
+ * One `docker` command.
+ *
+ * `env` is for a build that mounts a secret: `--secret id=NAME,env=NAME`
+ * reads the value out of the `docker` process's own environment, so a
+ * build run without it mounts an empty file and the step sees nothing.
+ * It is spread over `process.env` rather than replacing it, exactly the
+ * way `src/cli/image-repair.ts` runs the real build - docker needs
+ * `PATH`, `HOME` and `DOCKER_HOST` from this machine to work at all.
+ */
+function docker(
+  args: string[],
+  env?: Record<string, string>
+): { status: number | null; stdout: string; stderr: string } {
+  const run = spawnSync("docker", args, {
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+  });
   return { status: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
 }
 
@@ -136,15 +152,14 @@ test("a build secret reaches Fabrica's own image build, and is in no layer of wh
   // under test here is the secret, and these are the exact flags and
   // the exact environment the generated build gets.
   const image = "fabrica-build-secret-probe:latest";
-  const built = docker([
-    "build",
-    ...secretFlags,
-    "-t",
-    image,
-    "-f",
-    join(project, DOCKERFILE_INSPECTOR),
-    project,
-  ]);
+  const built = docker(
+    ["build", ...secretFlags, "-t", image, "-f", join(project, DOCKERFILE_INSPECTOR), project],
+    // The environment `machineImageBuild` asked for, on top of this
+    // machine's own - the half of its answer that carries the value.
+    // Without it the mount is there and empty, and the witness below
+    // records 0.
+    command.env
+  );
   t.after(() => docker(["image", "rm", "-f", image]));
   assert.equal(built.status, 0, `${built.stdout}\n${built.stderr}`);
 
@@ -241,15 +256,14 @@ test("the real Inspector passes a listed build secret to its check-image build, 
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as { outcome?: string; output?: string };
   const detail = `outcome=${report.outcome}\n${report.output ?? "(no output recorded)"}`;
 
-  // The expected failure until inspector#86 lands: the pinned Inspector
-  // reads past `buildSecrets`, so nothing is passed, the mount is empty
-  // and the length is 0.
+  // Green, and the length the build step really saw - which only an
+  // Inspector that passed the secret to its own build could produce.
   assert.equal(report.outcome, "green", detail);
   assert.match(
     report.output ?? "",
     new RegExp(`secret length seen by the build step: ${FAKE_VALUE.length}\\b`),
-    `the check image's build step was not handed the value - the usual cause is a pinned Inspector that does ` +
-      `not know the buildSecrets key yet (inspector#86):\n${detail}`
+    `the check image's build step was not handed the value - the usual cause is an Inspector older than ` +
+      `inspector#87, which does not know the buildSecrets key:\n${detail}`
   );
 
   // And nothing Inspector wrote carries the value: not its report, not

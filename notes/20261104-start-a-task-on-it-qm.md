@@ -98,27 +98,31 @@ newer Dockerfile frontend (Docker's own docs put it behind a `# syntax=`
 pin), so it is deliberately not used - issue #342 says so, and the file
 form works on any Docker with BuildKit.
 
-### The Inspector half is not merged, so the pin did not move
+### The Inspector half landed as inspector#87, and the pin moved to it
 
-`.github/workflows/docker-tests.yml`'s pin is unchanged on purpose:
-checked against GitHub's API on 2026-11-04, **inspector#86 is an open
-issue, not a merged pull request**, and Inspector's `main` is still at
-`8cc11fd116ec` - which is exactly the commit already pinned. There is no
-merge commit to move to.
+Issue #342 names inspector#86 (the Inspector-side *issue*); what merged
+is **inspector#87**, `e764e6c7f013198d782a931fd8a3b6d82e9e01ce`, whose
+only parent is `8cc11fd116ec` - the commit `docker-tests.yml` used to
+pin. So the pin moved exactly one commit, and both end-to-end tests are
+expected green against it rather than expected to fail.
 
-Read from Inspector's own source at that pin
-(`internal/inspector/config.go`): its `Config` is decoded with a plain
-`json.Unmarshal`, so an unknown `buildSecrets` key is **read past**, not
-refused. That is what makes writing the key ahead of the other side
-safe: an existing project is unaffected, and a project that needs a
-credential goes red in Inspector with its own authentication error.
+Read from Inspector's own source at that commit, and worth knowing
+because it is what Fabrica's side has to agree with:
+`internal/container/secret.go` validates a name against
+`^[A-Za-z0-9_]+$`, treats unset and whitespace-only as one "missing"
+case, collapses a repeat, and passes `--secret id=NAME,env=NAME` - which
+is character for character what `src/buildsecrets/resolve.ts` and
+`src/projectimage/resolve.ts` do, so `src/inspector/consumer-contract
+.json` needed no change. Its build needs BuildKit for the `--secret` and
+`--build-context` flags and relies on it being `docker build`'s default
+since Docker 23, so no `# syntax=` pin is wanted in the
+`Dockerfile.inspector` Fabrica writes.
 
-`src/register/build-secret-e2e.test.ts`'s Inspector half is therefore
-expected to FAIL on the current pin (it asserts the build step saw the
-value; with no `--secret` passed, the mount is empty). It skips where
-Docker is absent, which includes Inspector's own check box, so it does
-not turn this repository's own check red - only the `docker-tests` job
-on a real Docker runner.
+At the previous pin its `Config` was decoded with a plain
+`json.Unmarshal`, so an unknown `buildSecrets` key was **read past**
+rather than refused. That is what made writing the key ahead of the
+other side safe, and is why an Inspector older than #87 fails the
+end-to-end test with a secret length of 0 instead of refusing outright.
 
 ### A gap in `docker-tests.yml`'s path gate, left alone deliberately
 
@@ -129,5 +133,19 @@ suite. It does **not** cover `src/buildsecrets/*` (nor
 confined to the derivation alone would take the fast path and never run
 the Docker proof. Not fixed here: `.github/workflows/**` is one of
 rule 9's protected paths, and issue #342 sanctioned exactly one edit to
-that file (moving the pin), which has nothing to move to yet. Worth one
-line in `DOCKER_PATHS` next time that file is opened under a ruling.
+that file (moving the pin). Worth one line in `DOCKER_PATHS` next time
+that file is opened under a ruling.
+
+### A Docker build that mounts a secret needs the environment too
+
+`machineImageBuild`'s answer is two halves - the `--secret
+id=NAME,env=NAME` flags *and* an `env` map for the child - and
+`--secret ...,env=NAME` makes docker itself read that variable out of
+its own process environment. Spawning the build without the `env` half
+is not an error anywhere: the flag is accepted, the mount appears, and
+the step is handed an **empty file**. `src/cli/image-repair.ts` is the
+one place that runs these commands for real (`{ ...process.env,
+...cmd.env }`, spread rather than replaced, because docker needs this
+machine's `PATH`/`DOCKER_HOST`), and anything else that spawns one -
+`src/register/build-secret-e2e.test.ts` among them - has to do the same
+or it proves nothing.

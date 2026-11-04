@@ -300,8 +300,8 @@ jobs:
       # INSPECTOR PIN" at the top of this file for why it is not watched
       # for freshness, and who moves it.
       #
-      # The SHA below is inspector#85's merge commit, and is written
-      # once, in the command, so nothing can drift from it. Two things
+      # The SHA below is inspector#87's merge commit, and is written
+      # once, in the command, so nothing can drift from it. Three things
       # in it are what the end-to-end tests need:
       #
       #   - the named `repo` build context that a terms folder's
@@ -311,17 +311,25 @@ jobs:
       #   - a check box that is writable where git would ignore a new
       #     file (inspector#85). Rails writes `tmp/local_secret.txt`
       #     when it has no configured `secret_key_base`, and `tmp/*` is
-      #     git-ignored in any `rails new` application - under the
-      #     previous pin that was an `Errno::EROFS` red that Fabrica
-      #     deliberately did not work around.
+      #     git-ignored in any `rails new` application - under an earlier
+      #     pin that was an `Errno::EROFS` red that Fabrica deliberately
+      #     did not work around;
+      #   - `buildSecrets` in `.inspector.json` (inspector#87): the
+      #     listed environment variables are passed to the check-image
+      #     build as Docker build secrets. src/register/build-secret-e2e
+      #     .test.ts needs exactly that - an Inspector without it reads
+      #     past the key, passes no `--secret`, and the build step is
+      #     handed an empty file, which that test reports as a length of
+      #     0.
       #
-      # So both of src/register/inspector-e2e.test.ts's route tests are
+      # So all three of src/register/inspector-e2e.test.ts's and
+      # src/register/build-secret-e2e.test.ts's Inspector tests are
       # expected green against this pin, not merely expected to fail
       # loudly.
       - name: Install the pinned Inspector
         if: steps.gate.outputs.run_full == 'true'
         run: |
-          go install github.com/inactdev/inspector/cmd/inspector@8cc11fd116ec82f0303da878b3834fdf593bfcbc
+          go install github.com/inactdev/inspector/cmd/inspector@e764e6c7f013198d782a931fd8a3b6d82e9e01ce
           # `go install` puts it in GOBIN, or GOPATH/bin - neither is on
           # PATH by default on a runner, and the e2e test looks for
           # `inspector` on PATH.

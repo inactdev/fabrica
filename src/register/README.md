@@ -387,12 +387,14 @@ Inspector's docs first.
 
 `buildSecrets` is the one deliberate exception to that provenance rule,
 and it took a ruling to make: issue #342 asks for it by name as the
-Fabrica half of **inspector#86**, the Inspector side of the same pair.
-Until that merges the installed Inspector reads past the key (its config
-decodes the fields it knows and ignores the rest — read from its own
-`internal/inspector/config.go`), so a project needing a credential goes
-red there with its own authentication error rather than being refused
-for the key. That is why writing it ahead of the other side is safe, and
+Fabrica half of **inspector#86**, the Inspector side of the same pair,
+which merged as **inspector#87** — the commit
+`.github/workflows/docker-tests.yml` now pins. An Inspector older than
+that reads past the key (its config decodes the fields it knows and
+ignores the rest — read from its own `internal/inspector/config.go`), so
+a project needing a credential goes red there with its own
+authentication error rather than being refused for the key. That is why
+writing it ahead of the other side was safe, and
 `scaffold.test.ts` pins the narrower thing that can be pinned instead:
 the key appears only when a project actually has one. (`contract/helpers/fixture.ts`'s
 `FIXTURE_INSPECTOR_CONFIG` still carries an `image` key. It is a fixture
