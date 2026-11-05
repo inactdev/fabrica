@@ -8,12 +8,24 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { ContainmentError } from "./errors.ts";
-import { runContained } from "./run.ts";
+import { GRACEFUL_STOP_SECONDS, runContained } from "./run.ts";
+import type { ContainedRunResult } from "./types.ts";
 
 const IMAGE = "alpine";
 
@@ -39,6 +51,86 @@ function makeFixture() {
   const outsideDir = mkdtempSync(join(tmpdir(), "fabrica-containment-outside-"));
   writeFileSync(join(outsideDir, "secret.txt"), "should never be readable from workdir\n");
   return { workdir, outsideDir };
+}
+
+// helpers/fake-docker-stop.mjs on PATH as `docker` for the duration of
+// one test, with a reader for the argv the code under test really used -
+// the same shim-on-PATH mechanism install-fake-docker.ts uses for the
+// network commands, kept local to this file because this is the one
+// suite that drives a container's start-and-stop. Its whole point is
+// that the reissued stop below is proven everywhere this suite runs,
+// not only on a machine with a Docker daemon.
+function installFakeDockerStop(
+  t: { after: (fn: () => void) => void },
+  config: { missedStops: number; runCeilingMs: number }
+): { calls: () => string[][] } {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-fake-docker-stop-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = join(root, "bin");
+  const state = join(root, "state");
+  for (const dir of [bin, state]) mkdirSync(dir);
+  writeFileSync(join(state, "config.json"), JSON.stringify(config));
+
+  const shim = join(bin, "docker");
+  copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "helpers", "fake-docker-stop.mjs"), shim);
+  chmodSync(shim, 0o755);
+
+  // `dirname(process.execPath)` too, so the shim's own `#!/usr/bin/env
+  // node` resolves to the runtime running this test rather than
+  // depending on `node` being on the ambient PATH.
+  const priorPath = process.env.PATH;
+  const priorState = process.env.FABRICA_FAKE_DOCKER_STOP;
+  process.env.PATH = [bin, dirname(process.execPath), priorPath ?? ""].join(delimiter);
+  process.env.FABRICA_FAKE_DOCKER_STOP = state;
+  t.after(() => {
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
+    if (priorState === undefined) delete process.env.FABRICA_FAKE_DOCKER_STOP;
+    else process.env.FABRICA_FAKE_DOCKER_STOP = priorState;
+  });
+
+  const callsFile = join(state, "calls.jsonl");
+  return {
+    calls: () =>
+      existsSync(callsFile)
+        ? readFileSync(callsFile, "utf8")
+            .split("\n")
+            .filter((line) => line.trim() !== "")
+            .map((line) => JSON.parse(line) as string[])
+        : [],
+  };
+}
+
+// The commands these tests stop would otherwise run for ten minutes, so
+// a regression must fail in seconds rather than hang the suite out to
+// that length: the run is raced against a deadline, and a run that
+// misses it has its container force-removed here before the failure is
+// reported, so nothing is left behind for the rest of the file (a
+// leftover container keeps the networks it is on undeletable).
+async function endsWithin(
+  deadlineMs: number,
+  run: Promise<ContainedRunResult>,
+  containerName: string
+): Promise<ContainedRunResult> {
+  let timer: NodeJS.Timeout | undefined;
+  const outcome = await Promise.race([
+    run.then((result) => ({ result })),
+    new Promise<"missed">((resolve) => {
+      timer = setTimeout(() => resolve("missed"), deadlineMs);
+    }),
+  ]);
+  clearTimeout(timer);
+  if (outcome === "missed") {
+    try {
+      execFileSync("docker", ["rm", "-f", containerName], { stdio: "ignore" });
+    } catch {
+      // Nothing to remove, or docker would not say - the assertion
+      // below is the real report either way.
+    }
+    await run.catch(() => {});
+    assert.fail(`the run must end within ${deadlineMs}ms of the abort, not run its course`);
+  }
+  return outcome.result;
 }
 
 // The network probe below targets a well-known public IP:port directly
@@ -132,6 +224,132 @@ test("runContained: aborting gracefulStopSignal stops the container with SIGTERM
 
   // `docker run --rm` reaps a container that exits, so nothing is left
   // behind to keep this run's networks undeletable either.
+  const listed = execFileSync("docker", ["ps", "-a", "--filter", `name=${name}`, "--format", "{{.Names}}"], {
+    encoding: "utf8",
+  });
+  assert.equal(listed.trim(), "", `the box must be gone, got: ${listed}`);
+});
+
+// The two tests below need no daemon, so they run everywhere - which
+// matters because every Docker-gated test in this file skips on a
+// machine without one, and the reissue is the whole of issue #346's
+// fix. The stand-in docker answers the first two stops the way the real
+// one answers a stop for a container it has not created yet, so a
+// single-shot stop leaves the command running its full course and the
+// run comes back 99 instead of 137.
+test("runContained: a stop that finds no container yet is reissued until the run ends", async (t) => {
+  const fake = installFakeDockerStop(t, { missedStops: 2, runCeilingMs: 20_000 });
+  const { workdir } = makeFixture();
+
+  const stop = new AbortController();
+  stop.abort();
+  const startedAt = Date.now();
+
+  const result = await runContained("sh", ["-c", "sleep 600"], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    containerName: "fabrica-fake-box",
+    stopSignal: stop.signal,
+  });
+
+  assert.equal(result.exitCode, 137, `the run must end on the stop, not run its course: ${result.stderr}`);
+  const stops = fake.calls().filter((argv) => argv[0] === "rm");
+  assert.deepEqual(stops[0], ["rm", "-f", "fabrica-fake-box"], "a force-remove, unchanged in shape");
+  assert.equal(stops.length >= 3, true, `the stop must be reissued, not tried once - got ${stops.length}`);
+  // Three stops at STOP_RETRY_INTERVAL_MS apart, not a wait on anything
+  // the command itself does.
+  assert.equal(Date.now() - startedAt < 10_000, true, "reissuing must take about a second, not the run's length");
+});
+
+test("runContained: a graceful stop that finds no container yet is reissued the same way", async (t) => {
+  const fake = installFakeDockerStop(t, { missedStops: 2, runCeilingMs: 20_000 });
+  const { workdir } = makeFixture();
+
+  const pause = new AbortController();
+  pause.abort();
+
+  const result = await runContained("sh", ["-c", "sleep 600"], {
+    workdir,
+    network: "denied",
+    image: IMAGE,
+    containerName: "fabrica-fake-box",
+    gracefulStopSignal: pause.signal,
+  });
+
+  assert.equal(result.exitCode, 137, `the run must end on the stop, not run its course: ${result.stderr}`);
+  const stops = fake.calls().filter((argv) => argv[0] === "stop");
+  assert.deepEqual(
+    stops[0],
+    ["stop", "--time", String(GRACEFUL_STOP_SECONDS), "fabrica-fake-box"],
+    "SIGTERM-then-SIGKILL with its own grace period, unchanged in shape"
+  );
+  assert.equal(stops.length >= 3, true, `the graceful stop must be reissued too - got ${stops.length}`);
+});
+
+// Issue #346: the abort used to be acted on exactly once, so one that
+// landed before `docker run` had created the container found nothing to
+// stop - the container then started anyway and ran its full length.
+// Aborting before the call even begins is that race at its widest, and
+// is the shape a loaded CI runner kept hitting with a 500ms abort.
+test("runContained: an abort that lands before the container exists still stops the run", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+
+  const name = `fabrica-test-stop-early-${process.pid}`;
+  const stop = new AbortController();
+  stop.abort();
+
+  const startedAt = Date.now();
+  const result = await endsWithin(
+    30_000,
+    runContained("sh", ["-c", "sleep 600"], {
+      workdir,
+      network: "denied",
+      image: IMAGE,
+      containerName: name,
+      stopSignal: stop.signal,
+    }),
+    name
+  );
+
+  assert.ok(Date.now() - startedAt < 30_000);
+  assert.notEqual(result.exitCode, 0, "a container removed under it is not a successful run");
+
+  const listed = execFileSync("docker", ["ps", "-a", "--filter", `name=${name}`, "--format", "{{.Names}}"], {
+    encoding: "utf8",
+  });
+  assert.equal(listed.trim(), "", `the box must be gone, got: ${listed}`);
+});
+
+test("runContained: a gracefulStopSignal abort that lands before the container exists still stops the run", async (t) => {
+  if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+  const { workdir } = makeFixture();
+
+  const name = `fabrica-test-graceful-early-${process.pid}`;
+  const pause = new AbortController();
+  pause.abort();
+
+  const startedAt = Date.now();
+  // Nothing here asserts the trap ran: a stop reissued this early can
+  // reach the container before its shell has installed one, in which
+  // case the grace period runs out and SIGKILL ends it instead. That
+  // SIGTERM comes first is what the test above this one proves; what
+  // this one proves is that the run ends at all.
+  await endsWithin(
+    30_000,
+    runContained("sh", ["-c", "trap 'echo stopping; exit 0' TERM; sleep 600 & wait"], {
+      workdir,
+      network: "denied",
+      image: IMAGE,
+      containerName: name,
+      gracefulStopSignal: pause.signal,
+    }),
+    name
+  );
+
+  assert.ok(Date.now() - startedAt < 30_000);
+
   const listed = execFileSync("docker", ["ps", "-a", "--filter", `name=${name}`, "--format", "{{.Names}}"], {
     encoding: "utf8",
   });

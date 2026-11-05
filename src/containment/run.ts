@@ -22,6 +22,14 @@ import type { ContainedRunResult, ReadOnlyMount, RunContainedOptions } from "./t
  * process table through `ps`, which nothing in src/containment needs. */
 export const GRACEFUL_STOP_SECONDS = 10;
 
+/** How long to wait before reissuing a stop that did not end the run
+ * (`RunContainedOptions.stopSignal`/`gracefulStopSignal`) - see
+ * "Stopping a run" in README.md for why one stop is not enough. A few
+ * hundred milliseconds: short enough that an abort landing before the
+ * container exists still ends the run in about a second, long enough
+ * not to spawn a docker client faster than one can answer. */
+export const STOP_RETRY_INTERVAL_MS = 300;
+
 export async function runContained(
   command: string,
   args: string[],
@@ -159,26 +167,75 @@ export async function runContained(
         opts.onStdout?.(chunk);
       });
       child.stderr.on("data", (chunk: string) => (stderr += chunk));
+
+      // Whether this call has already ended, and the retry timers any
+      // in-flight stop loop below is holding. Both exist so that a stop
+      // loop can tell "the run is still going, keep asking" from "the
+      // run is over, there is nothing left to stop".
+      let settled = false;
+      const retryTimers = new Set<NodeJS.Timeout>();
+      const settle = (finish: () => void) => {
+        if (settled) return;
+        settled = true;
+        for (const timer of retryTimers) clearTimeout(timer);
+        retryTimers.clear();
+        finish();
+      };
+
       child.on("error", (err: NodeJS.ErrnoException) => {
-        reject(
-          new ContainmentError(
-            "spawn-failed",
-            `could not run "${command}" contained (docker) in ${workdir}: ${err.code ?? err.message}`
+        settle(() =>
+          reject(
+            new ContainmentError(
+              "spawn-failed",
+              `could not run "${command}" contained (docker) in ${workdir}: ${err.code ?? err.message}`
+            )
           )
         );
       });
-      child.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
+      child.on("close", (exitCode) => settle(() => resolve({ stdout, stderr, exitCode })));
 
       // Stopping the container, not killing the docker client: the
       // client's own signal handling is not something this depends on,
       // and a force-remove is the shape this project already uses on a
       // container it needs gone (src/relay/container/launch.ts). The
       // attached client exits on its own once the container is gone,
-      // which settles this promise through `close` above. A failure is
-      // swallowed: the container may already have exited, and the
-      // reason the caller aborted is what matters, not this.
+      // which settles this promise through `close` above.
+      //
+      // Issuing that stop once is not enough (issue #346): `docker run`
+      // creates the container and then starts it, so an abort landing
+      // before or inside that window finds nothing to stop, the
+      // container then starts anyway, and the run goes its full length -
+      // which is how a 500ms abort became a 600s run on a busy CI
+      // runner. So a stop is reissued every STOP_RETRY_INTERVAL_MS
+      // until the docker client exits, which is the one unambiguous
+      // proof the container is gone: `--rm` reaps it and the attached
+      // client leaves with it. Deliberately not "until a stop reports
+      // success" - `docker stop` on a container docker has created but
+      // not yet started succeeds without stopping anything, and `docker
+      // rm -f`'s own exit code for a container that isn't there has
+      // varied across docker versions, so neither can be read as proof.
+      // Each attempt is scheduled from the previous one's callback, so
+      // a `docker stop` sitting out its whole grace period never piles
+      // up concurrent stops. A failure stays swallowed, as it always
+      // was: the container may simply not exist (yet, or any more), and
+      // the reason the caller aborted is what matters, not this.
+      const keepStopping = (stopArgs: string[]) => {
+        const issue = () => {
+          if (settled) return;
+          execFile("docker", stopArgs, () => {
+            if (settled) return;
+            const timer = setTimeout(() => {
+              retryTimers.delete(timer);
+              issue();
+            }, STOP_RETRY_INTERVAL_MS);
+            retryTimers.add(timer);
+          });
+        };
+        issue();
+      };
+
       if (opts.stopSignal !== undefined && opts.containerName !== undefined) {
-        const stop = () => void execFile("docker", ["rm", "-f", opts.containerName!], () => {});
+        const stop = () => keepStopping(["rm", "-f", opts.containerName!]);
         if (opts.stopSignal.aborted) stop();
         else opts.stopSignal.addEventListener("abort", stop, { once: true });
       }
@@ -188,16 +245,10 @@ export async function runContained(
       // the Client's own stop uses on a task's process
       // (src/cli/task-process.ts). The container exits and its `--rm`
       // reaps it, which settles this promise through `close` above just
-      // as the force-remove does. Swallowed the same way: the container
-      // may already be gone, and what matters is the reason the caller
-      // asked.
+      // as the force-remove does, and it is reissued on the same terms.
       if (opts.gracefulStopSignal !== undefined && opts.containerName !== undefined) {
         const stopGracefully = () =>
-          void execFile(
-            "docker",
-            ["stop", "--time", String(GRACEFUL_STOP_SECONDS), opts.containerName!],
-            () => {}
-          );
+          keepStopping(["stop", "--time", String(GRACEFUL_STOP_SECONDS), opts.containerName!]);
         if (opts.gracefulStopSignal.aborted) stopGracefully();
         else opts.gracefulStopSignal.addEventListener("abort", stopGracefully, { once: true });
       }

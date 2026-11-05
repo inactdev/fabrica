@@ -254,10 +254,21 @@ src/containment/egress-network.test.ts: src/containment/egress-network.test.ts
 src/containment/helpers/fake-docker.mjs: src/containment/task-networks.test.ts, src/containment/isolated-network.test.ts, src/containment/egress-network.test.ts, src/foreman/task-networks.test.ts, src/cli/image-repair.test.ts, src/cli/up-command.test.ts
 src/containment/helpers/install-fake-docker.ts: src/containment/task-networks.test.ts, src/containment/isolated-network.test.ts, src/containment/egress-network.test.ts, src/foreman/task-networks.test.ts, src/cli/image-repair.test.ts, src/cli/up-command.test.ts
 src/containment/egress-network.ts: src/containment/egress-network.test.ts
+# Hand-added: the second `docker` CLI stand-in - the one that models a
+# single container's start-and-stop rather than the network and image
+# commands. One suite drives it, and it is what proves the reissued stop
+# (issue #346) on a machine with no daemon.
+src/containment/helpers/fake-docker-stop.mjs: src/containment/run.test.ts
 src/containment/isolated-network.test.ts: src/containment/isolated-network.test.ts
 src/containment/isolated-network.ts: src/containment/isolated-network.test.ts
 src/containment/run.test.ts: src/containment/run.test.ts
 src/containment/run.ts: src/containment/run.test.ts
+# Hand-added: types.ts has no colocated test of its own, so the
+# generator left it out. It declares `RunContainedOptions` and nothing
+# else of consequence, so the two suites that drive every option of it -
+# run.test.ts through the real daemon, docker-args.test.ts through the
+# argv each option becomes - are what actually cover it.
+src/containment/types.ts: src/containment/run.test.ts, src/containment/docker-args.test.ts
 src/delivery/diff-files.test.ts: src/delivery/diff-files.test.ts
 src/delivery/diff-files.ts: src/delivery/diff-files.test.ts
 src/delivery/validate.test.ts: src/delivery/validate.test.ts
