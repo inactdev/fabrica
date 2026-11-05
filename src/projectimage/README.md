@@ -57,6 +57,16 @@ the repair loop reports it against that one project and carries on. See
   folder lives outside it: the `COPY` lines in the shape `fabrica
   register` writes (`package.json`, `package-lock.json`, `go.mod`) name
   paths in the repository.
+- **The repository also rides on `--build-context repo=`** (issue #344),
+  on every build, layered or not, terms folder or repository - the same
+  fixed name, and the same "every build" rule, Inspector passes it under
+  (`REPO_BUILD_CONTEXT`, declared once in `src/inspector/`). A terms
+  folder's own `Dockerfile.inspector` reaches the repository's manifest
+  and lockfile with `COPY --from=repo ...` and no other way; without the
+  flag Docker reads `repo` as an image name and the build fails on
+  `docker.io/library/repo:latest`. A repository-route project's file has
+  no such `COPY` and simply does not read the context - passing it anyway
+  is what lets one `Dockerfile.inspector` work in both builds.
 - **The stamp is the hash of the generated Dockerfile**, passed to the
   build as `--build-arg FABRICA_IMAGE_STAMP` and stored under the same
   `fabrica.dockerfile-sha256` label the shared image uses. It therefore

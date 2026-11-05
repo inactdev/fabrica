@@ -322,7 +322,11 @@ inside the checkout, and is not what Inspector reads.
   repository as (inspector#81), and the only way to reach it from a
   terms folder. The in-repository route keeps the plain `COPY`
   deliberately: its build context genuinely is the repository, so it
-  needs no dependency on that feature.
+  needs no dependency on that feature. The name itself is
+  `REPO_BUILD_CONTEXT`, declared once in `src/inspector/` and read both
+  here and by `src/projectimage/`, which passes the `--build-context`
+  flag that supplies it to Fabrica's own machine image build (issue
+  #344).
 
 ### A folder written before all of that
 

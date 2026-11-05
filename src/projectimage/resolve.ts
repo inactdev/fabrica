@@ -54,7 +54,7 @@ import {
 import { BuildSecretsError, resolveBuildSecrets } from "../buildsecrets/index.ts";
 import { loadConfigOrProblem } from "../config/index.ts";
 import type { FabricaConfig } from "../config/index.ts";
-import { INSPECTOR_DOCKERFILE } from "../inspector/index.ts";
+import { INSPECTOR_DOCKERFILE, REPO_BUILD_CONTEXT } from "../inspector/index.ts";
 import { readEventsForTask } from "../record/index.ts";
 import type { FabricaEvent } from "../record/index.ts";
 import { workModeFor } from "../workmode/index.ts";
@@ -99,7 +99,12 @@ export interface MachineImage {
   /** The `docker build` context. The repository, even when the
    * Dockerfile itself lives outside it: the `COPY` lines in the shape
    * `fabrica register` writes (`package.json`, `package-lock.json`,
-   * `go.mod`) name paths in the repository, not in the terms folder. */
+   * `go.mod`) name paths in the repository, not in the terms folder.
+   *
+   * It is also what rides on `--build-context repo=` (issue #344), the
+   * named context a terms folder's file copies those paths out of - so
+   * the repository is reachable from the build whichever of the two
+   * forms that file uses. */
   context: string;
 }
 
@@ -252,6 +257,19 @@ export function machineImageBuild(recordHome: string, machine: MachineImage, bas
     "build",
     "--build-arg",
     `${MACHINE_STAMP_ARG}=${machineImageStamp(text)}`,
+    // Issue #344: the repository, under the one fixed name a
+    // `Dockerfile.inspector` reaches it by (`COPY --from=repo ...`),
+    // which is the only way a work-mode project's file - sitting in a
+    // terms folder that holds no manifest and no lockfile of its own -
+    // can copy them in at all. Passed for every project, exactly as
+    // Inspector passes it on every check image build: a repository-route
+    // project's file has no `COPY --from=repo` in it and simply does not
+    // read this context, and passing it anyway is what makes one
+    // Dockerfile work in both builds. Without it Docker reads `repo` as
+    // an image reference and the build fails on
+    // `docker.io/library/repo:latest`.
+    "--build-context",
+    `${REPO_BUILD_CONTEXT}=${machine.context}`,
     // One per declared name, in the form that reads the value out of
     // this command's own environment rather than out of the argv - which
     // every process on the machine can see. Docker exposes it only to a

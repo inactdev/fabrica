@@ -39,6 +39,7 @@ export {
   inspectorConfigProblemIn,
   readInspectorConfigFacts,
   INSPECTOR_DOCKERFILE,
+  REPO_BUILD_CONTEXT,
 } from "./config-check.ts";
 export type { DockerfileState, InspectorConfigFacts, InspectorConfigProblem, InspectorConfigRefusal } from "./config-check.ts";
 // Issue #316: the same question for a project whose terms live in a

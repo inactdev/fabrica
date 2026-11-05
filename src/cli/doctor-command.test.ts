@@ -531,7 +531,14 @@ test("fabrica doctor --fix: a project's own machine image is built from its Dock
 
   assert.equal(code, 0);
   assert.equal(ran.length, 1, "exactly one build, for the one project that needed it");
-  assert.match(ran[0], /^docker build --build-arg FABRICA_IMAGE_STAMP=[0-9a-f]{64} -t fabrica-machine-\S+ -f \S+\.Dockerfile \S+$/);
+  // `--build-context repo=` is on every machine image build (issue
+  // #344): a terms folder's own Dockerfile.inspector copies the
+  // repository's manifest and lockfile out of that named context, and
+  // without it Docker reads `repo` as an image name.
+  assert.match(
+    ran[0],
+    /^docker build --build-arg FABRICA_IMAGE_STAMP=[0-9a-f]{64} --build-context repo=\S+ -t fabrica-machine-\S+ -f \S+\.Dockerfile \S+$/
+  );
 });
 
 test("fabrica doctor --fix: a per-project CLI version mismatch is reported and never rebuilt", async () => {

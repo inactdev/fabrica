@@ -445,11 +445,17 @@ src/quiz/staleness.ts: src/quiz/staleness.test.ts
 
 # Hand-added: src/projectimage/ was written after this file was last
 # generated. `index.ts` is a barrel with no colocated test of its own,
-# and `resolve.ts` is driven by both files here - resolve.test.ts for
-# what it answers, wiring.test.ts for every call site that has to ask.
+# and `resolve.ts` is driven by three files - resolve.test.ts for what it
+# answers, wiring.test.ts for every call site that has to ask, and
+# src/register/build-secret-e2e.test.ts for the one thing neither can
+# tell you: whether the build command it hands back really builds, with
+# everything it names from outside the Dockerfile actually arriving
+# (issue #344). That last one is a real multi-minute Docker build which
+# skips where Docker is absent - listed here for the same reason
+# machine-layer.ts lists machine-image-build.test.ts.
 src/projectimage/index.ts: src/projectimage/resolve.test.ts
 src/projectimage/resolve.test.ts: src/projectimage/resolve.test.ts
-src/projectimage/resolve.ts: src/projectimage/resolve.test.ts, src/projectimage/wiring.test.ts
+src/projectimage/resolve.ts: src/projectimage/resolve.test.ts, src/projectimage/wiring.test.ts, src/register/build-secret-e2e.test.ts
 src/projectimage/wiring.test.ts: src/projectimage/wiring.test.ts
 # Hand-added: src/reader/ was written after this file was last generated,
 # so none of it was listed. `call.ts` and `types.ts` have no colocated

@@ -49,6 +49,32 @@ import { INSPECTOR_CONFIG } from "./run.ts";
  * name for the file it writes; this is the copy the check reads. */
 export const INSPECTOR_DOCKERFILE = "Dockerfile.inspector";
 
+/**
+ * The name every image build reaches the repository under check by:
+ * `docker build --build-context repo=<repository>`, so a
+ * `Dockerfile.inspector` can say
+ *
+ *     COPY --from=repo Gemfile Gemfile.lock /deps/
+ *
+ * and bake the project's dependencies in whether that file lives in the
+ * repository or in a terms folder outside it.
+ *
+ * Inspector's own `RepoBuildContext` (inspector#81/#83): fixed with no
+ * configuration key, in the same spirit as `INSPECTOR_DOCKERFILE` above,
+ * and passed on *every* build rather than only the terms-folder one, so
+ * one Dockerfile works either way. Declared here, once, because both
+ * sides of it are Fabrica's: `src/register/dockerfile.ts` writes the
+ * `COPY --from=` lines against this name and
+ * `src/projectimage/resolve.ts` passes the flag that supplies it
+ * (issue #344 - before that, Fabrica's own machine image build passed
+ * no such flag, and Docker read `repo` as an image name).
+ *
+ * A build context is resolved ahead of a build stage of the same name,
+ * so a project's own file declaring a `repo` stage has it shadowed.
+ * Inspector refuses such a file by name; Fabrica does not look.
+ */
+export const REPO_BUILD_CONTEXT = "repo";
+
 /** Which of Inspector's documented config refusals this is. */
 export type InspectorConfigRefusal =
   /** `.inspector.json` still carries `"image"` (any value). */

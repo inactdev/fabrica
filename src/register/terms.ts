@@ -58,9 +58,12 @@ import {
   GO_SUM,
   PACKAGE_JSON,
   PACKAGE_LOCK,
-  REPO_BUILD_CONTEXT,
   RUBY_VERSION_FILE,
 } from "./dockerfile.ts";
+// The one declaration of the `repo` build context's name - see that
+// constant's own comment for why it lives beside Inspector's other
+// fixed names rather than here.
+import { REPO_BUILD_CONTEXT } from "../inspector/index.ts";
 import { IMAGE_PLACEHOLDER_PREFIX, deriveProposal, type ProposalSignals } from "./propose.ts";
 import { checkCommandFor, checkScript, inspectorConfigJson } from "./scaffold.ts";
 

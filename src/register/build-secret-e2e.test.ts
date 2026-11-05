@@ -1,25 +1,42 @@
-// A build secret, end to end, against real Docker and the real
-// installed Inspector (issue #342).
+// An image build's inputs from outside the Dockerfile - a build secret
+// and the repository itself - end to end, against real Docker and the
+// real installed Inspector (issues #342 and #344).
 //
-// Everything else about build secrets is asserted on the *text* Fabrica
+// Everything else about either one is asserted on the *text* Fabrica
 // writes - the config's key, the Dockerfile's mount line, the `docker
 // build` argv. None of that can tell you whether the value actually
-// reaches `bundle install`, or whether it stays out of the image
-// afterwards, and both of those are the whole point: a mount that
-// silently hands the step an empty file looks identical in a substring
+// reaches `bundle install`, whether the repository's own files reach a
+// `COPY --from=repo`, or whether the credential stays out of the image
+// afterwards, and all three are the whole point: a mount that silently
+// hands the step an empty file looks identical in a substring
 // assertion, and so does a credential baked into a layer.
 //
-// So this file runs both halves for real:
+// So this file runs all three of them for real:
 //
 //   - **Fabrica's own machine image build.** The `--secret` flags and
 //     the environment come from `machineImageBuild` itself, and the
 //     mount line from the same writer `fabrica register` uses - then the
 //     image is searched for the value, in its history, in every layer's
 //     bytes, and in its own configuration.
+//   - **The whole of that build, for a work-mode project, through the
+//     runner a task start really uses** (`ensureMachineImage` →
+//     `runImageCommand`): the generated Dockerfile, Fabrica's own layer
+//     included, built from a terms folder whose file both mounts the
+//     credential and copies the repository's manifest out of the `repo`
+//     build context. Nothing in it is a hand-written `docker` call, so
+//     a flag Fabrica fails to pass fails this test.
 //   - **The real pinned Inspector.** Its check box is built from a terms
 //     folder that mounts the secret, the check reports what the build
 //     step saw, and Inspector's own report and everything it saves are
 //     searched for the value.
+//
+// Why a test about `src/projectimage/`'s own argv lives under
+// `src/register/`: `.github/workflows/docker-tests.yml`'s path gate
+// (`DOCKER_PATHS`) names `src/register/*` and does not name
+// `src/projectimage/*`, so a pull request touching only that directory
+// takes the fast path - and a Docker test placed there would skip
+// locally and never run on the merge path either. See
+// `notes/20261105-start-a-task-on-it-yg.md`.
 //
 // THREE THINGS TO KNOW BEFORE CHANGING ANYTHING HERE:
 //
@@ -38,14 +55,21 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { machineImageBuild, machineImageForProject } from "../projectimage/index.ts";
 import { brainEnvPath } from "../brain/index.ts";
+import type { ImageCommand } from "../brain/index.ts";
+// The runner a task start and `fabrica doctor --fix` really put a
+// project's machine image on this machine with - driven here rather
+// than imitated, so this test is about what Fabrica does and not about
+// what this file remembers Fabrica doing.
+import { ensureMachineImage } from "../cli/machine-image.ts";
+import { REPO_BUILD_CONTEXT } from "../inspector/index.ts";
 import { INSPECTOR_CONFIG } from "./origin.ts";
-import { DOCKERFILE_INSPECTOR, secretMountFlags, secretReadPrefix } from "./dockerfile.ts";
+import { DEPS_DIR, DOCKERFILE_INSPECTOR, secretMountFlags, secretReadPrefix } from "./dockerfile.ts";
 import { makeFixtureRepo } from "../../contract/helpers/fixture.ts";
 import { FIXTURE_IMAGE } from "./helpers/rails-app-fixture.ts";
 import { PAID_SOURCE_VARIABLE } from "./helpers/rails-fixture.ts";
@@ -198,6 +222,195 @@ test("a build secret reaches Fabrica's own image build, and is in no layer of wh
     assert.ok(!readFileSync(path, "utf8").includes(FAKE_VALUE), `${path} carries the value`);
   }
 });
+
+// ---------- the whole build, through the runner a task start uses
+//
+// Issue #344. The test above builds the project's own half of the
+// Dockerfile with a `docker` command this file assembles, which cannot
+// catch a flag Fabrica never passes - and `--build-context repo=` was
+// exactly that: a work-mode project's `Dockerfile.inspector` says
+// `COPY --from=repo`, Fabrica's build named no such context, and Docker
+// read `repo` as an image, so `fabrica update` and `fabrica doctor
+// --fix` failed on every such project with "failed to resolve source
+// metadata for docker.io/library/repo:latest".
+//
+// So this one hands nothing to docker itself. `ensureMachineImage` is
+// what a task start and `fabrica doctor --fix` call; it asks
+// `machineImageBuild` for the command and `runImageCommand` runs it.
+
+/** Files the repository carries and the terms folder does not - what a
+ * real project's install step copies in, and the whole reason the
+ * named context exists. */
+const REPO_FILES = ["Gemfile", "Gemfile.lock"] as const;
+
+/** Content unique to each copied file, so "the file arrived" cannot be
+ * confused with "a file of that name was already in the image". */
+function repoFileContent(name: string): string {
+  return `# ${name} from the repository under check, not from the terms folder\n`;
+}
+
+/** How long a real build of a generated machine Dockerfile may take:
+ * it installs the Node Fabrica pins and the worker CLI on top of the
+ * project's own image, which is minutes on any connection - the same
+ * ceiling src/brain/adapters/machine-image-build.test.ts allows its own
+ * real builds. */
+const BUILD_TIMEOUT_MS = 45 * 60 * 1000;
+
+/**
+ * A terms folder's `Dockerfile.inspector`, in the shape `fabrica
+ * register` writes for a project whose terms live outside its
+ * repository: every `COPY` reads the named `repo` context, since the
+ * build's own context holds none of those files, and the install step
+ * mounts the credential.
+ *
+ * `FIXTURE_IMAGE` is the base because Fabrica's own layer is appended to
+ * this file and really installed: that needs bash, git, a downloader, a
+ * checksum tool and a libc nodejs.org publishes a build for, which the
+ * official Ruby image (Debian, glibc, buildpack-deps) carries and the
+ * `alpine:3.20` the test above builds on does not.
+ */
+function termsDockerfile(names: readonly string[]): string {
+  const witness = `printf '%s' "\${#${names[0]}}" > ${WITNESS}`;
+  return [
+    `FROM ${FIXTURE_IMAGE}`,
+    `RUN mkdir -p ${DEPS_DIR}`,
+    `COPY --from=${REPO_BUILD_CONTEXT} ${REPO_FILES.join(" ")} ${DEPS_DIR}/`,
+    `RUN ${secretMountFlags(names)}${secretReadPrefix(names)}sh -c '${witness}'`,
+    "",
+  ].join("\n");
+}
+
+/** `docker run` of one command in a built image. `--entrypoint`
+ * because a project's own Dockerfile may set one, exactly as
+ * `installedCliVersionIn` does. */
+function inImage(image: string, argv: string[]): { status: number | null; stdout: string; stderr: string } {
+  return docker(["run", "--rm", "--entrypoint", argv[0], image, ...argv.slice(1)]);
+}
+
+/**
+ * Whether `value` is anywhere in the bytes of an image's layers.
+ *
+ * Streamed, never written to disk or held whole in memory: this image
+ * carries a Ruby, a Node and the worker CLI, so `docker save` is
+ * hundreds of megabytes - where the alpine-based test above can afford
+ * one `readFileSync`. `tail` keeps the last `value.length - 1` bytes of
+ * each chunk, so a match straddling a chunk boundary is still found,
+ * and `latin1` is a byte-for-byte reading of the stream rather than a
+ * decoding of it.
+ */
+async function imageLayersCarry(image: string, value: string): Promise<boolean> {
+  const child = spawn("docker", ["save", image], { stdio: ["ignore", "pipe", "inherit"] });
+  let found = false;
+  let tail = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    const text = tail + chunk.toString("latin1");
+    if (text.includes(value)) found = true;
+    tail = text.slice(-(value.length - 1));
+  });
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  assert.equal(code, 0, `docker save ${image} exited ${code}, so its layers were never searched`);
+  return found;
+}
+
+test(
+  "a work-mode project's machine image builds through the real runner, with the repository on the repo context and the credential mounted",
+  { timeout: BUILD_TIMEOUT_MS },
+  async (t) => {
+    if (!dockerAvailable()) return t.skip("Docker is not available on this machine");
+
+    // A registered work-mode project: the repository carries the files
+    // the install step needs and nothing of Fabrica's, and the terms
+    // folder beside it carries the two files Fabrica and Inspector read.
+    const repo = makeFixtureRepo("exit 0", { inspector: false, origin: false });
+    for (const name of REPO_FILES) writeFileSync(join(repo, name), repoFileContent(name));
+    const terms = dir("repo-context-terms");
+    writeFileSync(
+      join(terms, INSPECTOR_CONFIG),
+      `${JSON.stringify({ check: "./check.sh", buildSecrets: [PAID_SOURCE_VARIABLE] }, null, 2)}\n`
+    );
+    writeFileSync(join(terms, DOCKERFILE_INSPECTOR), termsDockerfile([PAID_SOURCE_VARIABLE]));
+    const recordHome = dir("repo-context-home");
+    writeFileSync(join(recordHome, "projects.toml"), `[projects.dayjob]\npath = "${repo}"\nterms = "${terms}"\n`);
+    const brainEnv = brainEnvPath(recordHome);
+    writeFileSync(brainEnv, `${PAID_SOURCE_VARIABLE}=${FAKE_VALUE}\n`);
+    chmodSync(brainEnv, 0o600);
+
+    // The file being layered is the terms folder's, not the
+    // repository's - which carries none. Compared by contents rather
+    // than by path: projects.toml's loader does not realpath a terms
+    // folder, so on macOS the registered path and `realpathSync`'s
+    // answer for it differ by /var -> /private/var.
+    const machine = machineImageForProject(recordHome, repo);
+    assert.equal(
+      readFileSync(machine.inspectorDockerfile ?? "", "utf8"),
+      termsDockerfile([PAID_SOURCE_VARIABLE]),
+      "the terms folder's own Dockerfile.inspector has to be the one this image is built from"
+    );
+    assert.equal(machine.context, realpathSync(repo), "the build context is the repository");
+    t.after(() => docker(["image", "rm", "-f", machine.image]));
+
+    // The real thing, start to finish: no docker command of this file's
+    // own anywhere in it. `onBuilding` is handed the argv that is about
+    // to run, which is the one place a test can read what Fabrica
+    // actually passes without assembling it again.
+    const log: string[] = [];
+    let ran: ImageCommand | undefined;
+    const result = await ensureMachineImage(recordHome, machine, {
+      onBuilding: (_machine, command) => {
+        ran = command;
+      },
+      onOutput: (line) => log.push(line),
+    });
+    assert.ok(result.ok, `the build failed: ${result.detail}\n${log.join("\n")}`);
+    assert.ok(result.built, "the image was not there, so it had to have been built");
+    assert.ok(ran !== undefined, "nothing reported a build, so nothing ran");
+    assert.ok(
+      ran.args.includes(`${REPO_BUILD_CONTEXT}=${machine.project}`),
+      `the repository has to ride on the ${REPO_BUILD_CONTEXT} context: ${ran.args.join(" ")}`
+    );
+
+    // What the build really received. The repository's own files are in
+    // the image, with the repository's own contents - which only a build
+    // that resolved `--from=repo` to the repository could produce.
+    for (const name of REPO_FILES) {
+      const copied = inImage(machine.image, ["cat", `${DEPS_DIR}/${name}`]);
+      assert.equal(copied.status, 0, `${DEPS_DIR}/${name} is not in the image:\n${copied.stderr}`);
+      assert.equal(copied.stdout, repoFileContent(name));
+    }
+
+    // ...and the credential's own length, which an empty or missing
+    // mount could not produce.
+    const witness = inImage(machine.image, ["cat", WITNESS]);
+    assert.equal(witness.status, 0, `${witness.stdout}\n${witness.stderr}`);
+    assert.equal(witness.stdout.trim(), String(FAKE_VALUE.length), "the mounted secret was not what the build was given");
+
+    // The value itself is nowhere: not in the build's own output (which
+    // the real runner streams to whoever is waiting), not in the image's
+    // history or configuration, and not in a layer.
+    assert.ok(!log.join("\n").includes(FAKE_VALUE), "the build's own output carries the value");
+    const history = docker(["history", "--no-trunc", machine.image]);
+    assert.equal(history.status, 0, history.stderr);
+    assert.ok(!history.stdout.includes(FAKE_VALUE), `the value is in docker history:\n${history.stdout}`);
+    const inspected = docker(["image", "inspect", machine.image]);
+    assert.equal(inspected.status, 0, inspected.stderr);
+    assert.ok(!inspected.stdout.includes(FAKE_VALUE), "the value is in the image's own configuration");
+    assert.equal(
+      await imageLayersCarry(machine.image, FAKE_VALUE),
+      false,
+      `the value is somewhere in a layer of ${machine.image} - a mounted secret must never be written into one`
+    );
+
+    // Nor in anything Fabrica wrote while preparing the build - the
+    // generated Dockerfile among them.
+    for (const path of filesUnder(recordHome)) {
+      if (path === brainEnv) continue; // the one file the value belongs in
+      assert.ok(!readFileSync(path, "utf8").includes(FAKE_VALUE), `${path} carries the value`);
+    }
+  }
+);
 
 // ------------------------------------------ the real pinned Inspector
 
