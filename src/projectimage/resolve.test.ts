@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BuildSecretsError } from "../buildsecrets/index.ts";
 import { loadConfig } from "../config/index.ts";
 import { appendEvent } from "../record/index.ts";
 import { DEFAULT_MACHINE_IMAGE } from "../brain/index.ts";
@@ -326,4 +327,74 @@ test("a Dockerfile.inspector that disappeared is reported as that, not as a stal
   assert.equal(check.ok, false);
   assert.equal(check.needsBuild, false, "a build would fail on the same missing file");
   assert.match(check.detail, /cannot be read/);
+});
+
+// ------------------------------------- build secrets (issue #342)
+
+const SECRET_VAR = "BUNDLE_ENTERPRISE__CONTRIBSYS__COM";
+const SECRET_VALUE = "someone:a-real-looking-password";
+
+/** A project whose `.inspector.json` lists a build secret, beside the
+ * `Dockerfile.inspector` whose install step mounts it. */
+function projectNeedingASecret(): string {
+  const dir = projectDir({ dockerfile: `FROM ruby:3.4\nRUN --mount=type=secret,id=${SECRET_VAR} bundle install\n` });
+  writeFileSync(
+    join(dir, ".inspector.json"),
+    `${JSON.stringify({ check: "./check.sh", buildSecrets: [SECRET_VAR] }, null, 2)}\n`
+  );
+  return dir;
+}
+
+function withBrainEnv(recordHome: string, contents: string): void {
+  const path = join(recordHome, "brain.env");
+  writeFileSync(path, contents, { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+test("a project's build secrets go on the build as --secret, by name, and in its environment by value", () => {
+  const project = projectNeedingASecret();
+  const recordHome = recordHomeWith();
+  withBrainEnv(recordHome, `${SECRET_VAR}=${SECRET_VALUE}\n`);
+  const machine = machineImageForProject(recordHome, project);
+
+  const command = machineImageBuild(recordHome, machine, BASE_USER);
+
+  // The name is in the argv, which every process on this machine can
+  // read; the value is in the environment, which they cannot.
+  assert.ok(
+    command.args.join(" ").includes(`--secret id=${SECRET_VAR},env=${SECRET_VAR}`),
+    command.args.join(" ")
+  );
+  assert.deepEqual(command.env, { [SECRET_VAR]: SECRET_VALUE });
+  assert.ok(!command.shell.includes(SECRET_VALUE), `the printed command must never carry a value: ${command.shell}`);
+  assert.ok(!command.args.join(" ").includes(SECRET_VALUE), command.args.join(" "));
+});
+
+test("a project that needs no credential gets no --secret and no environment of its own", () => {
+  const project = projectDir({ dockerfile: DOCKERFILE });
+  const recordHome = recordHomeWith();
+  const command = machineImageBuild(recordHome, machineImageForProject(recordHome, project), BASE_USER);
+
+  assert.ok(!command.args.includes("--secret"), command.args.join(" "));
+  assert.equal(command.env, undefined);
+});
+
+test("a build whose credential is not on this machine refuses by name, and writes nothing", () => {
+  const project = projectNeedingASecret();
+  const recordHome = recordHomeWith();
+  const machine = machineImageForProject(recordHome, project);
+
+  assert.throws(
+    () => machineImageBuild(recordHome, machine, BASE_USER),
+    (err: unknown) => {
+      assert.ok(err instanceof BuildSecretsError, `a typed refusal, so callers can tell it from an unreadable file: ${err}`);
+      assert.equal(err.code, "missing-build-secret");
+      assert.deepEqual(err.variables, [SECRET_VAR]);
+      assert.match(err.message, new RegExp(SECRET_VAR));
+      return true;
+    }
+  );
+  // Refused before anything was written: a half-prepared build leaves a
+  // generated Dockerfile claiming an image that was never built.
+  assert.equal(existsSync(machineDockerfilePath(recordHome, machine)), false);
 });

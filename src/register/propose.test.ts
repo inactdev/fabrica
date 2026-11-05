@@ -23,8 +23,11 @@ import {
 } from "./propose.ts";
 import { GO_SUM } from "./dockerfile.ts";
 import {
+  PAID_SOURCE_VARIABLE,
   RAILS_GEMFILE,
   RAILS_GEMFILE_LOCK,
+  RAILS_GEMFILE_LOCK_PAID_SOURCE,
+  RAILS_GEMFILE_PAID_SOURCE,
   RAILS_RUBY_VERSION,
   railsFixtureFiles,
   writeRailsFixture,
@@ -766,4 +769,45 @@ test("readProposalSignals: a repository with no Ruby in it has none of those sig
   assert.equal(signals.gemfile, null);
   assert.equal(signals.rubyVersion, null);
   assert.equal(signals.railsBin, false);
+});
+
+// ------------------------------------- build secrets (issue #342)
+
+test("propose: a paid gem source becomes a buildSecrets name, with where the value goes on stderr", () => {
+  const { config, stderr, dockerfile } = propose({
+    ...RAILS,
+    gemfileLock: RAILS_GEMFILE_LOCK_PAID_SOURCE,
+    gemfile: RAILS_GEMFILE_PAID_SOURCE,
+  });
+
+  assert.deepEqual(config.buildSecrets, [PAID_SOURCE_VARIABLE]);
+  // The one thing JSON cannot carry: where the value lives, which is
+  // the step the Client has to take by hand.
+  assert.match(stderr, new RegExp(`buildSecrets: ${PAID_SOURCE_VARIABLE} -`));
+  assert.match(stderr, /brain\.env/);
+  assert.match(dockerfile, new RegExp(`--mount=type=secret,id=${PAID_SOURCE_VARIABLE},mode=0444`));
+});
+
+test("propose: a project installing only from the public source omits the key and says why", () => {
+  const { config, stderr } = propose(RAILS);
+  assert.ok(!("buildSecrets" in config), JSON.stringify(config));
+  assert.match(stderr, /buildSecrets: omitted - every gem source/);
+});
+
+test("propose: a project with no Gemfile.lock omits it too, for its own reason", () => {
+  const { config, stderr } = propose({ packageJson: pkg({ scripts: { test: "node --test" } }), packageLock: true });
+  assert.ok(!("buildSecrets" in config), JSON.stringify(config));
+  assert.match(stderr, /buildSecrets: omitted - nothing here installs from a credentialed source/);
+});
+
+test("propose: a gem source no variable can be named for is a note of its own", () => {
+  const { config, stderr } = propose({
+    ...RAILS,
+    gemfileLock: RAILS_GEMFILE_LOCK.replace(
+      "  remote: https://rubygems.org/",
+      "  remote: https://rubygems.org/\n  remote: https://gems.example.com:8080/"
+    ),
+  });
+  assert.ok(!("buildSecrets" in config), JSON.stringify(config));
+  assert.match(stderr, /note: https:\/\/gems\.example\.com:8080\/ needs a credential/);
 });

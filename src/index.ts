@@ -204,6 +204,23 @@ export {
   MACHINE_IMAGE_PREFIX,
 } from "./projectimage/index.ts";
 export type { MachineImage, MachineImageCheck, MachineImageCurrency } from "./projectimage/index.ts";
+// Issue #342: the credential a project's own image build needs - a paid
+// gem source's, named in `.inspector.json`'s `buildSecrets` and held
+// only in brain.env. `fabrica doctor` reads whether each listed name has
+// a value; the two builds that need the value (this machine's own, and
+// Inspector's) read it through `resolveBuildSecrets`. Names are
+// printable everywhere; a value goes nowhere but one child process's
+// environment.
+export {
+  buildSecretsConfigDir,
+  describeBuildSecrets,
+  missingBuildSecretMessage,
+  resolveBuildSecrets,
+  resolveProjectBuildSecrets,
+  BuildSecretsError,
+  BUILD_SECRETS_KEY,
+} from "./buildsecrets/index.ts";
+export type { BuildSecretsErrorCode, BuildSecretsResolution } from "./buildsecrets/index.ts";
 // The one probe those take: what an image's own configuration says it
 // runs as, which is how the user a generated image has to end as is
 // found when the project's own file names none.

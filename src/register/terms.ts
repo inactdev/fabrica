@@ -207,6 +207,11 @@ export function writeTerms(opts: {
     terms: scriptIn,
     ...(derived.timeoutSeconds !== undefined ? { timeoutSeconds: derived.timeoutSeconds } : {}),
     ...(protectedPaths.paths !== undefined ? { protectedPaths: protectedPaths.paths } : {}),
+    // Issue #342: the credential variables this project's install step
+    // needs, derived from the same lockfile the Dockerfile's mounts are.
+    // This is the route the case exists for - a day job's repository,
+    // whose paid gem source's credential was never going to be in it.
+    buildSecrets: derived.buildSecrets,
   });
 
   const written: string[] = [];

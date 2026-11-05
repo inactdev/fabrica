@@ -19,6 +19,7 @@ import type { ChecksReader } from "./ci-checks.ts";
 import { defaultCheckBox } from "../brain/index.ts";
 import type { CheckBox } from "../brain/index.ts";
 import { machineImageForProject } from "../projectimage/index.ts";
+import { resolveBuildSecrets } from "../buildsecrets/index.ts";
 import type { GateResult, ProductionLine } from "../../contract/surface.ts";
 import type { RebaseConflict } from "../line/index.ts";
 // Type only: this module is a judgement's shape, not the rebase policy.
@@ -116,7 +117,14 @@ export function chooseCheckMode(
    * makes this an Inspector project whatever its repository carries, and
    * rides on to the real adapter as `-terms`; `noStamp` rides on as
    * `-no-stamp`. Omitted - every project today - changes nothing. */
-  workMode: WorkMode = NO_WORK_MODE
+  workMode: WorkMode = NO_WORK_MODE,
+  /** This project's build secrets, with their values (issue #342) -
+   * resolved by the caller, which holds the record home, and put on the
+   * `inspector` child's own environment for Inspector to pass to its
+   * check-image build. Omitted, or empty, and nothing extra is in that
+   * environment. A caller-supplied Inspector (a test's fake) builds no
+   * image and is used as given. */
+  buildSecrets: Record<string, string> = {}
 ): CheckMode {
   if (workMode.terms === undefined && !inspectorIsConfigured(line.workdir, baseCommit)) {
     return { mode: "self-test", reason: "no .inspector.json at the task base commit" };
@@ -128,6 +136,7 @@ export function chooseCheckMode(
       ...(token === undefined ? {} : { token }),
       ...(workMode.terms === undefined ? {} : { terms: workMode.terms }),
       ...(workMode.noStamp ? { noStamp: true } : {}),
+      ...(Object.keys(buildSecrets).length === 0 ? {} : { buildSecrets }),
     });
   if (chosen.installed && !chosen.installed()) return { mode: "self-test", reason: "Inspector is not installed" };
   return { mode: "inspector", inspector: chosen };
@@ -359,13 +368,40 @@ export function prepareRound(
     outsideTerms || inspectorIsConfigured(line.workdir, baseCommit)
       ? requireReviewer(recordHome, workMode.terms ?? line.workdir, line.project, outsideTerms ? undefined : baseCommit)
       : undefined;
+  // Issue #342: the credential this project's check-image build needs,
+  // read once per round out of brain.env, from the list in the same
+  // `.inspector.json` Inspector will read it from - the terms folder for
+  // a work-mode project, the repository otherwise.
+  //
+  // For an in-repository config that list is read **at the task's base
+  // commit**, not out of the worktree, and that is the same pinning -
+  // for the same reason - that `testPaths` gets above: the list decides
+  // which of brain.env's variables are handed to an image build, and a
+  // Worker free to add a name to the worktree's copy could name any
+  // credential in that file and have it mounted into a build whose
+  // Dockerfile it had just written. A terms folder needs no pinning: it
+  // is never mounted into a worker's box.
+  //
+  // A name with no value here is NOT refused on this side: Inspector
+  // owns that refusal and makes it by name, before any build, with its
+  // own exit code (inspector#86), and `fabrica doctor` has already said
+  // so on this project's own line. Fabrica forwards what it has rather
+  // than inventing a second refusal that could disagree with it.
+  const buildSecrets = resolveBuildSecrets({
+    recordHome,
+    configDir: workMode.terms ?? line.workdir,
+    ...(outsideTerms ? {} : { revision: baseCommit }),
+    env: process.env,
+    projectLabel: line.project,
+  });
   const mode = chooseCheckMode(
     line,
     baseCommit,
     opts.inspector,
     reviewer,
     publishToken(recordHome, taskId, line.project, opts.minter),
-    workMode
+    workMode,
+    buildSecrets.kind === "ready" ? buildSecrets.values : {}
   );
   // Settled before the first worker starts, so the answer is this
   // project's configuration as it stood when the round began rather

@@ -679,20 +679,29 @@ export async function registerProject(
       );
     }
 
+    // The shape is a fact about the repository (which lockfile it
+    // carries), not about the Dockerfile, so it is read either way: it
+    // decides both the install step a written Dockerfile gets and
+    // whether check.sh links in what an image baked. Read before the
+    // config is written, since issue #342 the config names one thing the
+    // shape derives too (`buildSecrets`, from the gem sources the
+    // lockfile declares).
+    const shape = dependencyShapeInTree(worktree);
+
     const protectedPaths = protectedPathsFor(request.protectedPaths ?? []);
     writeFileSync(
       join(worktree, INSPECTOR_CONFIG),
       inspectorConfigJson({
         protectedPaths,
         ...(request.timeoutSeconds !== undefined ? { timeoutSeconds: request.timeoutSeconds } : {}),
+        // Names only, and only when this project installs from a gem
+        // source other than the public one: the values live in
+        // brain.env, and nothing on this route reads one. Written on
+        // this route too, not only on --terms, because the file the
+        // Dockerfile mounts them for is the file this commits.
+        ...(shape?.buildSecrets === undefined ? {} : { buildSecrets: shape.buildSecrets }),
       })
     );
-
-    // The shape is a fact about the repository (which lockfile it
-    // carries), not about the Dockerfile, so it is read either way: it
-    // decides both the install step a written Dockerfile gets and
-    // whether check.sh links in what an image baked.
-    const shape = dependencyShapeInTree(worktree);
 
     writeFileSync(join(worktree, CHECK_SCRIPT), checkScript(check, shape));
     chmodSync(join(worktree, CHECK_SCRIPT), 0o755);

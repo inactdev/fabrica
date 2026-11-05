@@ -86,7 +86,16 @@ export function runImageCommand(
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(cmd.command, cmd.args, { cwd: cmd.cwd, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(cmd.command, cmd.args, {
+        cwd: cmd.cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        // Issue #342: a build that mounts a credential reads it out of
+        // this child's own environment (`docker build --secret
+        // id=NAME,env=NAME`). Fabrica's own environment is never
+        // modified, and nothing is added for a command that declares
+        // none - which is both machine-wide images.
+        ...(cmd.env === undefined ? {} : { env: { ...process.env, ...cmd.env } }),
+      });
     } catch (err) {
       resolve({ ok: false, detail: err instanceof Error ? err.message : String(err) });
       return;
@@ -159,6 +168,12 @@ interface RepairPlan {
    * is no reason to read when the relay image is the only thing
    * missing. */
   command: () => ImageCommand;
+  /** The image this plan is about, for the one report that cannot read
+   * it off the command: a `command()` that refused before composing one
+   * (issue #342's missing credential). Known without composing anything
+   * for a per-project plan; left out by the two machine-wide plans,
+   * whose own commands do not refuse. */
+  image?: string;
   /** Which doctor lines are re-asked once this command has run - its
    * own, plus any other line that reads the image it just replaced. */
   reprobe: string[];
@@ -229,6 +244,7 @@ function projectPlans(
         action: "built" as const,
         doing: `building it now from ${machine.inspectorDockerfile} - this takes a few minutes`,
         command: () => machineImageBuild(recordHome, machine, baseUser),
+        image: machine.image,
         reprobe: [label],
         // Through the same probe that produced the line above, never a
         // direct read of its own: the line printed after a repair has to
@@ -308,7 +324,21 @@ export async function repairImages(opts: RepairImagesOptions): Promise<RepairIma
   const outcomes: ImageRepairOutcome[] = [];
   const refreshed = new Map<string, DoctorCheck>();
   for (const { plan, asked } of wanted) {
-    const command = plan.command();
+    // Resolving the command is itself something that can fail: a
+    // project's generated Dockerfile may have become unreadable, and
+    // since issue #342 a build whose credential cannot be supplied
+    // refuses here, by name. Reported as a failed repair with that
+    // reason - never thrown out of this loop, which would take `fabrica
+    // doctor --fix` and `fabrica up` down over one project.
+    let command: ImageCommand;
+    try {
+      command = plan.command();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      stderr(`${plan.label}: could not be ${plan.action} - ${detail}`);
+      outcomes.push({ label: plan.label, image: plan.image ?? "", action: plan.action, ok: false, detail });
+      continue;
+    }
     // What was wrong, in the check's own words, then the exact command
     // about to run - so a Client reading the terminal sees the same two
     // facts `fabrica doctor` would have printed, and is never left

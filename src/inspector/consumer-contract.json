@@ -29,5 +29,11 @@
   },
   "env": {
     "githubToken": "GITHUB_TOKEN"
+  },
+  "buildSecrets": {
+    "configKey": "buildSecrets",
+    "source": "inspector's own environment: one variable per name the key lists, set by whoever invokes inspector",
+    "passedToBuildAs": "--secret id=NAME,env=NAME",
+    "note": "fabrica reads each value from ~/.fabrica/brain.env and sets it on the inspector child's environment; only names ever appear in a config, an argv, a log, a report or a message"
   }
 }

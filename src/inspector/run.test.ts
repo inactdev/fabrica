@@ -46,6 +46,10 @@ interface ConsumerContract {
   exitCodes: Record<string, number>;
   stdout: { pullRequestLine: string };
   env: { githubToken: string };
+  /** Issue #342: not a flag and not one fixed variable - the names come
+   * from the project's own `.inspector.json`, so what is ratified is
+   * where Inspector reads them and what it does with them. */
+  buildSecrets?: { configKey: string; source: string; passedToBuildAs: string; note: string };
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -412,4 +416,62 @@ test("inspectorAdapter carries both work-mode flags together, with everything el
       REVIEWER.model,
     ].join(" ")
   );
+});
+
+// Build secrets (issue #342): a project's paid gem source's credential,
+// which Inspector passes to its own check-image build as
+// `--secret id=NAME,env=NAME` and therefore has to read out of its own
+// environment. The same rule the reviewer's key follows above: the
+// environment, never argv.
+const BUILD_SECRET_VAR = "BUNDLE_ENTERPRISE__CONTRIBSYS__COM";
+const BUILD_SECRET_VALUE = "someone:a-real-looking-password";
+
+test("inspectorAdapter hands a build secret to the child's environment and never to its arguments", async () => {
+  const workdir = tempDir();
+  const path = join(workdir, "inspector-build-secret-env.sh");
+  writeFileSync(
+    path,
+    `#!/bin/sh\nprintf 'args=%s ' "$@"\nprintf 'secret=%s' "$${BUILD_SECRET_VAR}"\nexit 0\n`
+  );
+  chmodSync(path, 0o755);
+
+  const inspection = await inspectorAdapter(path, {
+    env: {},
+    token: fakeToken(),
+    buildSecrets: { [BUILD_SECRET_VAR]: BUILD_SECRET_VALUE },
+  }).inspect({ branch: "fabrica/task-1", workdir });
+
+  assert.match(inspection.report, new RegExp(`secret=${BUILD_SECRET_VALUE}`), "Inspector must be able to read it");
+  assert.doesNotMatch(
+    inspection.report.split("secret=")[0],
+    new RegExp(BUILD_SECRET_VALUE),
+    "a value must never be an argument - the process table is world-readable"
+  );
+  assert.doesNotMatch(inspection.report.split("secret=")[0], new RegExp(BUILD_SECRET_VAR), "nor is the name a flag");
+});
+
+test("inspectorAdapter puts nothing extra in the environment for a project with no build secrets", async () => {
+  const workdir = tempDir();
+  const path = join(workdir, "inspector-no-build-secret.sh");
+  writeFileSync(path, `#!/bin/sh\nprintf 'secret=[%s]' "$${BUILD_SECRET_VAR}"\nexit 0\n`);
+  chmodSync(path, 0o755);
+
+  const inspection = await inspectorAdapter(path, { env: {}, token: fakeToken() }).inspect({
+    branch: "fabrica/task-1",
+    workdir,
+  });
+
+  assert.equal(inspection.report, "secret=[]");
+});
+
+// The ratified contract has to say where Inspector reads them from, the
+// same way it names the GitHub token's variable: Inspector's own test
+// reads this file, so a change on one side that the other never heard
+// about fails there.
+test("the consumer contract declares how a build secret reaches Inspector", () => {
+  const declared = CONTRACT.buildSecrets;
+  assert.ok(declared, "consumer-contract.json must declare the buildSecrets half of the call");
+  assert.equal(declared.configKey, "buildSecrets");
+  assert.match(declared.source, /environment/);
+  assert.equal(declared.passedToBuildAs, "--secret id=NAME,env=NAME");
 });

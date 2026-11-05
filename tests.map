@@ -109,6 +109,21 @@ src/brain/task-network.test.ts: src/brain/task-network.test.ts
 src/brain/task-network.ts: src/brain/task-network.test.ts
 src/brain/writeup.test.ts: src/brain/writeup.test.ts
 src/brain/writeup.ts: src/brain/writeup.test.ts
+# Issue #342: the credential a project's own image build needs. The
+# derivation, the read-back and the resolve each have their own suite;
+# the structural proof that only two builds and doctor may ever read a
+# value is its own file, and the real Docker/Inspector proof lives with
+# the other end-to-end register test (it skips when Docker is absent).
+src/buildsecrets/derive.test.ts: src/buildsecrets/derive.test.ts
+src/buildsecrets/derive.ts: src/buildsecrets/derive.test.ts, src/register/dockerfile.test.ts, src/register/propose.test.ts
+src/buildsecrets/declared.test.ts: src/buildsecrets/declared.test.ts
+src/buildsecrets/declared.ts: src/buildsecrets/declared.test.ts, src/buildsecrets/resolve.test.ts
+src/buildsecrets/resolve.test.ts: src/buildsecrets/resolve.test.ts
+src/buildsecrets/resolve.ts: src/buildsecrets/resolve.test.ts, src/cli/doctor-command.test.ts, src/projectimage/resolve.test.ts
+src/buildsecrets/errors.ts: src/projectimage/resolve.test.ts, src/cli/machine-image.test.ts
+src/buildsecrets/index.ts: src/buildsecrets/resolve.test.ts, src/buildsecrets/derive.test.ts, src/buildsecrets/declared.test.ts
+src/buildsecrets/no-value-outside-the-build.test.ts: src/buildsecrets/no-value-outside-the-build.test.ts
+
 src/ci/checks.test.ts: src/ci/checks.test.ts
 src/ci/checks.ts: src/ci/checks.test.ts
 src/ci/conclusions.test.ts: src/ci/conclusions.test.ts
@@ -488,11 +503,12 @@ src/register/helpers/rails-fixture.ts: src/register/propose.test.ts, src/registe
 # that end-to-end test as well as to its own unit test, since a change to
 # any of them can only be wrong in the check box.
 src/register/inspector-e2e.test.ts: src/register/inspector-e2e.test.ts
-src/register/helpers/rails-app-fixture.ts: src/register/inspector-e2e.test.ts
+src/register/build-secret-e2e.test.ts: src/register/build-secret-e2e.test.ts
+src/register/helpers/rails-app-fixture.ts: src/register/inspector-e2e.test.ts, src/register/build-secret-e2e.test.ts
 src/register/terms.test.ts: src/register/terms.test.ts
 src/register/terms.ts: src/register/terms.test.ts, src/register/inspector-e2e.test.ts
 src/register/dockerfile.test.ts: src/register/dockerfile.test.ts
-src/register/dockerfile.ts: src/register/dockerfile.test.ts, src/register/inspector-e2e.test.ts
+src/register/dockerfile.ts: src/register/dockerfile.test.ts, src/register/inspector-e2e.test.ts, src/register/build-secret-e2e.test.ts
 src/register/origin.test.ts: src/register/origin.test.ts
 src/register/origin.ts: src/register/origin.test.ts
 src/register/propose.test.ts: src/register/propose.test.ts

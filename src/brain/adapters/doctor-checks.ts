@@ -68,6 +68,18 @@ export interface ImageCommand {
   image: string;
   /** The identical command as one shell line, for printing. */
   shell: string;
+  /**
+   * Variables to add to the command's own environment, for a build that
+   * needs a credential (issue #342: a project's `docker build --secret
+   * id=NAME,env=NAME`, which reads the value out of the build client's
+   * environment). Absent for every command that needs none, which is
+   * both machine-wide images.
+   *
+   * Values, so this field is the one thing on an `ImageCommand` that is
+   * never printed: `shell` above carries the argv, where only names
+   * appear.
+   */
+  env?: Record<string, string>;
 }
 
 /** The one definition of how the worker image gets built (issue #130's

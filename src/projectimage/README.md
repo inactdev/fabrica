@@ -32,6 +32,25 @@ undeclared contract between the two sides. Fabrica builds from the same
 matters - one declaration of the project's toolchain, two boxes - and
 Docker's layer cache makes the overlap nearly free.
 
+## A project whose build needs a credential (issue #342)
+
+This image is the project's own `Dockerfile.inspector` with Fabrica's
+layer on top, so a project whose install step mounts a build secret
+needs that secret here exactly as Inspector's own check-image build
+does. `machineImageBuild` adds one `--secret id=NAME,env=NAME` per name
+`.inspector.json` lists and puts the values on the build command's own
+environment (`ImageCommand.env`, which `src/cli/image-repair.ts`'s
+`runImageCommand` passes to the child) - so the argv, and therefore
+everything printed and everything any other process on the machine can
+read, carries names only.
+
+A name with no value anywhere refuses the build before the generated
+Dockerfile is even written, with a typed `BuildSecretsError` naming the
+variable: `src/cli/machine-image.ts` reports that in the credential's
+own words rather than as "its Dockerfile.inspector cannot be read", and
+the repair loop reports it against that one project and carries on. See
+`src/buildsecrets/README.md`.
+
 ## Sharp edges
 
 - **The build context is the repository**, even for a project whose terms

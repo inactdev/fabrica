@@ -118,6 +118,24 @@ export interface InspectorAdapterOptions {
    * is the task's worktree, not Fabrica's. Omitted, Inspector reads all
    * three out of the repository exactly as it always has. */
   terms?: string;
+  /**
+   * The credential variables this project's check-image build needs, with
+   * their values (issue #342): a paid gem source's own, named in
+   * `.inspector.json`'s `buildSecrets` and held only in `brain.env`.
+   * Inspector reads each one out of **its own environment** and passes it
+   * to `docker build` as `--secret id=NAME,env=NAME` (inspector#86), so
+   * they ride on the child's environment exactly as the GitHub token and
+   * the reviewer's key do - never on argv, which every process on the
+   * machine can read.
+   *
+   * Omitted - every project with no second gem source - and Inspector is
+   * called exactly as it was before, with nothing extra in its
+   * environment. A name listed in the config whose value Fabrica does not
+   * have is simply not passed: Inspector's own refusal names the variable
+   * and runs no build, which is the loud answer, and `fabrica doctor`
+   * already said so before any of this.
+   */
+  buildSecrets?: Record<string, string>;
   /** True for a project whose CI nothing of ours may touch (issue #316):
    * Inspector is handed `-no-stamp`, so a green run still pushes, opens
    * or updates its pull request and writes its own report, but posts no
@@ -147,11 +165,17 @@ export function inspectorAdapter(command: string = "inspector", opts: InspectorA
   // rather than once per adapter: it lives an hour, and a fix round
   // reached days after the first pass must not try to publish with a
   // token minted for the first one.
+  // Issue #342: the same reasoning for a project's build secrets, and
+  // resolved once per adapter like the reviewer's key rather than per
+  // inspection like the token - these come from brain.env, which has no
+  // expiry and no per-handoff mint.
+  const buildSecrets = opts.buildSecrets ?? {};
   const childEnv = (githubToken: string): NodeJS.ProcessEnv => ({
     ...baseEnv,
     GITHUB_TOKEN: githubToken,
     ...(reviewer === undefined ? {} : { [reviewer.apiKeyVar]: reviewer.apiKey }),
     ...(reviewer?.baseUrl === undefined ? {} : { [reviewer.baseUrlVar]: reviewer.baseUrl }),
+    ...buildSecrets,
   });
   return {
     async inspect({ branch, workdir, prTitle, prBody, expectedTip }) {
