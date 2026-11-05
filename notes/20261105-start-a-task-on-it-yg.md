@@ -34,11 +34,12 @@ value, same "for every build" rule as Inspector's own, so one
 - **Safest.** It adds a context; it takes nothing away. A repository
   route project's Dockerfile has no `COPY --from=repo` in it (plain
   `COPY` from the main context is what `fabrica register` writes there),
-  so for every project that built before this change the build is
-  byte-identical in effect - the extra context is simply unused. Passing
-  it there anyway is what makes a project that later moves its terms out
-  of the repository need no second decision, and is exactly the rule
-  Inspector states for its own side.
+  so the image such a project builds is unchanged - the extra context is
+  simply never read, and BuildKit sends nothing from a context no `COPY`
+  reads. Passing it there anyway is what makes a project that later
+  moves its terms out of the repository need no second decision, and is
+  exactly the rule Inspector states for its own side. The one real cost
+  of "every build" is named below: the flag is BuildKit-only.
 - **Most accurate.** The name is not re-spelled: `REPO_BUILD_CONTEXT`
   already existed, as the constant `fabrica register` writes `COPY
   --from=repo` from, and the flag is now built from the same constant.
@@ -130,12 +131,15 @@ project's own half - fails that twice: no bash and no git, and musl,
 which nodejs.org publishes for x64 only (so it would pass on a CI runner
 and fail on an arm64 Mac).
 
-`debian:bookworm-slim` plus `apt-get install bash ca-certificates curl
-git` is the cheap one that works on both: glibc, ~100MB before the
-layer, where `cimg/*` (what `src/brain/adapters/
-machine-image-build.test.ts` builds on, deliberately, as the real shape
-of a registered project) is a multi-gigabyte pull and a multi-gigabyte
-`docker save` to search for a leaked value afterwards.
+The official Ruby image (`FIXTURE_IMAGE`, `ruby:<pinned patch>` from
+`src/register/helpers/rails-app-fixture.ts`) is what that test builds
+on, and carries all five: it is Debian/glibc on `buildpack-deps`, so
+bash, git, curl and `sha256sum` are already there, no `apt-get` step of
+the test's own, and the sibling tests in the same file already pull it.
+`cimg/*` - what `src/brain/adapters/machine-image-build.test.ts` builds
+on, deliberately, as the real shape of a registered project - is a
+multi-gigabyte pull and a multi-gigabyte `docker save` to search for a
+leaked value afterwards, which is why it is not used here.
 
 ### Why the name is not in `src/inspector/consumer-contract.json`
 
@@ -157,7 +161,34 @@ one-flag fix.
 
 The repository-route test reads the whole `docker save` tar in with
 `readFileSync(...).includes(...)`. That is fine for an alpine-based
-image and not for one carrying a Node and a ~280MB CLI. The new test
-streams it instead, keeping the last `value.length - 1` bytes of each
-chunk so a match spanning a chunk boundary is still found -
-`tarCarriesValue` in that file.
+image and not for one carrying a Ruby, a Node and a ~280MB CLI. The new
+test streams `docker save`'s stdout instead - never to a file, never
+held whole in memory - keeping the last `value.length - 1` bytes of each
+chunk so a match spanning a chunk boundary is still found, and reading
+the chunks as `latin1` so they are compared byte for byte rather than
+decoded. `imageLayersCarry` in that file.
+
+### `--build-context` is BuildKit-only, so every per-project build is now
+
+Observed on the installed client (28.1.1): `DOCKER_BUILDKIT=0 docker
+build --build-context repo=/tmp ...` refuses with `unknown flag:
+--build-context`, before the daemon is contacted at all; with BuildKit
+(Docker's own default from 23 on, and the legacy builder deprecated in
+its own warning) the flag is accepted.
+
+So a machine image build on an install that has deliberately turned
+BuildKit off stops working with this change - loudly, naming the flag,
+through the runner's own reported output, never silently. It is not a
+new requirement for the project as a whole: `--secret` is BuildKit-only
+too, so any project with `buildSecrets` already needed it
+(`src/buildsecrets/README.md` states BuildKit as the baseline either
+side needs), and Inspector's check-image build passes this very flag for
+every project. What is new is that it now applies to a project with no
+build secrets as well. A `fabrica doctor` line for "this docker builds
+with BuildKit" would be the honest place to say so before a build fails;
+not added here, and worth an issue if the legacy builder ever turns up
+on a real machine.
+
+Nothing about the stamp changes: it hashes the generated Dockerfile and
+the base image's user, not the argv, so an image already built and
+current stays current and no project is rebuilt by this change alone.

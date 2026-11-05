@@ -66,7 +66,14 @@ the repair loop reports it against that one project and carries on. See
   flag Docker reads `repo` as an image name and the build fails on
   `docker.io/library/repo:latest`. A repository-route project's file has
   no such `COPY` and simply does not read the context - passing it anyway
-  is what lets one `Dockerfile.inspector` work in both builds.
+  is what lets one `Dockerfile.inspector` work in both builds. It does
+  mean **every** per-project build now needs BuildKit: the flag is
+  BuildKit-only, and a `docker build` run with the deprecated legacy
+  builder (`DOCKER_BUILDKIT=0`) refuses it with `unknown flag:
+  --build-context` before it reaches the daemon. BuildKit is Docker's own
+  default from version 23 on, and this project already required it of any
+  project carrying build secrets (`--secret` is BuildKit-only too) and of
+  Inspector's own check-image build, which passes this same flag.
 - **The stamp is the hash of the generated Dockerfile**, passed to the
   build as `--build-arg FABRICA_IMAGE_STAMP` and stored under the same
   `fabrica.dockerfile-sha256` label the shared image uses. It therefore
