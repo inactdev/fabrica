@@ -17,14 +17,31 @@
 // exact argv a real daemon would have received.
 //
 // `FABRICA_FAKE_DOCKER_STOP` points at a directory holding:
-//   config.json - { missedStops, runCeilingMs }. `missedStops` is how
-//                 many stop calls answer "No such container" before one
-//                 lands, standing in for the window where `docker run`
-//                 has not created the container yet - the whole bug.
-//                 `runCeilingMs` is how long a `run` waits to be
-//                 stopped before giving up and reporting that it ran
-//                 its course (exit 99), which is what a test asserting
-//                 on the stop reads as "the stop never arrived".
+//   config.json - { missedStops, missedStopReply, runCeilingMs }.
+//                 `missedStops` is how many stop calls answer as one
+//                 for a container that isn't there before one lands,
+//                 standing in for the window where `docker run` has
+//                 not created the container yet - the whole bug.
+//                 `missedStopReply` is how those answer, and exists
+//                 because the real CLI has no single answer here: a
+//                 `docker stop` for a container that isn't there fails
+//                 and names it ("no-such-container"), while a
+//                 force-remove has in some versions treated it as
+//                 already done and simply succeeded
+//                 ("silent-success"). run.ts reads neither the exit
+//                 code nor the message of a stop - every one is
+//                 swallowed - so this is not here to pin a docker
+//                 version down; it is here so both shapes are driven
+//                 through the real production code, and a reissue
+//                 that stopped at the first success could not pass
+//                 the silent one. `runCeilingMs` is how long a `run`
+//                 waits to be stopped before giving up and reporting
+//                 that it ran its course (exit 99), which is what a
+//                 test asserting on the stop reads as "the stop never
+//                 arrived". The 137 and 99 a `run` exits with are this
+//                 fake's own, chosen to be told apart; the only exit
+//                 code the production code under test actually reads
+//                 is the one its own `docker run` client leaves with.
 //   stopped     - written by the stop that lands; `run` exits once it
 //                 appears, the way a real client exits once its
 //                 container is gone.
@@ -83,8 +100,11 @@ if (args[0] === "stop" || (args[0] === "rm" && args.includes("-f"))) {
   const arrived = (existsSync(stopsPath) ? Number(readFileSync(stopsPath, "utf8")) : 0) + 1;
   writeFileSync(stopsPath, String(arrived));
   if (arrived <= (config.missedStops ?? 0)) {
-    // The real CLI's own answer when the container isn't there - which
-    // is what a stop issued before `docker run` created it gets.
+    // An answer for a container that isn't there - which is what a stop
+    // issued before `docker run` created it gets. Either shape the real
+    // CLI has been seen to give; see `missedStopReply` above for why
+    // both exist and why neither is load-bearing.
+    if ((config.missedStopReply ?? "no-such-container") === "silent-success") process.exit(0);
     process.stderr.write(`Error response from daemon: No such container: ${args[args.length - 1]}\n`);
     process.exit(1);
   }

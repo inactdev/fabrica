@@ -16,10 +16,19 @@ non-obvious parts of it, both worth keeping:
   exiting, not a stop command reporting success.** `docker stop` against
   a container docker has created but not yet *started* exits 0 without
   stopping anything - the container then starts and runs its full
-  course - and `docker rm -f`'s exit code for a container that isn't
-  there has varied across docker versions. The client exiting is
-  unambiguous: `--rm` reaps the container and the attached client leaves
-  with it.
+  course - and a force-remove of a container that isn't there has
+  answered differently across docker versions (refusing and saying so
+  in some, treating it as already done and succeeding in others). So
+  neither a stop's exit code nor its message is read at all. The client
+  exiting is the strongest signal available: `--rm` has docker remove
+  the container as it exits and the attached client leaves with it.
+  Its limit, worth knowing rather than discovering: a client that exits
+  for a reason of its own - a dropped connection to the daemon,
+  something killing it - ends the loop while the container may still be
+  alive. Nothing is issued after the call settles anyway, because a
+  container name belongs to the caller and may be reused by its next
+  run, so a late stop could remove that run's box instead. Teardown
+  past the point the call hands back is the caller's.
 - **Schedule each attempt from the previous one's callback, not on a
   fixed interval.** `docker stop --time 10` can block for its whole
   grace period; a `setInterval` would stack concurrent stops behind it.
@@ -45,11 +54,20 @@ stand-in next to `helpers/fake-docker.mjs`, kept separate because that
 one stands for the network and image commands and six suites read it.
 The new one models one container: `run` blocks until a stop lands and
 then exits 137, or gives up at a ceiling and exits 99 ("ran its
-course"), and the first N stops answer `No such container` the way the
-real CLI does for one that doesn't exist yet. That turns the bug into a
-one-second assertion (`137` vs `99`) on any machine, which matters here
-because every other test in `run.test.ts` skips without a daemon - the
-fix would otherwise have landed with nothing executed behind it.
+course"), and the first N stops answer as one for a container that
+isn't there. That turns the bug into a one-second assertion (`137` vs
+`99`) on any machine, which matters here because every other test in
+`run.test.ts` skips without a daemon - the fix would otherwise have
+landed with nothing executed behind it.
+
+That answer is configurable in shape (`missedStopReply`) and the two
+tests take one each, because the real CLI has no single answer for a
+container that isn't there: a `docker stop` fails and names it, a
+force-remove has in some versions treated it as already done and
+succeeded. The code under test reads neither the exit code nor the
+message of a stop, so the point is not to pin a version down - it is
+that both shapes are driven through it, and the silent-success one is
+what a future "stop reissuing once a stop succeeds" would fail.
 
 Its `run` blocks with `Atomics.wait` on a throwaway `SharedArrayBuffer`
 rather than a timer, so nothing about it can finish early because the

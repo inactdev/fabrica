@@ -207,13 +207,27 @@ export async function runContained(
       // container then starts anyway, and the run goes its full length -
       // which is how a 500ms abort became a 600s run on a busy CI
       // runner. So a stop is reissued every STOP_RETRY_INTERVAL_MS
-      // until the docker client exits, which is the one unambiguous
-      // proof the container is gone: `--rm` reaps it and the attached
-      // client leaves with it. Deliberately not "until a stop reports
-      // success" - `docker stop` on a container docker has created but
-      // not yet started succeeds without stopping anything, and `docker
-      // rm -f`'s own exit code for a container that isn't there has
-      // varied across docker versions, so neither can be read as proof.
+      // until this call settles: the docker client exiting (`--rm` has
+      // docker remove the container as it exits, and the attached
+      // client leaves with it) or never starting at all.
+      //
+      // Deliberately not "until a stop reports success", which looks
+      // equivalent and isn't: `docker stop` on a container docker has
+      // created but not yet started succeeds without stopping anything,
+      // and a force-remove of a container that isn't there has answered
+      // differently across docker versions - refusing and saying so in
+      // some, treating it as already done and succeeding in others - so
+      // neither a stop's exit code nor its message can be read as proof.
+      // The client exiting is the strongest signal available here, and
+      // its limit is worth knowing: a client that exits for a reason of
+      // its own - a dropped connection to the daemon, someone killing
+      // it - ends the loop while the container may still be alive.
+      // Nothing is issued once this call has settled, on purpose: a
+      // container name belongs to the caller and may be reused by its
+      // next run, and a stop arriving after this call returned could
+      // remove that run's box instead of this one's. Teardown past the
+      // point this call hands back is the caller's, not this loop's.
+      //
       // Each attempt is scheduled from the previous one's callback, so
       // a `docker stop` sitting out its whole grace period never piles
       // up concurrent stops. A failure stays swallowed, as it always

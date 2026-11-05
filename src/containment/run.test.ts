@@ -62,7 +62,15 @@ function makeFixture() {
 // not only on a machine with a Docker daemon.
 function installFakeDockerStop(
   t: { after: (fn: () => void) => void },
-  config: { missedStops: number; runCeilingMs: number }
+  config: {
+    missedStops: number;
+    /** How those missed stops answer - a stated failure or a silent
+     * success. Stated per call rather than defaulted, because the point
+     * of the two tests below is that the production code behaves the
+     * same for both; see the shim's own header. */
+    missedStopReply: "no-such-container" | "silent-success";
+    runCeilingMs: number;
+  }
 ): { calls: () => string[][] } {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-fake-docker-stop-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -233,12 +241,20 @@ test("runContained: aborting gracefulStopSignal stops the container with SIGTERM
 // The two tests below need no daemon, so they run everywhere - which
 // matters because every Docker-gated test in this file skips on a
 // machine without one, and the reissue is the whole of issue #346's
-// fix. The stand-in docker answers the first two stops the way the real
-// one answers a stop for a container it has not created yet, so a
-// single-shot stop leaves the command running its full course and the
-// run comes back 99 instead of 137.
+// fix. The stand-in docker answers the first two stops as one for a
+// container it has not created yet, so a single-shot stop leaves the
+// command running its full course and the run comes back 99 instead of
+// 137. The pair deliberately takes the two different answers the real
+// CLI has been seen to give for a container that isn't there: this one
+// a silent success - the harder case, and the one a reissue that
+// stopped at the first success would get wrong - and the graceful one
+// below a stated failure.
 test("runContained: a stop that finds no container yet is reissued until the run ends", async (t) => {
-  const fake = installFakeDockerStop(t, { missedStops: 2, runCeilingMs: 20_000 });
+  const fake = installFakeDockerStop(t, {
+    missedStops: 2,
+    missedStopReply: "silent-success",
+    runCeilingMs: 20_000,
+  });
   const { workdir } = makeFixture();
 
   const stop = new AbortController();
@@ -256,6 +272,8 @@ test("runContained: a stop that finds no container yet is reissued until the run
   assert.equal(result.exitCode, 137, `the run must end on the stop, not run its course: ${result.stderr}`);
   const stops = fake.calls().filter((argv) => argv[0] === "rm");
   assert.deepEqual(stops[0], ["rm", "-f", "fabrica-fake-box"], "a force-remove, unchanged in shape");
+  // Reissued past a stop that reported success while removing nothing,
+  // which is exactly what the exit code of a stop cannot be trusted for.
   assert.equal(stops.length >= 3, true, `the stop must be reissued, not tried once - got ${stops.length}`);
   // Three stops at STOP_RETRY_INTERVAL_MS apart, not a wait on anything
   // the command itself does.
@@ -263,7 +281,11 @@ test("runContained: a stop that finds no container yet is reissued until the run
 });
 
 test("runContained: a graceful stop that finds no container yet is reissued the same way", async (t) => {
-  const fake = installFakeDockerStop(t, { missedStops: 2, runCeilingMs: 20_000 });
+  const fake = installFakeDockerStop(t, {
+    missedStops: 2,
+    missedStopReply: "no-such-container",
+    runCeilingMs: 20_000,
+  });
   const { workdir } = makeFixture();
 
   const pause = new AbortController();

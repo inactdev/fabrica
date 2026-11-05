@@ -284,29 +284,42 @@ lands before or inside that window has nothing to stop yet. Issuing the
 stop exactly once there did nothing at all, the container started
 anyway, and the run went its full length - which is how a 500ms abort
 became a 600-second run on a loaded CI runner (issue #346). So the stop
-is **reissued every `STOP_RETRY_INTERVAL_MS` until the docker client
-process exits**, which is the one unambiguous proof the container is
-gone: `--rm` reaps it and the attached client leaves with it.
+is **reissued every `STOP_RETRY_INTERVAL_MS` until the call settles** -
+the docker client exiting (`--rm` has docker remove the container as it
+exits, and the attached client leaves with it) or never starting at all.
 
 Deliberately not "until a stop command reports success," which looks
 equivalent and isn't: `docker stop` against a container docker has
 created but not yet *started* succeeds without stopping anything (the
-container then starts and runs its course), and `docker rm -f`'s own
-exit code for a container that isn't there has varied across docker
-versions - neither can be read as proof. Each attempt is scheduled from
-the previous one's callback rather than on a fixed interval, so a
-`docker stop` sitting out its whole grace period never piles up
-concurrent stops, and nothing is issued at all once the call has
-settled. A failing stop stays swallowed: the container may simply not
-exist yet, or any more, and the reason the caller aborted is what
-matters, not this.
+container then starts and runs its course), and a force-remove of a
+container that isn't there has answered differently across docker
+versions - refusing and saying so in some, treating it as already done
+and succeeding in others. So neither a stop's exit code nor its message
+is read at all; a failing stop stays swallowed, because the container
+may simply not exist yet, or any more, and the reason the caller
+aborted is what matters, not this.
+
+The client exiting is the strongest signal available here, and its
+limit is worth stating: a client that exits for a reason of its own - a
+dropped connection to the daemon, someone killing it - ends the loop
+while the container may still be alive. Nothing is issued once the call
+has settled, on purpose: a container name belongs to the caller and may
+be reused by its next run, so a stop arriving after this call returned
+could remove *that* run's box instead of this one's. Teardown past the
+point the call hands back is the caller's. Each attempt is also
+scheduled from the previous one's callback rather than on a fixed
+interval, so a `docker stop` sitting out its whole grace period never
+piles up concurrent stops.
 
 `run.test.ts` proves this twice over - against the real daemon (abort
 first, then start the run, which is the race at its widest) and against
-a stand-in `docker` that answers the first stops the way the real one
-answers a stop for a container it hasn't created yet
-(`helpers/fake-docker-stop.mjs`), so the reissue is also proven where
-there is no daemon to skip to.
+a stand-in `docker` whose first stops answer as one for a container
+that isn't there (`helpers/fake-docker-stop.mjs`), so the reissue is
+also proven where there is no daemon to skip to. Those two take the
+stand-in's two different answers, a silent success and a stated
+failure, precisely because the real CLI's own answer varies: the
+production code must not depend on either, and a reissue that stopped
+at the first success would pass one of the pair and fail the other.
 
 ## Git under containment
 
