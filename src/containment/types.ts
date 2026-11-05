@@ -96,7 +96,10 @@ export interface RunContainedOptions {
    * (`docker rm -f`, the same way `src/relay/container/launch.ts`
    * removes its own) and this call settles with whatever the docker
    * client reported on its way out, rather than waiting for a command
-   * that cannot finish.
+   * that cannot finish. The removal is reissued every
+   * `STOP_RETRY_INTERVAL_MS` until the run really ends, so an abort
+   * landing before docker has created the container stops it anyway -
+   * see "Stopping a run" in README.md.
    *
    * Exists for one case (2026-10-18): a worker box whose task's relay
    * container has died has no network left and will spend minutes
@@ -110,8 +113,8 @@ export interface RunContainedOptions {
    * which sends the container's own process SIGTERM and then SIGKILL
    * after `--time` seconds (`GRACEFUL_STOP_SECONDS`), instead of
    * `stopSignal`'s immediate force-remove. Same requirement of a
-   * `containerName`, and the same settling path - the attached client
-   * exits once the container is gone.
+   * `containerName`, the same settling path - the attached client exits
+   * once the container is gone - and reissued on the same terms.
    *
    * Exists for issue #189: a subscription meter past its stop threshold
    * must stop an attempt "gracefully, at the next safe point, the same
