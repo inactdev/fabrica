@@ -20,6 +20,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildSecretsFor } from "../buildsecrets/index.ts";
+// The one declaration of the name a `COPY --from=` here and the
+// `--build-context` flag `src/projectimage/` passes both have to spell
+// the same way - see that constant's own comment.
+import { REPO_BUILD_CONTEXT } from "../inspector/index.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG } from "./origin.ts";
 
 /** The file Inspector builds the check box from, at the repository root.
@@ -723,13 +727,6 @@ export function comment(text: string): string[] {
 function copiedFiles(shape: DependencyShape): string {
   return [shape.manifest, shape.lockfile, ...(shape.extraCopies ?? [])].join(" ");
 }
-
-/**
- * The named build context Inspector hands every image build the
- * repository under check as (inspector#81). Fixed, with no
- * configuration key, in the same spirit as `/workspace` and `/terms`.
- */
-export const REPO_BUILD_CONTEXT = "repo";
 
 /**
  * How the install step's `COPY` reaches the repository's own manifest

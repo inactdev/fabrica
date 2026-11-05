@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BuildSecretsError } from "../buildsecrets/index.ts";
 import { loadConfig } from "../config/index.ts";
 import { appendEvent } from "../record/index.ts";
 import { DEFAULT_MACHINE_IMAGE } from "../brain/index.ts";
+import { REPO_BUILD_CONTEXT } from "../inspector/index.ts";
 import {
   isLayered,
   machineDockerfileFor,
@@ -160,6 +161,8 @@ test("the build command writes the generated Dockerfile and passes the stamp as 
     "build",
     "--build-arg",
     `FABRICA_IMAGE_STAMP=${machineImageStamp(readFileSync(path, "utf8"))}`,
+    "--build-context",
+    `repo=${machine.context}`,
     "-t",
     machine.image,
     "-f",
@@ -168,6 +171,50 @@ test("the build command writes the generated Dockerfile and passes the stamp as 
   ]);
   assert.equal(readFileSync(path, "utf8"), machineDockerfileFor(machine, BASE_USER));
   assert.match(command.shell, /^docker build /);
+});
+
+// ------------------------------- the repo build context (issue #344)
+
+test("the repository rides on the repo build context for a project whose terms are in a folder", () => {
+  // The fault this closes: a terms folder holds no manifest and no
+  // lockfile, so the file there says `COPY --from=repo ...` - and with
+  // no `--build-context` naming it, Docker read `repo` as an image and
+  // every such build failed on docker.io/library/repo:latest.
+  const project = projectDir();
+  const terms = projectDir({ dockerfile: `FROM ruby:3.4\nCOPY --from=repo Gemfile /deps/\n` });
+  const recordHome = recordHomeWith(`[projects.dayjob]\npath = "${project}"\nterms = "${terms}"\n`);
+  const machine = machineImageForProject(recordHome, project);
+
+  const command = machineImageBuild(recordHome, machine, BASE_USER);
+
+  const at = command.args.indexOf("--build-context");
+  assert.notEqual(at, -1, `no named build context at all: ${command.args.join(" ")}`);
+  // The repository, by name - never the terms folder the Dockerfile
+  // itself sits in, which is exactly what has none of those files.
+  assert.equal(command.args[at + 1], `${REPO_BUILD_CONTEXT}=${machine.project}`);
+  assert.notEqual(machine.project, realpathSync(terms));
+  assert.ok(command.shell.includes(`--build-context ${REPO_BUILD_CONTEXT}=${machine.project}`), command.shell);
+});
+
+test("a repository-route project's build carries the same repo build context", () => {
+  // Passed for every project, not only the terms-folder one - the same
+  // rule Inspector states for its own builds, so one Dockerfile works
+  // in both. Nothing `fabrica register` writes for a repository-route
+  // project reads it; a project that later moves its terms out needs no
+  // second decision.
+  const project = projectDir({ dockerfile: DOCKERFILE });
+  const recordHome = recordHomeWith(`[projects.app]\npath = "${project}"\n`);
+  const machine = machineImageForProject(recordHome, project);
+
+  const command = machineImageBuild(recordHome, machine, BASE_USER);
+
+  assert.ok(
+    command.args.includes(`${REPO_BUILD_CONTEXT}=${machine.project}`),
+    `expected the repository under the ${REPO_BUILD_CONTEXT} context: ${command.args.join(" ")}`
+  );
+  // And it is the same folder as the main context, which is what makes
+  // it a no-op here rather than a second source of files.
+  assert.equal(command.args[command.args.length - 1], machine.context);
 });
 
 test("nothing is written until a build is actually asked for", () => {
