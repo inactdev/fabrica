@@ -26,6 +26,7 @@ import {
   machineImageLabel,
   machineImageStatus,
   NETWORK_PRUNE_COMMAND,
+  placeableFields,
   probeWorkerToken,
   readEvents,
   requireGitRoot,
@@ -968,14 +969,36 @@ function describeWorkMode(workMode: WorkMode, path: string): string {
   if (workMode.terms !== undefined) parts.push(`terms in ${workMode.terms}`);
   if (workMode.noStamp) parts.push("no Inspector stamp");
   if (workMode.pullRequestTemplate) {
-    const found = findPullRequestTemplate(path);
-    parts.push(
-      found === undefined
-        ? `no ${PULL_REQUEST_TEMPLATE_PATHS.join(" or ")} to render the pull request body into`
-        : `pull request body from ${found.path}`
-    );
+    parts.push(describePullRequestTemplate(path));
   }
   return parts.length === 0 ? "" : `, ${parts.join(", ")}`;
+}
+
+/** Where this project's pull request body will actually come from, for
+ * the tail of its own line - three answers, not two.
+ *
+ * The third is the one worth having: a template that exists but whose
+ * headings claim no part of a write-up (a bare checklist, "thanks for
+ * contributing", headings in none of the words the match list knows) is
+ * one a round cannot render into, so its pull requests carry Fabrica's
+ * own body and the template's own checklist appears nowhere
+ * (`pr-template.ts`'s `renderIntoTemplate`). That is a working outcome,
+ * but a published pull request gives the Client no way to tell it from a
+ * template that was followed - so it is named here, where the setting
+ * itself is reported, and not left to be discovered on a pull request.
+ *
+ * Information, never a FAIL: nothing is broken, and refusing a working
+ * session over the wording of a repository's template is not this
+ * command's business. */
+function describePullRequestTemplate(path: string): string {
+  const found = findPullRequestTemplate(path);
+  if (found === undefined) {
+    return `no ${PULL_REQUEST_TEMPLATE_PATHS.join(" or ")} to render the pull request body into`;
+  }
+  if (placeableFields(found.text).length === 0) {
+    return `${found.path} has no section the write-up can fill, so the pull request body will be Fabrica's own`;
+  }
+  return `pull request body from ${found.path}`;
 }
 
 /** A doctor line is one line. Every refusal Fabrica writes opens with

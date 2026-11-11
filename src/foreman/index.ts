@@ -28,6 +28,7 @@ export type { ClosesIssue, FinalMessageForCommit } from "./pr-body.ts";
 // project's line whether there is one to render into.
 export {
   findPullRequestTemplate,
+  placeableFields,
   readPullRequestTemplate,
   renderIntoTemplate,
   PULL_REQUEST_TEMPLATE_PATHS,

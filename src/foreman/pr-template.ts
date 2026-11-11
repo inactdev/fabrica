@@ -149,9 +149,13 @@ interface TemplateSection {
  * body would then describe the change nowhere, so this answers undefined
  * and the caller publishes Fabrica's own four-section body instead
  * (`judge.ts`'s `pullRequestBody`) - the same outcome as a project that
- * asks for a template and has none. The cost is that such a template's
- * own checklist is not in the body: a body that describes nothing was
- * judged the worse of the two.
+ * asks for a template and has none. The cost is real and is the reason
+ * `placeableFields` exists: such a template's own checklist is not in
+ * the body at all, so the choice is said out loud on the project's
+ * `fabrica doctor` line rather than made silently at publish time. A
+ * body that describes the change nowhere was judged the worse of the
+ * two, and appending the four-section body under the template's content
+ * instead would add exactly the sections issue #349 says not to add.
  */
 export function renderIntoTemplate(template: string, writeup: WorkerWriteup): string | undefined {
   const { preamble, sections } = splitSections(template);
@@ -177,6 +181,35 @@ export function renderIntoTemplate(template: string, writeup: WorkerWriteup): st
   }
 
   return block(rendered);
+}
+
+/**
+ * Which of the write-up's fields this template has a section for, in the
+ * order its own headings claim them - empty for a template
+ * `renderIntoTemplate` can only ever answer undefined for, whatever the
+ * write-up says.
+ *
+ * This exists so that fallback is loud instead of silent: a project asks
+ * for its repository's template, the template turns out to have no
+ * section any part of a write-up can fill, and its pull requests then
+ * carry Fabrica's own body with none of the template's own checklist -
+ * a working outcome, but not the one that was asked for, and nothing
+ * about a published pull request would tell the Client why. The empty
+ * answer is reported on that project's `fabrica doctor` line, beside
+ * the "has no template at all" case it amounts to.
+ *
+ * Structural only, and deliberately: this reads the template and no
+ * write-up, so a non-empty answer means "a round can place something
+ * here", not "it will". A worker that left every one of these fields
+ * empty still falls back, and that is not knowable before the round.
+ */
+export function placeableFields(template: string): (keyof WorkerWriteup)[] {
+  const claimed = new Set<keyof WorkerWriteup>();
+  for (const { heading } of splitSections(template).sections) {
+    const field = claimFor(heading, claimed);
+    if (field !== undefined) claimed.add(field);
+  }
+  return [...claimed];
 }
 
 /** `## Heading` as the words alone, for matching a field against it. */

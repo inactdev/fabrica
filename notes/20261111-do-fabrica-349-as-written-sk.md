@@ -42,9 +42,30 @@ whitespace-only template ("no template to render into").
 The cost is real and worth knowing: that fallback drops the template's
 own checklist from the body, which is the one case where this module's
 "nothing in the template is ever thrown away" rule bends. A body with no
-description at all was judged worse than a body without the checklist.
-A template with at least one matching heading keeps everything, as
-before.
+description at all was judged worse than a body without the checklist,
+and the third option - appending Fabrica's own four sections after the
+checklist - adds exactly the sections this issue says not to add. A
+template with at least one matching heading keeps everything, as before.
+
+So the choice stands, but it is not made quietly: a silent skip is a
+bug. `placeableFields(template)` asks the same question of a template
+alone, with no write-up to hand, and `fabrica doctor`'s line for the
+project reports an empty answer by name - "<file> has no section the
+write-up can fill, so the pull request body will be Fabrica's own" -
+next to the wording that line already used for a project whose template
+is missing altogether. Information, not a FAIL: nothing is broken, and
+refusing a working session over the wording of a repository's template
+is not that command's business. It has to be said *there*, because a
+published pull request body carrying Fabrica's own four sections looks
+identical whether the template was ignored or never existed.
+
+That check is structural on purpose, and that limit is worth knowing:
+it reads headings, not a write-up, so a non-empty answer means a round
+*can* place something, not that it will. A template whose only matching
+heading is `## Testing` passes it and still falls back for any round
+whose worker reported no tests - unknowable before the round, and not
+worth a second, vaguer warning on a line that would then be wrong half
+the time.
 
 ## Both spellings of the template's path
 

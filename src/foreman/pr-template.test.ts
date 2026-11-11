@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   findPullRequestTemplate,
+  placeableFields,
   readPullRequestTemplate,
   renderIntoTemplate,
   PULL_REQUEST_TEMPLATE_PATHS,
@@ -172,6 +173,26 @@ test("renderIntoTemplate: a template nothing can be placed into renders nothing 
   assert.equal(renderIntoTemplate("Thanks for contributing!\n", WRITEUP), undefined);
   assert.equal(renderIntoTemplate("## Checklist\n\n- [ ] I read CONTRIBUTING.md\n", WRITEUP), undefined);
   // The only matching heading is one the worker had nothing for.
+  assert.equal(renderIntoTemplate("## Testing\n", WRITEUP), undefined);
+});
+
+test("placeableFields: which fields a template has a section for, without a write-up to ask", () => {
+  assert.deepEqual(placeableFields("## Why\n\n## What\n\n## How\n"), ["why", "what", "how"]);
+  // The template's own order, not the match list's.
+  assert.deepEqual(placeableFields("## Testing\n\n## Motivation\n"), ["testsRun", "why"]);
+  // A second heading for an already-claimed field adds nothing.
+  assert.deepEqual(placeableFields("## Description\n\n## Summary\n"), ["what"]);
+});
+
+test("placeableFields: empty for exactly the templates renderIntoTemplate cannot render into", () => {
+  for (const template of ["Thanks for contributing!\n", "## Checklist\n\n- [ ] I read CONTRIBUTING.md\n", "```\n## Description\n```\n"]) {
+    assert.deepEqual(placeableFields(template), [], template);
+    assert.equal(renderIntoTemplate(template, WRITEUP), undefined, template);
+  }
+  // Structural only: this heading can be filled, by a write-up that
+  // reported tests. The one in WRITEUP did not, so that round still
+  // falls back - which is not knowable from the template alone.
+  assert.deepEqual(placeableFields("## Testing\n"), ["testsRun"]);
   assert.equal(renderIntoTemplate("## Testing\n", WRITEUP), undefined);
 });
 

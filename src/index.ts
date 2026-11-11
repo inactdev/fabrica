@@ -17,6 +17,7 @@ export type { FinalMessageForCommit } from "./foreman/index.ts";
 // that asks for its body to be rendered into it.
 export {
   findPullRequestTemplate,
+  placeableFields,
   readPullRequestTemplate,
   renderIntoTemplate,
   PULL_REQUEST_TEMPLATE_PATHS,

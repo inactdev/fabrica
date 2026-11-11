@@ -1279,6 +1279,28 @@ test("fabrica doctor: a project asking for its repository's pull request templat
   assert.match(withTemplate.lines.join("\n"), /pull request body from \.github\/PULL_REQUEST_TEMPLATE\.md/);
 });
 
+test("fabrica doctor: a template with no section the write-up can fill is named, not left silent", async () => {
+  const project = companyProject();
+  mkdirSync(join(project, ".github"), { recursive: true });
+  writeFileSync(join(project, ".github", "PULL_REQUEST_TEMPLATE.md"), "## Checklist\n\n- [ ] I read CONTRIBUTING.md\n");
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${project}"\n` +
+      `check = "bin/ci"\nterms = "${termsFolder()}"\npullRequestTemplate = true\n`
+  );
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  // Still not a FAIL - the project works, its pull requests just carry
+  // Fabrica's own body and none of that checklist. Which is the whole
+  // point of saying it here: a published pull request cannot be told
+  // apart from one whose template was followed.
+  assert.equal(code, 0, text);
+  assert.match(
+    text,
+    /\.github\/PULL_REQUEST_TEMPLATE\.md has no section the write-up can fill, so the pull request body will be Fabrica's own/
+  );
+});
+
 test("fabrica doctor: a project in no work mode says nothing about any of it", async () => {
   const { lines } = await doctor(healthyHome(), okProbes());
   const line = lines.find((l) => l.includes("project demo"))!;
