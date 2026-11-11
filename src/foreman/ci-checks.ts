@@ -13,6 +13,25 @@ import { readPullRequestChecks } from "../ci/index.ts";
 import type { ChecksReport, CheckSource, ChecksVerdict, ConcludedCheck } from "../ci/index.ts";
 import type { TokenMinter } from "../githubapp/index.ts";
 import { readChecksScope, taskGithubCredential } from "./github-token.ts";
+import { registeredProject } from "./registered-project.ts";
+
+/**
+ * Whether a red check on this project's pull request may start another
+ * attempt by itself (issue #348, `projects.toml`'s `retryOnRedChecks`).
+ *
+ * On unless the project turns it off, which is what every project did
+ * before the setting existed - and what a project with no entry at all
+ * does, for the same reason `onlyTouchedTests` defaults that way: a
+ * setting with a sane default must not be the thing that reports an
+ * unregistered project or a broken registry (`registered-project.ts`).
+ *
+ * Off, the round still delivers red with the checks' own output for the
+ * Client to rule on; what it no longer does is spend a correcting
+ * attempt on a failure nobody asked a Worker to fix.
+ */
+export function retryOnRedChecksFor(recordHome: string, projectPath: string): boolean {
+  return registeredProject(recordHome, projectPath)?.retryOnRedChecks ?? true;
+}
 
 /**
  * The outside call: read `prUrl`'s checks and answer with what they said,

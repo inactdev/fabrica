@@ -128,12 +128,21 @@ src/ci/checks.test.ts: src/ci/checks.test.ts
 src/ci/checks.ts: src/ci/checks.test.ts
 src/ci/conclusions.test.ts: src/ci/conclusions.test.ts
 src/ci/conclusions.ts: src/ci/conclusions.test.ts
+src/ci/latest.test.ts: src/ci/latest.test.ts
+src/ci/latest.ts: src/ci/latest.test.ts, src/ci/poll.test.ts
 src/ci/poll.test.ts: src/ci/poll.test.ts
 src/ci/poll.ts: src/ci/poll.test.ts
 src/ci/pull-request.test.ts: src/ci/pull-request.test.ts
 src/ci/pull-request.ts: src/ci/pull-request.test.ts
 src/ci/report.test.ts: src/ci/report.test.ts
 src/ci/report.ts: src/ci/report.test.ts
+# Hand-added: the endpoint readers, the barrel and the fake GitHub have no
+# colocated test of their own to be generated from, so `fabrica tests-map`
+# leaves them out. These are the suites that drive them for real - the fake
+# server answers every endpoint `read.ts` parses, through the real client.
+src/ci/helpers/fake-github.ts: src/ci/poll.test.ts, src/ci/checks.test.ts
+src/ci/index.ts: src/ci/checks.test.ts, src/ci/poll.test.ts
+src/ci/read.ts: src/ci/poll.test.ts, src/ci/latest.test.ts
 src/cli/answer-args.test.ts: src/cli/answer-args.test.ts
 src/cli/answer-args.ts: src/cli/answer-args.test.ts
 src/cli/answer-command.test.ts: src/cli/answer-command.test.ts

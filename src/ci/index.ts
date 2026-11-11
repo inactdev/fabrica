@@ -15,7 +15,14 @@ export { createGithubReader, GITHUB_API_BASE, GITHUB_API_VERSION, REQUEST_TIMEOU
 export type { FetchLike, GithubReader, GithubReaderOptions } from "./github.ts";
 export { CiError } from "./errors.ts";
 export type { CiErrorCode } from "./errors.ts";
-export { isRedConclusion, isUnresolvedCheckRunStatus, isUnresolvedCommitStatusState } from "./conclusions.ts";
+export {
+  isNoResultConclusion,
+  isRedConclusion,
+  isUnresolvedCheckRunStatus,
+  isUnresolvedCommitStatusState,
+} from "./conclusions.ts";
+export { latestRunPerCheck, ONLY_CANCELLED } from "./latest.ts";
+export type { CheckRunRead, LatestRuns } from "./latest.ts";
 export { readChecks, readHeadSha, PAGE_SIZE } from "./read.ts";
 export type { ChecksSnapshot } from "./read.ts";
 export { attachLogTails, tailOf, MAX_LOG_TAIL_BYTES, MAX_LOGS_FETCHED } from "./logs.ts";

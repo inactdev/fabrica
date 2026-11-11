@@ -642,7 +642,16 @@ export async function runAttempts(opts: {
 
     // No verdict (Inspector refused, the box could not run the check, the
     // commit failed) means nothing a further attempt could correct from.
-    if (capStop || !gate || (gate.green && stopEarlyOnGreen)) break;
+    if (capStop || !gate) break;
+    // Issue #348: a red the project asked not to be retried
+    // (`retryOnRedChecks = false`, set by `judge.ts` only for a red
+    // check on the pull request) ends the round exactly where a green
+    // would. Subordinate to `stopEarlyOnGreen` for the same reason the
+    // green case is: when the Client gave an explicit count, every one
+    // of those attempts was going to run whatever this one said, so the
+    // red is not what caused another attempt and there is nothing here
+    // to prevent - and cutting his count short would break rule 3.
+    if (stopEarlyOnGreen && (gate.green || (judgement.kind === "verdict" && judgement.noRetry === true))) break;
   }
 
   return {

@@ -636,6 +636,22 @@ A `model = "<name>"` line here is this project's standing model choice
 for its Workers - see "Running a task" below; without one, the worker's
 own configuration decides.
 
+A `retryOnRedChecks = false` line here turns off the one thing a red
+check on the pull request does by itself: start another attempt. After
+Inspector opens the pull request, Fabrica reads the checks your
+repository runs on it, and a red one normally comes back to the Worker as
+a correction to fix. For a repository whose checks go red for reasons a
+Worker cannot act on, set this to `false` and the round simply delivers
+red, with the checks' own output, for you to rule on. It is on for every
+project, including ones registered before this existed.
+
+(A *cancelled* check run is never red either way, and not a setting: a
+workflow that cancels its own older runs - `concurrency:
+cancel-in-progress` - leaves cancelled runs on the same commit as the run
+that actually finished, so Fabrica waits for the newest run of each check
+and reads only its pass or fail. A check left with nothing but cancelled
+runs is reported as unknown and retries nothing.)
+
 `onlyTouchedTests` is the standing instruction every Worker on this
 project is given: run the tests covering what you touched, not the
 whole suite - the project's check runs in full after the Worker is

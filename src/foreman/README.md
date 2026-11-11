@@ -1981,8 +1981,47 @@ round's own last judged receipt → `src/ci/report.ts`'s
 a round whose worker changes nothing has nothing new for anybody, and
 re-reading the same commit's checks could only find the same red.
 
+### A cancelled run is not a result, and the retry is a setting (issue #348)
+
+Two things were wrong about the first version of this, both found on a
+real one-file pull request. A workflow with `concurrency:
+cancel-in-progress` triggered on `opened`, `synchronize` and `edited`
+stops its own older runs on every push and every description edit, so one
+commit carried two `cancelled` runs of a check *and* a later run of the
+same check that passed. Fabrica called that check red, started a second
+attempt, and handed the Worker a failure with nothing in it to fix — the
+Worker, finding nothing, added an unrequested two-line comment so it had
+something to return, and the task delivered red at 0% confidence on a
+commit whose every check was green. About $2.08 for a change nobody
+needed.
+
+The read itself no longer reads it that way: a cancelled run is not a
+result, and the newest remaining run of a check is its answer
+(`src/ci/latest.ts`). A check left with nothing but cancelled runs when
+the wait expires is `unknown`, which — like every other `unknown` — never
+turns a round red and so never starts an attempt. That part is fixed for
+every project, not configurable.
+
+What *is* a setting is the retry itself: `projects.toml`'s
+`retryOnRedChecks`, resolved by `ci-checks.ts`'s `retryOnRedChecksFor`
+and settled once per round in `prepareRound`, with the rest of the
+project's configuration, so a round answers to the setting as it stood
+when it began. On unless a project turns it off, which is what every
+project did before it existed. Off, `inspectorJudge` marks the red
+judgement `noRetry` and `attempts.ts` ends the loop there — the delivery
+is still `inspection-red` carrying the checks' own output, because the
+Client still rules on it; what stops is Fabrica buying a correcting
+attempt by itself.
+
+`noRetry` is subordinate to `stopEarlyOnGreen`, exactly as the green case
+is: when the Client named a count, every one of those attempts was going
+to run whatever this round's checks said, so the red is not what caused
+another attempt and there is nothing here to prevent — and cutting his
+count short would break rule 3 ("three means three") for no gain.
+
 Three results deliberately leave the round alone: an `unknown` (the
-bounded wait expired with checks still running), a `none` (the repository
+bounded wait expired with checks still running, or cancelled with no
+newer run yet), a `none` (the repository
 reports no checks), and an `unreadable` (the API could not be read). Each
 is recorded as itself and named in the delivery's own evidence — never
 silently dropped, and never turned into a red. Inventing a red out of a

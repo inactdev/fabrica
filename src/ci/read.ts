@@ -16,7 +16,9 @@
 // two jobs already lean on.
 
 import { CiError } from "./errors.ts";
-import { isRedConclusion, isUnresolvedCheckRunStatus, isUnresolvedCommitStatusState } from "./conclusions.ts";
+import { isRedConclusion, isUnresolvedCommitStatusState } from "./conclusions.ts";
+import { latestRunPerCheck } from "./latest.ts";
+import type { CheckRunRead } from "./latest.ts";
 import type { GithubReader } from "./github.ts";
 import type { ConcludedCheck, PullRequestRef, UnresolvedCheck } from "./types.ts";
 
@@ -68,8 +70,18 @@ export async function readChecks(
 }
 
 /** `filter=latest` is the endpoint's own default and is passed
- * explicitly: a re-run of a job must be read as its newest attempt, not
- * as two checks of the same name disagreeing. */
+ * explicitly, as the cheapest narrowing available - but it is NOT what
+ * makes one check answer once. GitHub documents it as no more than
+ * "Filters check runs by their completed_at timestamp. latest returns
+ * the most recent check runs", which says nothing about collapsing runs
+ * that share a name, and issue #348 is the proof that it does not: one
+ * commit carried two cancelled runs of a check and a later successful
+ * run of the same check, and all three arrived here. Each workflow run
+ * opens its own check suite, which is the level `latest` appears to work
+ * at.
+ *
+ * So which run of a check answers for it is decided here, by
+ * `latestRunPerCheck` - see `latest.ts` for the two rules. */
 async function readCheckRuns(
   reader: GithubReader,
   ref: PullRequestRef,
@@ -81,30 +93,20 @@ async function readCheckRuns(
   const list = Array.isArray(body?.check_runs) ? body!.check_runs : [];
   const total = typeof body?.total_count === "number" ? body!.total_count : list.length;
 
-  const concluded: ConcludedCheck[] = [];
-  const unresolved: UnresolvedCheck[] = [];
+  const runs: CheckRunRead[] = [];
   for (const entry of list) {
     const run = asObject(entry);
     if (run === null) continue;
-    const name = typeof run.name === "string" && run.name.length > 0 ? run.name : "(unnamed check)";
-    const status = typeof run.status === "string" ? run.status : "";
-    const url = firstUrl(run.html_url, run.details_url);
-    if (isUnresolvedCheckRunStatus(status) || typeof run.conclusion !== "string") {
-      unresolved.push({ name, source: "check-run", status: status || "unknown", url });
-      continue;
-    }
-    concluded.push({
-      name,
-      source: "check-run",
-      conclusion: run.conclusion,
-      red: isRedConclusion(run.conclusion),
-      url,
-      // Carried only so `logs.ts` can match this check against its
-      // Actions job; stripped before anything reaches the record.
-      ...(typeof run.id === "number" ? { checkRunId: run.id } : {}),
+    runs.push({
+      name: typeof run.name === "string" && run.name.length > 0 ? run.name : "(unnamed check)",
+      status: typeof run.status === "string" ? run.status : "",
+      conclusion: typeof run.conclusion === "string" ? run.conclusion : null,
+      url: firstUrl(run.html_url, run.details_url),
+      ...(typeof run.id === "number" ? { id: run.id } : {}),
+      ...(typeof run.started_at === "string" ? { startedAt: run.started_at } : {}),
     });
   }
-  return { concluded, unresolved, truncated: total > list.length };
+  return { ...latestRunPerCheck(runs), truncated: total > list.length };
 }
 
 async function readCommitStatuses(
