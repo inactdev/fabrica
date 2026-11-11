@@ -197,6 +197,24 @@ comfortably inside GitHub's hourly quota.
   that answered and then a red answer over a green one: a tie must never
   resolve into a pass by accident, and the answer must not depend on the
   order GitHub happened to list them in.
+- **Named limit: two genuinely different checks that share one name read
+  as one check.** The reduction groups by name, because "the newest run
+  of that check" is a rule written in names and a name is what every
+  surface here already identifies a check by — and because nothing a
+  check run carries separates "this check ran again" from "a different
+  check happens to share this name": each workflow run opens its own
+  check suite in both cases. So on a commit where two unrelated
+  workflows each post a check called `build`, only the newer of the two
+  answers, and a red older one is not reported. Stated rather than
+  guarded, because there is no field to guard it with; keeping check
+  names distinct is the repository's own business, and this project's own
+  jobs are uniquely named. The direction of the remaining risk is the
+  reason the tie-breaks below exist at all.
+- **Nothing is ever promoted by missing data.** A run GitHub reported no
+  `started_at` and no `id` for sorts as the oldest run in its group,
+  whatever colour it is — so a real failure is never replaced by an
+  unplaceable pass, and an unplaceable failure never displaces a run
+  GitHub actually placed. `latest.test.ts` holds both directions.
 - **A check's identity across ticks is its mechanism, its name and its
   answer**, not its check run id: a re-run answers under a new id, and
   announcing that as a second check would double-count it. The answer is

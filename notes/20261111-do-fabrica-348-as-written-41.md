@@ -35,6 +35,20 @@ answer over a green one — so a tie can never silently resolve into a
 pass, and the result never depends on the order GitHub happened to list
 them in.
 
+Two consequences of grouping by name are named out loud rather than
+guarded, because no field GitHub serves can guard them:
+
+- Two unrelated workflows that each post a check of the same name on one
+  commit read as one check, and only the newer of them answers. Nothing
+  on a check run separates that from the same check having run twice —
+  each workflow run opens its own check suite either way — and the
+  ruling's own rule ("the newest run of *that check*") is written in
+  names. Keeping names distinct is the repository's business.
+- A run with neither `started_at` nor `id` is the oldest in its group,
+  whichever colour it is: a failure that really was placed in time is
+  never replaced by an unplaceable pass, and an unplaceable failure never
+  displaces a run GitHub did place.
+
 ## Why cancelled became "unresolved" rather than a third category
 
 `ChecksReport` already had exactly the right bucket for "no answer from

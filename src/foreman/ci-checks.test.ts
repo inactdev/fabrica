@@ -528,6 +528,27 @@ test("retryOnRedChecks = true, written out: the correcting attempt happens exact
   assert.match(brain.briefs[1], /--- nixfmt \(check-run\): failure/);
 });
 
+test("retryOnRedChecks = false is about the pull request's checks, and nothing else that goes red", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  register(recordHome, project, "retryOnRedChecks = false\n");
+  const brain = recordingBrain();
+  const foreman = createForeman({
+    recordHome,
+    // Inspector itself says red, so no pull request is opened and no
+    // check on one is ever read. This setting waives a red that arrived
+    // after Inspector had already passed the branch - it is not a
+    // licence to stop correcting an ordinary failed check.
+    inspector: redInspector(),
+    checksReader: fakeReader([undefined]),
+  });
+
+  await foreman.do("Format the nix files", { project, brain });
+
+  assert.equal(brain.briefs.length, 2, "an Inspector red still gets its correcting attempt");
+  assert.match(brain.briefs[1], /Inspector reported red/);
+});
+
 test("retryOnRedChecks = false never shortens a count the Client asked for", async () => {
   const recordHome = freshHome();
   const project = inspectedProject();

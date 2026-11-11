@@ -117,6 +117,67 @@ test("an unparseable started_at is read as no timestamp at all, not as the newes
   assert.equal(concluded[0].conclusion, "success");
 });
 
+test("a run GitHub gave neither a timestamp nor an id never outranks one it did", () => {
+  // Both directions of the same rule: ordering follows the evidence, and
+  // a run with no ordering fields at all is read as the oldest whatever
+  // colour it is - never promoted to "newest" by the absence itself.
+  const redHasThem = latestRunPerCheck([
+    run({ name: "tests", id: 5, conclusion: "failure", startedAt: "2026-11-01T10:00:00Z" }),
+    { name: "tests", status: "completed", conclusion: "success", url: null },
+  ]);
+  assert.equal(redHasThem.concluded.length, 1);
+  assert.equal(redHasThem.concluded[0].red, true, "a real failure must not be replaced by an unplaceable pass");
+
+  const greenHasThem = latestRunPerCheck([
+    run({ name: "tests", id: 2, conclusion: "success", startedAt: "2026-11-01T10:00:00Z" }),
+    { name: "tests", status: "completed", conclusion: "failure", url: null },
+  ]);
+  assert.equal(greenHasThem.concluded[0].checkRunId, 2);
+});
+
+test("with no timestamps anywhere, the larger id is the one read", () => {
+  const { concluded } = latestRunPerCheck([
+    run({ name: "tests", id: 3, conclusion: "failure" }),
+    run({ name: "tests", id: 4, conclusion: "success" }),
+  ]);
+  assert.equal(concluded.length, 1);
+  assert.equal(concluded[0].checkRunId, 4);
+});
+
+test("cancelled-only with nothing to order the runs by still answers once, and with a link", () => {
+  const { concluded, unresolved } = latestRunPerCheck([
+    run({ name: "tests", conclusion: "cancelled", url: "https://github.com/o/r/runs/a" }),
+    run({ name: "tests", conclusion: "cancelled", url: "https://github.com/o/r/runs/b" }),
+  ]);
+  assert.deepEqual(concluded, []);
+  assert.equal(unresolved.length, 1);
+  assert.equal(unresolved[0].status, ONLY_CANCELLED);
+  // Deliberate and deterministic: with nothing at all to separate two
+  // runs, the one GitHub listed first stands, so two reads of the same
+  // commit never disagree about which link to show.
+  assert.equal(unresolved[0].url, "https://github.com/o/r/runs/a");
+});
+
+test("a repository whose workflows cancel nothing reads exactly as it did before", () => {
+  // One run per check, which is every repository without
+  // `cancel-in-progress`: each check's own answer, unchanged, and the
+  // one still running still the only thing waited for.
+  const { concluded, unresolved } = latestRunPerCheck([
+    run({ name: "gate", id: 1, conclusion: "success", startedAt: "2026-11-01T10:00:00Z" }),
+    run({ name: "docker-tests", id: 2, conclusion: "failure", startedAt: "2026-11-01T10:00:05Z" }),
+    run({ name: "stamp", id: 3, status: "in_progress", conclusion: null, startedAt: "2026-11-01T10:00:06Z" }),
+    run({ name: "rehearsal", id: 4, conclusion: "skipped", startedAt: "2026-11-01T10:00:07Z" }),
+  ]);
+  assert.deepEqual(
+    concluded.map((check) => `${check.name}:${check.conclusion}:${check.red}`),
+    ["gate:success:false", "docker-tests:failure:true", "rehearsal:skipped:false"]
+  );
+  assert.deepEqual(
+    unresolved.map((check) => `${check.name}:${check.status}`),
+    ["stamp:in_progress"]
+  );
+});
+
 test("different names are different checks, in the order GitHub listed them", () => {
   const { concluded, unresolved } = latestRunPerCheck([
     run({ name: "lint", id: 1, conclusion: "success" }),
