@@ -23,6 +23,7 @@ checks.ts        readPullRequestChecks(prUrl, opts) — the front door
   pull-request.ts  which URLs are addressable over the API at all
   poll.ts          WHEN to read, and when to stop
     read.ts        one function per documented endpoint
+    latest.ts      WHICH run of a check answers for it
     logs.ts        a red check's own job log, when the API serves one
     conclusions.ts reading GitHub's two vocabularies
   report.ts      how a read is said — one phrase, and the full output
@@ -66,7 +67,7 @@ could fire on the first. See `notes/` for the full comparison.
 | --- | --- | --- |
 | `green` | at least one check concluded, none red | unchanged; the evidence says so |
 | `red` | at least one concluded check is red | **red delivery**, output attached |
-| `unknown` | nothing red, but the wait expired with checks still running | unchanged; the evidence names them |
+| `unknown` | nothing red, but the wait expired with a check that never answered — still running, or cancelled with no newer run yet (issue #348) | unchanged; the evidence names them |
 | `none` | GitHub reported no check at all, even after the grace window | unchanged; the evidence says so |
 | `unreadable` | the API could not be read | unchanged; the evidence says why |
 
@@ -77,10 +78,58 @@ is the same lie as calling it green, read in the other direction — issue
 A red *conclusion* is anything in GitHub's own vocabulary that is not
 `success`, `neutral` or `skipped`. `skipped` is the repository itself
 saying a check does not apply to this change; `neutral` is a check
-declining to judge. `cancelled`, `timed_out` and `action_required` are
-red: a check that was supposed to answer did not pass. A word this code
-has never seen is red too — an answer nobody understands must not read as
-a pass.
+declining to judge. `timed_out` and `action_required` are red: a check
+that was supposed to answer did not pass. A word this code has never seen
+is red too — an answer nobody understands must not read as a pass.
+
+`cancelled` is the one conclusion that is neither (issue #348) — see
+below.
+
+## Which run of a check answers for it (issue #348)
+
+One commit can carry several check runs of the same name, and reading
+each on its own terms gets the answer wrong. The ordinary cause is a
+workflow with `concurrency: cancel-in-progress` triggered on `opened`,
+`synchronize` and `edited`: every push and every description edit starts
+a fresh run and stops the one before it, so the commit ends up holding
+two or three `cancelled` runs of a check plus the one that finished.
+Fabrica used to call that check red while the pull request page showed it
+green — and spend a whole extra attempt handing a Worker a failure with
+nothing in it to fix.
+
+Two rules, in `latest.ts`, fixed for every project:
+
+1. **A cancelled run is not a result.** Dropped before anything is
+   judged: never read as red, never read as green.
+2. **The newest remaining run of a check is its answer** — which is also
+   what GitHub's own pull request page shows for it, and what its
+   required-status-check settings judge.
+
+A check whose every run on this commit was cancelled therefore has no
+answer yet, and lands in `unresolved` with GitHub's own word
+(`cancelled`) as its status: the poll keeps waiting for the newer run,
+and if the wait expires with still nothing the verdict is `unknown` —
+never red, and so never a retry. That is deliberately the bucket this
+already had for "nobody answered"; a fourth `ChecksVerdict` would have
+meant a new case in every surface that renders a report, for a state
+meaning exactly what `unknown` already means.
+
+`filter=latest` on the endpoint does **not** do this for us, whatever
+the name suggests — see the sharp edge below. Commit statuses need none
+of it: the combined-status endpoint already resolves to the latest status
+per context, and a commit status has no cancelled state to begin with
+(its documented states are `error`, `failure`, `pending`, `success`).
+
+### Whether a red check starts another attempt is a project's setting
+
+`projects.toml`'s `retryOnRedChecks` (issue #348), resolved once per
+round by `src/foreman/ci-checks.ts`'s `retryOnRedChecksFor`. On unless a
+project turns it off, which is what every project did before it existed.
+Off, the round still delivers red with the checks' own output for the
+Client's verdict — what stops is Fabrica spending a correcting attempt on
+it by itself. Nothing in this module reads the setting: a report says
+what the checks said, and what a round does about it is
+`src/foreman/`'s business.
 
 ## The three bounds, and why they are different numbers
 
@@ -130,9 +179,49 @@ comfortably inside GitHub's hourly quota.
   context**, so a commit's whole status history is never paged back
   through. The same documented fact `.github/workflows/rule9-gate.yml`'s
   two jobs already lean on.
-- **A check's identity across ticks is its mechanism plus its name**, not
-  its check run id: a re-run answers under a new id, and announcing that
-  as a second check would double-count it.
+- **`filter=latest` does not collapse two runs of the same check name.**
+  GitHub documents it as no more than "Filters check runs by their
+  completed_at timestamp. latest returns the most recent check runs",
+  which says nothing about collapsing per *name* — and issue #348 is the
+  empirical proof that it does not: one commit carried two `cancelled`
+  runs of a check and a later `success` run of the same check, and all
+  three arrived here. Each workflow run opens its own check suite, which
+  is the level `latest` appears to work at. It is still passed
+  explicitly, as the cheapest narrowing available; the per-name reduction
+  is `latest.ts`'s.
+- **Nothing documented orders two runs of a check except `started_at`.**
+  `completed_at` is null for the run that has not finished — exactly the
+  case that matters — and `id`, though newer in practice, is documented
+  nowhere as monotonic. So `latest.ts` orders on `started_at`, breaks a
+  tie on the larger `id`, and breaks a remaining tie by preferring a run
+  that answered and then a red answer over a green one: a tie must never
+  resolve into a pass by accident, and the answer must not depend on the
+  order GitHub happened to list them in.
+- **Named limit: two genuinely different checks that share one name read
+  as one check.** The reduction groups by name, because "the newest run
+  of that check" is a rule written in names and a name is what every
+  surface here already identifies a check by — and because nothing a
+  check run carries separates "this check ran again" from "a different
+  check happens to share this name": each workflow run opens its own
+  check suite in both cases. So on a commit where two unrelated
+  workflows each post a check called `build`, only the newer of the two
+  answers, and a red older one is not reported. Stated rather than
+  guarded, because there is no field to guard it with; keeping check
+  names distinct is the repository's own business, and this project's own
+  jobs are uniquely named. The direction of the remaining risk is the
+  reason the tie-breaks below exist at all.
+- **Nothing is ever promoted by missing data.** A run GitHub reported no
+  `started_at` and no `id` for sorts as the oldest run in its group,
+  whatever colour it is — so a real failure is never replaced by an
+  unplaceable pass, and an unplaceable failure never displaces a run
+  GitHub actually placed. `latest.test.ts` holds both directions.
+- **A check's identity across ticks is its mechanism, its name and its
+  answer**, not its check run id: a re-run answers under a new id, and
+  announcing that as a second check would double-count it. The answer is
+  part of it since issue #348, because a check's answer can genuinely
+  change between ticks now — a newer run lands and replaces what the
+  older one said — and the record must not keep the first answer while
+  the round's own summary reports the second.
 - **One page per endpoint, deliberately.** A commit with more than a
   hundred checks is not a case this is for, and the summary says so
   (`more checks than one page holds, not all read`) rather than reporting

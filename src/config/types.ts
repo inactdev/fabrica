@@ -135,6 +135,19 @@ export interface ProjectConfig {
    * which is what every project today renders. The commit message is
    * unchanged either way. */
   pullRequestTemplate?: boolean;
+  /** `retryOnRedChecks = false` — a red check on the pull request
+   * Inspector opened does NOT start another attempt for this project
+   * (issue #348). The round still delivers red, carrying the checks'
+   * own output, for the Client's verdict; what stops is Fabrica
+   * spending a second attempt on it by itself.
+   *
+   * For a repository whose checks go red for reasons a Worker cannot
+   * act on. Absent — the default, and every project today — a red check
+   * starts a correcting attempt exactly as it did before this existed,
+   * so an entry written before this setting carries today's behaviour
+   * with no edit. Read where it is used (src/foreman/ci-checks.ts's
+   * `retryOnRedChecksFor`), the way `noStamp` is. */
+  retryOnRedChecks?: boolean;
   /** `[projects.<name>.reviewer]` — this project's own reviewer,
    * overriding the global `[reviewer]` table outright (not field by
    * field: a project that names one names both fields). */

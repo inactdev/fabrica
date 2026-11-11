@@ -13,6 +13,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createForeman } from "./foreman.ts";
+import { retryOnRedChecksFor } from "./ci-checks.ts";
 import type { ChecksReader, CiCheckConcludedDetails, CiChecksFinishedDetails } from "./ci-checks.ts";
 import type { Brain } from "../brain/index.ts";
 import type { Inspector } from "../inspector/index.ts";
@@ -444,4 +445,125 @@ test("a heartbeat the read asks for lands on the record, so a long wait never re
     (event) => event.name === "heartbeat" && (event.details as { phase?: string } | undefined)?.phase === "ci-checks"
   );
   assert.equal(ciHeartbeats.length, 2);
+});
+
+// Issue #348's second half: whether a red check on the pull request may
+// start a correcting attempt by itself is this project's own setting,
+// `projects.toml`'s `retryOnRedChecks`. On unless the project says
+// otherwise, which is what every project did before it existed.
+
+/** Registers `project` in a record home's projects.toml, optionally
+ * naming the setting. */
+function register(recordHome: string, project: string, line = ""): void {
+  writeFileSync(
+    join(recordHome, "projects.toml"),
+    `[projects.fixture]\npath = ${JSON.stringify(project)}\ncheck = "./check.sh"\n${line}`
+  );
+}
+
+test("retryOnRedChecksFor: on by default, and for a project nobody registered", () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  assert.equal(retryOnRedChecksFor(recordHome, project), true, "no projects.toml at all");
+
+  register(recordHome, project);
+  assert.equal(retryOnRedChecksFor(recordHome, project), true, "an entry that says nothing");
+  assert.equal(retryOnRedChecksFor(recordHome, inspectedProject()), true, "a path with no entry");
+});
+
+test("retryOnRedChecksFor: the project's own answer, either way", () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+
+  register(recordHome, project, "retryOnRedChecks = false\n");
+  assert.equal(retryOnRedChecksFor(recordHome, project), false);
+
+  register(recordHome, project, "retryOnRedChecks = true\n");
+  assert.equal(retryOnRedChecksFor(recordHome, project), true);
+});
+
+test("retryOnRedChecksFor: a registry too broken to read is not what reports it - the default stands", () => {
+  const recordHome = freshHome();
+  writeFileSync(join(recordHome, "projects.toml"), "this is not toml = = =\n");
+  assert.equal(retryOnRedChecksFor(recordHome, inspectedProject()), true);
+});
+
+test("retryOnRedChecks = false: a red check delivers red without spending another attempt", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  register(recordHome, project, "retryOnRedChecks = false\n");
+  const brain = recordingBrain();
+  const foreman = createForeman({
+    recordHome,
+    inspector: greenInspector(),
+    checksReader: fakeReader([RED_REPORT]),
+  });
+
+  const task = await foreman.do("Format the nix files", { project, brain });
+
+  assert.equal(brain.briefs.length, 1, "the red checks started an attempt this project asked not to have");
+  const delivery = await foreman.deliveryOf(task.id);
+  // Still red, and still carrying the checks' own output: the Client
+  // rules on it, which is the whole point of not retrying it here.
+  assert.equal(delivery?.outcome, "inspection-red");
+  assert.match(delivery!.summary, /The pull request's own checks went red/);
+  assert.match(delivery!.evidence, /--- nixfmt \(check-run\): failure/);
+  assert.equal(task.state, "delivered");
+});
+
+test("retryOnRedChecks = true, written out: the correcting attempt happens exactly as before", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  register(recordHome, project, "retryOnRedChecks = true\n");
+  const brain = recordingBrain();
+  const foreman = createForeman({
+    recordHome,
+    inspector: greenInspector(),
+    checksReader: fakeReader([RED_REPORT, report({ verdict: "green", concluded: [concluded("nixfmt", false)] })]),
+  });
+
+  await foreman.do("Format the nix files", { project, brain });
+
+  assert.equal(brain.briefs.length, 2);
+  assert.match(brain.briefs[1], /--- nixfmt \(check-run\): failure/);
+});
+
+test("retryOnRedChecks = false is about the pull request's checks, and nothing else that goes red", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  register(recordHome, project, "retryOnRedChecks = false\n");
+  const brain = recordingBrain();
+  const foreman = createForeman({
+    recordHome,
+    // Inspector itself says red, so no pull request is opened and no
+    // check on one is ever read. This setting waives a red that arrived
+    // after Inspector had already passed the branch - it is not a
+    // licence to stop correcting an ordinary failed check.
+    inspector: redInspector(),
+    checksReader: fakeReader([undefined]),
+  });
+
+  await foreman.do("Format the nix files", { project, brain });
+
+  assert.equal(brain.briefs.length, 2, "an Inspector red still gets its correcting attempt");
+  assert.match(brain.briefs[1], /Inspector reported red/);
+});
+
+test("retryOnRedChecks = false never shortens a count the Client asked for", async () => {
+  const recordHome = freshHome();
+  const project = inspectedProject();
+  register(recordHome, project, "retryOnRedChecks = false\n");
+  const brain = recordingBrain();
+  const foreman = createForeman({
+    recordHome,
+    inspector: greenInspector(),
+    checksReader: fakeReader([RED_REPORT]),
+  });
+
+  // Every one of these attempts was going to run whatever this round's
+  // checks said, so the red is not what caused the second one - and
+  // rule 3 says a count given is a count honored.
+  await foreman.do("Format the nix files", { project, brain, attempts: 2 });
+
+  assert.equal(brain.briefs.length, 2);
 });

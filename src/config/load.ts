@@ -287,6 +287,7 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
     terms,
     noStamp,
     pullRequestTemplate,
+    retryOnRedChecks,
     reviewer,
     reader,
     knowledge,
@@ -299,7 +300,8 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
       "malformed",
       `${path}: [projects.${name}] has unknown field(s): ${extra.join(", ")}. ` +
         `Only path, check, model, hosts, maxRequestBytes, maxCallsPerTask, githubTokenVar, githubToken, terms, ` +
-        `noStamp, pullRequestTemplate, reviewer, reader, knowledge and onlyTouchedTests are recognized.`
+        `noStamp, pullRequestTemplate, retryOnRedChecks, reviewer, reader, knowledge and onlyTouchedTests are ` +
+        `recognized.`
     );
   }
   if (typeof projectPath !== "string" || projectPath.length === 0) {
@@ -367,6 +369,12 @@ function parseProject(name: string, value: unknown, path: string): ProjectConfig
   if (noStamp !== undefined) project.noStamp = requireFlag(noStamp, `${path}: [projects.${name}].noStamp`);
   if (pullRequestTemplate !== undefined) {
     project.pullRequestTemplate = requireFlag(pullRequestTemplate, `${path}: [projects.${name}].pullRequestTemplate`);
+  }
+  // Issue #348. Left absent rather than defaulted to true here, so an
+  // entry that says nothing is byte-for-byte the entry it already was -
+  // the default lives at the one place that reads it.
+  if (retryOnRedChecks !== undefined) {
+    project.retryOnRedChecks = requireFlag(retryOnRedChecks, `${path}: [projects.${name}].retryOnRedChecks`);
   }
   if (check !== undefined) project.check = check;
   if (model !== undefined) project.model = (model as string).trim();

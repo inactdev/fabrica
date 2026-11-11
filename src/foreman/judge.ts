@@ -14,7 +14,7 @@ import { appendEvent } from "../record/index.ts";
 import { defaultInspector, inspectorIsConfigured } from "../inspector/index.ts";
 import { checksOutputForWorker, isRedReport } from "../ci/index.ts";
 import type { ChecksReport } from "../ci/index.ts";
-import { handToPullRequestChecks } from "./ci-checks.ts";
+import { handToPullRequestChecks, retryOnRedChecksFor } from "./ci-checks.ts";
 import type { ChecksReader } from "./ci-checks.ts";
 import { defaultCheckBox } from "../brain/index.ts";
 import type { CheckBox } from "../brain/index.ts";
@@ -60,6 +60,14 @@ export type Judgement =
        * the delivery can say what actually went red instead of blaming
        * Inspector for a verdict it did not reach. */
       ciRed?: string;
+      /** Issue #348: set when this red must not start another attempt -
+       * `projects.toml`'s `retryOnRedChecks = false` for this project.
+       * The round still delivers red, with the checks' own output, for
+       * the Client's verdict; the counted loop just stops here instead
+       * of handing a Worker a failure to correct. Only ever set
+       * alongside `ciRed` - no other red is a project's setting to
+       * waive. */
+      noRetry?: boolean;
     }
   /** Inspector reached no verdict. */
   | { kind: "refused"; inspection: Inspection }
@@ -186,9 +194,15 @@ export function inspectorJudge(
      * message is never rendered this way - only what Inspector is asked
      * to open the pull request with. */
     prTemplate?: string;
+    /** Issue #348: whether a red check on the pull request may start
+     * another attempt. Resolved once per round by `prepareRound` from
+     * this project's own entry; omitted means it may, which is what
+     * every project did before the setting existed. */
+    retryOnRedChecks?: boolean;
   } = {}
 ): Judge {
   const { closesIssue, publishLease, checksReader, minter, outsideTerms, prTemplate } = opts;
+  const retryOnRedChecks = opts.retryOnRedChecks ?? true;
   return async (_attempt, _gateChanges, finalMessage) => {
     const lease = publishLease?.();
     // attempts.ts has already committed this attempt with this same
@@ -245,6 +259,10 @@ export function inspectorJudge(
       gate: { green: false, output: `${gate.output}\n\n${checksOutputForWorker(report)}` },
       inspection,
       ciRed: report.summary,
+      // Issue #348: this project asked for a red check not to start a
+      // correcting attempt. The delivery is red all the same - the
+      // Client rules on it - but the loop ends here.
+      ...(retryOnRedChecks ? {} : { noRetry: true }),
     };
   };
 }
@@ -451,6 +469,12 @@ export function prepareRound(
           ...(opts.checksReader === undefined ? {} : { checksReader: opts.checksReader }),
           ...(opts.minter === undefined ? {} : { minter: opts.minter }),
           ...(outsideTerms ? { outsideTerms: true } : {}),
+          // Issue #348: settled here with the rest of this project's
+          // configuration, before any worker starts, so a round that
+          // goes red answers to the setting as it stood when the round
+          // began rather than to whatever projects.toml says an hour
+          // later - the same reason the reader is settled here.
+          retryOnRedChecks: retryOnRedChecksFor(recordHome, line.project),
           // Issue #316: read once per round, from the commit the task
           // was cut from, for the same reason `.inspector.json` is - a
           // Worker that edited the template must not be rewriting the

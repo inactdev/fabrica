@@ -878,3 +878,53 @@ test("runAttempts: a brain that reports no model per call falls back to its own 
   assert.equal(receipts[0].declaredModel, null, "nothing declared one");
   assert.equal(receipts[0].modelSource, "default");
 });
+
+// Issue #348: a red the project asked not to be retried
+// (`retryOnRedChecks = false`, which only judge.ts's checks read sets)
+// ends the round where a green would.
+
+/** A red verdict carrying `noRetry` - what `inspectorJudge` returns for
+ * a red pull request check on a project that turned the retry off. */
+const noRetryRedJudge: Judge = async () => ({
+  kind: "verdict",
+  gate: { green: false, output: "the pull request's own checks went red" },
+  ciRed: "rehearsal red",
+  noRetry: true,
+});
+
+test("a red marked noRetry ends the loop, instead of correcting from it", async () => {
+  const briefs: string[] = [];
+
+  const { receipts, lastGate } = await runAttempts({
+    brain: fakeBrain({ onWork: (brief) => briefs.push(brief) }),
+    brief: "do the thing",
+    workdir: scratchWorkdir(),
+    taskId: "task-1",
+    judge: noRetryRedJudge,
+    totalAttempts: 3,
+    stopEarlyOnGreen: true,
+  });
+
+  assert.equal(briefs.length, 1, "a further attempt ran on a red the project asked not to retry");
+  assert.equal(receipts.length, 1);
+  // Still a red verdict - what stops is the retry, not the delivery.
+  assert.equal(lastGate?.green, false);
+  assert.equal(receipts[0].outcome, "failed");
+});
+
+test("noRetry never shortens an explicit count - every attempt asked for still runs", async () => {
+  const briefs: string[] = [];
+
+  await runAttempts({
+    brain: fakeBrain({ onWork: (brief) => briefs.push(brief) }),
+    brief: "do the thing",
+    workdir: scratchWorkdir(),
+    taskId: "task-1",
+    judge: noRetryRedJudge,
+    totalAttempts: 3,
+    // What do.ts passes when the Client named a number of attempts.
+    stopEarlyOnGreen: false,
+  });
+
+  assert.equal(briefs.length, 3);
+});

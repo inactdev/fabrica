@@ -1148,3 +1148,61 @@ test("loadConfig: the unknown-field refusal names work mode's three settings amo
     }
   );
 });
+
+// Issue #348: whether a red check on the pull request may start a
+// correcting attempt by itself. Absent here on purpose - the default
+// lives at the one place that reads it, so an entry written before this
+// setting existed is byte-for-byte the entry it already was.
+
+test("loadConfig: retryOnRedChecks is read as given, and left absent when the entry says nothing", () => {
+  for (const value of [true, false]) {
+    const recordHome = makeTestHome(`
+      [projects.dayjob]
+      path = "~/work/widgets"
+      retryOnRedChecks = ${value}
+    `);
+
+    assert.equal(loadConfig(recordHome).projects["dayjob"].retryOnRedChecks, value);
+  }
+
+  const silent = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+  `);
+  assert.equal(loadConfig(silent).projects["dayjob"].retryOnRedChecks, undefined);
+});
+
+test("loadConfig: retryOnRedChecks is refused unless it is true or false", () => {
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    retryOnRedChecks = "false"
+  `);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /retryOnRedChecks must be true or false, not false\./);
+      return true;
+    }
+  );
+});
+
+test("loadConfig: the unknown-field refusal names retryOnRedChecks among what is recognized", () => {
+  const recordHome = makeTestHome(`
+    [projects.dayjob]
+    path = "~/work/widgets"
+    retryOnRedCheck = false
+  `);
+
+  assert.throws(
+    () => loadConfig(recordHome),
+    (err: unknown) => {
+      assert.ok(err instanceof ConfigError);
+      assert.match(err.message, /unknown field\(s\): retryOnRedCheck\./);
+      assert.match(err.message, /retryOnRedChecks/);
+      return true;
+    }
+  );
+});

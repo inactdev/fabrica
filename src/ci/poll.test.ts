@@ -202,6 +202,77 @@ test("every concluded check is announced once, however many ticks it is seen on"
   }
 });
 
+test("a cancelled run keeps the check waiting, and the newer run's pass is the answer (issue #348)", async () => {
+  const { report } = await poll({
+    checkRuns: [
+      [checkRun("tests", "cancelled", { id: 1, startedAt: "2026-11-01T10:00:00Z" })],
+      [
+        checkRun("tests", "cancelled", { id: 1, startedAt: "2026-11-01T10:00:00Z" }),
+        runningCheckRun("tests", { id: 2, startedAt: "2026-11-01T10:05:00Z" }),
+      ],
+      [
+        checkRun("tests", "cancelled", { id: 1, startedAt: "2026-11-01T10:00:00Z" }),
+        checkRun("tests", "success", { id: 2, startedAt: "2026-11-01T10:05:00Z" }),
+      ],
+    ],
+  });
+  assert.equal(report.verdict, "green");
+  assert.equal(report.summary, "1 green");
+  assert.deepEqual(report.unresolved, []);
+});
+
+test("a check left with only cancelled runs when the wait expires is unknown, never red (issue #348)", async () => {
+  const { report } = await poll(
+    { checkRuns: [[checkRun("tests", "success", { id: 1 }), checkRun("rehearsal", "cancelled", { id: 2 })]] },
+    { waitMs: 60_000 }
+  );
+  assert.equal(report.verdict, "unknown");
+  assert.equal(report.summary, "1 green, 1 unknown (rehearsal)");
+  assert.deepEqual(
+    report.concluded.map((check) => check.name),
+    ["tests"]
+  );
+});
+
+test("a cancelled run never costs an Actions log lookup - it is not a red to explain", async () => {
+  const { requests } = await poll({ checkRuns: [[checkRun("tests", "cancelled")]] }, { waitMs: 30_000 });
+  assert.equal(
+    requests.filter((request) => request.path.includes("/actions/")).length,
+    0,
+    "a cancelled run was treated as a red worth fetching a log for"
+  );
+});
+
+test("a check whose answer changes between ticks is announced again, with the new answer", async () => {
+  const github = await startFakeGithub({
+    checkRuns: [
+      [
+        checkRun("tests", "failure", { id: 1, startedAt: "2026-11-01T10:00:00Z" }),
+        runningCheckRun("slow", { id: 9 }),
+      ],
+      [
+        checkRun("tests", "failure", { id: 1, startedAt: "2026-11-01T10:00:00Z" }),
+        checkRun("tests", "success", { id: 2, startedAt: "2026-11-01T10:05:00Z" }),
+        checkRun("slow", "success", { id: 9 }),
+      ],
+    ],
+  });
+  try {
+    const clock = fakeClock();
+    const announced: string[] = [];
+    await pollPullRequestChecks(PR_URL, REF, {
+      token: "t",
+      baseUrl: github.baseUrl,
+      now: clock.now,
+      sleep: clock.sleep,
+      onConcluded: (check) => announced.push(`${check.name}:${check.conclusion}`),
+    });
+    assert.deepEqual(announced, ["tests:failure", "tests:success", "slow:success"]);
+  } finally {
+    await github.close();
+  }
+});
+
 test("the bounded wait and the appear window are deliberately different orders of magnitude", () => {
   assert.ok(
     DEFAULT_CHECKS_APPEAR_MS * 5 < DEFAULT_CHECKS_WAIT_MS,

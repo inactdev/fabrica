@@ -64,7 +64,10 @@ export function checksOutputForWorker(report: ChecksReport): string {
   const green = report.concluded.length - red.length;
   const lines: string[] = [
     `The pull request's own checks on GitHub (${report.prUrl}, commit ${report.sha || "unknown"}): ` +
-      `${red.length} red, ${green} green${report.unresolved.length > 0 ? `, ${report.unresolved.length} still running` : ""}.`,
+      // "With no answer" rather than "still running", for the same
+      // reason as the listing below: since issue #348 a check every run
+      // of which was cancelled counts here, and it is not running.
+      `${red.length} red, ${green} green${report.unresolved.length > 0 ? `, ${report.unresolved.length} with no answer` : ""}.`,
   ];
   for (const check of red) {
     lines.push("");
@@ -79,8 +82,11 @@ export function checksOutputForWorker(report: ChecksReport): string {
   }
   if (report.unresolved.length > 0) {
     lines.push("");
+    // "No answer", not "still running": since issue #348 a check whose
+    // every run on this commit was cancelled lands here too, and it is
+    // not running at all - it is waiting for a newer run of itself.
     lines.push(
-      `Still running when this was read, so unjudged either way: ${report.unresolved
+      `No answer from these when this was read, so unjudged either way: ${report.unresolved
         .map((check) => `${check.name} (${check.status})`)
         .join(", ")}.`
     );

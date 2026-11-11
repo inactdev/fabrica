@@ -129,11 +129,14 @@ export async function startFakeGithub(plan: FakeGithubPlan): Promise<FakeGithub>
   };
 }
 
-/** A completed check run, as GitHub's own shape. */
+/** A completed check run, as GitHub's own shape. `startedAt` is what
+ * orders two runs of the same name against each other (`latest.ts`);
+ * left out, the run carries none, exactly as GitHub's own nullable
+ * `started_at` allows. */
 export function checkRun(
   name: string,
   conclusion: string,
-  opts: { id?: number; url?: string } = {}
+  opts: { id?: number; url?: string; startedAt?: string } = {}
 ): Record<string, unknown> {
   return {
     id: opts.id ?? 1,
@@ -142,11 +145,15 @@ export function checkRun(
     conclusion,
     html_url: opts.url ?? `https://github.com/o/r/runs/${opts.id ?? 1}`,
     details_url: null,
+    ...(opts.startedAt === undefined ? {} : { started_at: opts.startedAt }),
   };
 }
 
 /** A check run that has not answered yet. */
-export function runningCheckRun(name: string, opts: { id?: number; status?: string } = {}): Record<string, unknown> {
+export function runningCheckRun(
+  name: string,
+  opts: { id?: number; status?: string; startedAt?: string } = {}
+): Record<string, unknown> {
   return {
     id: opts.id ?? 2,
     name,
@@ -154,6 +161,7 @@ export function runningCheckRun(name: string, opts: { id?: number; status?: stri
     conclusion: null,
     html_url: `https://github.com/o/r/runs/${opts.id ?? 2}`,
     details_url: null,
+    ...(opts.startedAt === undefined ? {} : { started_at: opts.startedAt }),
   };
 }
 

@@ -73,12 +73,24 @@ test("checksOutputForWorker names every red check, its link and its log tail", (
       unresolved: [{ name: "rehearsal", source: "check-run", status: "queued", url: null }],
     })
   );
-  assert.match(output, /1 red, 1 green, 1 still running/);
+  assert.match(output, /1 red, 1 green, 1 with no answer/);
   assert.match(output, /--- nixfmt \(check-run\): failure - https:\/\/github\.com\/o\/r\/runs\/nixfmt/);
   assert.match(output, /Error: file\.nix is not formatted/);
   // A green check is counted, never listed.
   assert.doesNotMatch(output, /--- tests/);
-  assert.match(output, /Still running when this was read[\s\S]*rehearsal \(queued\)/);
+  assert.match(output, /No answer from these when this was read[\s\S]*rehearsal \(queued\)/);
+});
+
+test("checksOutputForWorker says a cancelled-only check had no answer, not that it is running", () => {
+  const output = checksOutputForWorker(
+    report({
+      verdict: "red",
+      concluded: [concluded("gate", "failure", true)],
+      unresolved: [{ name: "tests", source: "check-run", status: "cancelled", url: null }],
+    })
+  );
+  assert.match(output, /No answer from these when this was read[\s\S]*tests \(cancelled\)/);
+  assert.doesNotMatch(output, /Still running when this was read/);
 });
 
 test("checksOutputForWorker says so when no log was served, rather than leaving a bare name", () => {

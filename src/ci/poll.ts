@@ -182,9 +182,18 @@ export async function pollPullRequestChecks(
   return { ...report, summary: summarizeChecks(report, { truncated, logsSkippedForCap }) };
 }
 
-/** Identity of a check across ticks: the mechanism plus the name. Not the
- * check run id - a re-run of the same job answers under a new id, and
- * announcing that as a second check would double-count it. */
+/** Identity of one announcement across ticks: the mechanism, the name,
+ * and the answer. Not the check run id - a re-run of the same job
+ * answers under a new id, and announcing that as a second check would
+ * double-count it - so a check seen concluded on three consecutive ticks
+ * is still announced once.
+ *
+ * The answer is part of it since issue #348: a check's answer can now
+ * genuinely change between ticks, when a newer run of it lands and
+ * replaces what the older one said (`latest.ts`). Keyed on the name
+ * alone, the record would keep the first answer and the round's own
+ * summary would report the second, which is the one disagreement a log
+ * of this must not have. */
 function keyOf(check: ConcludedCheck): string {
-  return `${check.source}:${check.name}`;
+  return `${check.source}:${check.name}:${check.conclusion}`;
 }
