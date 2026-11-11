@@ -17,7 +17,7 @@ pullRequestTemplate = true
 | --- | --- |
 | `terms` | The folder on this machine holding this project's `.inspector.json`, `Dockerfile.inspector` and check script. Handed to Inspector as `-terms <dir>`, and Fabrica stops looking for those files in the repository at all. |
 | `noStamp` | Inspector is handed `-no-stamp`, so a green run still pushes and opens its pull request but posts no commit status; Fabrica's own checks for that status are skipped, and its publishing token stops asking for `statuses: write`. |
-| `pullRequestTemplate` | The pull request body is this repository's own `.github/PULL_REQUEST_TEMPLATE.md`, with the write-up's words placed under the template's own sections. The commit message is unchanged. |
+| `pullRequestTemplate` | The pull request body is this repository's own `.github/pull_request_template.md` (either spelling), with the write-up's words placed under the template's own sections and nothing added anywhere else (issue #349). The commit message is unchanged. |
 
 A project that carries none of them behaves exactly as it did before
 this existed - the issue's own clarification, and what every test

@@ -362,7 +362,7 @@ not be told they are "the old shape" because a comment moved.
   same breath as the registration rather than leaving the Client to meet
   it as a refusal.
 - **It writes no `pullRequestTemplate`.** Work mode's third setting says
-  the repository's own `.github/PULL_REQUEST_TEMPLATE.md` is the shape
+  the repository's own `.github/pull_request_template.md` is the shape
   of the pull request body — a fact about that repository, not something
   this command could read off the two it was given.
 

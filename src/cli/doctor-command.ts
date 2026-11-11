@@ -14,6 +14,7 @@ import {
   describeProjectCredential,
   describeUnmeasured,
   eventsByTask,
+  findPullRequestTemplate,
   ghPublishAnswer,
   githubAppStatus,
   githubRepoOf,
@@ -27,9 +28,8 @@ import {
   NETWORK_PRUNE_COMMAND,
   probeWorkerToken,
   readEvents,
-  readPullRequestTemplate,
   requireGitRoot,
-  PULL_REQUEST_TEMPLATE_PATH,
+  PULL_REQUEST_TEMPLATE_PATHS,
   resolveProjectBuildSecrets,
   resolveProjectToken,
   stateOf,
@@ -957,19 +957,22 @@ function describeGhPublish(gh: GhPublishAnswer | undefined): string {
  * settings, which is every project today.
  *
  * A project that asks for its repository's own pull request template and
- * has none at the path GitHub reads is reported here rather than left
+ * has none at either path GitHub reads is reported here rather than left
  * silent: its pull requests will carry Fabrica's own body instead, which
  * is a working outcome but not the one that was asked for, and this line
- * is the one place the Client would look. */
+ * is the one place the Client would look. The found case names the
+ * spelling it was actually read from, since both are looked for (issue
+ * #349). */
 function describeWorkMode(workMode: WorkMode, path: string): string {
   const parts: string[] = [];
   if (workMode.terms !== undefined) parts.push(`terms in ${workMode.terms}`);
   if (workMode.noStamp) parts.push("no Inspector stamp");
   if (workMode.pullRequestTemplate) {
+    const found = findPullRequestTemplate(path);
     parts.push(
-      readPullRequestTemplate(path) === undefined
-        ? `no ${PULL_REQUEST_TEMPLATE_PATH} to render the pull request body into`
-        : `pull request body from ${PULL_REQUEST_TEMPLATE_PATH}`
+      found === undefined
+        ? `no ${PULL_REQUEST_TEMPLATE_PATHS.join(" or ")} to render the pull request body into`
+        : `pull request body from ${found.path}`
     );
   }
   return parts.length === 0 ? "" : `, ${parts.join(", ")}`;

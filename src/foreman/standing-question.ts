@@ -33,7 +33,14 @@ export const STANDING_QUESTION =
  * read the diff, and is shown to him on the live view's review page and
  * kept on its own /quiz page afterwards - never in the pull request
  * body. "Exactly three" is stated as the hard requirement it is, since a
- * fourth question, or a missing one, makes the whole write-up invalid. */
+ * fourth question, or a missing one, makes the whole write-up invalid.
+ *
+ * Length is asked for and checked nowhere (issue #349: a pull request
+ * body much longer than the change it described). How long a field
+ * should be is a judgment only the worker can make, and refusing a
+ * write-up for being long would cost the task a whole red round over
+ * something cosmetic - the same line `quizProblem` draws for a wrapped
+ * answer and `withoutTemplateHeadings` for an echoed heading. */
 export const FINAL_MESSAGE_FORMAT_NOTICE =
   "When you finish, give your write-up as the structured answer you are asked for. Fabrica uses it verbatim as " +
   "the commit message and (when a pull request is opened) its title and body, so write every field for a " +
@@ -53,7 +60,9 @@ export const FINAL_MESSAGE_FORMAT_NOTICE =
   "actually want to know and answer it plainly); and, optionally, couldNotVerify (anything you " +
   "could not check from where you are - a service you could not reach, a test you could not run; leave it out " +
   "entirely if there is nothing). Every field except couldNotVerify is required and must not be empty, and the " +
-  "quiz must hold exactly three questions - not two, not four. Do not " +
+  "quiz must hold exactly three questions - not two, not four. Keep every field as short as the change deserves: " +
+  "a one-file change is a few lines, not paragraphs, and each field says its own thing once rather than " +
+  "restating another's. Do not " +
   "type the write-up out as text; an attempt without a valid structured write-up is not accepted as done.";
 
 /** A bug is rarely a one-off: the same shape - the same missing guard,

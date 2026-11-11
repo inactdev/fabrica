@@ -1,18 +1,17 @@
 // A pull request body in the shape of the repository's own template
-// (issue #316, work mode).
+// (issue #316, work mode; narrowed to the template alone by issue #349).
 //
-// At work a repository has a `.github/PULL_REQUEST_TEMPLATE.md` its
-// reviewers expect every pull request to follow, and Fabrica's own
-// four-section body (`pr-body.ts`) is not it. For a project that says
+// At work a repository has a pull request template its reviewers expect
+// every pull request to follow, and Fabrica's own four-section body
+// (`pr-body.ts`) is not it. For a project that says
 // `pullRequestTemplate = true`, the body handed to Inspector is that
 // template with the write-up's own words placed under the template's
-// matching sections, and everything that found no section appended at
-// the end under one "## Notes" heading. The commit message is untouched
-// - it stays the four-section rendering on every project, because a
-// company template is about how a pull request reads, not about what a
-// commit says.
+// matching sections, and nothing else at all. The commit message is
+// untouched - it stays the four-section rendering on every project,
+// because a company template is about how a pull request reads, not
+// about what a commit says.
 //
-// Two rules this follows throughout:
+// Three rules this follows throughout:
 //
 //   - **Rendered from the write-up, never parsed back out of a body.**
 //     A worker's write-up is structured data (the deleted
@@ -22,23 +21,50 @@
 //     section keeps whatever the template had under it - a checklist, an
 //     instruction, an HTML comment - and the write-up's words are placed
 //     after it. A reviewer who wrote that checklist still gets it.
+//   - **No section the template does not have is ever added** (issue
+//     #349). What found no section is simply not in the body: the
+//     write-up's confidence, assumptions and what it could not verify
+//     are for the Client, who reads them on the delivery and the review
+//     page, not for the team's reviewers, who read this. There used to
+//     be one "## Notes" heading collecting all of it - most of the body
+//     on a one-file change - and it must not come back.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ADDITIONAL_HEADING, CONTENT_SECTIONS, additionalInformationBullets, writeupSection } from "./pr-body.ts";
+import { writeupSection } from "./pr-body.ts";
 import type { WorkerWriteup } from "../brain/index.ts";
 
-/** The one path this reads, exactly as the issue names it. GitHub itself
- * accepts several (a lowercase spelling, the repository root, `docs/`);
- * only this one is looked for, so a repository using another spelling
- * renders the ordinary body rather than half of one. */
-export const PULL_REQUEST_TEMPLATE_PATH = ".github/PULL_REQUEST_TEMPLATE.md";
+/** The paths this reads, in the order it tries them. GitHub's own
+ * documentation ("Creating a pull request template for your
+ * repository") spells the file lowercase throughout and says nothing
+ * about the name being case-insensitive, so both spellings occur in the
+ * wild and both are looked for (issue #349) - uppercase first, which is
+ * what Fabrica read before, so a repository holding both renders
+ * exactly as it used to.
+ *
+ * That same documentation names two more locations for a single
+ * template - `pull_request_template.md` in the repository root and
+ * `docs/pull_request_template.md` - which are deliberately NOT looked
+ * for: a repository using one of those renders the ordinary body, and
+ * `fabrica doctor`'s project line is where the Client sees that. */
+export const PULL_REQUEST_TEMPLATE_PATHS = [
+  ".github/PULL_REQUEST_TEMPLATE.md",
+  ".github/pull_request_template.md",
+] as const satisfies readonly string[];
+
+/** A template that was found, and which of `PULL_REQUEST_TEMPLATE_PATHS`
+ * it was found at - so `fabrica doctor` can name the real file rather
+ * than whichever spelling happens to be listed first. */
+export interface FoundPullRequestTemplate {
+  path: string;
+  text: string;
+}
 
 /**
- * The repository's own pull request template, or undefined when it has
- * none (or holds nothing but whitespace, which is no template to render
- * into).
+ * The repository's own pull request template and where it was read from,
+ * or undefined when it has none at either spelling (or the one it has
+ * holds nothing but whitespace, which is no template to render into).
  *
  * Read at `revision` when one is given - the commit the task was cut
  * from - for the same reason `.inspector.json` is: the question is about
@@ -46,17 +72,27 @@ export const PULL_REQUEST_TEMPLATE_PATH = ".github/PULL_REQUEST_TEMPLATE.md";
  * already had its hands on. A Worker that edited the template would
  * otherwise be rewriting the shape of its own pull request.
  */
-export function readPullRequestTemplate(workdir: string, revision?: string): string | undefined {
-  let text: string;
-  try {
-    text =
-      revision === undefined
-        ? readFileSync(join(workdir, PULL_REQUEST_TEMPLATE_PATH), "utf8")
-        : git(workdir, ["show", `${revision}:${PULL_REQUEST_TEMPLATE_PATH}`]);
-  } catch {
-    return undefined;
+export function findPullRequestTemplate(workdir: string, revision?: string): FoundPullRequestTemplate | undefined {
+  for (const path of PULL_REQUEST_TEMPLATE_PATHS) {
+    let text: string;
+    try {
+      text =
+        revision === undefined
+          ? readFileSync(join(workdir, path), "utf8")
+          : git(workdir, ["show", `${revision}:${path}`]);
+    } catch {
+      continue;
+    }
+    if (text.trim().length > 0) return { path, text };
   }
-  return text.trim().length === 0 ? undefined : text;
+  return undefined;
+}
+
+/** The repository's own pull request template's text alone - the one
+ * thing a round needs, `findPullRequestTemplate`'s path being only for
+ * what `fabrica doctor` prints. */
+export function readPullRequestTemplate(workdir: string, revision?: string): string | undefined {
+  return findPullRequestTemplate(workdir, revision)?.text;
 }
 
 /** Which write-up field a template heading claims, and the words that
@@ -66,29 +102,24 @@ export function readPullRequestTemplate(workdir: string, revision?: string): str
  * insensitively, so "Description of the change" claims `what` while
  * "Undescribed" claims nothing.
  *
+ * This list is also, since issue #349, the whole of what a body can
+ * carry: a field that claims no heading is not in the body at all, so
+ * `outsideChanges` - which no template has a section for - and the
+ * confidence/assumptions/expected-outcomes/deviations bullets are never
+ * rendered here. They are in the commit message and on the review page,
+ * which is where the Client reads them.
+ *
  * `testsRun` is here only because the Client's own list names Testing.
  * It is the one field Fabrica's own body deliberately does not render
  * (`src/brain/writeup.ts`), so it is placed when a template asks for it
- * by name and never otherwise - it is not carried into "## Notes" below.
+ * by name and never otherwise.
  */
 const MATCHABLE_FIELDS = [
-  { field: "why", label: "Context (Why)", keywords: ["why", "motivation", "context", "background", "rationale"] },
-  { field: "what", label: "Description (What)", keywords: ["what", "description", "summary", "overview"] },
-  { field: "how", label: "Changes in the codebase (How)", keywords: ["how", "changes", "change", "implementation"] },
-  { field: "testsRun", label: "Tests", keywords: ["testing", "tests", "test plan", "verification"] },
-] as const satisfies readonly { field: keyof WorkerWriteup; label: string; keywords: readonly string[] }[];
-
-/** The heading every unplaced part of the write-up ends up under -
- * exactly one, per the issue. */
-const NOTES_HEADING = "## Notes";
-
-/** The write-up's parts that are never matched to a template section and
- * so always land under "## Notes", with the Client's own heading for
- * each (read off `pr-body.ts`'s own list, never spelled a second time
- * here). Only `outsideChanges` today: a template section for "changes
- * outside the codebase" is not a thing templates have, and the three
- * matchable fields above are what the issue says to place. */
-const NOTES_ONLY_SECTIONS = CONTENT_SECTIONS.filter(({ field }) => field === "outsideChanges");
+  { field: "why", keywords: ["why", "motivation", "context", "background", "rationale"] },
+  { field: "what", keywords: ["what", "description", "summary", "overview"] },
+  { field: "how", keywords: ["how", "changes", "change", "implementation"] },
+  { field: "testsRun", keywords: ["testing", "tests", "test plan", "verification"] },
+] as const satisfies readonly { field: keyof WorkerWriteup; keywords: readonly string[] }[];
 
 interface TemplateSection {
   heading: string;
@@ -99,16 +130,30 @@ interface TemplateSection {
 }
 
 /**
- * `template` with the write-up placed into it.
+ * `template` with the write-up placed into it - or undefined when not one
+ * word of the write-up could be placed, which is a template there is no
+ * way to follow and describe the change at the same time (see below).
  *
  * Each of the write-up's matchable fields claims at most one heading,
  * and each heading is claimed by at most one field. Walked in the
  * template's own order so the document decides, not this list: for one
  * heading that matches several fields (a "What changed and why"), the
  * field whose keyword appears earliest in the heading wins, and a tie
- * goes to the earlier entry in `MATCHABLE_FIELDS`.
+ * goes to the earlier entry in `MATCHABLE_FIELDS`. A field that claims
+ * no heading is simply not in the body (issue #349) - nothing is
+ * appended under a heading of Fabrica's own making.
+ *
+ * Which leaves one case this has to answer: a template whose headings
+ * claim nothing at all - none of them matching, or a template with no
+ * headings at all ("Thanks for contributing!", a bare checklist). Its
+ * body would then describe the change nowhere, so this answers undefined
+ * and the caller publishes Fabrica's own four-section body instead
+ * (`judge.ts`'s `pullRequestBody`) - the same outcome as a project that
+ * asks for a template and has none. The cost is that such a template's
+ * own checklist is not in the body: a body that describes nothing was
+ * judged the worse of the two.
  */
-export function renderIntoTemplate(template: string, writeup: WorkerWriteup): string {
+export function renderIntoTemplate(template: string, writeup: WorkerWriteup): string | undefined {
   const { preamble, sections } = splitSections(template);
   const claimed = new Set<keyof WorkerWriteup>();
 
@@ -121,6 +166,7 @@ export function renderIntoTemplate(template: string, writeup: WorkerWriteup): st
     claimed.add(field);
     section.field = field;
   }
+  if (claimed.size === 0) return undefined;
 
   const rendered = [...preamble];
   for (const section of sections) {
@@ -130,32 +176,11 @@ export function renderIntoTemplate(template: string, writeup: WorkerWriteup): st
     rendered.push(writeupSection(writeup, section.field), "");
   }
 
-  return [block(rendered), notes(writeup, claimed)].join("\n\n");
+  return block(rendered);
 }
 
-/** Everything the template had no section for, under one heading. Always
- * present: the confidence, assumptions, expected outcomes and deviations
- * a reviewer reads last have no section in anybody's template, and
- * dropping them would be the one thing this must not do. */
-function notes(writeup: WorkerWriteup, claimed: Set<keyof WorkerWriteup>): string {
-  const parts: string[] = [NOTES_HEADING];
-  for (const { field, label } of MATCHABLE_FIELDS) {
-    if (claimed.has(field) || field === "testsRun") continue;
-    const text = writeupSection(writeup, field);
-    if (text.length > 0) parts.push(`### ${label}`, text);
-  }
-  for (const { heading, field } of NOTES_ONLY_SECTIONS) {
-    const text = writeupSection(writeup, field);
-    if (text.length > 0) parts.push(`### ${heading3(heading)}`, text);
-  }
-  parts.push(`### ${heading3(ADDITIONAL_HEADING)}`, additionalInformationBullets(writeup));
-  return parts.join("\n\n");
-}
-
-/** `## Heading` as the words alone, for re-emitting one level deeper
- * under "## Notes" - so the labels a reviewer sees are the same words
- * Fabrica's own body uses, never a second vocabulary. */
-function heading3(heading: string): string {
+/** `## Heading` as the words alone, for matching a field against it. */
+function headingText(heading: string): string {
   return heading.replace(/^#+\s*/, "");
 }
 
@@ -185,7 +210,7 @@ function splitSections(template: string): { preamble: string[]; sections: Templa
 /** The field this heading claims, or undefined when it matches none that
  * is still unclaimed. */
 function claimFor(heading: string, claimed: Set<keyof WorkerWriteup>): keyof WorkerWriteup | undefined {
-  const text = heading3(heading).toLowerCase();
+  const text = headingText(heading).toLowerCase();
   let best: { field: keyof WorkerWriteup; at: number } | undefined;
   for (const { field, keywords } of MATCHABLE_FIELDS) {
     if (claimed.has(field)) continue;

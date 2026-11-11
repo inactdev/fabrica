@@ -15,7 +15,13 @@ export { finalMessageFor } from "./foreman/index.ts";
 export type { FinalMessageForCommit } from "./foreman/index.ts";
 // Issue #316: the repository's own pull request template, for a project
 // that asks for its body to be rendered into it.
-export { readPullRequestTemplate, renderIntoTemplate, PULL_REQUEST_TEMPLATE_PATH } from "./foreman/index.ts";
+export {
+  findPullRequestTemplate,
+  readPullRequestTemplate,
+  renderIntoTemplate,
+  PULL_REQUEST_TEMPLATE_PATHS,
+} from "./foreman/index.ts";
+export type { FoundPullRequestTemplate } from "./foreman/index.ts";
 // The pull request's own text as the record describes it, which is not
 // always the four-section render of the latest write-up: a rebase-only
 // fix round (the Client's note "master moved") appends one section to

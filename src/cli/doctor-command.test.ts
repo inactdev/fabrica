@@ -1270,7 +1270,8 @@ test("fabrica doctor: a project asking for its repository's pull request templat
   // Fabrica's own body - but this line is the one place the Client
   // would look, so it says so rather than staying silent.
   assert.equal(code, 0, text);
-  assert.match(text, /no \.github\/PULL_REQUEST_TEMPLATE\.md to render the pull request body into/);
+  // Both spellings are looked for (issue #349), so both are named.
+  assert.match(text, /no \.github\/PULL_REQUEST_TEMPLATE\.md or \.github\/pull_request_template\.md to render/);
 
   mkdirSync(join(project, ".github"), { recursive: true });
   writeFileSync(join(project, ".github", "PULL_REQUEST_TEMPLATE.md"), "## Description\n");
