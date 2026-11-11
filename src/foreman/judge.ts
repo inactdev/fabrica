@@ -278,10 +278,15 @@ export function inspectorJudge(
  * structured data Fabrica renders, never prose Fabrica parses. A message
  * carrying none (an invalid write-up, or one a judge wrapper has already
  * replaced - see `withPullRequestMessage`) is published as it stands.
+ *
+ * A template with no section for any part of the write-up renders
+ * nothing (`renderIntoTemplate` answers undefined), and falls back to
+ * the four-section body here: following such a template to the letter
+ * would publish a pull request that describes the change nowhere.
  */
 function pullRequestBody(message: FinalMessageForCommit, template: string | undefined): string {
   if (template === undefined || message.writeup === undefined) return message.body;
-  return renderIntoTemplate(template, message.writeup);
+  return renderIntoTemplate(template, message.writeup) ?? message.body;
 }
 
 /** One line about a read that did not turn the round red, appended to the

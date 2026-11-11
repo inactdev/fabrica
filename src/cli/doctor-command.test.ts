@@ -1270,12 +1270,35 @@ test("fabrica doctor: a project asking for its repository's pull request templat
   // Fabrica's own body - but this line is the one place the Client
   // would look, so it says so rather than staying silent.
   assert.equal(code, 0, text);
-  assert.match(text, /no \.github\/PULL_REQUEST_TEMPLATE\.md to render the pull request body into/);
+  // Both spellings are looked for (issue #349), so both are named.
+  assert.match(text, /no \.github\/PULL_REQUEST_TEMPLATE\.md or \.github\/pull_request_template\.md to render/);
 
   mkdirSync(join(project, ".github"), { recursive: true });
   writeFileSync(join(project, ".github", "PULL_REQUEST_TEMPLATE.md"), "## Description\n");
   const withTemplate = await doctor(home, okProbes());
   assert.match(withTemplate.lines.join("\n"), /pull request body from \.github\/PULL_REQUEST_TEMPLATE\.md/);
+});
+
+test("fabrica doctor: a template with no section the write-up can fill is named, not left silent", async () => {
+  const project = companyProject();
+  mkdirSync(join(project, ".github"), { recursive: true });
+  writeFileSync(join(project, ".github", "PULL_REQUEST_TEMPLATE.md"), "## Checklist\n\n- [ ] I read CONTRIBUTING.md\n");
+  const home = recordHome(
+    `[caps]\nperDayUsd = 25\n\n[projects.dayjob]\npath = "${project}"\n` +
+      `check = "bin/ci"\nterms = "${termsFolder()}"\npullRequestTemplate = true\n`
+  );
+
+  const { code, lines } = await doctor(home, okProbes());
+  const text = lines.join("\n");
+  // Still not a FAIL - the project works, its pull requests just carry
+  // Fabrica's own body and none of that checklist. Which is the whole
+  // point of saying it here: a published pull request cannot be told
+  // apart from one whose template was followed.
+  assert.equal(code, 0, text);
+  assert.match(
+    text,
+    /\.github\/PULL_REQUEST_TEMPLATE\.md has no section the write-up can fill, so the pull request body will be Fabrica's own/
+  );
 });
 
 test("fabrica doctor: a project in no work mode says nothing about any of it", async () => {

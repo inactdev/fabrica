@@ -382,12 +382,17 @@ permission to post one, so an App or a personal token granted only
 Contents and Pull requests is enough for such a project.
 
 **`pullRequestTemplate = true`** makes the pull request body the
-repository's own `.github/PULL_REQUEST_TEMPLATE.md`: the worker's Why,
-What and How go under the template's own matching sections (Motivation,
-Description, Changes, Testing and the obvious synonyms), whatever the
-template already had under those headings is kept, and everything that
-found no section — the rest of the write-up — is appended at the end
-under one **Notes** heading. The commit message is unchanged either way.
+repository's own `.github/pull_request_template.md` (either spelling of
+that name): the worker's Why, What and How go under the template's own
+matching sections (Motivation, Description, Changes, Testing and the
+obvious synonyms), whatever the template already had under those
+headings is kept — and that is the whole body. No heading the template
+does not have is added, and the rest of the write-up, including the
+confidence and assumptions, is not in it: that is for the delivery and
+the review page, which is where you read it. A template with no section
+for any part of the write-up would describe the change nowhere, so such
+a repository gets Fabrica's own body instead. The commit message is
+unchanged either way.
 
 `fabrica doctor` reports all three on that project's own line, FAILs if
 the terms folder is one Inspector would refuse (missing, not a folder,

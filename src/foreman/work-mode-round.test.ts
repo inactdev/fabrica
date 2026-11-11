@@ -25,7 +25,9 @@ import { readEventsForTask } from "../record/index.ts";
 import { ForemanError } from "./errors.ts";
 import { prepareRound, withPullRequestMessage } from "./judge.ts";
 import { finalMessageFor } from "./pr-body.ts";
-import { PULL_REQUEST_TEMPLATE_PATH } from "./pr-template.ts";
+import { PULL_REQUEST_TEMPLATE_PATHS } from "./pr-template.ts";
+
+const PULL_REQUEST_TEMPLATE_PATH = PULL_REQUEST_TEMPLATE_PATHS[0];
 import type { ProductionLine } from "../../contract/surface.ts";
 import type { WorkerWriteup } from "../brain/index.ts";
 
@@ -235,7 +237,11 @@ test("the pull request body is the repository's own template, while the commit m
   // there - an instruction to the author is not thrown away.
   assert.match(calls[0].prBody!, /^## Motivation\n\n<!-- why -->\n\nThe push kept dropping\./);
   assert.match(calls[0].prBody!, /## Changes\n\nA loop in push\.ts, plus a test\./);
-  assert.match(calls[0].prBody!, /## Notes\n/);
+  // Issue #349: the template's own sections and nothing else - no
+  // heading Fabrica invented, and none of the write-up the Client reads
+  // on the delivery.
+  assert.doesNotMatch(calls[0].prBody!, /## Notes/);
+  assert.doesNotMatch(calls[0].prBody!, /Confidence/);
   assert.equal(calls[0].prTitle, "Add retries");
   // The commit message this round already wrote is untouched by any of
   // it - the four-section rendering, on every project.
@@ -244,6 +250,22 @@ test("the pull request body is the repository's own template, while the commit m
 
 test("a project that asks for its repository's template and has none publishes the ordinary body", async () => {
   const { project, baseCommit } = companyRepo();
+  const recordHome = workModeHome(project, `terms = ${JSON.stringify(termsFolder())}\npullRequestTemplate = true`);
+  const { inspector, calls } = recordingInspector();
+
+  const { judge } = prepareRound(recordHome, "task-1", lineAt(project, recordHome), baseCommit, { inspector });
+  await judge(1, undefined, finalMessageFor(WRITEUP, "fabrica: task-1"));
+
+  assert.match(calls[0].prBody!, /^## Context \(Why\)\n/);
+});
+
+// Issue #349: with nothing added under a heading of Fabrica's own, a
+// template whose sections claim no part of the write-up would publish a
+// pull request that describes the change nowhere. The ordinary body is
+// the lesser of the two evils.
+test("a template with no section for any part of the write-up publishes the ordinary body", async () => {
+  const { project } = companyRepo();
+  const baseCommit = commitTemplate(project, "## Checklist\n\n- [ ] I read CONTRIBUTING.md\n");
   const recordHome = workModeHome(project, `terms = ${JSON.stringify(termsFolder())}\npullRequestTemplate = true`);
   const { inspector, calls } = recordingInspector();
 
