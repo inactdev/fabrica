@@ -105,6 +105,7 @@ function entriesOf(document: FakeDocument): { question: string; answer: string; 
 }
 
 test("the review page draws a delivered task's quiz with every answer closed until tapped", async () => {
+  const now = Date.now();
   const document = await render("review.html", "/review", {
     "/api/review": {
       rows: [
@@ -119,7 +120,7 @@ test("the review page draws a delivered task's quiz with every answer closed unt
           inspectorDetail: null,
           gateState: "untouched",
           prUrl: null,
-          lastActivityMs: Date.now(),
+          lastActivityMs: now,
         },
       ],
       running: [],
@@ -148,6 +149,7 @@ test("the review page draws a delivered task's quiz with every answer closed unt
 // which would read as something missing rather than something that was
 // never asked for.
 test("the review page draws a delivered task with no quiz, and no empty quiz block", async () => {
+  const now = Date.now();
   const document = await render("review.html", "/review", {
     "/api/review": {
       rows: [
@@ -162,7 +164,7 @@ test("the review page draws a delivered task with no quiz, and no empty quiz blo
           inspectorDetail: null,
           gateState: "untouched",
           prUrl: null,
-          lastActivityMs: Date.now(),
+          lastActivityMs: now,
         },
       ],
       running: [],
@@ -199,7 +201,16 @@ function apiQuestion(over: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
-function quizBody(questions: ReturnType<typeof apiQuestion>[]): unknown {
+/** The whole response, as of one instant. `now` is required rather than
+ * defaulted on purpose: the page takes its own clock from `body.now`
+ * (public/quiz.js), so any time a test builds - a `dueAtMs`, a
+ * `lastAnsweredAtMs` - has to come from the very same value, not from a
+ * second `Date.now()` read a few milliseconds apart. A due time stamped
+ * exactly two hours out and then measured against a clock read later
+ * renders as "1h59m" rather than "2h", which is what made this file
+ * flaky. Making the caller pass its one `now` is what keeps that from
+ * coming back. */
+function quizBody(questions: ReturnType<typeof apiQuestion>[], now: number): unknown {
   return {
     questions,
     counts: {
@@ -209,13 +220,17 @@ function quizBody(questions: ReturnType<typeof apiQuestion>[]): unknown {
       outdated: questions.filter((q) => q.status === "outdated").length,
       retired: questions.filter((q) => q.status === "retired").length,
     },
-    now: Date.now(),
+    now,
   };
 }
 
 test("the quiz page opens in review mode: one question, its answer hidden, and the list put away", async () => {
+  const now = Date.now();
   const document = await render("quiz.html", "/quiz", {
-    "/api/quiz": quizBody([apiQuestion({ index: 0 }), apiQuestion({ index: 1, question: QUIZ[1].question, answer: QUIZ[1].answer })]),
+    "/api/quiz": quizBody(
+      [apiQuestion({ index: 0 }), apiQuestion({ index: 1, question: QUIZ[1].question, answer: QUIZ[1].answer })],
+      now
+    ),
   });
 
   // Review mode is the visible one; the full list is the secondary view.
@@ -242,26 +257,30 @@ test("the quiz page opens in review mode: one question, its answer hidden, and t
 });
 
 test("the quiz page's list view carries every question, with the never-asked ones marked", async () => {
+  const now = Date.now();
   const document = await render("quiz.html", "/quiz", {
-    "/api/quiz": quizBody([
-      apiQuestion({ index: 0 }),
-      apiQuestion({
-        index: 1,
-        question: QUIZ[1].question,
-        answer: QUIZ[1].answer,
-        status: "outdated",
-        askable: false,
-        staleBecause: { touchedBy: "20261022-later-aa", files: ["a.ts"] },
-      }),
-      apiQuestion({
-        index: 2,
-        question: QUIZ[2].question,
-        answer: QUIZ[2].answer,
-        status: "retired",
-        askable: false,
-        recheckNote: "that code is gone",
-      }),
-    ]),
+    "/api/quiz": quizBody(
+      [
+        apiQuestion({ index: 0 }),
+        apiQuestion({
+          index: 1,
+          question: QUIZ[1].question,
+          answer: QUIZ[1].answer,
+          status: "outdated",
+          askable: false,
+          staleBecause: { touchedBy: "20261022-later-aa", files: ["a.ts"] },
+        }),
+        apiQuestion({
+          index: 2,
+          question: QUIZ[2].question,
+          answer: QUIZ[2].answer,
+          status: "retired",
+          askable: false,
+          recheckNote: "that code is gone",
+        }),
+      ],
+      now
+    ),
   });
 
   assert.equal(document.getElementById("count")?.textContent, "3");
@@ -290,7 +309,7 @@ test("the quiz page's list view carries every question, with the never-asked one
 });
 
 test("the quiz page says so plainly when nothing has been accepted yet", async () => {
-  const document = await render("quiz.html", "/quiz", { "/api/quiz": quizBody([]) });
+  const document = await render("quiz.html", "/quiz", { "/api/quiz": quizBody([], Date.now()) });
 
   assert.equal(document.getElementById("count")?.textContent, "0");
   const asked = document.querySelector(".quiz-asked");
@@ -306,15 +325,23 @@ test("the quiz page says so plainly when nothing has been accepted yet", async (
 });
 
 test("nothing due, but questions exist: the page says when the next one is back and offers one anyway", async () => {
-  const dueAtMs = Date.now() + 2 * 60 * 60 * 1000;
+  // One instant for the whole fixture: the due time the page measures and
+  // the clock it measures it against are the same `now`, so "2h" out is
+  // exactly two hours out, not two hours minus however long this test
+  // took to get from one line to the next.
+  const now = Date.now();
+  const dueAtMs = now + 2 * 60 * 60 * 1000;
   const document = await render("quiz.html", "/quiz", {
-    "/api/quiz": quizBody([
-      apiQuestion({
-        askable: false,
-        intervalLabel: "2 right in a row - back in 2 days",
-        standing: { streak: 2, rightCount: 2, wrongCount: 0, lastAnsweredAtMs: Date.now(), dueAtMs },
-      }),
-    ]),
+    "/api/quiz": quizBody(
+      [
+        apiQuestion({
+          askable: false,
+          intervalLabel: "2 right in a row - back in 2 days",
+          standing: { streak: 2, rightCount: 2, wrongCount: 0, lastAnsweredAtMs: now, dueAtMs },
+        }),
+      ],
+      now
+    ),
   });
 
   const asked = document.querySelector(".quiz-asked");
