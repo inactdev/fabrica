@@ -130,4 +130,16 @@ export interface ContainedRunResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+  /** The signal that ended the run, when that is why `exitCode` is null
+   * (issue #353). Node's `"close"` event carries it alongside the code,
+   * and dropping it was how a signalled box came back as a bare
+   * `exitCode: null` that a caller could only render as the word "null"
+   * - naming neither what ended nor why. Null for an ordinary exit.
+   *
+   * This is docker's own client being signalled, which is how the stop
+   * paths above end a run; the container's own process exiting on a
+   * signal reaches the client as an exit code in the 128+N range, not
+   * as this. See ./exit-code.ts's `describeExit` for the one renderer
+   * every caller should use rather than interpolating either field. */
+  signal: NodeJS.Signals | null;
 }

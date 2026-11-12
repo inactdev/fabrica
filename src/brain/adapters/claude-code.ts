@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import type { Brain, BrainAskResult, BrainWorkOptions, BrainWorkResult, TranscriptEntry, WorkerWriteup } from "../types.ts";
 import { WRITEUP_FIELDS, WRITEUP_QUIZ_LENGTH, WRITEUP_STRING_FIELDS, WRITEUP_TITLE_MAX_LENGTH } from "../writeup.ts";
 import { ASK_SHAPE_NOTICE } from "../ask-shape.ts";
-import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgressNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
+import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgressNetwork, removeIsolatedNetwork, describeExit, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import type { CheckBox } from "../check-box.ts";
 import { resolveCommonGitDir, writeSanitizedGitConfig } from "../../line/index.ts";
@@ -713,6 +713,9 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       let stdout: string;
       let stderr: string;
       let exitCode: number | null;
+      // Issue #353: kept so the failure below can name what ended the
+      // call when there is no exit code to report.
+      let signal: NodeJS.Signals | null = null;
       // Whenever opts.env carries the real worker token (every real call
       // - defaultBrainAdapter forwards it before this runs), this box
       // joins a fresh isolated network instead of the open one, and the
@@ -720,7 +723,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       let prepared: Awaited<ReturnType<typeof prepareNetwork>> | undefined;
       try {
         prepared = await prepareNetwork(opts.env);
-        ({ stdout, stderr, exitCode } = await runContained(bin, args, {
+        ({ stdout, stderr, exitCode, signal } = await runContained(bin, args, {
           workdir: scratchDir,
           network: prepared.network,
           image,
@@ -752,7 +755,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       const budgetExhausted = result?.subtype === "error_max_budget_usd";
 
       if (!budgetExhausted && (exitCode !== 0 || result?.is_error)) {
-        const detail = result?.result ?? (stderr.trim() || `exit code ${exitCode}`);
+        const detail = result?.result ?? (stderr.trim() || describeExit(`"${bin}"`, exitCode, signal));
         const status = result?.api_error_status ? ` (api_error_status ${result.api_error_status})` : "";
         throw new ClaudeCodeError("cli-error", `${detail}${status}`);
       }
@@ -813,6 +816,10 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       let stdout: string;
       let stderr: string;
       let exitCode: number | null;
+      // Issue #353: a box ended by a signal reports no exit code at all,
+      // and the failure below has to name what ended rather than render
+      // the word "null" at the Client.
+      let signal: NodeJS.Signals | null = null;
       // Network was unconditionally "allowed" before issue #186's second
       // half: the CLI has to reach its own API to do anything at all.
       // Now, whenever opts.env carries the real worker token (every real
@@ -879,7 +886,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
             return problem;
           });
         }
-        ({ stdout, stderr, exitCode } = await runContained(bin, args, {
+        ({ stdout, stderr, exitCode, signal } = await runContained(bin, args, {
           workdir,
           network: prepared.network,
           image,
@@ -927,7 +934,7 @@ export function claudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): Brain {
       const writeupGaveUp = result?.subtype === "error_max_structured_output_retries";
 
       if (!budgetExhausted && !writeupGaveUp && (exitCode !== 0 || result?.is_error)) {
-        const detail = result?.result ?? (stderr.trim() || `exit code ${exitCode}`);
+        const detail = result?.result ?? (stderr.trim() || describeExit(`"${bin}"`, exitCode, signal));
         const status = result?.api_error_status ? ` (api_error_status ${result.api_error_status})` : "";
         throw new ClaudeCodeError("cli-error", `${detail}${status}`);
       }

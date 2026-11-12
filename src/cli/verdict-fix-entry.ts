@@ -52,6 +52,13 @@ try {
 try {
   await runRecordedFix(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel, image }) });
 } catch (err) {
+  // Issue #353: on the record before it is printed. `runRecordedFix`
+  // wraps the round itself in `recordingFailure`, but everything it does
+  // before that - re-deriving the project, the note and the prior
+  // receipts off the record - is outside it, and so was reaching only
+  // this `console.error` and <recordHome>/cli.log, which nothing points
+  // the Client at. A failure already recorded is not recorded twice.
+  recordTaskFailure(recordHome, taskId, err);
   console.error(`fabrica verdict: fix round for "${taskId}" failed: ${(err as Error).message}`);
   process.exit(1);
 }

@@ -11,15 +11,24 @@ import { ForemanError } from "./errors.ts";
 // Errors whose own event is already on the record (ask-failed,
 // cap-refused): recording them again as task-failed would say the same
 // thing twice.
-const alreadyRecorded = new WeakSet<object>();
+const recordedFailures = new WeakSet<object>();
 
 export function markRecorded<T>(err: T): T {
-  if (typeof err === "object" && err !== null) alreadyRecorded.add(err);
+  if (typeof err === "object" && err !== null) recordedFailures.add(err);
   return err;
 }
 
+/** True when this exact error already has its own event on the record.
+ * Exported for the other recorders of a failure that share this one set
+ * - `src/foreman/verdict.ts`'s `recordVerdictFailure` (issue #353) - so
+ * that "don't say the same thing twice in two vocabularies" is one rule
+ * with one answer, not a second WeakSet that could disagree. */
+export function alreadyRecorded(err: unknown): boolean {
+  return typeof err === "object" && err !== null && recordedFailures.has(err);
+}
+
 export function recordTaskFailure(recordHome: string, taskId: string, err: unknown): void {
-  if (typeof err === "object" && err !== null && alreadyRecorded.has(err)) return;
+  if (alreadyRecorded(err)) return;
   markRecorded(err);
   const message = err instanceof Error ? err.message : String(err);
   appendEvent(recordHome, { taskId, name: "task-failed", details: { message } });

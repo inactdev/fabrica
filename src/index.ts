@@ -35,7 +35,7 @@ export { fixRoundOf } from "./foreman/index.ts";
 // verdict fix` - see those two modules' own comments for why the round
 // itself is re-derived from the record rather than threaded through.
 export { recordAnswerDecision, runRecordedAnswer } from "./foreman/index.ts";
-export { recordVerdictDecision, runRecordedFix } from "./foreman/index.ts";
+export { recordVerdictDecision, recordVerdictFailure, runRecordedFix } from "./foreman/index.ts";
 // Issue #203: the review page's one new write - recording the Client's
 // decision to stop a task. Signaling the worker's own process is a
 // separate, CLI-layer step (src/cli/task-process.ts).
@@ -238,6 +238,10 @@ export type { BaseUserProbe } from "./brain/index.ts";
 // them (src/containment/task-networks.ts, network-pools.ts).
 export { listWorkerNetworks, NETWORK_PRUNE_COMMAND, WORKER_NETWORK_PREFIX } from "./containment/index.ts";
 export type { WorkerNetwork } from "./containment/index.ts";
+// Issue #353: one renderer for "how did that process end", so a spawned
+// command killed by a signal is never reported to the Client as the
+// word "null" with nothing named (src/containment/exit-code.ts).
+export { describeExit } from "./containment/index.ts";
 // Issue #267: what the repository's own checks said about the pull
 // request. Only the label and the two event-detail shapes are exported -
 // `fabrica status`/`watch` and the live view read the summary straight

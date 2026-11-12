@@ -26,6 +26,8 @@ import { changeFingerprintOf, NOT_COMMITTED, unstamped } from "./fingerprint.ts"
 import type { ChangeFingerprint } from "./fingerprint.ts";
 import { withTransportRetry } from "./transport-retry.ts";
 import type { TransportRetryDetails } from "./transport-retry.ts";
+import { withColdStartFallback } from "./warm-worker.ts";
+import type { WarmWorkerRestartedDetails } from "./warm-worker.ts";
 import { ForemanError } from "./errors.ts";
 
 /** How often a "heartbeat" event lands while a Worker's single `brain.work`
@@ -146,6 +148,15 @@ export async function runAttempts(opts: {
    * number. Omitted, the retry still happens; only the record misses
    * it. */
   onTransportRetry?: (details: TransportRetryDetails) => void;
+  /** Issue #353: fires once per `brain.work` call that was asked to
+   * resume a warm worker whose session is gone, and is about to be made
+   * again with no session at all - a fresh worker on the task's own
+   * history and the Client's note (warm-worker.ts). The caller records
+   * it as a "warm-worker-restarted" event. A restart is NOT an attempt,
+   * for the same reason a transport retry is not: it happens inside one
+   * turn of this loop and never moves its counter. Omitted, the restart
+   * still happens; only the record misses it. */
+  onWarmWorkerGone?: (details: WarmWorkerRestartedDetails) => void;
   /** Test-only override of DEFAULT_HEARTBEAT_INTERVAL_MS - a short value
    * lets a test observe a heartbeat without waiting 15 real seconds. */
   heartbeatIntervalMs?: number;
@@ -205,6 +216,7 @@ export async function runAttempts(opts: {
     onTranscriptEntry,
     onHeartbeat,
     onTransportRetry,
+    onWarmWorkerGone,
     heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
     relayGoneGraceMs,
     spendLimits,
@@ -255,9 +267,16 @@ export async function runAttempts(opts: {
     // guaranteed stop either way.
     const maxSpendUsd =
       spendLimits?.perTaskUsd !== undefined ? Math.max(0, spendLimits.perTaskUsd - spentUsd) : undefined;
-    const workOpts = {
-      ...(session ? { session } : {}),
-      ...(maxSpendUsd !== undefined ? { maxSpendUsd } : {}),
+    // Built per call rather than once, because a warm worker that turns
+    // out to be gone is restarted with no session at all (issue #353) -
+    // and handing the cold call the session the brain has just refused
+    // is the whole bug that fallback exists to fix.
+    const workOptsFor = (resumeSession: string | undefined) => {
+      const workOpts = {
+        ...(resumeSession ? { session: resumeSession } : {}),
+        ...(maxSpendUsd !== undefined ? { maxSpendUsd } : {}),
+      };
+      return Object.keys(workOpts).length > 0 ? workOpts : undefined;
     };
     // Issue #70: a brain that can report entries as it produces them
     // (today's reference adapter) does so through this listener, keyed
@@ -387,27 +406,53 @@ export async function runAttempts(opts: {
         // probe below still fails the whole thing if this box's network
         // is what died - that failure is raised outside this wrapper
         // and so is never itself retried.
+        //
+        // Issue #353: and outside that again, the one fallback from a
+        // warm worker that is gone to a fresh one (warm-worker.ts).
+        // This order is the point - a dropped connection says nothing
+        // about the session, so it is retried WARM first, and only a
+        // brain genuinely refusing to resume the session falls back to
+        // cold. The cold call then gets its own transport retry for
+        // free, since it goes through the same wrapper.
         () =>
-          withTransportRetry(
-            () => brain.work(thisBrief, workdir, Object.keys(workOpts).length > 0 ? workOpts : undefined),
+          withColdStartFallback(
+            (resumeSession) =>
+              withTransportRetry(() => brain.work(thisBrief, workdir, workOptsFor(resumeSession)), {
+                which: "work",
+                model: modelForDroppedCall,
+                // The pause rule already decided to stop this worker
+                // (issue #189): the call ending is Fabrica's own doing a
+                // moment earlier, not a dropped connection, and calling
+                // the worker again is the last thing wanted here.
+                giveUp: () => meterStop !== undefined,
+                onRetry: (details) => {
+                  // The dropped call's live entries stay delivered - they
+                  // really were produced, and they are already in
+                  // transcript.log - but they are no longer a prefix of
+                  // anything: the retry returns its OWN transcript, and
+                  // the catch-up below slices by this array's length. Not
+                  // clearing it would silently drop the first entries of
+                  // the transcript that did come back.
+                  liveEntries.length = 0;
+                  onTransportRetry?.({ ...details, attempt });
+                },
+              }),
             {
-              which: "work",
-              model: modelForDroppedCall,
-              // The pause rule already decided to stop this worker
-              // (issue #189): the call ending is Fabrica's own doing a
-              // moment earlier, not a dropped connection, and calling
-              // the worker again is the last thing wanted here.
-              giveUp: () => meterStop !== undefined,
-              onRetry: (details) => {
-                // The dropped call's live entries stay delivered - they
-                // really were produced, and they are already in
-                // transcript.log - but they are no longer a prefix of
-                // anything: the retry returns its OWN transcript, and
-                // the catch-up below slices by this array's length. Not
-                // clearing it would silently drop the first entries of
-                // the transcript that did come back.
+              session,
+              onRestart: (details) => {
+                // Same reason the transport retry clears it: the cold
+                // call returns its own transcript from the beginning, so
+                // the refused call's live entries are no longer a prefix
+                // of anything and the catch-up pass below would drop the
+                // start of the transcript that did come back.
                 liveEntries.length = 0;
-                onTransportRetry?.({ ...details, attempt });
+                // The warm worker is gone for the REST of this round too,
+                // not just this call: a later pass handing the same dead
+                // id back would fail the same way (and is then one more
+                // worker call spent proving it). From here on this task
+                // has no session until a fresh worker reports one.
+                session = undefined;
+                onWarmWorkerGone?.({ ...details, attempt });
               },
             }
           ),

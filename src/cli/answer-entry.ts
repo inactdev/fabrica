@@ -55,6 +55,12 @@ try {
 try {
   await runRecordedAnswer(recordHome, taskId, { brain: defaultBrainAdapter(recordHome, { model: declaredModel, image }) });
 } catch (err) {
+  // Issue #353, same shape as verdict-fix-entry.ts: whatever
+  // `runRecordedAnswer` does before it wraps the round in
+  // `recordingFailure` was reaching only this line and
+  // <recordHome>/cli.log. A failure already recorded is not recorded
+  // twice.
+  recordTaskFailure(recordHome, taskId, err);
   console.error(`fabrica answer: resuming "${taskId}" failed: ${(err as Error).message}`);
   process.exit(1);
 }

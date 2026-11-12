@@ -51,7 +51,7 @@ import {
   WRITEUP_STRING_FIELDS,
   WRITEUP_TITLE_MAX_LENGTH,
 } from "../writeup.ts";
-import { ContainmentError, createEgressNetwork, createIsolatedNetwork, removeEgressNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
+import { ContainmentError, createEgressNetwork, createIsolatedNetwork, describeExit, removeEgressNetwork, removeIsolatedNetwork, runContained } from "../../containment/index.ts";
 import type { ReadOnlyMount } from "../../containment/index.ts";
 import { emitLiveTranscriptEntry } from "../live-transcript.ts";
 import { registerRelayHealthProbe } from "../relay-health.ts";
@@ -515,7 +515,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
   async function runAgent(
     job: Omit<AgentJob, "endpoint" | "apiKey">,
     box: { workdir: string; homeDir: string; readOnlyMounts: ReadOnlyMount[]; onLine?: (line: AgentLine) => void }
-  ): Promise<{ lines: AgentLine[]; stderr: string; exitCode: number | null; relayGone?: string }> {
+  ): Promise<{ lines: AgentLine[]; stderr: string; exitCode: number | null; signal: NodeJS.Signals | null; relayGone?: string }> {
     let prepared: PreparedNetwork;
     try {
       prepared = await connectThroughRelay({ baseUrl, ...(opts.apiKey === undefined ? {} : { apiKey: opts.apiKey }) });
@@ -572,7 +572,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
     });
 
     try {
-      const { stderr, exitCode } = await runContained(
+      const { stderr, exitCode, signal } = await runContained(
         "node",
         [join(CONTAINER_AGENT_DIR, "bootstrap.mjs"), join(CONTAINER_AGENT_DIR, "job.json")],
         {
@@ -587,7 +587,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
           stopSignal: stopBox.signal,
         }
       );
-      return { lines, stderr, exitCode, ...(relayGone === undefined ? {} : { relayGone }) };
+      return { lines, stderr, exitCode, signal, ...(relayGone === undefined ? {} : { relayGone }) };
     } catch (err) {
       if (err instanceof ContainmentError || err instanceof RelayError) {
         throw new OpenAiCompatibleError(
@@ -603,12 +603,17 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
     }
   }
 
-  function resultFrom(lines: AgentLine[], stderr: string, exitCode: number | null): AgentResult {
+  function resultFrom(
+    lines: AgentLine[],
+    stderr: string,
+    exitCode: number | null,
+    signal: NodeJS.Signals | null
+  ): AgentResult {
     const last = [...lines].reverse().find((line) => line.t === "result");
     if (last === undefined || last.t !== "result") {
       throw new OpenAiCompatibleError(
         "unparseable-output",
-        `this worker printed no final result line (exit code ${exitCode})${stderr.trim() ? `: ${stderr.trim().slice(-500)}` : ""}`
+        `this worker printed no final result line (${describeExit("the worker's own command (node)", exitCode, signal)})${stderr.trim() ? `: ${stderr.trim().slice(-500)}` : ""}`
       );
     }
     return last.result;
@@ -630,7 +635,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
       const homeDir = mkdtempSync(join(realpathSync(tmpdir()), "fabrica-ask-home-"));
 
       try {
-        const { lines, stderr, exitCode, relayGone } = await runAgent(
+        const { lines, stderr, exitCode, signal, relayGone } = await runAgent(
           {
             ...jobBase,
             mode: "ask",
@@ -642,7 +647,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
           { workdir: scratchDir, homeDir, readOnlyMounts: [] }
         );
         if (relayGone !== undefined) throw new OpenAiCompatibleError("worker-network-gone", relayGone);
-        const result = resultFrom(lines, stderr, exitCode);
+        const result = resultFrom(lines, stderr, exitCode, signal);
         if (!result.ok) {
           // Nothing was asked and nothing was done - the Foreman records
           // "ask-failed" with this message, which is how the Client finds
@@ -698,7 +703,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
 
       const transcript: TranscriptEntry[] = [];
       try {
-        const { lines, stderr, exitCode, relayGone } = await runAgent(
+        const { lines, stderr, exitCode, signal, relayGone } = await runAgent(
           {
             ...jobBase,
             mode: "work",
@@ -726,7 +731,7 @@ export function openAiCompatibleAdapter(opts: OpenAiCompatibleOptions): Brain {
         // the relay, which the box's own error would never name.
         if (relayGone !== undefined) throw new OpenAiCompatibleError("worker-network-gone", relayGone);
 
-        const result = resultFrom(lines, stderr, exitCode);
+        const result = resultFrom(lines, stderr, exitCode, signal);
 
         // Nothing happened and nothing was spent: a rejected credential,
         // an unknown model, an unreachable endpoint. That is an

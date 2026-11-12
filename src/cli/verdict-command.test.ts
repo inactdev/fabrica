@@ -358,3 +358,78 @@ test("runVerdictCommand: a verdict on an already-closed task refuses", async () 
   assert.equal(code, 1);
   assert.match(io.err[0], /already has a final verdict/);
 });
+
+// Issue #353: `fabrica verdict <id> fix` failed in the foreground and
+// printed one line to a terminal. `fabrica log <id>` then showed the
+// previous day's delivery as the last thing that ever happened, so there
+// was no way to tell a ruling had been attempted at all - twice.
+test("runVerdictCommand: a ruling that fails is on the task's own log, with the real error", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  // A fix with no note: refused before anything is handed off.
+  const code = await runVerdictCommand([task.id, "fix"], { recordHome, ...io });
+
+  assert.equal(code, 1);
+  const failed = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-failed");
+  assert.equal(failed.length, 1);
+  const details = failed[0].details as { ruling?: string; hasNote?: boolean; error?: string };
+  assert.equal(details.ruling, "fix");
+  assert.equal(details.hasNote, false);
+  assert.equal(details.error, io.err[0], "the record and the terminal say the same thing, word for word");
+});
+
+test("runVerdictCommand: a failure after the ruling was validated is recorded too", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  // Same trick the ProductionLine-refusal test above uses: a directory
+  // where the task's verdict file has to be written, so the write fails
+  // with a plain filesystem error rather than a ForemanError.
+  mkdirSync(join(recordHome, "tasks", task.id, "verdict"), { recursive: true });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "fix", "-m", "change this"], { recordHome, ...io });
+
+  assert.equal(code, 1);
+  const failed = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-failed");
+  assert.equal(failed.length, 1, "a filesystem failure is still a verdict attempt that failed");
+  const details = failed[0].details as { hasNote?: boolean; error?: string };
+  assert.equal(details.hasNote, true);
+  assert.match(details.error!, /EISDIR|illegal operation on a directory/i);
+});
+
+test("runVerdictCommand: a cap refusal is not recorded twice in two vocabularies", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  // A per-day cap of nothing at all refuses the fix round's start, and
+  // `cap-refused` already carries the numbers and the exact message.
+  writeFileSync(join(recordHome, "projects.toml"), '[caps]\nperDayUsd = 0.0\n');
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "fix", "-m", "change this"], { recordHome, ...io });
+
+  assert.equal(code, 1);
+  const events = readEventsForTask(recordHome, task.id).map((e) => e.name);
+  assert.ok(events.includes("cap-refused"), "the refusal has its own event, with its own numbers");
+  assert.ok(!events.includes("verdict-failed"), "and is not said a second time in different words");
+});
+
+test("runVerdictCommand: an unknown task id is printed, never invented as a task on the record", async () => {
+  const recordHome = tempRecordHome();
+  const io = captureIo();
+
+  const code = await runVerdictCommand(["no-such-task", "fix", "-m", "change this"], { recordHome, ...io });
+
+  assert.equal(code, 1);
+  assert.deepEqual(readEventsForTask(recordHome, "no-such-task"), [], "no phantom task (issue #81's shape)");
+});
