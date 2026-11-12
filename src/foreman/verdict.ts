@@ -13,6 +13,7 @@
 // happens.
 
 import { appendEvent, appendTaskFile, readEventsForTask, readTaskFile } from "../record/index.ts";
+import type { FabricaEvent } from "../record/index.ts";
 import { abortRebase, destroyProductionLine, rebaseInProgress, reopenProductionLine } from "../line/index.ts";
 import { withTaskNetwork } from "../brain/index.ts";
 import type { Brain } from "../brain/index.ts";
@@ -39,7 +40,7 @@ import { knowledgeNotesFor, withKnowledge } from "./task-knowledge.ts";
 import { attachedFilesFor, placeAttachedFiles, withAttachedFiles } from "./task-files.ts";
 import { testMapFor } from "./test-map.ts";
 import { workerBrief } from "./touched-tests.ts";
-import { recordingFailure } from "./task-failure.ts";
+import { alreadyRecorded, markRecorded, recordingFailure } from "./task-failure.ts";
 import { sweepTaskNetworks } from "./task-networks.ts";
 import { runAttempts } from "./attempts.ts";
 import type { AttemptLoopResult } from "./attempts.ts";
@@ -75,6 +76,62 @@ import type { CheckBox, WorkerWriteup } from "../brain/index.ts";
 
 const RULINGS = new Set(["accept", "fix", "wrong"]);
 
+/** What a `"verdict-failed"` event carries (issue #353). The note itself
+ * is deliberately NOT here - a ruling that never took effect has no
+ * standing on the record, and the only place the Client's own words
+ * belong is the `"verdict-recorded"` event of a ruling that did. Whether
+ * one came with it is still worth knowing, since a missing note is one
+ * of the reasons a `fix` is turned away. */
+export interface VerdictFailedDetails {
+  ruling: string;
+  /** False for an `accept`/`wrong` given without one, which is allowed,
+   * and for a `fix` given without one, which is not. */
+  hasNote: boolean;
+  /** The failure's own message, verbatim - the same words the Client was
+   * shown in his terminal, so the record and the terminal can never
+   * disagree about why a ruling did not take. */
+  error: string;
+}
+
+/**
+ * Issue #353: a ruling the Client gave that could not be taken lands on
+ * the task's own log, with the real error, instead of only being printed
+ * to a terminal and then lost. A task was delivered, ruled `fix` the
+ * next day, and the command failed - and `fabrica log` showed the
+ * previous day's delivery as the last thing that ever happened, twice
+ * over, with no way to tell a ruling had ever been attempted.
+ *
+ * Two things it refuses to do, both deliberate:
+ *
+ *  - **Nothing for a task that is not in this record.** There is no log
+ *    to append to, and appending anyway would invent a task id
+ *    `fabrica status` then lists - the phantom-task shape issue #81 is
+ *    about. An unknown id already fails loudly in the terminal with the
+ *    id it could not find.
+ *  - **Nothing for a failure that already has its own event.** A cap
+ *    refusal (`"cap-refused"`) and a meter refusal (`"meter-refused"`)
+ *    have both already said this, with their own numbers, through the
+ *    same `markRecorded` set `task-failure.ts` uses. Saying it twice in
+ *    two vocabularies is worse than saying it once.
+ */
+export function recordVerdictFailure(
+  recordHome: string,
+  taskId: string,
+  ruling: string,
+  note: string | undefined,
+  err: unknown
+): void {
+  if (alreadyRecorded(err)) return;
+  if (readEventsForTask(recordHome, taskId).length === 0) return;
+  markRecorded(err);
+  const details: VerdictFailedDetails = {
+    ruling,
+    hasNote: note !== undefined && note.trim().length > 0,
+    error: err instanceof Error ? err.message : String(err),
+  };
+  appendEvent(recordHome, { taskId, name: "verdict-failed", details });
+}
+
 /**
  * The fast, synchronous half of a verdict: validates the ruling against
  * the record and writes `verdict`/`"verdict-recorded"` - everything a
@@ -87,6 +144,12 @@ const RULINGS = new Set(["accept", "fix", "wrong"]);
  * `recordVerdict` (below) composes this with actually running that round,
  * which is what every library caller (the contract tests included) still
  * gets: a verdict call that doesn't resolve until a "fix" round is done.
+ *
+ * Every way this can refuse is recorded first (issue #353,
+ * `recordVerdictFailure` above) - the two checks ahead of that excepted,
+ * since neither has a task log to write to: an unknown id, and a ruling
+ * that is not one of the three (which the CLI's own parser rejects
+ * before this is ever reached, leaving it for a library caller).
  */
 export function recordVerdictDecision(
   recordHome: string,
@@ -110,6 +173,27 @@ export function recordVerdictDecision(
     );
   }
 
+  try {
+    decideVerdict(recordHome, taskId, ruling, note, opts, events);
+  } catch (err) {
+    recordVerdictFailure(recordHome, taskId, ruling, note, err);
+    throw err;
+  }
+}
+
+/** Everything `recordVerdictDecision` decides once it knows the task is
+ * real, kept as its own function purely so that function's one
+ * `try`/`catch` can put a failed ruling on the record (issue #353)
+ * without indenting the whole body. `events` is the caller's own read,
+ * passed in rather than read again. */
+function decideVerdict(
+  recordHome: string,
+  taskId: string,
+  ruling: "accept" | "fix" | "wrong",
+  note: string | undefined,
+  opts: { caps?: Caps },
+  events: FabricaEvent[]
+): void {
   const lastVerdict = events.filter((e) => e.name === "verdict-recorded").at(-1);
   const lastRuling = (lastVerdict?.details as { ruling?: string } | undefined)?.ruling;
   if (lastRuling === "accept" || lastRuling === "wrong") {
@@ -857,6 +941,15 @@ async function runFixRound(
             onTransportRetry: (details) => {
               appendEvent(recordHome, { taskId, name: "transport-retry", details });
             },
+            // Issue #353, and this is the call site the whole fallback
+            // exists for: a `fix` ruled hours or days after the delivery
+            // finds the warm worker it wants to re-enter gone, and the
+            // round goes ahead with a fresh one on this task's own
+            // history and the Client's note (warm-worker.ts) instead of
+            // dying with nothing recorded.
+            onWarmWorkerGone: (details) => {
+              appendEvent(recordHome, { taskId, name: "warm-worker-restarted", details });
+            },
             // Issue #70: fires as each entry is known, not once per attempt -
             // see runAttempts' own onTranscriptEntry doc for why every entry
             // lands here exactly once either way.
@@ -931,6 +1024,9 @@ async function runFixRound(
               },
               onTransportRetry: (details) => {
                 appendEvent(recordHome, { taskId, name: "transport-retry", details });
+              },
+              onWarmWorkerGone: (details) => {
+                appendEvent(recordHome, { taskId, name: "warm-worker-restarted", details });
               },
               onTranscriptEntry: (entry) => {
                 appendTaskFile(recordHome, taskId, "transcript.log", `${JSON.stringify(entry)}\n`);

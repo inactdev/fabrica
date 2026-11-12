@@ -21,6 +21,7 @@
 // new way to start.
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { describeExit } from "../index.ts";
 
 /** Two minutes, per the ruling. Docker Desktop's own cold start on a
  * Mac is tens of seconds; this is the ceiling before `fabrica up` stops
@@ -75,7 +76,10 @@ function openDockerApp(): { ok: boolean; detail: string } {
   if (result.error) return { ok: false, detail: result.error.message };
   if (result.status !== 0) {
     const said = `${result.stderr ?? ""}${result.stdout ?? ""}`.trim();
-    return { ok: false, detail: said || `open -a Docker exited ${result.status}` };
+    // describeExit rather than the status on its own (issue #353): a
+    // 30-second timeout makes spawnSync report a null status and a
+    // SIGTERM, which read as "exited null" before.
+    return { ok: false, detail: said || describeExit("open -a Docker", result.status, result.signal) };
   }
   return { ok: true, detail: "" };
 }

@@ -192,7 +192,10 @@ export async function runContained(
           )
         );
       });
-      child.on("close", (exitCode) => settle(() => resolve({ stdout, stderr, exitCode })));
+      // Both arguments, not just the first (issue #353): a run ended by
+      // a signal has no exit code at all, and keeping only the null left
+      // every caller rendering the word "null" at the Client.
+      child.on("close", (exitCode, signal) => settle(() => resolve({ stdout, stderr, exitCode, signal })));
 
       // Stopping the container, not killing the docker client: the
       // client's own signal handling is not something this depends on,

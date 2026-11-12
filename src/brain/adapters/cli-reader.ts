@@ -32,6 +32,7 @@ import { spawn } from "node:child_process";
 import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
+import { describeExit } from "../../containment/index.ts";
 
 /** The `vendor =` spelling in projects.toml that means "go through the
  * command below". Deliberately the harness's own name rather than the
@@ -268,6 +269,10 @@ function spawnProblem(err: NodeJS.ErrnoException, command: string): string {
 
 interface CommandRun {
   exitCode: number | null;
+  /** The signal that ended the command, when that is why there is no
+   * exit code (issue #353) - so a failure names what happened rather
+   * than rendering the word "null". */
+  signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
 }
@@ -295,13 +300,13 @@ function runCommand(
       clearTimeout(timer);
       reject(new Error(`could not run the reader's command \`${command}\`: ${spawnProblem(err, command)}`));
     });
-    child.on("close", (exitCode) => {
+    child.on("close", (exitCode, signal) => {
       clearTimeout(timer);
       if (timedOut) {
         reject(new Error(`the reader's command \`${command}\` gave no answer within ${opts.timeoutMs}ms`));
         return;
       }
-      resolve({ exitCode, stdout, stderr });
+      resolve({ exitCode, signal, stdout, stderr });
     });
     // Written and closed in one go: the prompt is the whole of this
     // call's input, and an open stdin would leave the command waiting.
@@ -342,7 +347,7 @@ function answerFrom(command: string, run: CommandRun): string {
   const line = run.stdout.trim().split("\n").filter(Boolean).at(-1);
   if (line === undefined) {
     throw new Error(
-      `the reader's command \`${command}\` printed nothing (exit ${run.exitCode}): ${tail(run.stderr)}`
+      `the reader's command \`${command}\` printed nothing (${describeExit(command, run.exitCode, run.signal)}): ${tail(run.stderr)}`
     );
   }
 
@@ -366,7 +371,7 @@ function answerFrom(command: string, run: CommandRun): string {
     const why = text.length > 0 ? text : run.stderr;
     const status = typeof result.api_error_status === "number" ? ` (api_error_status ${result.api_error_status})` : "";
     throw new Error(
-      `the reader's command \`${command}\` failed (exit ${run.exitCode}` +
+      `the reader's command \`${command}\` failed (${describeExit(command, run.exitCode, run.signal)}` +
         `${typeof result.subtype === "string" ? `, ${result.subtype}` : ""})${status}: ${tail(why)}`
     );
   }

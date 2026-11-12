@@ -1,4 +1,5 @@
 export { runContained, GRACEFUL_STOP_SECONDS } from "./run.ts";
+export { describeExit } from "./exit-code.ts";
 export { caffeinated } from "./caffeinate.ts";
 export { buildDockerArgs, DEFAULT_MEMORY, DEFAULT_CPUS, DEFAULT_PIDS_LIMIT } from "./docker-args.ts";
 export { createIsolatedNetwork, removeIsolatedNetwork } from "./isolated-network.ts";

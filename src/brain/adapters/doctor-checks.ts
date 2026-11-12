@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runContained } from "../../containment/index.ts";
+import { describeExit, runContained } from "../../containment/index.ts";
 import { DEFAULT_IMAGE } from "./claude-code.ts";
 import { HOSTED_BASE_URL, HOSTED_CREDENTIAL_VAR } from "./openai-compatible.ts";
 import { chatCompletion } from "./openai-agent/client.mjs";
@@ -410,6 +410,6 @@ export async function probeWorkerToken(
   if (result && (!result.is_error || result.subtype === "error_max_budget_usd")) {
     return { ok: true, label, detail: "alive - the token authenticated a real call" };
   }
-  const why = (result?.result ?? stderr ?? `exit ${exitCode}`).split("\n")[0];
+  const why = (result?.result ?? stderr ?? describeExit("the call", exitCode)).split("\n")[0];
   return { ok: false, label, detail: `dead - ${why}`, fix };
 }

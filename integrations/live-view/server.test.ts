@@ -1047,6 +1047,13 @@ test("startLiveView: a verdict POST for \"fix\" with no note is refused before a
 
     const events = readEventsForTask(recordHome, task.id);
     assert.ok(!events.some((e) => e.name === "verdict-recorded"));
+    // Issue #353: "refused before anything is recorded" is about the
+    // VERDICT - the refusal itself is still written down, the same way
+    // `fabrica verdict` writes it, so a ruling attempted from the phone
+    // and turned away is not invisible either.
+    const failed = events.filter((e) => e.name === "verdict-failed");
+    assert.equal(failed.length, 1);
+    assert.equal((failed[0].details as { error?: string }).error, body.error);
   } finally {
     await view.close();
   }

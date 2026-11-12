@@ -270,6 +270,13 @@ src/containment/egress-network.ts: src/containment/egress-network.test.ts
 src/containment/helpers/fake-docker-stop.mjs: src/containment/run.test.ts
 src/containment/isolated-network.test.ts: src/containment/isolated-network.test.ts
 src/containment/isolated-network.ts: src/containment/isolated-network.test.ts
+src/containment/exit-code.test.ts: src/containment/exit-code.test.ts
+src/containment/exit-code.ts: src/containment/exit-code.test.ts
+# Hand-added: the barrel has no colocated test of its own. It only
+# re-exports, so the suite covering whichever export a change touches
+# is what covers it - exit-code.test.ts and run.test.ts between them
+# drive everything a change here is likely to be about.
+src/containment/index.ts: src/containment/exit-code.test.ts, src/containment/run.test.ts
 src/containment/run.test.ts: src/containment/run.test.ts
 src/containment/run.ts: src/containment/run.test.ts
 # Hand-added: types.ts has no colocated test of its own, so the
@@ -304,7 +311,7 @@ src/foreman/do.ts: src/foreman/do.test.ts
 # Hand-added: errors.ts declares the code every refusal in this module
 # branches on and has no colocated test of its own; these are the suites
 # that drive those codes through the real refusals.
-src/foreman/errors.ts: src/foreman/do.test.ts, src/foreman/github-token.test.ts, src/foreman/publish-permissions.test.ts
+src/foreman/errors.ts: src/foreman/do.test.ts, src/foreman/github-token.test.ts, src/foreman/publish-permissions.test.ts, src/foreman/fix-rebase.test.ts
 src/foreman/fix-rebase.test.ts: src/foreman/fix-rebase.test.ts
 src/foreman/fix-rebase.ts: src/foreman/fix-rebase.test.ts
 src/foreman/follow.test.ts: src/foreman/follow.test.ts
@@ -360,6 +367,11 @@ src/foreman/task-issue.test.ts: src/foreman/task-issue.test.ts
 src/foreman/task-issue.ts: src/foreman/task-issue.test.ts
 src/foreman/task-knowledge.test.ts: src/foreman/task-knowledge.test.ts
 src/foreman/task-knowledge.ts: src/foreman/task-knowledge.test.ts
+# Hand-added: task-failure.ts has no colocated test of its own. These
+# are the suites that drive a real failure through it - a round's own
+# (task-failed.test.ts) and a verdict's (verdict-command.test.ts,
+# which shares its `markRecorded` set - issue #353).
+src/foreman/task-failure.ts: src/foreman/task-failed.test.ts, src/cli/verdict-command.test.ts
 src/foreman/test-map.test.ts: src/foreman/test-map.test.ts
 src/foreman/test-map.ts: src/foreman/test-map.test.ts
 src/foreman/touched-tests.test.ts: src/foreman/touched-tests.test.ts
@@ -367,6 +379,8 @@ src/foreman/touched-tests.ts: src/foreman/touched-tests.test.ts
 src/foreman/transport-retry.test.ts: src/foreman/transport-retry.test.ts
 src/foreman/transport-retry.ts: src/foreman/transport-retry.test.ts
 src/foreman/verdict.test.ts: src/foreman/verdict.test.ts
+src/foreman/warm-worker.test.ts: src/foreman/warm-worker.test.ts
+src/foreman/warm-worker.ts: src/foreman/warm-worker.test.ts, src/foreman/verdict.test.ts
 src/foreman/verdict.ts: src/foreman/verdict.test.ts
 src/foreman/work-mode-round.test.ts: src/foreman/work-mode-round.test.ts
 src/foreman/writeup.test.ts: src/foreman/writeup.test.ts

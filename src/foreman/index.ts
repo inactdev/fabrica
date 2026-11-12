@@ -15,7 +15,7 @@ export type { AnswerDecision, AnswerDecisionOptions } from "./answer.ts";
 export { answeredQuestionsOf, answerFor, askedQuestionsOf, deriveBrief, renderAnswerRound } from "./questions.ts";
 export type { AnswerRecord, AnswersGivenDetails } from "./questions.ts";
 export type { AskedDetails, AskRejectedDetails, QuestionAutoAnsweredDetails } from "./ask.ts";
-export { recordVerdictDecision, runRecordedFix } from "./verdict.ts";
+export { recordVerdictDecision, recordVerdictFailure, runRecordedFix } from "./verdict.ts";
 // Issue #203: the Client's own stop - the record half only (the process
 // half is src/cli/task-process.ts; see stop.ts's header for why).
 export { recordStopDecision } from "./stop.ts";

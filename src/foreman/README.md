@@ -1566,6 +1566,111 @@ task's work. An `already-current` round keeps the base it had (still an
 ancestor of the branch), and a round that aborted its rebase puts the old
 base back.
 
+#### A rebase that cannot be run at all (issue #353)
+
+A conflict is the policy above. A rebase that cannot be *run* — origin
+unreachable, a base nobody can name, a locked index, a rebase already in
+flight in the task's worktree — is this round's honest failure, and
+`fix-rebase.ts`'s `rebaseFailureMessage` is the one wording for it:
+`ForemanError("rebase-failed")` carrying git's own reason verbatim, plus
+the two facts the Client would otherwise have to go and check for
+himself — that the branch is exactly where his delivery left it, and that
+ruling `fix` again is all it takes once the cause is gone.
+
+The "untouched" half of that sentence is a promise `src/line/rebase.ts`
+already keeps, which is why it can be made: it fetches and names the base
+*before* it rebases anything, aborts a part-applied rebase back to the
+branch's own last commit before throwing, and refuses outright — touching
+nothing — when a rebase is already in progress (via `src/line`'s own
+detached-HEAD safety check, which gets there first). Nothing about the
+wording changed that; what changed is that it is now said.
+
+The round itself lands on the record as `"task-failed"` the ordinary way
+(`recordingFailure`), and the ruling is already recorded, so the task
+stays open and stays the Client's to rule on.
+
+### A warm worker that is gone is restarted cold (issue #353)
+
+`fix` hands the note back to the same warm worker on the same line, and a
+warm worker is a resumable session a brain owns — which does not live
+forever. A task delivered one day and ruled `fix` the next found its
+session gone, and the round died with nothing on the task's log at all
+(issue #353, reported twice in five minutes).
+
+By Client ruling the round now starts a **fresh worker with the task's
+history and the note** instead of refusing. `warm-worker.ts` owns it:
+
+- `sessionGoneReason(err)` is an **allowlist** of the wordings that mean
+  "the session named by this call is not there any more", shaped exactly
+  after `transport-retry.ts`'s classifier and for the same reason. An
+  error it does not recognise is not a dead session and fails at once: a
+  wording wrongly left out costs one honest failure the Client can rule
+  on again, a wording wrongly let in re-runs a whole worker call cold.
+  A `ForemanError` is never one of them.
+- `withColdStartFallback` makes the call once with the session and, only
+  on that classification, exactly once more with **no session at all** —
+  the cold call builds its own options rather than being handed the id
+  the brain just refused. There is no second fallback; a cold call that
+  fails is the honest answer.
+- `attempts.ts` wraps it **outside** `withTransportRetry`, deliberately:
+  a dropped connection says nothing about the session, so it is retried
+  *warm* first, and only a genuine session refusal falls back to cold
+  (which then gets its own transport retry for free). The restart clears
+  `liveEntries` for the same reason a transport retry does, and clears
+  the round's `session` so a later pass of the same round does not spend
+  another worker call handing the same dead id over again.
+- Every restart appends `"warm-worker-restarted"` (details:
+  `WarmWorkerRestartedDetails` — the session, Fabrica's own short reason,
+  the brain's own words, and the attempt). Never an attempt of its own:
+  rule 3 counts attempts, so it happens inside one turn of the counted
+  loop, exactly as `"transport-retry"` does. A silent downgrade from the
+  warm worker the Client was promised to a fresh one is the thing that
+  must not happen.
+
+**Nothing is lost by starting cold, and that is why the ruling is cheap
+here.** `buildFixBrief` already composes the task's *original* brief —
+the request, the issue's own words, the attached files, the project's
+knowledge notes — with the Client's note, on every pass of every fix
+round, and the branch already carries every prior round's commits. The
+warm session was an optimisation on top of a brief that always carried
+the history, never the only copy of it.
+
+### Every verdict attempt is on the record, failures included (issue #353)
+
+`recordVerdictDecision` refuses a ruling for a good handful of reasons —
+an unknown task, an already-closed one, a missing note, no delivery to
+reopen, a cap or a meter with no room. It used to refuse them all
+silently as far as the record was concerned: the message went to the
+Client's terminal and nowhere else, so `fabrica log <id>` showed the
+previous day's delivery as the last thing that ever happened and there
+was no way to tell a ruling had been attempted at all.
+
+Every one of them now appends `"verdict-failed"` first (details:
+`VerdictFailedDetails` — the ruling, whether a note came with it, and the
+failure's own message verbatim, so the record and the terminal can never
+disagree). `runVerdictCommand` records whatever fails after that too (the
+round number, the handoff), reading what was attempted off its own two
+positionals so a `fix` refused for its missing note is covered as well.
+
+Three things it deliberately does not do:
+
+- **Not `"task-failed"`.** The task did not fail, the ruling did — it is
+  still delivered and still waiting on him. `stateOf` leaves this event
+  alone (it has a `default: break;`), and it is not in `CLEARS_FAILURE`
+  either, so it cannot rescue a task that really had failed.
+- **Nothing for a task that is not in this record.** There is no log to
+  append to, and appending anyway would invent a task id `fabrica
+  status` then lists — the phantom-task shape issue #81 is about.
+- **Nothing for a failure that already has its own event.** A cap
+  refusal and a meter refusal have both already said this with their own
+  numbers, through the same `markRecorded` set `task-failure.ts` uses
+  (now readable through its exported `alreadyRecorded`).
+
+The two detached entry points (`src/cli/verdict-fix-entry.ts`,
+`answer-entry.ts`) got the same treatment: whatever their round does
+before `recordingFailure` wraps it was reaching only `console.error` and
+`<recordHome>/cli.log`, which nothing points the Client at.
+
 ### A rebase-only round: when the note is "master moved" (`rebase-only.ts`)
 
 The Client's note is also what decides the *shape* of a fix round. A note
