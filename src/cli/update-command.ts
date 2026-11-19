@@ -26,6 +26,19 @@
 // own cache - is refused rather than reinstalled somewhere it never
 // lived.
 //
+// That install is also kept away from `<prefix>/bin/fabrica` whenever
+// something other than npm's own link is sitting there - the launcher
+// the Client's dotfiles write, which pins the node Fabrica runs on.
+// bin-launcher.ts owns that entirely, including the two failures it
+// closes (npm refusing the whole install with EEXIST, and npm replacing
+// the launcher with a link that runs on whatever node the terminal
+// has). What this command adds on top is the reporting and the exit
+// code: a launcher that no longer points at anything is the Client's to
+// fix, so it is named on stderr with the path that is gone and returns
+// 1 - at the end of the run, not by stopping early, since the code
+// really was replaced and everything else still has to come forward
+// with it.
+//
 // Once Fabrica's own code is updated, the installed Inspector is brought
 // forward with it (`updateInspector`): Fabrica and Inspector keep a
 // ratified, hand-synced agreement about the call between them
@@ -89,11 +102,17 @@ import {
   type InspectorInstallTarget,
   type InspectorVersionProbes,
 } from "../index.ts";
+import type { LauncherOutcome } from "./bin-launcher.ts";
 import { CliError } from "./errors.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { detectCopy, git, short, type CopyInfo } from "./doctor-command.ts";
-import { commandFailureMessage, realGlobalReinstallIo, reinstallGlobalCopy } from "./global-reinstall.ts";
-import { clonePackInstallProcedure, prefixOfGlobalInstall } from "./npm-prefix.ts";
+import {
+  commandFailureMessage,
+  realGlobalReinstallIo,
+  reinstallGlobalCopy,
+  type ReinstallOutcome,
+} from "./global-reinstall.ts";
+import { clonePackInstallProcedure, globalPackagePath, prefixOfGlobalInstall } from "./npm-prefix.ts";
 import { buildRegisteredMachineImages, type MachineImageBuildReport, type MachineImageIo } from "./machine-image.ts";
 import { LIVE_VIEW_PORT, refreshStaleLiveView, type LiveViewStaleOutcome } from "./up-command.ts";
 
@@ -124,6 +143,17 @@ session:
          build step to read the commit from, leaving an installed copy
          that cannot say which commit it is. A copy that is neither of
          the two - \`npx\` runs one out of its own cache - is refused.
+         If \`<prefix>/bin/fabrica\` is anything other than npm's own
+         link into that copy - the launcher your dotfiles write, which
+         pins the node Fabrica runs on - it is moved aside for the
+         install and put back afterwards, byte for byte, whether the
+         install worked or not. Without that, npm either refuses the
+         whole install with \`EEXIST\` or replaces the launcher with a
+         link that runs on whatever node your shell has. If the
+         launcher no longer points at a file that exists once it is
+         back, it is removed in favour of npm's own link - so fabrica
+         still starts - and this command says which path is gone and
+         exits non-zero.
   2. Brings the installed Inspector forward too, since the two sides
      agree on the exact shape of the call between them: it reads the
      commit the installed \`inspector\` was built from, reads the tip of
@@ -166,8 +196,9 @@ session:
      reconnects by itself, and \`fabrica up\` is the one command that
      opens one.
   5. Prints one summary line: the commit before and after, the
-     installed Inspector before and after, whether the live view was
-     restarted, started or left as is, and the exact next step.
+     installed Inspector before and after, what became of a launcher
+     of your own if there was one, whether the live view was restarted,
+     started or left as is, and the exact next step.
 
 Resume your session afterward with \`fabrica up --continue\` - your
 chat harness's own flag for continuing the most recent conversation in
@@ -207,9 +238,11 @@ export interface UpdateProbes {
   /** Replaces the installed copy under one npm prefix - the one the
    * running copy is installed under - with the current code on master,
    * as global-reinstall.ts's clone, pack and install steps. A failure's
-   * `message` already names the exact command that failed.
-   * Installed-copy only. */
-  reinstall(prefix: string): { ok: boolean; message: string };
+   * `message` already names the exact command that failed, and
+   * `launcher` says what became of any hand-written
+   * `<prefix>/bin/fabrica` the install had to be kept away from
+   * (bin-launcher.ts). Installed-copy only. */
+  reinstall(prefix: string): ReinstallOutcome;
   /** Inspector's side of the same update (see `updateInspector`). */
   inspector: InspectorUpdateProbes;
 }
@@ -294,6 +327,11 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
 
   const before = probes.copy();
 
+  // What became of a hand-written `<prefix>/bin/fabrica` launcher, which
+  // only the installed-copy path can touch at all: a `git pull` goes
+  // nowhere near npm's prefix.
+  let launcher: LauncherOutcome = { kind: "none" };
+
   if (before.kind === "dev-checkout") {
     if (before.branch !== "master") {
       stderr(
@@ -322,13 +360,19 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
       return 1;
     }
     const result = probes.reinstall(prefix);
+    launcher = result.launcher;
     if (!result.ok) {
       // The message already names the exact npm command that failed -
       // reinstalling is two of them now, and only the step that really
-      // ran knows which one it was.
+      // ran knows which one it was. The launcher is reported too: it was
+      // moved aside and put back around that failed install, and a
+      // launcher that no longer points at anything matters more to the
+      // Client than the install that didn't happen.
       stderr(`fabrica update: ${result.message}`);
+      reportLauncher(launcher, prefix, stderr);
       return 1;
     }
+    reportLauncher(launcher, prefix, stderr);
   }
 
   const after = probes.copy();
@@ -398,10 +442,68 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
 
   stdout(
     `fabrica update: ${short(before.commit)} -> ${short(after.commit)} - ${describeInspectorOutcome(inspector)} - ` +
-      `${describeMachineImages(images)} - live view ${describeLiveViewOutcome(outcome)}. ` +
-      `Resume your session with: fabrica up --continue`
+      `${describeMachineImages(images)}${describeLauncherOutcome(launcher)} - ` +
+      `live view ${describeLiveViewOutcome(outcome)}. Resume your session with: fabrica up --continue`
   );
-  return 0;
+
+  // A launcher the install broke fails the update on its own (Client
+  // ruling), and it fails it *here* rather than by stopping early:
+  // Fabrica's own code really was replaced, so Inspector, every
+  // project's machine image and the live view all still have to come
+  // forward with it - a live view left serving the code that was just
+  // replaced is what an earlier ruling on this command forbids.
+  return launcherFailsUpdate(launcher) ? 1 : 0;
+}
+
+/** Whether what happened to the launcher is the Client's to act on
+ * before Fabrica can be relied on again. */
+export function launcherFailsUpdate(outcome: LauncherOutcome): boolean {
+  return outcome.kind === "discarded" || outcome.kind === "broken-kept";
+}
+
+/** Everything the Client is told about the launcher on stderr. The two
+ * failing outcomes name the path that is gone and the one command that
+ * puts a new launcher there; the unverifiable one says plainly that it
+ * was not checked, rather than passing in silence. */
+function reportLauncher(outcome: LauncherOutcome, prefix: string, warn: (line: string) => void): void {
+  const bootstrap = `re-run your dotfiles bootstrap to write a new one`;
+  if (outcome.kind === "discarded") {
+    warn(
+      `fabrica update: ${outcome.path} was a launcher of your own, and after the install it pointed at ` +
+        `${outcome.missing}, which no longer exists. It was removed and npm's own link (-> ${outcome.npmLink}) put ` +
+        `back in its place, so fabrica still starts - but on whatever node your shell has, not the one the ` +
+        `launcher pinned: ${bootstrap}.`
+    );
+    return;
+  }
+  if (outcome.kind === "broken-kept") {
+    warn(
+      `fabrica update: ${outcome.path} is a launcher of your own, and it points at ${outcome.missing}, which does ` +
+        `not exist. It was put back exactly as it was, because the install left no npm link of its own to fall ` +
+        `back to - so there is nothing under ${prefix} that can start fabrica right now: ${bootstrap}.`
+    );
+    return;
+  }
+  if (outcome.kind === "unverifiable") {
+    warn(
+      `fabrica update: ${outcome.path} was a launcher of your own, put back exactly as it was - but it names no ` +
+        `path inside ${globalPackagePath(prefix)}, so whether it still starts the new code could not be checked ` +
+        `here. Run \`fabrica doctor\` to be sure: its checkout line reports the commit the copy it is running ` +
+        `really is.`
+    );
+  }
+}
+
+/** The launcher's segment of the one summary line - nothing at all when
+ * there was no launcher to keep, since that is the ordinary case and has
+ * nothing to report. Pre-joined with its own separator so the segment
+ * can be absent entirely. */
+export function describeLauncherOutcome(outcome: LauncherOutcome): string {
+  if (outcome.kind === "kept") return " - launcher kept";
+  if (outcome.kind === "unverifiable") return " - launcher kept, unchecked";
+  if (outcome.kind === "discarded") return ` - launcher DISCARDED, it pointed at ${outcome.missing}`;
+  if (outcome.kind === "broken-kept") return ` - launcher BROKEN, it points at ${outcome.missing}`;
+  return "";
 }
 
 /** The machine-image segment of the one summary line: how many projects
