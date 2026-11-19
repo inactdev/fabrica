@@ -228,10 +228,47 @@ export {
   BUILD_SECRETS_KEY,
 } from "./buildsecrets/index.ts";
 export type { BuildSecretsErrorCode, BuildSecretsResolution } from "./buildsecrets/index.ts";
+// Issue #355: the versions a project's image is built on, read out of
+// the repository's own files (`.ruby-version`, `.node-version`,
+// `.python-version`, `go.mod`) rather than typed into a Dockerfile.
+// `fabrica register` writes the `ARG`/`FROM` pair and the matching
+// `.inspector.json` entry; both image builds resolve the values and pass
+// them; `fabrica doctor` reports a project still hard-coding one, and
+// `fabrica update`/`fabrica doctor --fix` convert the terms folders
+// Fabrica owns. See src/buildargs/README.md.
+export {
+  buildArgFlags,
+  buildArgsFingerprint,
+  configWithBuildArgs,
+  declaredBuildArgs,
+  planVersionPinConversion,
+  readFileIn,
+  replacementLinesFor,
+  resolveBuildArgs,
+  versionArgFor,
+  BUILD_ARGS_KEY,
+  VERSION_FAMILIES,
+} from "./buildargs/index.ts";
+export type {
+  BuildArgSource,
+  DeclaredBuildArgs,
+  ReadRepoFile,
+  ResolvedBuildArgs,
+  UnresolvedBuildArg,
+  VersionArgFor,
+  VersionPinConversion,
+  VersionPinPlan,
+} from "./buildargs/index.ts";
 // The one probe those take: what an image's own configuration says it
 // runs as, which is how the user a generated image has to end as is
 // found when the project's own file names none.
 export type { BaseUserProbe } from "./brain/index.ts";
+// Reading a `FROM` line that names a build argument (issue #355) - the
+// file's own `ARG` defaults, and the substitution a build makes with
+// them. One reader, so `fabrica doctor`'s Node pin, the generated
+// Dockerfile and the base-image question can never resolve one `FROM`
+// three ways.
+export { argDefaultsBeforeFirstFrom, expandImageRef } from "./brain/index.ts";
 // The Docker networks tasks run on: what is still open
 // (`fabrica doctor`'s leftover count) and the one command that clears
 // the unused ones, named identically wherever the Client is told about
@@ -259,6 +296,9 @@ export { inspectorBranchStatus } from "./inspector/index.ts";
 // and the line that should have said so can never disagree.
 export { inspectorConfigProblem } from "./inspector/index.ts";
 export type { InspectorConfigProblem, InspectorConfigRefusal } from "./inspector/index.ts";
+// The names of Inspector's own two files, for the CLI layer's messages
+// about them - spelled in src/inspector, never again anywhere else.
+export { INSPECTOR_CONFIG, INSPECTOR_DOCKERFILE } from "./inspector/index.ts";
 // Issue #316, work mode: the same two readers for a project whose terms
 // live in a folder outside its repository. `termsProblem` is what
 // Inspector would refuse about that folder; `termsSetup` is "is this

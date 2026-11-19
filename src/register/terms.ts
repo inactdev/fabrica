@@ -215,6 +215,11 @@ export function writeTerms(opts: {
     // This is the route the case exists for - a day job's repository,
     // whose paid gem source's credential was never going to be in it.
     buildSecrets: derived.buildSecrets,
+    // Issue #355: and the version files the Dockerfile's own FROM reads
+    // through a build argument. This route is the one the case exists
+    // for too - a repository whose `.ruby-version` moves without anyone
+    // being able to commit a thing to it.
+    buildArgs: derived.buildArgs,
   });
 
   const written: string[] = [];

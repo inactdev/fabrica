@@ -721,3 +721,36 @@ test("inspectorConfigJson: buildSecrets is written only when a project has one",
   // the others do.
   assert.deepEqual(Object.keys(config), ["check", "protectedPaths", "buildSecrets"]);
 });
+
+// Issue #355, and the same narrower test `buildSecrets` above gets, for
+// the same reason: this is the second key written for a paired change on
+// Inspector's side rather than from live evidence in this repository's
+// own config.
+test("inspectorConfigJson: buildArgs is written only when a project reads a version from a file", () => {
+  for (const asked of [undefined, {}]) {
+    const config = JSON.parse(inspectorConfigJson({ protectedPaths: ["check.sh"], buildArgs: asked }));
+    assert.equal(Object.hasOwn(config, "buildArgs"), false, JSON.stringify(config));
+  }
+  const config = JSON.parse(
+    inspectorConfigJson({
+      protectedPaths: ["check.sh"],
+      buildArgs: { RUBY_VERSION: { file: ".ruby-version", pattern: "^([0-9].*)$" } },
+    })
+  );
+  assert.deepEqual(config.buildArgs, { RUBY_VERSION: { file: ".ruby-version", pattern: "^([0-9].*)$" } });
+  // After the keys that were there before it, so the file reads the way
+  // the others do.
+  assert.deepEqual(Object.keys(config), ["check", "protectedPaths", "buildArgs"]);
+});
+
+test("inspectorConfigJson: both forms of a buildArgs entry survive the writing", () => {
+  const config = JSON.parse(
+    inspectorConfigJson({
+      buildArgs: { NODE_VERSION: { file: ".node-version" }, GO_VERSION: { file: "go.mod", pattern: "^go[ \\t]+(.*)$" } },
+    })
+  );
+  assert.deepEqual(config.buildArgs, {
+    NODE_VERSION: { file: ".node-version" },
+    GO_VERSION: { file: "go.mod", pattern: "^go[ \\t]+(.*)$" },
+  });
+});

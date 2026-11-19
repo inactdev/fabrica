@@ -51,6 +51,25 @@ own words rather than as "its Dockerfile.inspector cannot be read", and
 the repair loop reports it against that one project and carries on. See
 `src/buildsecrets/README.md`.
 
+## A version this project declares for itself (issue #355)
+
+A `Dockerfile.inspector` whose `FROM` says `ruby:${RUBY_VERSION}` needs
+that argument's value, and `.inspector.json`'s `buildArgs` says which
+file in the repository to read it from. `machineImageFor` resolves them
+(`src/buildargs/`), `machineImageBuild` passes one `--build-arg
+NAME=value` per resolved name, and the stamp is taken over the generated
+Dockerfile *plus* those values - see the sharp edge below for why that
+last part is load-bearing.
+
+Which tree they are read from is the build's own context, which is the
+registered project's checkout: the same tree this build's `COPY` lines
+already read the manifest and the lockfile out of. Reading the version
+from one commit while the `Gemfile` and `.ruby-version` beside it come
+from another is the one combination that cannot work - bundler refuses
+the build naming both versions. Inspector resolves the same entries for
+itself, at the commit under check; see `src/buildargs/README.md`'s "Two
+builds, two trees".
+
 ## Sharp edges
 
 - **The build context is the repository**, even for a project whose terms
@@ -81,6 +100,14 @@ the repair loop reports it against that one project and carries on. See
   layer, which carries both version pins. It does **not** move when a
   project's dependencies do: that is Docker's own cache question, exactly
   as it is for Inspector's box.
+- **The resolved build arguments are hashed with it** (issue #355), and
+  they have to be: a project whose `FROM` reads its version out of
+  `.ruby-version` has a Dockerfile whose text does *not* move when that
+  file is bumped, so hashing the text alone would leave the worker's box
+  on the old Ruby forever while Inspector's check box followed the
+  bump - the exact divergence that issue exists to close. A project with
+  no build arguments stamps byte-identically to how it did before, so
+  nothing already built becomes stale for having gained this.
 - **Nothing here writes anything except `machineImageBuild`**, which is
   only ever called for a build that is about to run. That is what keeps
   plain `fabrica doctor` read-only, and it is why a missing image's fix

@@ -432,6 +432,37 @@ request or any message; only the name appears in any of those.
 `fabrica doctor` FAILs that project's line, naming the variable, when
 `brain.env` has not got it - before a task is ever started on it.
 
+### A language version the repository bumps on its own
+
+A project declares its own language version - `.ruby-version`,
+`.node-version` (or `.nvmrc`), `.python-version`, `go.mod`'s `go` line,
+`.tool-versions` - and the box its check runs in has to be built on that
+version. When the two were written down separately, a bump on the base
+branch broke every task on that project until somebody edited
+`Dockerfile.inspector` by hand.
+
+So the repository's own file is the source of truth. `fabrica register`
+writes
+
+    ARG RUBY_VERSION=3.4.13
+    FROM ruby:${RUBY_VERSION}
+
+and names the file it comes from in `.inspector.json`:
+
+    "buildArgs": { "RUBY_VERSION": { "file": ".ruby-version" } }
+
+Both image builds then read that file and pass the value - Inspector at
+the commit it is checking, Fabrica for the box the work is written in -
+so a bump needs no edit anywhere, and the worker's box is rebuilt on the
+new version the next time a task starts.
+
+A project registered before this is converted for you: `fabrica update`
+and `fabrica doctor --fix` rewrite a terms folder that lives outside its
+repository, keep the old file as `Dockerfile.inspector.bak`, print
+exactly what changed, and rebuild that project's image. Terms committed
+**inside** a repository are never edited by Fabrica - there `fabrica
+doctor` shows the exact two lines to change, and you make the change.
+
 ### Paying per token instead (optional)
 
 The default Worker is the coding agent above, on the flat-rate

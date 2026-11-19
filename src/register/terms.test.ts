@@ -236,7 +236,17 @@ test("register --terms: a Rails repository gets its servers, its gems and a long
   // through the named repo build context, since this folder is the
   // docker build context and holds none of the repository's own files.
   const dockerfile = readFileSync(join(terms, DOCKERFILE_INSPECTOR), "utf8");
-  assert.match(dockerfile, /^FROM ruby:3\.3\.4$/m);
+  // Issue #355: the version is read back out of the repository's own
+  // `.ruby-version` rather than written in here - this is the route the
+  // case exists for, a repository whose version file moves while
+  // nothing of Fabrica's may be committed to it. The default is what
+  // that file says today, so a build passing nothing is unchanged.
+  assert.match(dockerfile, /^ARG RUBY_VERSION=3\.3\.4$/m);
+  assert.match(dockerfile, /^FROM ruby:\$\{RUBY_VERSION\}$/m);
+  assert.doesNotMatch(dockerfile, /^FROM ruby:3\.3\.4$/m);
+  assert.deepEqual(config.buildArgs, {
+    RUBY_VERSION: { file: ".ruby-version", pattern: "^(?:ruby-)?([0-9][^\\s]*)$" },
+  });
   assert.match(dockerfile, /postgresql libpq-dev redis-server/);
   assert.match(dockerfile, /^COPY --from=repo Gemfile Gemfile\.lock \.ruby-version \/deps\/$/m);
   assert.match(dockerfile, /^RUN cd \/deps && bundle install$/m);

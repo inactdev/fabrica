@@ -9,11 +9,13 @@ import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from 
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  argDefaultsBeforeFirstFrom,
   capsActive,
   describeBuildSecrets,
   describeProjectCredential,
   describeUnmeasured,
   eventsByTask,
+  expandImageRef,
   findPullRequestTemplate,
   ghPublishAnswer,
   githubAppStatus,
@@ -69,6 +71,12 @@ import {
   UPSTREAM_GIT_URL,
 } from "./npm-prefix.ts";
 import { resolveRecordHome } from "./record-home.ts";
+import {
+  convertProjectVersionPins,
+  versionPinsCheck,
+  versionPinsLabel,
+  type VersionPinConversionReport,
+} from "./version-pins.ts";
 
 export const DOCTOR_USAGE = "fabrica doctor [--fix] [--live]";
 
@@ -108,6 +116,20 @@ none. It FAILs when that image is missing, or when either input changed
 after it was built, and reports the worker CLI version installed inside
 it against the one pinned version.
 
+After that image line comes a versions line: which build arguments that
+image is built with, read out of the repository's own version files
+(.ruby-version, .node-version / .nvmrc, .python-version, go.mod's go
+line, .tool-versions). It FAILs - without stopping a task, so \`fabrica
+up\` only warns - when the project's terms still hard-code a version the
+repository declares for itself, which is how a bump on the base branch
+used to break every task on it until someone edited Dockerfile.inspector
+by hand. For a terms folder outside the repository the fix is \`--fix\`
+(or \`fabrica update\`), which rewrites that file into the build-argument
+form, keeps the old one as Dockerfile.inspector.bak, prints exactly what
+changed and rebuilds that project's image. Terms committed inside a
+repository are never edited by Fabrica: there the line carries the exact
+replacement lines to apply by hand.
+
 Each project's line ends with which GitHub credential it uses: the
 GitHub App, its own token when its projects.toml entry names one
 (githubTokenVar), or the login the GitHub CLI holds on this machine
@@ -145,14 +167,19 @@ since an unreadable file cannot answer them either way.
 
   --fix   Also put the images a task needs onto this machine when they
           are missing or out of date, instead of only naming the
-          command: builds the worker image, pulls the relay image,
-          builds each registered project's own machine image, and
-          reports what it did. Each runs only when its own check above
-          fails, and the pins those checks read are unchanged - so this
-          never does more than run the command that check already
-          printed. Without it, doctor reads and spends nothing, exactly
-          as before. Runs before --live, so a live call is made with
-          the image this just built.
+          command: converts any terms folder outside its repository
+          that still hard-codes a version the repository declares in a
+          file (keeping the old files as <name>.bak and printing
+          exactly what changed), then builds the worker image, pulls
+          the relay image, builds each registered project's own machine
+          image, and reports what it did. Each runs only when its own
+          check above fails, and the pins those checks read are
+          unchanged - so this never does more than run the command that
+          check already printed. The conversion runs first, which is
+          why the converted project's image is then rebuilt from the
+          new file. Without it, doctor reads and spends nothing,
+          exactly as before. Runs before --live, so a live call is made
+          with the image this just built.
   --live  Also make one minimal real call with the worker token (a few
           cents) and report whether it is alive or dead.
 
@@ -513,11 +540,23 @@ export function inspectNpmLinkSite(site: { prefix: string; npmDefault: boolean }
  *
  * Anchored to a FROM line rather than matched anywhere in the file: a
  * Dockerfile has comments, and a comment mentioning some other Node
- * must never be able to satisfy a pin the box itself does not honor. */
+ * must never be able to satisfy a pin the box itself does not honor.
+ *
+ * A `FROM` in the build-argument form (issue #355 - `FROM
+ * cimg/node:${NODE_VERSION}`) is resolved through the file's own `ARG`
+ * defaults before the tag is read, the same way every other reader of a
+ * `FROM` here does it (`finalStageBaseImage`). Without that, converting
+ * this repository's own `Dockerfile.inspector` - which is exactly what
+ * `fabrica doctor`'s version line now suggests for a project declaring
+ * its version in a file - would quietly turn this pin into "no pinned
+ * version found". */
 export function pinnedNodeVersion(): string | null {
   try {
     const dockerfile = readFileSync(join(CHECKOUT, "Dockerfile.inspector"), "utf8");
-    return /^FROM\s+\S*node:(\d+\.\d+\.\d+)/m.exec(dockerfile)?.[1] ?? null;
+    const from = /^FROM\s+(\S+)/m.exec(dockerfile)?.[1];
+    if (from === undefined) return null;
+    const resolved = from.includes("$") ? expandImageRef(from, argDefaultsBeforeFirstFrom(dockerfile)) : from;
+    return resolved === null ? null : (/\bnode:(\d+\.\d+\.\d+)/.exec(resolved)?.[1] ?? null);
   } catch {
     return null;
   }
@@ -1046,6 +1085,19 @@ export function formatDoctorLine(check: DoctorCheck): string {
     : `FAIL ${check.label}: ${check.detail}${check.fix ? ` - fix: ${check.fix}` : ""}`;
 }
 
+/** The line `--fix` prints for a project whose terms it could not
+ * convert (issue #355) - the version line above it says the file still
+ * hard-codes a version, and this says why the fix did not take. */
+function failedConversionLine(report: VersionPinConversionReport): DoctorCheck {
+  return {
+    ok: false,
+    blocking: false,
+    label: versionPinsLabel(report.name),
+    detail: `--fix could not convert this project's terms: ${report.detail}`,
+    fix: `fix that, or convert the file by hand - \`fabrica doctor\` names the exact replacement lines`,
+  };
+}
+
 /** Every check `fabrica doctor` runs, as objects rather than lines -
  * exported so `fabrica up` can decide per finding whether it stops a
  * task (`stopsATask`) instead of reading doctor's exit code, which
@@ -1144,7 +1196,18 @@ export async function collectDoctorChecks(opts: {
       // same reason as the line above it, and its `needsBuild` is what
       // `--fix` and `fabrica up` build from, so the decision to build
       // stays this line's own.
-      checks.push(probes.projectImage(machineImageFor(config, path), machineImageLabel(name)));
+      const machine = machineImageFor(config, path);
+      checks.push(probes.projectImage(machine, machineImageLabel(name)));
+      // Issue #355: and whether the version that image is built on
+      // still comes from a number typed into its Dockerfile while the
+      // repository declares the same version in a file of its own -
+      // which is how a bump on the base branch used to break every task
+      // until someone edited that file by hand. Read off the same
+      // `MachineImage` the line above reports, so what this says and
+      // what a build actually passes are one answer. Not a probe: it
+      // reads files and asks Docker nothing, like this project's own
+      // line above it.
+      checks.push(versionPinsCheck(machine, versionPinsLabel(name)));
     }
 
     const { perTaskUsd, perDayUsd } = config.caps;
@@ -1203,6 +1266,14 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
   // lines it re-asks afterwards must come from the same probes, or the
   // report could describe one machine and the exit code another.
   const probes = opts.probes ?? realProbes;
+  // Issue #355, and deliberately before any check is collected rather
+  // than inside the repair step below: converting a project's terms to
+  // the build-argument form changes the file its image is built from, so
+  // doing it first is what makes the image line that follows say "out of
+  // date" and the repair step rebuild it from the converted file. There
+  // is no second copy of the build here, and the Client reads one
+  // ordered story - what changed, then what was rebuilt because of it.
+  const converted = fix ? convertProjectVersionPins(recordHome, { stdout, stderr }) : [];
   const checks = await collectDoctorChecks({
     recordHome,
     probes,
@@ -1225,5 +1296,11 @@ export async function runDoctorCommand(argv: string[], opts: RunDoctorCommandOpt
       : undefined,
   });
   for (const check of checks) stdout(formatDoctorLine(check));
-  return checks.every((c) => c.ok) ? 0 : 1;
+  // A conversion that failed gets a FAIL line of its own, after the
+  // report: the project's own version line already says the file still
+  // hard-codes a version, and this is the half that says why `--fix`
+  // did not change that.
+  const failed = converted.filter((one) => one.outcome === "failed");
+  for (const report of failed) stdout(formatDoctorLine(failedConversionLine(report)));
+  return failed.length === 0 && checks.every((c) => c.ok) ? 0 : 1;
 }

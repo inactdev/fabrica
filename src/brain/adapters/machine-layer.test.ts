@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  argDefaultsBeforeFirstFrom,
   finalStageBaseImage,
   finalStageUser,
   machineDockerfile,
@@ -276,6 +277,53 @@ test("finalStageBaseImage resolves which image the last stage is really built on
   // Unresolvable, and said so rather than guessed:
   assert.equal(finalStageBaseImage("FROM $BASE\n"), null);
   assert.equal(finalStageBaseImage("RUN true\n"), null);
+});
+
+// Issue #355: a project's `FROM` now names its version through a build
+// argument. Before this, any `$` in a reference answered null here -
+// which through `machineRestoreUser` made every such project an image
+// Fabrica refused to build at all.
+test("finalStageBaseImage fills a FROM's build arguments in, from the file and from the build", () => {
+  const file = "ARG RUBY_VERSION=3.4.8\nFROM ruby:${RUBY_VERSION}\n";
+  // The file's own default, when the build passes nothing.
+  assert.equal(finalStageBaseImage(file), "ruby:3.4.8");
+  // And what the build passes wins over it, which is what docker does.
+  assert.equal(finalStageBaseImage(file, { RUBY_VERSION: "3.4.13" }), "ruby:3.4.13");
+  // Both spellings, a suffix kept, and several arguments at once.
+  assert.equal(finalStageBaseImage("ARG V=3.4.8\nFROM ruby:$V-slim\n"), "ruby:3.4.8-slim");
+  assert.equal(finalStageBaseImage("ARG A=cimg\nARG B=1.2.3\nFROM ${A}/ruby:${B}\n"), "cimg/ruby:1.2.3");
+  // A declaration with no default has no value until a build gives it
+  // one: unresolvable, not an empty tag.
+  assert.equal(finalStageBaseImage("ARG RUBY_VERSION\nFROM ruby:${RUBY_VERSION}\n"), null);
+  assert.equal(finalStageBaseImage("ARG RUBY_VERSION\nFROM ruby:${RUBY_VERSION}\n", { RUBY_VERSION: "3.4.13" }), "ruby:3.4.13");
+  // An `ARG` below the first `FROM` is in no `FROM`'s scope at all -
+  // BuildKit's own rule, and the reason the conversion writes its own
+  // line above the first one.
+  assert.equal(finalStageBaseImage("FROM ruby:${RUBY_VERSION}\nARG RUBY_VERSION=3.4.8\n"), null);
+  // And an earlier stage followed back still resolves.
+  assert.equal(finalStageBaseImage("ARG V=3.4.8\nFROM ruby:$V AS deps\nFROM deps\n"), "ruby:3.4.8");
+});
+
+test("the user to restore is worked out for a FROM in the argument form, and still refused without a value", () => {
+  const file = "ARG RUBY_VERSION=3.4.8\nFROM ruby:${RUBY_VERSION}\n";
+  assert.equal(machineRestoreUser(file, () => "someone"), "someone");
+  assert.equal(machineRestoreUser(file, ROOT_BASE), null);
+  // The image asked about is the resolved one, never the text.
+  const asked: string[] = [];
+  machineRestoreUser(file, (image) => (asked.push(image), ""), { RUBY_VERSION: "3.4.13" });
+  assert.deepEqual(asked, ["ruby:3.4.13"]);
+  assert.throws(
+    () => machineRestoreUser("ARG RUBY_VERSION\nFROM ruby:${RUBY_VERSION}\n", ROOT_BASE),
+    /cannot be read out of it either/,
+    "an argument nothing gives a value is still unresolvable"
+  );
+});
+
+test("argDefaultsBeforeFirstFrom reads only what a FROM may actually use", () => {
+  assert.deepEqual(argDefaultsBeforeFirstFrom("ARG A=1\nARG B=2\nFROM x\nARG C=3\n"), { A: "1", B: "2" });
+  assert.deepEqual(argDefaultsBeforeFirstFrom("arg A=1 B=2\nFROM x\n"), { A: "1", B: "2" }, "one line may declare several");
+  assert.deepEqual(argDefaultsBeforeFirstFrom(`ARG A="quoted"\nFROM x\n`), { A: "quoted" });
+  assert.deepEqual(argDefaultsBeforeFirstFrom("ARG A\nFROM x\n"), {}, "no default, no value");
 });
 
 test("finalStageUser reads the last USER of the last stage only", () => {

@@ -35,5 +35,14 @@
     "source": "inspector's own environment: one variable per name the key lists, set by whoever invokes inspector",
     "passedToBuildAs": "--secret id=NAME,env=NAME",
     "note": "fabrica reads each value from ~/.fabrica/brain.env and sets it on the inspector child's environment; only names ever appear in a config, an argv, a log, a report or a message"
+  },
+  "buildArgs": {
+    "configKey": "buildArgs",
+    "entry": "NAME to {file} or {file, pattern}, where file is repository-relative",
+    "source": "the repository under check, read at the commit being checked - never the working tree and never another tree",
+    "passedToBuildAs": "--build-arg NAME=value",
+    "patternSemantics": "matched one trimmed line at a time, first matching line winning, taking the first capture group or the whole match when the pattern has none; with no pattern the value is the file's first non-empty line, trimmed. Never a (?m) inline flag: fabrica matches these with JavaScript's engine and inspector with Go's RE2, and (?m) is a syntax error in the first",
+    "unresolved": "a declared name whose file is absent, whose file matches nothing, or whose value could not be a Docker tag is not passed at all, so the Dockerfile's own ARG default stands",
+    "note": "fabrica register writes `ARG RUBY_VERSION=<version>` above the first FROM and `FROM ruby:${RUBY_VERSION}`, plus the matching entry here, so the version an image is built on follows the repository's own .ruby-version / .node-version / .python-version / go.mod rather than a number typed into a Dockerfile (fabrica issue #355). The ARG always carries a default, so a build that passes no value - an older inspector, a hand docker build - produces exactly the image the literal tag produced. Fabrica resolves the same entries for its own machine-image build, from that build's context, and hashes them into that image's stamp so a version bump rebuilds it too"
   }
 }

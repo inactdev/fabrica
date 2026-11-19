@@ -40,6 +40,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildArgEntry, readFileIn, versionArgFor } from "../buildargs/index.ts";
 import { LineError, fetchOriginDefaultBranch, requireRepoRoot } from "../line/index.ts";
 import { RegisterError, RegisterProposalError } from "./errors.ts";
 import { proposeInspectorConfig, readProposalSignals } from "./propose.ts";
@@ -687,6 +688,14 @@ export async function registerProject(
     // shape derives too (`buildSecrets`, from the gem sources the
     // lockfile declares).
     const shape = dependencyShapeInTree(worktree);
+    // Issue #355: whether the image this check runs in carries a
+    // version the repository declares in a file of its own - read out
+    // of the worktree, which is origin's default branch, the commit a
+    // task would be cut from. Derived once for both files below, the
+    // same way `deriveProposal` does it for the other two routes: the
+    // `ARG`/`FROM` lines and the `buildArgs` entry are two halves of
+    // one answer and must never be written disagreeing.
+    const versionArg = versionArgFor(image, readFileIn(worktree)) ?? undefined;
 
     const protectedPaths = protectedPathsFor(request.protectedPaths ?? []);
     writeFileSync(
@@ -700,6 +709,11 @@ export async function registerProject(
         // this route too, not only on --terms, because the file the
         // Dockerfile mounts them for is the file this commits.
         ...(shape?.buildSecrets === undefined ? {} : { buildSecrets: shape.buildSecrets }),
+        // The file the Dockerfile's own FROM reads its version from,
+        // when there is one. Written on this route too, for the same
+        // reason the secrets are: the Dockerfile this commits is the
+        // file that consumes it.
+        ...(versionArg === undefined ? {} : { buildArgs: buildArgEntry(versionArg) }),
       })
     );
 
@@ -722,6 +736,7 @@ export async function registerProject(
           reason: `the image \`fabrica register --image ${image}\` was given, and ${RECORDED_CHECK} was run ` +
             `inside it once before this was committed`,
           shape,
+          ...(versionArg === undefined ? {} : { versionArg }),
         })
       );
     } else {

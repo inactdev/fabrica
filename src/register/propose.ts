@@ -35,6 +35,14 @@
 // Reading is one function; deriving is a pure one over what it read, so
 // every rule below is testable with no git and no repository.
 
+import {
+  buildArgEntry,
+  versionArgFor,
+  VERSION_FAMILIES,
+  type DeclaredBuildArgs,
+  type ReadRepoFile,
+  type VersionArgFor,
+} from "../buildargs/index.ts";
 import { PUBLIC_GEM_HOST } from "../buildsecrets/index.ts";
 import { CHECK_SCRIPT, INSPECTOR_CONFIG, RECORDED_CHECK, fileExistsOnRef, readFileOnRef } from "./origin.ts";
 import { checkScript, inspectorConfigJson, type TermsLocation } from "./scaffold.ts";
@@ -115,6 +123,18 @@ export interface ProposalSignals {
   /** Whether `bin/rails` is at the repository root, i.e. whether
    * `bin/rails <task>` is a command this repository has. */
   railsBin: boolean;
+  /**
+   * Every other file `src/buildargs`'s table may read a language
+   * version out of (issue #355) - `.node-version`, `.nvmrc`,
+   * `.python-version`, `.tool-versions` - keyed by path, read off the
+   * same ref as everything above.
+   *
+   * Optional, and the two fields above still answer for `.ruby-version`
+   * and `go.mod`, which this repository already read for other reasons:
+   * one read per file, and a hand-built signals object in a test keeps
+   * working. `readProposalSignals` always fills it.
+   */
+  versionFiles?: Record<string, string | null>;
 }
 
 /** What `fabrica register` prints when a repository has no
@@ -168,6 +188,34 @@ export function readProposalSignals(project: string, ref: string): ProposalSigna
     gemfile: readFileOnRef(project, ref, GEMFILE),
     rubyVersion: readFileOnRef(project, ref, RUBY_VERSION_FILE),
     railsBin: fileExistsOnRef(project, ref, RAILS_BIN),
+    versionFiles: versionFilesOnRef(project, ref),
+  };
+}
+
+/** Every file `src/buildargs`'s table may read a version out of, read
+ * off the same ref - skipping the two this repository already read for
+ * their own reasons, so no file is fetched twice. */
+function versionFilesOnRef(project: string, ref: string): Record<string, string | null> {
+  const already = new Set([RUBY_VERSION_FILE, GO_MOD]);
+  const paths = new Set(
+    VERSION_FAMILIES.flatMap((family) => family.files.map((source) => source.file)).filter(
+      (file) => !already.has(file)
+    )
+  );
+  return Object.fromEntries([...paths].map((file) => [file, readFileOnRef(project, ref, file)]));
+}
+
+/** The repository's own files as `src/buildargs` reads them, out of the
+ * signals already gathered - so the version a `FROM` line carries and
+ * the version the proposal's notes name come from one read of one ref.
+ */
+export function versionFileReader(signals: ProposalSignals): ReadRepoFile {
+  return (path: string) => {
+    const gathered = signals.versionFiles?.[path];
+    if (gathered !== undefined) return gathered;
+    if (path === RUBY_VERSION_FILE) return signals.rubyVersion;
+    if (path === GO_MOD) return signals.goMod;
+    return null;
   };
 }
 
@@ -822,6 +870,24 @@ function buildSecretsReason(signals: ProposalSignals, names: readonly string[]):
   );
 }
 
+/** The `buildArgs:` note line (issue #355) - which version the image's
+ * tag now comes from, or why the key is left out. */
+function buildArgsReason(versionArg: VersionArgFor | undefined): string {
+  if (versionArg === undefined) {
+    return (
+      `omitted - the image above carries no version this repository also declares in a file of its own, so ` +
+      `${DOCKERFILE_INSPECTOR}'s FROM names it outright. Nothing here has to be kept in step with anything`
+    );
+  }
+  const { arg, label } = versionArg.family;
+  return (
+    `${arg} from ${versionArg.declared.file}, which declares ${label} ${versionArg.declared.value} - so ` +
+    `${DOCKERFILE_INSPECTOR} says FROM ${versionArg.image.image}:\${${arg}}${versionArg.image.suffix} and a bump ` +
+    `in that file needs no edit to either file. Inspector reads it at the commit under check and Fabrica reads it ` +
+    `for the box the work is written in, so both boxes move together`
+  );
+}
+
 export interface ProtectedPathsField {
   /** `undefined` leaves the key out of the document entirely. */
   paths: string[] | undefined;
@@ -894,6 +960,19 @@ export interface ProposalDerivation {
    * anywhere.
    */
   buildSecrets: string[];
+  /**
+   * `.inspector.json`'s `buildArgs` (issue #355): the build arguments
+   * `Dockerfile.inspector`'s own `FROM` reads its version through, and
+   * the repository file each one comes from. Empty - and the key left
+   * out of the document entirely - for an image whose tag is not a
+   * language version, or a repository that declares none.
+   */
+  buildArgs: DeclaredBuildArgs;
+  /** The same derivation in the form `Dockerfile.inspector` needs it,
+   * absent when there is none - so a caller writing that file with
+   * `inspectorDockerfile` passes exactly what the config was written
+   * from. */
+  versionArg?: VersionArgFor;
   /** `Dockerfile.inspector`'s contents, with a trailing newline. */
   dockerfile: string;
   /**
@@ -951,6 +1030,13 @@ export function deriveProposal(
   // lockfile, so the key the config lists and the mounts the Dockerfile
   // writes are one answer rather than two readings of one file.
   const buildSecrets = [...(dependencies.shape?.buildSecrets ?? [])];
+  // Issue #355: whether the image this check runs in carries a version
+  // the repository declares in a file of its own - and if so, the `ARG`
+  // the Dockerfile's FROM reads it through and the `buildArgs` entry
+  // naming the file. Derived once, here, so the two files cannot be
+  // written disagreeing with each other.
+  const versionArg = versionArgFor(image.value, versionFileReader(signals)) ?? undefined;
+  const buildArgs: DeclaredBuildArgs = versionArg === undefined ? {} : buildArgEntry(versionArg);
 
   return {
     check,
@@ -958,12 +1044,15 @@ export function deriveProposal(
     dependencies,
     protectedPaths,
     buildSecrets,
+    buildArgs,
+    ...(versionArg === undefined ? {} : { versionArg }),
     ...(timeout.seconds !== undefined ? { timeoutSeconds: timeout.seconds } : {}),
     dockerfile: inspectorDockerfile({
       from: image.value,
       reason: image.reason,
       shape: dependencies.shape,
       repoFiles: terms === "folder" ? "named-repo-context" : "build-context",
+      ...(versionArg === undefined ? {} : { versionArg }),
     }),
     // The same function the `--terms` route writes its script with, over
     // the same command and the same shape, so the proposal a Client
@@ -977,6 +1066,7 @@ export function deriveProposal(
         `${protectedPaths.reason}.`,
       `  buildSecrets: ${buildSecrets.length === 0 ? "omitted" : buildSecrets.join(", ")} - ` +
         `${buildSecretsReason(signals, buildSecrets)}.`,
+      `  buildArgs: ${buildArgsReason(versionArg)}.`,
       // The check box is built from Dockerfile.inspector since
       // inspector#47, so these two are fields of that file rather than
       // keys of a config - there is no `image` key and no `network` key
@@ -1006,6 +1096,10 @@ export function proposeInspectorConfig(
     ...(derived.timeoutSeconds !== undefined ? { timeoutSeconds: derived.timeoutSeconds } : {}),
     ...(protectedPaths.paths !== undefined ? { protectedPaths: protectedPaths.paths } : {}),
     buildSecrets: derived.buildSecrets,
+    // Issue #355: written beside the Dockerfile whose FROM reads it, in
+    // the same proposal, so a Client committing both gets a pair that
+    // agrees.
+    buildArgs: derived.buildArgs,
   }).trimEnd();
 
   // Two files for almost every project; three when the derived check

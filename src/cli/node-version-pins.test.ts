@@ -45,6 +45,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pinnedNodeVersion } from "./doctor-command.ts";
+import { argDefaultsBeforeFirstFrom, expandImageRef } from "../index.ts";
 import { machineLayer, pinnedMachineNodeVersion } from "../brain/index.ts";
 
 const CHECKOUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -152,4 +153,31 @@ test("the worker Dockerfile never names a second Node version", () => {
     [nodeVersionFile()],
     `the worker Dockerfile mentions ${JSON.stringify([...new Set(found)])}; every Node version it names must be .node-version's`
   );
+});
+
+// Issue #355 made `fabrica doctor` suggest, for any project whose
+// repository declares its own version in a file, that
+// `Dockerfile.inspector` read it from there instead of naming it -
+// which includes this repository, whose `.node-version` declares the
+// Node its own check box runs. Following that advice must not quietly
+// turn this pin into "no pinned version found", so the reader resolves
+// the build-argument form through the file's own ARG defaults. Driven
+// through text rather than by rewriting the real file, which is the
+// Client's to convert.
+test("the FROM-tag reader resolves a version named through a build argument", () => {
+  const converted = [
+    "ARG NODE_VERSION=24.18.0",
+    "FROM cimg/node:${NODE_VERSION}",
+    "USER root",
+    "",
+  ].join("\n");
+  const from = /^FROM\s+(\S+)/m.exec(converted)?.[1] ?? "";
+  const resolved = expandImageRef(from, argDefaultsBeforeFirstFrom(converted));
+
+  assert.equal(resolved, "cimg/node:24.18.0");
+  assert.equal(/\bnode:(\d+\.\d+\.\d+)/.exec(resolved ?? "")?.[1], "24.18.0");
+  // And a conversion that left the argument with no default anywhere is
+  // unresolvable rather than silently empty - which is what makes the
+  // pin read as missing instead of as some other version.
+  assert.equal(expandImageRef("cimg/node:${NODE_VERSION}", {}), null);
 });

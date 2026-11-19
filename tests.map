@@ -105,6 +105,12 @@ src/brain/helpers/fake-brain.test.ts: src/brain/helpers/fake-brain.test.ts
 src/brain/helpers/fake-brain.ts: src/brain/helpers/fake-brain.test.ts
 src/brain/live-transcript.test.ts: src/brain/live-transcript.test.ts
 src/brain/live-transcript.ts: src/brain/live-transcript.test.ts
+# Hand-added: the barrel has no colocated test of its own, the same way
+# every other index.ts here hasn't. These are the suites that reach what
+# it re-exports through it rather than through the module directly - the
+# readers of a project's own Dockerfile (issue #355), and the two
+# callers that compose one.
+src/brain/index.ts: src/brain/adapters/machine-layer.test.ts, src/projectimage/resolve.test.ts, src/cli/node-version-pins.test.ts
 src/brain/task-network.test.ts: src/brain/task-network.test.ts
 src/brain/task-network.ts: src/brain/task-network.test.ts
 src/brain/writeup.test.ts: src/brain/writeup.test.ts
@@ -123,6 +129,24 @@ src/buildsecrets/resolve.ts: src/buildsecrets/resolve.test.ts, src/cli/doctor-co
 src/buildsecrets/errors.ts: src/projectimage/resolve.test.ts, src/cli/machine-image.test.ts
 src/buildsecrets/index.ts: src/buildsecrets/resolve.test.ts, src/buildsecrets/derive.test.ts, src/buildsecrets/declared.test.ts
 src/buildsecrets/no-value-outside-the-build.test.ts: src/buildsecrets/no-value-outside-the-build.test.ts
+
+# Issue #355: the versions an image is built on, read out of the
+# repository's own files. The table, the read-back, the resolve and the
+# conversion each have their own suite; the one fact about Docker itself
+# that all of it rests on - a FROM carrying a build argument really
+# builds on the version that argument passes - is a real build of its
+# own (it skips, loudly, when Docker is absent), and the real-Inspector
+# half lives with the other end-to-end register tests.
+src/buildargs/versions.test.ts: src/buildargs/versions.test.ts
+src/buildargs/versions.ts: src/buildargs/versions.test.ts, src/buildargs/convert.test.ts, src/buildargs/resolve.test.ts, src/register/propose.test.ts
+src/buildargs/declared.test.ts: src/buildargs/declared.test.ts
+src/buildargs/declared.ts: src/buildargs/declared.test.ts, src/projectimage/resolve.test.ts
+src/buildargs/resolve.test.ts: src/buildargs/resolve.test.ts
+src/buildargs/resolve.ts: src/buildargs/resolve.test.ts, src/projectimage/resolve.test.ts
+src/buildargs/convert.test.ts: src/buildargs/convert.test.ts
+src/buildargs/convert.ts: src/buildargs/convert.test.ts, src/cli/version-pins.test.ts
+src/buildargs/index.ts: src/buildargs/versions.test.ts, src/buildargs/declared.test.ts, src/buildargs/resolve.test.ts, src/buildargs/convert.test.ts
+src/buildargs/arg-form-build.test.ts: src/buildargs/arg-form-build.test.ts
 
 src/ci/checks.test.ts: src/ci/checks.test.ts
 src/ci/checks.ts: src/ci/checks.test.ts
@@ -220,7 +244,12 @@ src/cli/tsx-bootstrap.test.ts: src/cli/tsx-bootstrap.test.ts
 src/cli/up-command.test.ts: src/cli/up-command.test.ts
 src/cli/up-command.ts: src/cli/up-command.test.ts
 src/cli/update-command.test.ts: src/cli/update-command.test.ts
-src/cli/update-command.ts: src/cli/update-command.test.ts
+src/cli/update-command.ts: src/cli/update-command.test.ts, src/cli/version-pins.test.ts
+# Issue #355: the doctor line, and the conversion `fabrica update` and
+# `fabrica doctor --fix` run. Its own suite drives both commands for
+# real, so it covers the two call sites too.
+src/cli/version-pins.test.ts: src/cli/version-pins.test.ts
+src/cli/version-pins.ts: src/cli/version-pins.test.ts, src/cli/doctor-command.test.ts
 src/cli/verdict-args.test.ts: src/cli/verdict-args.test.ts
 src/cli/verdict-args.ts: src/cli/verdict-args.test.ts
 src/cli/verdict-command.test.ts: src/cli/verdict-command.test.ts
@@ -544,6 +573,7 @@ src/register/helpers/rails-fixture.ts: src/register/propose.test.ts, src/registe
 # any of them can only be wrong in the check box.
 src/register/inspector-e2e.test.ts: src/register/inspector-e2e.test.ts
 src/register/build-secret-e2e.test.ts: src/register/build-secret-e2e.test.ts
+src/register/build-arg-e2e.test.ts: src/register/build-arg-e2e.test.ts
 src/register/helpers/rails-app-fixture.ts: src/register/inspector-e2e.test.ts, src/register/build-secret-e2e.test.ts
 src/register/terms.test.ts: src/register/terms.test.ts
 src/register/terms.ts: src/register/terms.test.ts, src/register/inspector-e2e.test.ts
