@@ -82,6 +82,17 @@ export function globalPackagePath(prefix: string): string {
   return join(prefix, "lib", "node_modules", GLOBAL_PACKAGE_NAME);
 }
 
+/** Where a prefix puts the `fabrica` command itself - the one path npm
+ * and a hand-written launcher both want to own (bin-launcher.ts).
+ * Observed on npm 11.16.0: a global install writes this as a *relative*
+ * symlink, `../lib/node_modules/fabrica/<the package's own bin field>`,
+ * and refuses the whole install with `EEXIST` - leaving
+ * `lib/node_modules` empty - if anything else is already sitting
+ * there. */
+export function globalBinPath(prefix: string): string {
+  return join(prefix, "bin", GLOBAL_PACKAGE_NAME);
+}
+
 /** Where Fabrica's own code comes from, over plain https: the one
  * spelling shared by every command that reads or clones it (this
  * module's clone step, and `fabrica doctor`'s side-effect-free

@@ -27,6 +27,11 @@
 // install that tarball. The exact commands are spelled once, in
 // npm-prefix.ts.
 //
+// The install step is wrapped so that a hand-written launcher at
+// `<prefix>/bin/fabrica` survives it - see bin-launcher.ts, which owns
+// that entirely, including why npm cannot simply be allowed to have
+// that path.
+//
 // Everything that touches the machine is one injected interface
 // (`GlobalReinstallIo`), so the tests here assert the exact argv git and
 // npm are handed, and the directory each is run in, without ever running
@@ -36,6 +41,12 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  installKeepingLauncher,
+  realLauncherIo,
+  type LauncherIo,
+  type LauncherOutcome,
+} from "./bin-launcher.ts";
 import {
   GLOBAL_PACKAGE_NAME,
   cloneCommandArgs,
@@ -50,6 +61,15 @@ import {
 export interface CommandOutcome {
   ok: boolean;
   message: string;
+}
+
+/** A reinstall reports two things: whether the install itself worked,
+ * and what became of any launcher at `<prefix>/bin/fabrica` - which is
+ * its own answer, since a launcher can be broken by an install that
+ * otherwise went perfectly, and `fabrica update` has to say so and exit
+ * non-zero for that alone. */
+export interface ReinstallOutcome extends CommandOutcome {
+  launcher: LauncherOutcome;
 }
 
 /** The message a failed `execFileSync` should be reported with: what the
@@ -80,6 +100,9 @@ export interface GlobalReinstallIo {
   /** Removes it, whatever happened. Must never throw: a staging
    * directory left behind is litter, not a failed update. */
   removeStagingDir(dir: string): void;
+  /** The filesystem steps that keep a hand-written launcher at
+   * `<prefix>/bin/fabrica` across the install (bin-launcher.ts). */
+  launcher: LauncherIo;
 }
 
 function run(command: string, args: string[], cwd: string): CommandOutcome {
@@ -104,6 +127,7 @@ export const realGlobalReinstallIo: GlobalReinstallIo = {
       // turning a finished update into a failure over.
     }
   },
+  launcher: realLauncherIo,
 };
 
 /** Where inside the staging directory the clone goes. A name of our own,
@@ -121,18 +145,24 @@ const CLONE_DIR_NAME = GLOBAL_PACKAGE_NAME;
  * passing npm a `fabrica-*.tgz` glob: npm is run directly, with no shell
  * anywhere to expand one. A directory this function just created holds
  * exactly one tarball; none at all, or more than one, is reported rather
- * than guessed at. */
-export function reinstallGlobalCopy(prefix: string | null, io: GlobalReinstallIo): CommandOutcome {
+ * than guessed at.
+ *
+ * Only the install step is wrapped in the launcher's move-aside and
+ * put-back (`installKeepingLauncher`): the clone and the pack never go
+ * near `<prefix>/bin`, so a failure in either leaves the launcher where
+ * it has been all along, which is why they report `{ kind: "none" }`. */
+export function reinstallGlobalCopy(prefix: string | null, io: GlobalReinstallIo): ReinstallOutcome {
   const staging = io.makeStagingDir();
   const clone = join(staging, CLONE_DIR_NAME);
+  const untouched = { kind: "none" } as const;
   try {
     const cloneArgs = cloneCommandArgs(clone);
     const cloned = io.git(cloneArgs, staging);
-    if (!cloned.ok) return failure("git", cloneArgs, cloned.message);
+    if (!cloned.ok) return { ...failure("git", cloneArgs, cloned.message), launcher: untouched };
 
     const packArgs = packInCloneCommandArgs(staging);
     const packed = io.npm(packArgs, clone);
-    if (!packed.ok) return failure("npm", packArgs, packed.message);
+    if (!packed.ok) return { ...failure("npm", packArgs, packed.message), launcher: untouched };
 
     const tarballs = io.readStagingDir(staging).filter(isPackedTarball);
     if (tarballs.length !== 1) {
@@ -141,12 +171,15 @@ export function reinstallGlobalCopy(prefix: string | null, io: GlobalReinstallIo
         message:
           `npm ${packArgs.join(" ")} ${describeWrongTarballCount(tarballs)} - ` +
           `there is no one tarball to install fabrica from, so nothing was installed`,
+        launcher: untouched,
       };
     }
 
     const installArgs = installTarballCommandArgs(prefix, join(staging, tarballs[0]));
-    const installed = io.npm(installArgs, clone);
-    return installed.ok ? installed : failure("npm", installArgs, installed.message);
+    const { install: installed, launcher } = installKeepingLauncher(prefix, io.launcher, () =>
+      io.npm(installArgs, clone)
+    );
+    return installed.ok ? { ...installed, launcher } : { ...failure("npm", installArgs, installed.message), launcher };
   } finally {
     // Unconditional: the install copies the tarball in, so keeping it
     // afterwards serves nothing, and a failed run has no more use for it

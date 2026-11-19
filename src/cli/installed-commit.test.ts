@@ -30,16 +30,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { savedLauncherPath } from "./bin-launcher.ts";
 import { checkoutCheck, detectCopy, git } from "./doctor-command.ts";
 import { realGlobalReinstallIo, reinstallGlobalCopy, type GlobalReinstallIo } from "./global-reinstall.ts";
-import { GLOBAL_PACKAGE_NAME, globalPackagePath, isPackedTarball, UPSTREAM_GIT_URL } from "./npm-prefix.ts";
+import {
+  GLOBAL_PACKAGE_NAME,
+  globalBinPath,
+  globalPackagePath,
+  isPackedTarball,
+  UPSTREAM_GIT_URL,
+} from "./npm-prefix.ts";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PREPARE_SCRIPT = join("scripts", "write-build-info.mjs");
+/** The probe package's own entry point - what npm links
+ * `<prefix>/bin/fabrica` at, and what a launcher of one's own would
+ * exec by absolute path. */
+const PROBE_BIN = "bin.mjs";
 
 const GIT_ENV = {
   ...process.env,
@@ -53,16 +74,27 @@ function scratch(what: string): string {
   return mkdtempSync(join(tmpdir(), `fabrica-installed-commit-${what}-`));
 }
 
-/** The probe package's files, written into `root`. */
+/** The probe package's files, written into `root`. It carries a `bin`
+ * field under this package's own name, like the real one does, so npm
+ * writes `<prefix>/bin/fabrica` for real - which is the path the
+ * launcher test below is about. */
 function writeProbePackage(root: string): void {
   writeFileSync(
     join(root, "package.json"),
     JSON.stringify(
-      { name: GLOBAL_PACKAGE_NAME, version: "0.0.0", private: true, scripts: { prepare: `node ${PREPARE_SCRIPT}` } },
+      {
+        name: GLOBAL_PACKAGE_NAME,
+        version: "0.0.0",
+        private: true,
+        bin: { [GLOBAL_PACKAGE_NAME]: `./${PROBE_BIN}` },
+        scripts: { prepare: `node ${PREPARE_SCRIPT}` },
+      },
       null,
       2
     ) + "\n"
   );
+  writeFileSync(join(root, PROBE_BIN), '#!/usr/bin/env node\nconsole.log("probe fabrica");\n');
+  chmodSync(join(root, PROBE_BIN), 0o755);
   mkdirSync(join(root, "scripts"), { recursive: true });
   copyFileSync(join(REPO, PREPARE_SCRIPT), join(root, PREPARE_SCRIPT));
 }
@@ -114,6 +146,105 @@ test("installed copy: cloning first, then packing from inside the clone, lands a
   const check = checkoutCheck(copy, remote.commit);
   assert.equal(check.ok, true, check.detail);
   assert.match(check.detail, /up to date with origin\/master/);
+});
+
+/** The shape the Client's dotfiles write at `<prefix>/bin/fabrica`: a
+ * script that pins the node Fabrica runs on and then execs this
+ * package's own entry point by absolute path. */
+function writeLauncher(prefix: string): string {
+  const text = [
+    "#!/bin/sh",
+    "# Written by dotfiles work/bootstrap.sh - pins the node Fabrica runs on.",
+    `exec node "${join(globalPackagePath(prefix), PROBE_BIN)}" "$@"`,
+    "",
+  ].join("\n");
+  mkdirSync(join(prefix, "bin"), { recursive: true });
+  writeFileSync(globalBinPath(prefix), text);
+  chmodSync(globalBinPath(prefix), 0o755);
+  return text;
+}
+
+// The headline requirement, against a real `npm install -g`: a launcher
+// of the Client's own survives an update byte for byte, and the install
+// it was in the way of actually happens.
+test("installed copy: a launcher of one's own survives a real install byte for byte, and the install still lands", () => {
+  const remote = probeRemote();
+  const prefix = scratch("prefix-launcher");
+  const text = writeLauncher(prefix);
+  const before = lstatSync(globalBinPath(prefix));
+
+  const result = reinstallGlobalCopy(prefix, ioAgainst(remote.url));
+  assert.equal(result.ok, true, result.message);
+
+  // The install really happened - not npm's EEXIST refusal, which
+  // leaves `lib/node_modules` empty and updates nothing at all.
+  const copy = installedCopy(prefix);
+  assert.equal(copy.commit, remote.commit);
+
+  assert.deepEqual(result.launcher, { kind: "kept", path: globalBinPath(prefix) });
+  assert.equal(readFileSync(globalBinPath(prefix), "utf8"), text, "the launcher's own bytes, unchanged");
+  const after = lstatSync(globalBinPath(prefix));
+  assert.equal(after.mode, before.mode, "and its mode - a launcher that is not executable is no launcher");
+  assert.equal(after.ino, before.ino, "the same file, moved by rename, not a copy that came out the same");
+  // Nothing stranded in a `bin` directory that is on PATH.
+  assert.throws(() => lstatSync(savedLauncherPath(prefix)));
+
+  // And it still starts the code that just landed, which is the only
+  // thing any of this is for.
+  const ran = spawnSync(globalBinPath(prefix), [], { encoding: "utf8" });
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.match(ran.stdout, /probe fabrica/);
+});
+
+// Why the move-aside is load-bearing rather than belt-and-braces, from
+// the other side: handed the same install with the launcher left in
+// place, npm cannot both install and leave it alone. On npm 11.16.0 it
+// refused outright - `npm error code EEXIST`, "File exists:
+// <prefix>/bin/fabrica", "Remove the existing file and try again, or run
+// npm with --force to overwrite files recklessly" - and left
+// `lib/node_modules` empty, updating nothing. A future npm that
+// overwrites instead would leave its own link there, running on whatever
+// node the terminal has, which is the same bug wearing the other hat -
+// so both are asserted as the one thing that must not happen.
+test("installed copy: npm itself cannot both install and keep a launcher - the move-aside is what makes it possible", () => {
+  const remote = probeRemote();
+  const prefix = scratch("prefix-no-move");
+  const text = writeLauncher(prefix);
+  const staging = scratch("staging-no-move");
+
+  const tree = join(staging, "tree");
+  execFileSync("git", ["clone", "--depth", "1", "--branch", "master", remote.url, tree], {
+    env: GIT_ENV,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const packed = spawnSync("npm", ["pack", "--pack-destination", staging], { cwd: tree, encoding: "utf8" });
+  assert.equal(packed.status, 0, packed.stderr);
+  const tarball = packed.stdout.trim().split("\n").filter(isPackedTarball).at(-1);
+  assert.ok(tarball, `npm pack wrote no tarball: ${packed.stdout}`);
+
+  const installed = spawnSync("npm", ["install", "-g", "--prefix", prefix, join(staging, tarball)], {
+    cwd: tree,
+    encoding: "utf8",
+  });
+
+  const survived = (() => {
+    try {
+      return readFileSync(globalBinPath(prefix), "utf8") === text;
+    } catch {
+      return false;
+    }
+  })();
+  assert.equal(
+    installed.status === 0 && survived,
+    false,
+    `npm installed and left the launcher alone, so nothing here needs to move it aside - re-read ` +
+      `bin-launcher.ts's header, which is written from the opposite observation. npm said: ${installed.stderr}`
+  );
+  if (installed.status === 0) {
+    // The other failure: npm took the path for itself.
+    assert.equal(lstatSync(globalBinPath(prefix)).isSymbolicLink(), true);
+    assert.match(readlinkSync(globalBinPath(prefix)), /lib\/node_modules\/fabrica/);
+  }
 });
 
 test("installed copy: the hosted-spec way, with no .git in the packed tree, says plainly that its commit is unknown", () => {
