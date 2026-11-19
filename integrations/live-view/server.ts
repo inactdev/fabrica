@@ -34,6 +34,7 @@ import {
   recordQuizAnswer,
   recordStopDecision,
   recordVerdictDecision,
+  recordVerdictFailure,
   TASK_ID_PATTERN,
 } from "../../src/index.ts";
 import { runningCopyCommit } from "../../src/cli/doctor-command.ts";
@@ -571,6 +572,18 @@ async function handleRecordVerdict(
     const quiz = ruling === "accept" ? startQuizRecheck(recordHome, taskId, entryScripts.quizRecheck) : undefined;
     send(res, 200, "application/json", JSON.stringify({ ok: true, ruling, ...(quiz ? { quiz } : {}) }));
   } catch (err) {
+    // Issue #353, the same as `src/cli/verdict-command.ts`'s own catch:
+    // a ruling that could not be taken goes on the task's own log
+    // before it is answered. `recordVerdictDecision` already records
+    // whatever it refuses itself; this covers the handoff after it, and
+    // is a no-op for a failure that already has its own event. A record
+    // that cannot be written must never replace the real error with its
+    // own - the Client still gets the message below.
+    try {
+      recordVerdictFailure(recordHome, taskId, ruling, note, err);
+    } catch {
+      /* ignored on purpose - see above */
+    }
     send(res, 400, "application/json", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }
 }

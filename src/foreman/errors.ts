@@ -133,7 +133,16 @@ export type ForemanErrorCode =
    * listening. Carries what the relay watcher reported, which names the
    * relay - a worker left to discover this itself says only
    * "ConnectionRefused", minutes later, if at all. */
-  | "worker-network-gone";
+  | "worker-network-gone"
+  /** A fix round's host-side rebase onto origin's default branch could
+   * not be run at all (issue #353): origin unreachable, a base nobody
+   * can name, a locked index, a rebase already in flight in the task's
+   * worktree. Carries git's own reason verbatim plus the two facts the
+   * Client would otherwise have to go and check - that the branch is
+   * exactly where his delivery left it, and that ruling `fix` again is
+   * all it takes once the cause is gone. See
+   * src/foreman/fix-rebase.ts's `rebaseFailureMessage`. */
+  | "rebase-failed";
 
 export class ForemanError extends Error {
   readonly code: ForemanErrorCode;

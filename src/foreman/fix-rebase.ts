@@ -50,6 +50,7 @@ import type { DeliveryStamp } from "./fingerprint.ts";
 import type { ReaderOnDelivery } from "../reader/index.ts";
 import { diffFiles, validateDelivery } from "../delivery/index.ts";
 import { costLabelOf } from "./caps.ts";
+import { ForemanError } from "./errors.ts";
 
 /** How many times one round's rebase may stop on a conflict and be handed
  * to its worker before the host gives up, aborts and reports (Client
@@ -88,9 +89,35 @@ export type FixRebase = { tips: BranchTips } & (
   | { status: "handed-to-worker"; stopped: StoppedRebase }
 );
 
-/** Runs the rebase and records what it did. */
+/**
+ * Runs the rebase and records what it did.
+ *
+ * A rebase that cannot be run at all - origin unreachable, a base nobody
+ * can name, a locked index, a rebase already in flight in this worktree -
+ * is this round's honest failure, and issue #353 asks that it "say so
+ * plainly and leave the branch untouched". The leaving-untouched half was
+ * already true and is the reason the sentence below can promise it:
+ * `src/line/rebase.ts` fetches and names the base *before* it rebases
+ * anything, aborts a part-applied rebase back to the branch's own last
+ * commit before throwing, and refuses outright - touching nothing - when
+ * a rebase is already in progress. What was missing was saying it: the
+ * Client was handed git's own words about a branch whose state he then
+ * had no way to know, on a task whose only visible change was that his
+ * ruling had failed.
+ *
+ * Re-worded here rather than in `src/line/rebase.ts` because that is the
+ * module boundary this file's own header draws - `src/line/rebase.ts`
+ * owns the git, this file owns the policy, and "the branch is where you
+ * left it, rule `fix` again when the cause is gone" is policy. git's own
+ * message is carried through verbatim inside it, never replaced.
+ */
 export function rebaseForFixRound(recordHome: string, taskId: string, line: ProductionLine): FixRebase {
-  const outcome = rebaseOntoOriginDefault(line);
+  let outcome: ReturnType<typeof rebaseOntoOriginDefault>;
+  try {
+    outcome = rebaseOntoOriginDefault(line);
+  } catch (err) {
+    throw new ForemanError("rebase-failed", rebaseFailureMessage(line, err));
+  }
   const tips = outcome.tips;
 
   if (outcome.status === "already-current") return { status: "already-current", tips };
@@ -106,6 +133,25 @@ export function rebaseForFixRound(recordHome: string, taskId: string, line: Prod
   };
   recordStop(recordHome, taskId, stopped, { left: "stopped" });
   return { status: "handed-to-worker", stopped, tips };
+}
+
+/** The one wording for a rebase that could not be run, naming what was
+ * attempted, git's own reason verbatim, and the two things the Client
+ * would otherwise have to go and check for himself: that his branch is
+ * exactly where his delivery left it, and that ruling `fix` again is all
+ * it takes once the cause is gone (the ruling is already on the record -
+ * `recordVerdictDecision` writes it before this round is ever started -
+ * so the task is still open and still his to rule on). */
+function rebaseFailureMessage(line: ProductionLine, err: unknown): string {
+  const reason = err instanceof Error ? err.message : String(err);
+  return (
+    `This fix round could not bring ${line.branch} up to origin's default branch, so it stopped before ` +
+    `any worker ran: ${reason}\n\n` +
+    `Nothing was rewritten and nothing was published - ${line.branch} is exactly where the delivery you ` +
+    `ruled on left it, and no commit of it has moved. A fix round always rebases first, so this will keep ` +
+    `happening until the cause above is cleared; once it is, rule \`fix\` again and the round runs from the ` +
+    `start.`
+  );
 }
 
 /**

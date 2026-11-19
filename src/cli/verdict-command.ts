@@ -14,11 +14,17 @@
 // There is no cap on how many rounds a task can have (issue #65) - see
 // `fixRoundOf` for where the round number printed below comes from.
 
-import { createForeman, fixRoundOf, onTaskAccepted, recordVerdictDecision } from "../index.ts";
+import { createForeman, fixRoundOf, onTaskAccepted, recordVerdictDecision, recordVerdictFailure } from "../index.ts";
 import { parseVerdictArgs, VERDICT_USAGE } from "./verdict-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { spawnDetachedResume } from "./spawn-detached.ts";
+
+/** The three ruling names, for reading what was attempted off the raw
+ * arguments when the parse itself fails (issue #353 - see
+ * `runVerdictCommand`). The parser is still the authority on everything
+ * else about them. */
+const RULINGS = ["accept", "fix", "wrong"];
 
 export const VERDICT_HELP = `Usage: ${VERDICT_USAGE}
 
@@ -100,9 +106,29 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
   const stdout = opts.stdout ?? ((line: string) => console.log(line));
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
+  // Issue #353 asks that every verdict attempt reach the task's own log,
+  // failures included - so what was attempted has to be known in the
+  // catch below as well as inside the `try`.
+  //
+  // Read straight off the two positionals this command's own usage line
+  // declares (`<taskId> <accept|fix|wrong>`), deliberately, rather than
+  // waiting for the parse to succeed: `parseVerdictArgs` refuses a `fix`
+  // with no note, which is one of the real ways a ruling fails, and it
+  // refuses it AFTER it has already read both positionals. Taking them
+  // from here covers that case too. The ruling is recognised rather than
+  // trusted - anything that is not one of the three names no ruling, and
+  // `recordVerdictFailure`'s own check keeps an id that is not a task in
+  // this record from ever being written down.
+  let attempted: { taskId: string; ruling: string; note?: string } | undefined =
+    argv.length >= 2 && RULINGS.includes(argv[1]) ? { taskId: argv[0], ruling: argv[1] } : undefined;
+  // Resolved before the parse rather than after it, for the same reason:
+  // it is an environment variable and a home directory, it cannot fail,
+  // and the catch below needs it.
+  const recordHome = opts.recordHome ?? resolveRecordHome();
+
   try {
     const { taskId, ruling, note } = parseVerdictArgs(argv);
-    const recordHome = opts.recordHome ?? resolveRecordHome();
+    attempted = { taskId, ruling, ...(note === undefined ? {} : { note }) };
     const caps = loadConfigOrDefault(recordHome).caps;
 
     // Validates and records the ruling right here, synchronously - a bad
@@ -143,6 +169,22 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
     // replace an instruction the Client can act on with a stack trace,
     // on a task that then looks unruled. Nothing here branches on a
     // `code`, so nothing here needs the type.
+    //
+    // Issue #353: and before it is printed, it goes on the task's own
+    // log. `recordVerdictDecision` already records whatever it refuses
+    // itself; this covers everything after it - reading the round
+    // number, handing the round off - and is a no-op for a failure that
+    // already has its own event. A failure that cannot be attributed to
+    // a task at all (the arguments themselves) is still printed and
+    // nothing more: there is no log to write to yet.
+    if (attempted !== undefined) {
+      try {
+        recordVerdictFailure(recordHome, attempted.taskId, attempted.ruling, attempted.note, err);
+      } catch {
+        // A record that cannot be written must not replace the real
+        // error with its own. The Client still gets the message below.
+      }
+    }
     stderr(err instanceof Error ? err.message : String(err));
     return 1;
   }

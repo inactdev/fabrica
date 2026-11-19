@@ -37,6 +37,7 @@ import { pauseRuleFor } from "./meters.ts";
 import type { Caps } from "../../contract/surface.ts";
 import type { IssueReader } from "./task-issue.ts";
 import type { TransportRetryDetails } from "./transport-retry.ts";
+import type { WarmWorkerRestartedDetails } from "./warm-worker.ts";
 import type { TranscriptEntry } from "../brain/index.ts";
 import type { FabricaTask, Receipt } from "../inspector/types.ts";
 import type { Inspector } from "../inspector/index.ts";
@@ -377,6 +378,15 @@ async function productionRound(
       // never a silent downgrade to a different model.
       onTransportRetry: (details: TransportRetryDetails) => {
         appendEvent(recordHome, { taskId, name: "transport-retry", details });
+      },
+      // Issue #353: a warm worker that turns out to be gone is restarted
+      // cold rather than killing the round, and the record says so -
+      // never a silent downgrade from the warm worker the Client was
+      // promised to a fresh one. A first round has no session to resume
+      // and so can never reach this; the reader's own fix pass below
+      // does, since it asks for the round's own warm worker by id.
+      onWarmWorkerGone: (details: WarmWorkerRestartedDetails) => {
+        appendEvent(recordHome, { taskId, name: "warm-worker-restarted", details });
       },
       // Issue #70: fires as each entry is known, not once per attempt -
       // see runAttempts' own onTranscriptEntry doc for why every entry

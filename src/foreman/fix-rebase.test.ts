@@ -667,3 +667,79 @@ test("a branch that moved on since it was published leases on origin's copy, and
   assert.notEqual(published, localTip, "the two tips never diverged, so this proves nothing");
   destroyProductionLine(line);
 });
+
+// Issue #353: "If the planned rebase onto origin/main fails, say so
+// plainly and leave the branch untouched." A rebase that cannot be run
+// at all - as opposed to one that conflicts, which is the whole policy
+// above - used to reach the Client as git's own sentence about a branch
+// whose state he then had no way to know.
+
+test("a rebase that cannot be run at all says plainly that the branch is untouched, and leaves it so", () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  const line = createProductionLine({ project, taskId: "no-origin-task", recordHome });
+  const beforeRebase = branchHead(project, "no-origin-task");
+
+  // origin pointed at nothing reachable: the fetch fails, so there is no
+  // base to rebase onto and nothing is attempted. Stands in for every
+  // other way the rebase itself refuses - a locked index, an unreadable
+  // object, origin simply down.
+  execFileSync("git", ["remote", "set-url", "origin", join(project, "..", "no-such-remote.git")], {
+    cwd: project,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let thrown: unknown;
+  try {
+    rebaseForFixRound(recordHome, "no-origin-task", line);
+  } catch (err) {
+    thrown = err;
+  }
+
+  assert.ok(thrown instanceof Error, "a rebase that cannot be run is this round's failure, not a silent skip");
+  const message = (thrown as Error).message;
+  // git's own reason is carried through, never replaced.
+  assert.match(message, /origin|fetch/i);
+  // And the two facts the Client would otherwise have to go and check.
+  assert.match(message, /Nothing was rewritten and nothing was published/);
+  assert.match(message, /rule `fix` again/);
+  assert.match(message, /fabrica\/no-origin-task/, "the branch is named");
+
+  assert.equal(rebaseInProgress(line.workdir), false, "no rebase left in flight");
+  assert.equal(branchHead(project, "no-origin-task"), beforeRebase, "and the branch really is where it was");
+  destroyProductionLine(line);
+});
+
+test("a rebase refused because one is already in flight touches nothing either", () => {
+  const recordHome = freshHome();
+  const project = makeFixtureRepo("exit 0");
+  const line = createProductionLine({ project, taskId: "already-rebasing", recordHome });
+  const commit = (name: string, content: string) => {
+    writeFileSync(join(line.workdir, name), content);
+    execFileSync("git", ["add", "-A"], { cwd: line.workdir, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", name], {
+      cwd: line.workdir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  };
+  commit("one.txt", "the task's one\n");
+  const beforeRebase = branchHead(project, "already-rebasing");
+  advanceOrigin(project, { "one.txt": "origin's one\n" });
+
+  // First call leaves a real rebase stopped on the conflict.
+  assert.equal(rebaseForFixRound(recordHome, "already-rebasing", line).status, "handed-to-worker");
+  assert.equal(rebaseInProgress(line.workdir), true);
+
+  // A second round starting on top of it refuses before touching
+  // anything - src/line's own safety check gets there first, because a
+  // worktree mid-rebase sits on a detached HEAD - and says the same two
+  // things: the branch's own last commit is still where it was.
+  assert.throws(
+    () => rebaseForFixRound(recordHome, "already-rebasing", line),
+    (err: Error) =>
+      /Refusing to rebase/.test(err.message) &&
+      /Nothing was rewritten and nothing was published/.test(err.message)
+  );
+  assert.equal(branchHead(project, "already-rebasing"), beforeRebase);
+  destroyProductionLine(line);
+});

@@ -247,10 +247,21 @@ const result = await runContained("echo", ["hi"], {
   name docker then has to keep unique, and aborting without a
   `containerName` does nothing, since there is no name to hand docker.
 
-Returns `{ stdout, stderr, exitCode }` - identical in shape to a plain
-`child_process.spawn` wrapped in a promise, so an adapter that already
-does that (see the reference CLI adapter) can switch to this without
-reshaping how it reads the result.
+Returns `{ stdout, stderr, exitCode, signal }` - identical in shape to a
+plain `child_process.spawn` wrapped in a promise, so an adapter that
+already does that (see the reference CLI adapter) can switch to this
+without reshaping how it reads the result.
+
+`signal` is there because `exitCode` is nullable and used to be the only
+thing carried (issue #353): a run ended by a signal has no exit code at
+all, so every caller that interpolated the value into a sentence printed
+the word `null` at the Client, naming neither what ended nor why.
+**Render both through `describeExit(name, exitCode, signal)`**
+(`./exit-code.ts`) rather than either field directly - it requires the
+process's name, and describes a missing code as a signal death instead
+of printing it. The stop paths below are what produce one in practice;
+the container's own process dying on a signal reaches the docker client
+as an exit code in the 128+N range, not as this.
 
 ## Stopping a run
 

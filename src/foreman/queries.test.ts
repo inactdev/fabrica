@@ -378,3 +378,41 @@ test("redPublishedChecksOf: a record from before issue #68 still answers off the
     "the whole red output, as it was stored then"
   );
 });
+
+test("stateOf: a failed verdict attempt (issue #353) leaves the task exactly where it was", () => {
+  // The whole reason `"verdict-failed"` is not `"task-failed"`: the task
+  // did not fail, the ruling did. It is still delivered and still the
+  // Client's to rule on, and every surface has to keep saying so.
+  const delivered = [
+    { occurredAt: "t0", taskId: "t1", name: "work-started" as const },
+    { occurredAt: "t1", taskId: "t1", name: "delivered" as const, details: { outcome: "done" } },
+  ];
+  assert.equal(
+    stateOf([
+      ...delivered,
+      { occurredAt: "t2", taskId: "t1", name: "verdict-failed", details: { ruling: "fix", hasNote: false, error: "x" } },
+    ]),
+    "delivered"
+  );
+
+  // And it does not rescue a task that really had failed, either - it is
+  // not in CLEARS_FAILURE, so an absorbing failure stays absorbing.
+  assert.equal(
+    stateOf([
+      { occurredAt: "t0", taskId: "t1", name: "task-failed", details: { message: "boom" } },
+      { occurredAt: "t1", taskId: "t1", name: "verdict-failed", details: { ruling: "accept", hasNote: false, error: "x" } },
+    ]),
+    "failed"
+  );
+});
+
+test("stateOf: a warm worker restarted cold (issue #353) is not a state of its own", () => {
+  assert.equal(
+    stateOf([
+      { occurredAt: "t0", taskId: "t1", name: "work-started" },
+      { occurredAt: "t1", taskId: "t1", name: "warm-worker-restarted", details: { session: "s", reason: "r", error: "e" } },
+    ]),
+    "working",
+    "the round is still running - a restart happens inside one attempt"
+  );
+});

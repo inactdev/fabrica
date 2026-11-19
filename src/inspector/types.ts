@@ -393,7 +393,45 @@ export type FabricaEventName =
    * it shows on the status row, rides on the delivery, and is counted
    * on `fabrica status`'s own bottom line. Here rather than in the
    * contract for the same reason as the names above it. */
-  | "reader-failed";
+  | "reader-failed"
+  /** A ruling the Client gave could not be taken (issue #353): the task
+   * was not in a state that ruling applies to, a cap or a meter refused
+   * the round it would have started, or the handoff itself failed.
+   * Details: `src/foreman/verdict.ts`'s `VerdictFailedDetails` - which
+   * ruling was attempted, whether a note came with it, and the real
+   * error, verbatim.
+   *
+   * Exists because issue #353 found the opposite: a `fix` that failed in
+   * the foreground printed one line to a terminal and left NOTHING on
+   * the task's own log, so `fabrica log` showed the previous day's
+   * delivery as the last thing that ever happened and there was no way
+   * to tell a ruling had been attempted at all. The standing rule is
+   * that everything fails loudly.
+   *
+   * Deliberately NOT `"task-failed"`: the task itself did not fail - it
+   * is still delivered and still waiting on a verdict, and recording it
+   * as failed would both mis-state that on every surface and hide the
+   * delivery the Client still has to rule on. `stateOf` leaves this
+   * event alone for exactly that reason.
+   *
+   * Here rather than in the contract for the same reason as the names
+   * above it: a ruling that never took effect is Fabrica's own
+   * bookkeeping, not a new promise to the Client about a seam. */
+  | "verdict-failed"
+  /** The warm worker a `fix` round wanted to re-enter was gone, so the
+   * round went ahead with a fresh one on the task's own history and the
+   * Client's note instead of dying (issue #353). Details:
+   * `src/foreman/warm-worker.ts`'s `WarmWorkerRestartedDetails` - the
+   * session that could not be resumed, Fabrica's own short reason, the
+   * brain's own words, and the attempt it happened inside.
+   *
+   * Never an attempt of its own: CONTRACT rule 3 counts attempts, so a
+   * restart happens inside one turn of the counted loop and leaves its
+   * numbers alone - the same rule `"transport-retry"` above follows. One
+   * per restarted call, so a round that makes several passes may carry
+   * several. Here rather than in the contract for the same reason as
+   * the names above it. */
+  | "warm-worker-restarted";
 
 export interface FabricaEvent extends Omit<ContractFabricaEvent, "name"> {
   name: FabricaEventName;

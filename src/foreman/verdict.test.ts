@@ -583,3 +583,126 @@ test("the human-readable verdict file is written before the closing record event
   assert.ok(verdictFile, "the verdict file must exist even though the closing event never landed");
   assert.match(verdictFile!, /accept: looks right/);
 });
+
+// Issue #353 ------------------------------------------------------------
+//
+// A task delivered the day before, ruled `fix` about twenty hours later:
+// the warm worker is gone, and before this the round died with nothing on
+// the task's own log at all.
+
+test("a fix round whose warm worker is gone starts a fresh one with the task's history and the note", async () => {
+  const recordHome = freshHome();
+  let version = 0;
+  const brain = fakeBrain({
+    onWork: (_brief, workdir) => writeFileSync(join(workdir, "work.txt"), `v${++version}\n`),
+    // Call 1 is the first round (no session to resume). Call 2 is the fix
+    // round asking for the warm worker, which is gone - the exact wording
+    // the reference CLI adapter passes through, verified and written down
+    // in its own document under src/brain/adapters/. Call 3 is the cold
+    // restart.
+    workError: (call) =>
+      call === 2 ? new Error("No conversation found with session ID: fake-session-1") : undefined,
+  });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
+  const firstSession = receiptsOf(recordHome, task.id)[0].session;
+  assert.ok(firstSession);
+
+  await foreman.verdict(task.id, "fix", "wrong button spot");
+
+  assert.equal(brain.calls, 3, "the refused warm call, then exactly one cold restart");
+  assert.equal(brain.workOptions[1]?.session, firstSession, "the fix round asked for the warm worker first");
+  assert.equal(brain.workOptions[2]?.session, undefined, "the restart must not be handed the refused session");
+
+  // The whole point of the ruling: the fresh worker gets the task's own
+  // history and the Client's note, not just the note.
+  const coldBriefs = [...brain.historyBySession.values()].at(-1) ?? [];
+  assert.equal(coldBriefs.length, 1, "the restart is a fresh session of its own");
+  assert.match(coldBriefs[0], /small change/, "the task's own request");
+  assert.match(coldBriefs[0], /wrong button spot/, "and the Client's note");
+
+  const events = await foreman.events(task.id);
+  const restart = events.filter((e) => e.name === "warm-worker-restarted");
+  assert.equal(restart.length, 1, "a silent downgrade from warm to cold is exactly what must not happen");
+  const details = restart[0].details as { session?: string; reason?: string; error?: string; attempt?: number };
+  assert.equal(details.session, firstSession);
+  assert.match(details.error!, /No conversation found/, "the brain's own words, verbatim");
+  assert.equal(details.attempt, 2, "a restart is not an attempt of its own - rule 3 counts attempts");
+
+  // And the round genuinely finished rather than merely not crashing.
+  assert.equal(deliveryOf(recordHome, task.id)?.outcome, "done");
+  // The fresh worker's own session is what this round's receipt records,
+  // so the NEXT `fix` resumes the worker that actually did the work
+  // rather than the dead id again (`priorReceipts.at(-1)?.session`).
+  const fixReceipt = receiptsOf(recordHome, task.id).at(-1)!;
+  assert.ok(fixReceipt.session, "the restart's own session reached the receipt");
+  assert.notEqual(fixReceipt.session, firstSession);
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "delivered", "still open, still the Client's to rule on");
+});
+
+test("a fix round's worker failure that is not a dead session is never restarted cold", async () => {
+  const recordHome = freshHome();
+  const brain = fakeBrain({
+    workError: (call) => (call === 2 ? new Error("Invalid API key · Fix external API key") : undefined),
+  });
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain });
+
+  await assert.rejects(() => foreman.verdict(task.id, "fix", "wrong button spot"));
+
+  assert.equal(brain.calls, 2, "no cold re-run: the key is wrong, not the session");
+  const events = (await foreman.events(task.id)).map((e) => e.name);
+  assert.ok(!events.includes("warm-worker-restarted"));
+  assert.ok(events.includes("task-failed"), "an honest failure, on the record");
+});
+
+test("a ruling that cannot be taken lands on the task's own log with the real error", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
+
+  // A fix with no note: refused in the foreground, before anything is
+  // handed off, which is where issue #353 found the record silent.
+  await assert.rejects(() => foreman.verdict(task.id, "fix", "   "), ForemanError);
+
+  const events = await foreman.events(task.id);
+  const failed = events.filter((e) => e.name === "verdict-failed");
+  assert.equal(failed.length, 1);
+  const details = failed[0].details as { ruling?: string; hasNote?: boolean; error?: string };
+  assert.equal(details.ruling, "fix");
+  assert.equal(details.hasNote, false);
+  assert.match(details.error!, /needs a note/, "the same words the Client was shown");
+
+  // And the task is untouched by the attempt: no verdict was recorded, so
+  // it is still delivered and still waiting on him.
+  assert.ok(!events.some((e) => e.name === "verdict-recorded"), "a refused ruling records no verdict");
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "delivered", "not closed, not failed - still awaiting a verdict");
+});
+
+test("a ruling on a task that is already closed is recorded as a failed attempt too", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  const task = await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
+  await foreman.verdict(task.id, "accept", "looks right");
+
+  await assert.rejects(() => foreman.verdict(task.id, "fix", "actually, change this"), ForemanError);
+
+  const events = await foreman.events(task.id);
+  assert.equal(events.filter((e) => e.name === "verdict-failed").length, 1);
+  const mine = (await foreman.status()).find((t) => t.id === task.id);
+  assert.equal(mine?.state, "closed", "a failed ruling never moves the task's state");
+});
+
+test("a ruling on a task that is not in this record writes nothing - there is no log to write to", async () => {
+  const recordHome = freshHome();
+  const foreman = createForeman({ recordHome, inspector: fixtureInspector() });
+  await foreman.do("small change", { project: makeFixtureRepo("exit 0"), brain: fakeBrain() });
+
+  await assert.rejects(() => foreman.verdict("task-nope", "fix", "change this"), ForemanError);
+
+  // Appending anyway would invent a task id `fabrica status` then lists -
+  // the phantom-task shape issue #81 is about.
+  assert.deepEqual(await foreman.events("task-nope"), []);
+});
