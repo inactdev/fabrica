@@ -44,6 +44,14 @@
 // exited 0 and changed nothing reads as a failure here, naming both
 // directories, instead of as an unchanged version.
 //
+// A project whose terms still hard-code a version its own repository
+// declares in a file is converted here too (issue #355,
+// `convertProjectVersionPins`), before the image builds below - which is
+// what rebuilds that project's box on the new version with nothing done
+// by hand. Only a terms folder outside the repository is written; terms
+// committed in a repository are the Client's, and the exact replacement
+// lines are printed for him instead. See src/cli/version-pins.ts.
+//
 // Every registered project's own machine image comes forward too
 // (`buildRegisteredMachineImages`, src/cli/machine-image.ts): new code
 // can move Fabrica's own machine layer, which makes every project's
@@ -95,6 +103,7 @@ import { detectCopy, git, short, type CopyInfo } from "./doctor-command.ts";
 import { commandFailureMessage, realGlobalReinstallIo, reinstallGlobalCopy } from "./global-reinstall.ts";
 import { clonePackInstallProcedure, prefixOfGlobalInstall } from "./npm-prefix.ts";
 import { buildRegisteredMachineImages, type MachineImageBuildReport, type MachineImageIo } from "./machine-image.ts";
+import { convertProjectVersionPins, describeVersionPinConversions } from "./version-pins.ts";
 import { LIVE_VIEW_PORT, refreshStaleLiveView, type LiveViewStaleOutcome } from "./up-command.ts";
 
 export const UPDATE_USAGE = "fabrica update";
@@ -143,7 +152,20 @@ session:
      can fail the update: no network, a \`go install\` that fails, or
      one that didn't take, warns and leaves the installed Inspector
      alone.
-  3. Builds every registered project's own machine image that needs
+  3. Converts any registered project whose terms still hard-code a
+     version its own repository declares in a file - \`FROM ruby:3.4.8\`
+     against a \`.ruby-version\` that now says 3.4.13, which is how a
+     bump on the base branch broke every task until someone edited
+     that file by hand. The \`FROM\` becomes \`ruby:\${RUBY_VERSION}\`
+     with the old version as the argument's default,
+     \`.inspector.json\` gains a \`buildArgs\` entry naming the file,
+     the old files are kept as \`<name>.bak\`, and exactly what
+     changed is printed. Only a terms folder outside the repository is
+     ever written: terms committed in a repository are never edited by
+     Fabrica, and \`fabrica doctor\` shows the exact replacement lines
+     for those instead. A converted project's image is stale by
+     definition, so step 4 rebuilds it.
+  4. Builds every registered project's own machine image that needs
      it - the image that project's worker is written in, its
      \`Dockerfile.inspector\` with Fabrica's own layer on top. New code
      can move that layer, which makes every project's image stale at
@@ -154,7 +176,7 @@ session:
      build failing never stops another, and never fails this command:
      it is named on stderr, and tasks on that project are refused -
      with the build's own error - until it is fixed.
-  4. Brings the live view on 127.0.0.1:7777 in line with the code that
+  5. Brings the live view on 127.0.0.1:7777 in line with the code that
      just landed - the same check and restart \`fabrica up\` itself
      runs. If the commit changed, whatever is listening is restarted
      and one that wasn't running is started; there is no flag to skip
@@ -165,9 +187,10 @@ session:
      No browser tab is ever opened here - the tab you already have
      reconnects by itself, and \`fabrica up\` is the one command that
      opens one.
-  5. Prints one summary line: the commit before and after, the
-     installed Inspector before and after, whether the live view was
-     restarted, started or left as is, and the exact next step.
+  6. Prints one summary line: the commit before and after, the
+     installed Inspector before and after, how many projects' version
+     pins were converted, whether the live view was restarted, started
+     or left as is, and the exact next step.
 
 Resume your session afterward with \`fabrica up --continue\` - your
 chat harness's own flag for continuing the most recent conversation in
@@ -352,6 +375,16 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
   // nothing else, including this command, which still succeeds: Fabrica
   // itself was updated, and a project whose Dockerfile.inspector is
   // broken is that project's problem to fix.
+  // Issue #355, and before the builds below on purpose: a project whose
+  // terms still hard-code a version the repository declares for itself
+  // is converted to the build-argument form here, which makes that
+  // project's image stale - so the build step that follows rebuilds it
+  // from the converted file, with no second copy of the build logic.
+  // Only a terms folder outside the repository is ever written: terms
+  // committed in a repository are the Client's, and the conversion is
+  // printed for him to apply instead.
+  const pins = convertProjectVersionPins(recordHome, { stdout, stderr });
+
   const images = await buildRegisteredMachineImages(recordHome, {
     onBuilding: (machine) => stdout(`fabrica update: building ${machine.image} from ${machine.inspectorDockerfile}.`),
     onOutput: (line) => stdout(`  ${line}`),
@@ -398,8 +431,8 @@ export async function runUpdateCommand(argv: string[], opts: RunUpdateCommandOpt
 
   stdout(
     `fabrica update: ${short(before.commit)} -> ${short(after.commit)} - ${describeInspectorOutcome(inspector)} - ` +
-      `${describeMachineImages(images)} - live view ${describeLiveViewOutcome(outcome)}. ` +
-      `Resume your session with: fabrica up --continue`
+      `${describeVersionPinConversions(pins)} - ${describeMachineImages(images)} - live view ` +
+      `${describeLiveViewOutcome(outcome)}. Resume your session with: fabrica up --continue`
   );
   return 0;
 }

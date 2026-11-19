@@ -185,6 +185,58 @@ function stagesOf(dockerfile: string): { ref: string; alias: string | null }[] {
   return stages;
 }
 
+/** The build arguments declared above the first `FROM`, with their own
+ * defaults - the only arguments a `FROM` line may read at all
+ * (BuildKit's Dockerfile reference: "FROM instructions support
+ * variables that are declared by any ARG instructions that occur before
+ * the first FROM"). A declaration with no default contributes nothing,
+ * since it has no value until a build passes one. */
+export function argDefaultsBeforeFirstFrom(dockerfile: string): Record<string, string> {
+  const defaults: Record<string, string> = {};
+  for (const raw of dockerfile.split("\n")) {
+    const line = raw.trim();
+    if (/^FROM\s/i.test(line)) break;
+    const arg = /^ARG\s+(.*)$/i.exec(line);
+    if (arg === null) continue;
+    // One `ARG` may declare several, space-separated, each with its own
+    // optional default.
+    for (const token of arg[1].split(/\s+/).filter((part) => part.length > 0)) {
+      const named = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(token);
+      if (named === null) continue;
+      defaults[named[1]] = named[2].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+    }
+  }
+  return defaults;
+}
+
+/**
+ * An image reference with its build arguments filled in - `ruby:$
+ * {RUBY_VERSION}` against `{RUBY_VERSION: "3.4.13"}` is `ruby:3.4.13`.
+ *
+ * `values` wins over the file's own `ARG` defaults, because that is
+ * what the build does: a `--build-arg` overrides the default
+ * (BuildKit's reference: "If an ARG instruction has a default value and
+ * if there is no value passed at build-time, the builder uses the
+ * default").
+ *
+ * Null when the reference names a variable neither source has a value
+ * for - the honest answer, and the one `machineRestoreUser` refuses on
+ * rather than inspecting an image name with an empty hole in it.
+ */
+export function expandImageRef(ref: string, values: Record<string, string>): string | null {
+  let unknown = false;
+  const expanded = ref.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, braced, bare) => {
+    const name = braced ?? bare;
+    const value = values[name];
+    if (value === undefined || value.length === 0) {
+      unknown = true;
+      return "";
+    }
+    return value;
+  });
+  return unknown ? null : expanded;
+}
+
 /**
  * The image a Dockerfile's final stage is ultimately built on - the one
  * whose own configuration decides what the built image runs as when no
@@ -197,18 +249,28 @@ function stagesOf(dockerfile: string): { ref: string; alias: string | null }[] {
  * neither an earlier alias nor an earlier index is an image's name -
  * which also makes this walk strictly backwards, and so terminating.
  *
- * Null when the answer is not in the text at all: a reference carrying
- * a `$` (a build argument, whose value belongs to the build rather than
- * to the file), or a file with no `FROM`. Null is never treated as
- * "root" - `machineRestoreUser` refuses on it.
+ * A reference carrying a build argument (`FROM ruby:${RUBY_VERSION}`,
+ * the shape issue #355 writes) is filled in from `buildArgs` and the
+ * file's own `ARG` defaults above the first `FROM`, in that order of
+ * precedence - which is how the build itself resolves it. Before that,
+ * any `$` here answered null, which through `machineRestoreUser` made
+ * every project using the argument form an image Fabrica refused to
+ * build at all.
+ *
+ * Null when the answer is not in the text at all: a reference naming a
+ * build argument nothing supplies a value for, or a file with no
+ * `FROM`. Null is never treated as "root" - `machineRestoreUser`
+ * refuses on it.
  */
-export function finalStageBaseImage(dockerfile: string): string | null {
+export function finalStageBaseImage(dockerfile: string, buildArgs: Record<string, string> = {}): string | null {
   const stages = stagesOf(dockerfile);
   if (stages.length === 0) return null;
+  const values = { ...argDefaultsBeforeFirstFrom(dockerfile), ...buildArgs };
   let index = stages.length - 1;
   for (;;) {
-    const { ref } = stages[index];
-    if (ref.includes("$")) return null;
+    const raw = stages[index].ref;
+    const ref = raw.includes("$") ? expandImageRef(raw, values) : raw;
+    if (ref === null) return null;
     const named = stages.findIndex((stage, at) => at < index && stage.alias?.toLowerCase() === ref.toLowerCase());
     const numbered = /^\d+$/.test(ref) && Number(ref) < index ? Number(ref) : -1;
     const next = named === -1 ? numbered : named;
@@ -292,15 +354,20 @@ export type BaseUserProbe = (image: string) => string | null;
  * written to be read after "its Dockerfile.inspector cannot be read:",
  * which is the one sentence every caller puts them in.
  */
-export function machineRestoreUser(dockerfile: string, baseUser: BaseUserProbe = imageConfigUser): string | null {
+export function machineRestoreUser(
+  dockerfile: string,
+  baseUser: BaseUserProbe = imageConfigUser,
+  buildArgs: Record<string, string> = {}
+): string | null {
   const named = finalStageUser(dockerfile);
   if (named !== null) return named;
 
-  const base = finalStageBaseImage(dockerfile);
+  const base = finalStageBaseImage(dockerfile, buildArgs);
   if (base === null) {
     throw new Error(
       `it names no USER at the end of its final stage, and which image that stage is built FROM cannot be read out ` +
-        `of it either (a FROM naming a build argument, or no FROM at all) - so the user Fabrica's layer has to ` +
+        `of it either (a FROM naming a build argument nothing gives a value - neither an ARG default above the ` +
+        `first FROM nor this project's own buildArgs - or no FROM at all) - so the user Fabrica's layer has to ` +
         `switch back to after installing cannot be worked out. Name it with a USER line at the end of that file.`
     );
   }
@@ -516,10 +583,18 @@ export function machineDockerfile(opts: {
   pins?: { node?: string | null; cli?: string | null };
   /** Replaced in a test, so none has to reach a real daemon. */
   baseUser?: BaseUserProbe;
+  /** The build arguments this build will pass (issue #355), so a `FROM`
+   * naming one can be resolved to the image whose own configuration
+   * decides the user to switch back to. The generated text itself is
+   * unchanged by them - the project's own file is embedded verbatim,
+   * `ARG` lines and all, and the values travel on the `docker build`
+   * argv. */
+  buildArgs?: Record<string, string>;
 }): string {
   const own = opts.inspectorDockerfile.replace(/\s*$/, "");
   const named = finalStageUser(own);
-  const restore = machineRestoreUser(own, opts.baseUser);
+  const buildArgs = opts.buildArgs ?? {};
+  const restore = machineRestoreUser(own, opts.baseUser, buildArgs);
   return [
     `# Generated by Fabrica (issue #322) - the image this project's machine`,
     `# works in. Built from ${opts.source}, with Fabrica's own layer appended.`,
@@ -534,7 +609,7 @@ export function machineDockerfile(opts: {
           "",
           ...(named === null
             ? [
-                `# Back to the user ${finalStageBaseImage(own)} itself runs as. That is`,
+                `# Back to the user ${finalStageBaseImage(own, buildArgs)} itself runs as. That is`,
                 "# in the base image's own configuration, which no line above names - so",
                 "# it is read off the image rather than off this text.",
               ]

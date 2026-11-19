@@ -13,6 +13,7 @@ import {
   machineDockerfileFor,
   machineDockerfilePath,
   machineImageBuild,
+  machineImageCurrency,
   machineImageFor,
   machineImageForProject,
   machineImageForTask,
@@ -444,4 +445,105 @@ test("a build whose credential is not on this machine refuses by name, and write
   // Refused before anything was written: a half-prepared build leaves a
   // generated Dockerfile claiming an image that was never built.
   assert.equal(existsSync(machineDockerfilePath(recordHome, machine)), false);
+});
+
+// ---------------------------------- version build arguments (issue #355)
+
+/** A project whose `Dockerfile.inspector` reads its version out of the
+ * repository, with `.inspector.json` naming the file - the shape
+ * `fabrica register` writes now. */
+function projectReadingItsVersion(opts: { declared?: string | null } = {}): string {
+  const dir = projectDir({ dockerfile: "ARG RUBY_VERSION=3.4.8\nFROM ruby:${RUBY_VERSION}\nRUN bundle install\n" });
+  writeFileSync(
+    join(dir, ".inspector.json"),
+    `${JSON.stringify({ check: "./check.sh", buildArgs: { RUBY_VERSION: { file: ".ruby-version" } } }, null, 2)}\n`
+  );
+  const declared = opts.declared === undefined ? "3.4.13\n" : opts.declared;
+  if (declared !== null) writeFileSync(join(dir, ".ruby-version"), declared);
+  return dir;
+}
+
+test("a declared build argument is valued out of the repository and passed to the build", () => {
+  const project = projectReadingItsVersion();
+  const recordHome = recordHomeWith();
+  const machine = machineImageForProject(recordHome, project);
+
+  assert.deepEqual(machine.buildArgs, { RUBY_VERSION: "3.4.13" });
+  assert.deepEqual(machine.unresolvedBuildArgs, []);
+
+  const command = machineImageBuild(recordHome, machine, BASE_USER);
+  const at = command.args.indexOf("RUBY_VERSION=3.4.13");
+  assert.ok(at !== -1, command.args.join(" "));
+  assert.equal(command.args[at - 1], "--build-arg");
+  // And the generated file is the project's own, verbatim: the value
+  // travels on the argv, never by rewriting what the Client wrote.
+  const generated = readFileSync(machineDockerfilePath(recordHome, machine), "utf8");
+  assert.ok(generated.includes("ARG RUBY_VERSION=3.4.8"), generated);
+  assert.ok(generated.includes("FROM ruby:${RUBY_VERSION}"), generated);
+});
+
+// The whole point of hashing them into the stamp: with the version in a
+// build argument rather than in the Dockerfile's text, the text does not
+// move when the repository bumps - so without this the worker's box
+// would stay on the old version forever while the check box followed.
+test("a bumped version file moves the stamp, so the image reads as stale", () => {
+  const project = projectReadingItsVersion();
+  const recordHome = recordHomeWith();
+  const before = machineImageForProject(recordHome, project);
+  const stamp = machineImageStamp(machineDockerfileFor(before, BASE_USER), before.buildArgs);
+
+  assert.equal(machineImageCurrency(before, () => stamp, BASE_USER).state, "current");
+
+  writeFileSync(join(project, ".ruby-version"), "3.5.0\n");
+  const after = machineImageForProject(recordHome, project);
+  assert.deepEqual(after.buildArgs, { RUBY_VERSION: "3.5.0" });
+  assert.equal(machineImageCurrency(after, () => stamp, BASE_USER).state, "stale");
+});
+
+test("a project declaring no build argument builds and stamps exactly as it did before", () => {
+  const project = projectDir({ dockerfile: DOCKERFILE });
+  const recordHome = recordHomeWith();
+  const machine = machineImageForProject(recordHome, project);
+
+  assert.deepEqual(machine.buildArgs, {});
+  // The stamp over no arguments is the hash of the text alone, so
+  // nothing already built on this machine becomes stale for having
+  // gained this feature.
+  const text = machineDockerfileFor(machine, BASE_USER);
+  assert.equal(machineImageStamp(text, {}), machineImageStamp(text));
+  const command = machineImageBuild(recordHome, machine, BASE_USER);
+  assert.equal(command.args.filter((arg) => arg === "--build-arg").length, 1, "only the stamp's own");
+});
+
+test("a declared argument whose file has gone is carried as unresolved, not passed", () => {
+  const project = projectReadingItsVersion({ declared: null });
+  const recordHome = recordHomeWith();
+  const machine = machineImageForProject(recordHome, project);
+
+  assert.deepEqual(machine.buildArgs, {});
+  assert.deepEqual(
+    machine.unresolvedBuildArgs.map((one) => [one.name, one.file]),
+    [["RUBY_VERSION", ".ruby-version"]]
+  );
+  // The build still runs - the Dockerfile's own ARG default stands -
+  // and `fabrica doctor`'s version line is what says so out loud.
+  const command = machineImageBuild(recordHome, machine, BASE_USER);
+  assert.ok(!command.args.includes("--build-arg RUBY_VERSION="), command.args.join(" "));
+});
+
+// A work-mode project declares them beside the Dockerfile the build is
+// built from - its terms folder - and values them out of the build
+// context, which is the repository.
+test("a work-mode project declares its arguments in the terms folder and values them from the repository", () => {
+  const project = projectDir();
+  writeFileSync(join(project, ".ruby-version"), "3.4.13\n");
+  const terms = projectDir({ dockerfile: "ARG RUBY_VERSION=3.4.8\nFROM ruby:${RUBY_VERSION}\n" });
+  writeFileSync(
+    join(terms, ".inspector.json"),
+    `${JSON.stringify({ check: "sh /terms/check.sh", buildArgs: { RUBY_VERSION: { file: ".ruby-version" } } }, null, 2)}\n`
+  );
+
+  const machine = machineImageFor(configOf(`[projects.dayjob]\npath = "${project}"\nterms = "${terms}"\n`), project);
+
+  assert.deepEqual(machine.buildArgs, { RUBY_VERSION: "3.4.13" });
 });

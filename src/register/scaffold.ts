@@ -7,6 +7,7 @@
 // `image` key and no `network` key: the check box is built from
 // `Dockerfile.inspector` (see dockerfile.ts) and has no network.
 
+import { BUILD_ARGS_KEY, type DeclaredBuildArgs } from "../buildargs/index.ts";
 import { BUILD_SECRETS_KEY } from "../buildsecrets/index.ts";
 import {
   CHECK_SCRIPT,
@@ -123,6 +124,25 @@ export function inspectorConfigJson(
      * safe.
      */
     buildSecrets?: readonly string[];
+    /**
+     * The build arguments this project's `Dockerfile.inspector` reads
+     * out of the repository (issue #355), as
+     * `{ RUBY_VERSION: { file: ".ruby-version" } }` - written by the
+     * same derivation that writes the matching `ARG`/`FROM` lines, so
+     * the two can only ever be written as a pair.
+     *
+     * Omitted entirely when there are none, for the same reason
+     * `buildSecrets` above is: a key saying nothing.
+     *
+     * The same deliberate exception to this file's provenance rule that
+     * `buildSecrets` was, and for the same reason: issue #355 asks for
+     * this key by name as the Fabrica half of a pair, and an Inspector
+     * from before the other half reads past it (its config decodes the
+     * fields it knows) - so the `ARG` default beside it stands, which is
+     * the version that was hard-coded there anyway. Writing it early
+     * costs such a project nothing.
+     */
+    buildArgs?: DeclaredBuildArgs;
   } = {}
 ): string {
   return `${JSON.stringify(
@@ -137,6 +157,9 @@ export function inspectorConfigJson(
       ...(opts.protectedPaths !== undefined ? { protectedPaths: [...opts.protectedPaths] } : {}),
       ...(opts.buildSecrets !== undefined && opts.buildSecrets.length > 0
         ? { [BUILD_SECRETS_KEY]: [...opts.buildSecrets] }
+        : {}),
+      ...(opts.buildArgs !== undefined && Object.keys(opts.buildArgs).length > 0
+        ? { [BUILD_ARGS_KEY]: { ...opts.buildArgs } }
         : {}),
     },
     null,

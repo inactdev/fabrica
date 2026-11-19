@@ -189,7 +189,17 @@ test("register: a Rails project's committed files carry its servers, its gems an
   );
 
   const dockerfile = fileOnOriginBranch(dir, REGISTER_BRANCH, DOCKERFILE_INSPECTOR);
-  assert.ok(dockerfile.includes("FROM ruby:3.3.4"), dockerfile);
+  // Issue #355: this repository declares its own Ruby in
+  // `.ruby-version`, so the committed file reads the version back out of
+  // it rather than naming 3.3.4 outright - and `.inspector.json` names
+  // that file, so both image builds pass the same value.
+  assert.ok(dockerfile.includes("ARG RUBY_VERSION=3.3.4"), dockerfile);
+  assert.ok(dockerfile.includes("FROM ruby:${RUBY_VERSION}"), dockerfile);
+  assert.equal(dockerfile.includes("FROM ruby:3.3.4"), false, dockerfile);
+  assert.deepEqual(
+    (JSON.parse(fileOnOriginBranch(dir, REGISTER_BRANCH, INSPECTOR_CONFIG)) as { buildArgs?: unknown }).buildArgs,
+    { RUBY_VERSION: { file: ".ruby-version", pattern: "^(?:ruby-)?([0-9][^\\s]*)$" } }
+  );
   assert.ok(dockerfile.includes("postgresql libpq-dev redis-server"), dockerfile);
   assert.ok(dockerfile.includes("bundle install"), dockerfile);
 

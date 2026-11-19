@@ -19,6 +19,10 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+// Issue #355: the one table of which images carry a language version in
+// their tag and which file the repository declares it in, plus the
+// argument form of a reference. Declared there, written here.
+import { argFormRef, BUILD_ARGS_KEY, type VersionArgFor } from "../buildargs/index.ts";
 import { buildSecretsFor } from "../buildsecrets/index.ts";
 // The one declaration of the name a `COPY --from=` here and the
 // `--build-context` flag `src/projectimage/` passes both have to spell
@@ -1023,6 +1027,32 @@ function userEntryLines(services: readonly BoxService[]): string[] {
 }
 
 /**
+ * The `ARG` line a version-carrying `FROM` needs above it, and the
+ * sentences saying why it is there (issue #355).
+ *
+ * The default is the version the repository declares right now, so a
+ * build that passes no value at all - a hand `docker build`, or an
+ * Inspector from before `buildArgs` - produces exactly the image the
+ * literal tag would have produced. The value travels from the
+ * repository's own file on every build that does pass one.
+ */
+function versionArgLines(version: VersionArgFor): string[] {
+  const { arg } = version.family;
+  const { file, pattern } = version.declared;
+  return [
+    `#`,
+    ...comment(
+      `${arg}: this project's ${version.family.label} version comes from ${file} in the repository, which is ` +
+        `where it is already declared - so a bump there needs no edit here. ${INSPECTOR_CONFIG}'s ` +
+        `"${BUILD_ARGS_KEY}" names that file${pattern === undefined ? `` : ` and the pattern that reads it`}, and ` +
+        `both Inspector and Fabrica read it and pass this argument. The default below is what ${file} says ` +
+        `today, which is what a build that passes nothing gets.`
+    ),
+    `ARG ${arg}=${version.declared.value}`,
+  ];
+}
+
+/**
  * `Dockerfile.inspector`'s contents. `from` is the image - `--image`, or
  * the one a proposal derived - and `reason` is where that image came
  * from, written as the file's own comment since a Dockerfile has
@@ -1042,8 +1072,23 @@ export function inspectorDockerfile(opts: {
    * what terms committed in the repository want; a terms *folder* needs
    * `"named-repo-context"` - see `RepoFilesSource`. */
   repoFiles?: RepoFilesSource;
+  /**
+   * The build argument the `FROM` line carries its version in, when the
+   * repository declares that version in a file of its own (issue #355):
+   * `ARG RUBY_VERSION=3.4.13` above the first `FROM`, and
+   * `FROM ruby:${RUBY_VERSION}` instead of the literal tag.
+   *
+   * Omitted - an image whose tag is not a language version, or a
+   * repository that declares none - and the `FROM` names the image
+   * exactly as it was given, which is every project before that issue.
+   * Resolved by `src/buildargs`, which also writes the matching
+   * `.inspector.json` entry, so the file and the config can only ever
+   * be written as a pair.
+   */
+  versionArg?: VersionArgFor;
 }): string {
   const repoFiles = opts.repoFiles ?? "build-context";
+  const version = opts.versionArg;
   const lines = [
     ...comment(
       `The image Inspector builds and runs this project's check in. The check container has no network, so ` +
@@ -1059,7 +1104,8 @@ export function inspectorDockerfile(opts: {
     ),
     `#`,
     ...comment(`FROM: ${opts.reason}.`),
-    `FROM ${opts.from.trim()}`,
+    ...(version === undefined ? [] : versionArgLines(version)),
+    `FROM ${version === undefined ? opts.from.trim() : argFormRef(version)}`,
   ];
 
   if (opts.shape !== null) {

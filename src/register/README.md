@@ -195,6 +195,21 @@ cannot read a proposal as a successful registration.
   in `src/buildsecrets/`, which owns the whole concept; see its README.
   A gem source this cannot name a variable for (a port in the host, say)
   is a `note:` line rather than a silent omission.
+- **`buildArgs`** (issue #355) — the versions the `FROM` line reads out
+  of the repository instead of carrying itself. When the derived image's
+  tag *is* a language version (`ruby:3.4.13`, `cimg/node:24.18.0`) and
+  the repository declares that version in a file of its own,
+  `Dockerfile.inspector` gets `ARG RUBY_VERSION=3.4.13` above its first
+  `FROM` and `FROM ruby:${RUBY_VERSION}`, and this key names the file
+  the value comes from. Both halves are derived in one place
+  (`src/buildargs/`, which owns the table of files and patterns — see
+  its README) so the two files can never be written disagreeing.
+  Omitted entirely for an image whose tag is not a version, and for a
+  repository that declares none. **Why the `ARG` always has a default:**
+  a build that passes no value — an Inspector from before the other half
+  of this pair, a hand `docker build` — then produces exactly the image
+  the literal tag produced, rather than resolving `FROM ruby:` into
+  Docker's own "invalid reference format".
 
 That last point is a deliberate disagreement with `protectedPathsFor`
 below, which always lists `.inspector.json` and `Dockerfile.inspector`
@@ -368,10 +383,10 @@ not be told they are "the old shape" because a comment moved.
 
 ## `.inspector.json`'s schema, and where it came from
 
-Up to four keys: `check` (the project's own script — `./check.sh`, or
+Up to five keys: `check` (the project's own script — `./check.sh`, or
 `sh /terms/check.sh` from a terms folder, see work mode above),
-`protectedPaths`, and — only when asked for — `timeoutSeconds` and
-`buildSecrets`.
+`protectedPaths`, and — only when asked for — `timeoutSeconds`,
+`buildSecrets` and `buildArgs`.
 
 There used to be two more, `image` and `network`. **inspector#47
 (inspector PR #64) retired both, with any value**: the check box is
@@ -389,8 +404,8 @@ config doesn't use, which is exactly how the two retired keys were
 caught. Another key should not be added here on a guess; read
 Inspector's docs first.
 
-`buildSecrets` is the one deliberate exception to that provenance rule,
-and it took a ruling to make: issue #342 asks for it by name as the
+`buildSecrets` is the first of two deliberate exceptions to that
+provenance rule, and it took a ruling to make: issue #342 asks for it by name as the
 Fabrica half of **inspector#86**, the Inspector side of the same pair,
 which merged as **inspector#87** — the commit
 `.github/workflows/docker-tests.yml` now pins. An Inspector older than
@@ -405,6 +420,16 @@ the key appears only when a project actually has one. (`contract/helpers/fixture
 no real Inspector ever reads — every test faking the check box or
 Inspector supplies its own answer — so it is evidence of nothing about
 the schema any more.)
+
+`buildArgs` is the second, on the same reasoning and for the same shape
+of pair: issue #355 asks for it by name as the Fabrica half, and the
+Inspector half is its own task. Until that lands, the installed
+Inspector reads past the key and the `ARG` default in the file beside it
+stands — which is the version that was hard-coded there anyway, so a
+project is no worse off than before. `src/register/build-arg-e2e.test.ts`
+is the test that proves the other side for real and **is expected red
+until `.github/workflows/docker-tests.yml`'s pin moves to that merge
+commit**; it says so in its own failure message, naming the pin.
 
 `check.sh`, `.inspector.json` and `Dockerfile.inspector` are **always**
 in `protectedPaths`, with `--protected` adding to them rather than

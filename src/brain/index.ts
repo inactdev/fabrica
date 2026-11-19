@@ -72,6 +72,8 @@ export type { ImageCommand } from "./adapters/doctor-checks.ts";
 // everything downstream only ever asks for the text.
 export { DEFAULT_MACHINE_IMAGE } from "./adapters/index.ts";
 export {
+  argDefaultsBeforeFirstFrom,
+  expandImageRef,
   finalStageBaseImage,
   finalStageUser,
   imageConfigUser,

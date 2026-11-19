@@ -409,11 +409,37 @@ test("propose: a plain Ruby project with no servers has its command named in the
 });
 
 test("propose: an exact .ruby-version derives the official Ruby image for that version", () => {
-  const { dockerfile, stderr } = propose(RAILS);
+  const { config, dockerfile, stderr } = propose(RAILS);
 
-  assert.ok(dockerfile.includes("FROM ruby:3.3.4"), dockerfile);
+  // Issue #355: the version is read back out of the file that declared
+  // it rather than written into the FROM line, so a bump there needs no
+  // edit to either file. The default is what the file says today, so a
+  // build that passes nothing still gets exactly this image.
+  assert.ok(dockerfile.includes("ARG RUBY_VERSION=3.3.4"), dockerfile);
+  assert.ok(dockerfile.includes("FROM ruby:${RUBY_VERSION}"), dockerfile);
+  assert.equal(dockerfile.includes("FROM ruby:3.3.4"), false, dockerfile);
+  assert.deepEqual(config.buildArgs, {
+    RUBY_VERSION: { file: ".ruby-version", pattern: "^(?:ruby-)?([0-9][^\\s]*)$" },
+  });
   assert.ok(stderr.includes("Dockerfile.inspector FROM: ruby:3.3.4"), stderr);
   assert.ok(stderr.includes(".ruby-version pins ruby 3.3.4"), stderr);
+  assert.ok(stderr.includes("buildArgs: RUBY_VERSION from .ruby-version"), stderr);
+});
+
+// The other half of the same rule: a version that is in no file of the
+// repository's own is written into the FROM line outright, and no
+// argument is invented for it. `.ruby-version` is absent in both cases
+// below - the version comes from the Gemfile or the lockfile - and
+// neither is a file this reads a build argument from (the Client's own
+// clarification names the four primaries and two fallbacks).
+test("propose: a version no version file declares stays in the FROM line, with no buildArgs", () => {
+  for (const signals of [{ ...RAILS, rubyVersion: null }, { ...RAILS, rubyVersion: null, gemfile: `source "https://rubygems.org"\n` }]) {
+    const { config, dockerfile, stderr } = propose(signals);
+    assert.ok(dockerfile.includes("FROM ruby:3.3.4"), dockerfile);
+    assert.equal(dockerfile.includes("ARG RUBY_VERSION"), false, dockerfile);
+    assert.equal(Object.hasOwn(config, "buildArgs"), false, JSON.stringify(config));
+    assert.ok(stderr.includes("buildArgs: omitted"), stderr);
+  }
 });
 
 // Three files can pin it, asked in the order issue #324 names them.
@@ -452,7 +478,11 @@ test("propose: Ruby signals win over a package.json beside them, in every field"
   });
 
   assert.equal(config.check, "./check.sh", "not npm test");
-  assert.ok(dockerfile.includes("FROM ruby:3.3.4"), dockerfile);
+  // Ruby's own argument, read from `.ruby-version` (issue #355) - and
+  // not node's, even though this package.json pins one: the image the
+  // suite runs in is the Ruby one, so that is the version that travels.
+  assert.ok(dockerfile.includes("FROM ruby:${RUBY_VERSION}"), dockerfile);
+  assert.deepEqual(Object.keys(config.buildArgs as Record<string, unknown>), ["RUBY_VERSION"]);
   assert.ok(dockerfile.includes("bundle install"), dockerfile);
   assert.ok(!dockerfile.includes("npm ci"), dockerfile);
   // ...and the lockfile that went uninstalled is named, not dropped.
@@ -640,8 +670,19 @@ test("propose: every key it can ever write is one this repository's own .inspect
     RAILS,
   ];
 
+  // The two deliberate exceptions, each asked for by name by the issue
+  // that added it, as the Fabrica half of a paired Inspector change -
+  // `buildSecrets` (issue #342 / inspector#86) and `buildArgs` (issue
+  // #355). This repository's own config needs neither: it installs from
+  // the public npm registry and names its Node version in the one place
+  // a Dockerfile can be read from. An Inspector that has not yet
+  // learned either key reads past it, so writing it early costs a
+  // project nothing - see scaffold.ts's own note on both.
+  const askedForByAnIssue = ["buildSecrets", "buildArgs"];
+
   for (const signals of cases) {
     for (const key of Object.keys(propose(signals).config)) {
+      if (askedForByAnIssue.includes(key)) continue;
       assert.ok(Object.hasOwn(ours, key), `${key} is not a key this repository's own .inspector.json uses`);
     }
   }
@@ -756,9 +797,15 @@ test("readProposalSignals reads a Rails repository's four signals off the ref", 
   assert.equal(signals.rubyVersion, "3.3.4");
   assert.equal(signals.railsBin, true, "bin/rails is a nested path, and still read off the commit");
 
-  // ...and the proposal built from them is the Rails one, end to end.
+  // ...and the proposal built from them is the Rails one, end to end -
+  // with the version read back out of the file that declared it, off
+  // the same commit (issue #355).
   const proposal = proposeInspectorConfig(signals, { projectPath: dir, defaultBranch: "main" });
-  assert.ok(proposal.dockerfile.includes("FROM ruby:3.3.4"), proposal.dockerfile);
+  assert.ok(proposal.dockerfile.includes("ARG RUBY_VERSION=3.3.4"), proposal.dockerfile);
+  assert.ok(proposal.dockerfile.includes("FROM ruby:${RUBY_VERSION}"), proposal.dockerfile);
+  assert.deepEqual((JSON.parse(proposal.json) as { buildArgs?: unknown }).buildArgs, {
+    RUBY_VERSION: { file: ".ruby-version", pattern: "^(?:ruby-)?([0-9][^\\s]*)$" },
+  });
   assert.ok(proposal.checkScript?.includes("--auth=trust"), proposal.checkScript ?? "");
 });
 

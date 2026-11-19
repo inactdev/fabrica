@@ -51,6 +51,14 @@ import {
   type BaseUserProbe,
   type ImageCommand,
 } from "../brain/index.ts";
+import {
+  buildArgFlags,
+  buildArgsFingerprint,
+  declaredBuildArgs,
+  readFileIn,
+  resolveBuildArgs,
+  type UnresolvedBuildArg,
+} from "../buildargs/index.ts";
 import { BuildSecretsError, resolveBuildSecrets } from "../buildsecrets/index.ts";
 import { loadConfigOrProblem } from "../config/index.ts";
 import type { FabricaConfig } from "../config/index.ts";
@@ -106,6 +114,29 @@ export interface MachineImage {
    * the repository is reachable from the build whichever of the two
    * forms that file uses. */
   context: string;
+  /**
+   * The build arguments this project's own `.inspector.json` declares,
+   * given their values out of the repository's own files (issue #355) -
+   * `{ RUBY_VERSION: "3.4.13" }` from `.ruby-version`.
+   *
+   * Resolved here, with everything else about the image, because both
+   * readers need the same answer: the build passes them as
+   * `--build-arg`, and the stamp is taken over them *with* the
+   * generated Dockerfile, so a version bump in the repository makes the
+   * image stale even though the Dockerfile's own text has not moved.
+   *
+   * Empty for a project that declares none, which is every project
+   * registered before that issue - and then nothing about the build or
+   * the stamp changes at all.
+   */
+  buildArgs: Record<string, string>;
+  /** Every declared argument that could NOT be given a value, with the
+   * reason (a version file that is not there, one that names nothing, a
+   * value no image tag could be). Carried rather than dropped: the
+   * build then falls back to the Dockerfile's own `ARG` default, which
+   * is the stale version issue #355 is about, so `fabrica doctor` says
+   * so on this project's own line. */
+  unresolvedBuildArgs: UnresolvedBuildArg[];
 }
 
 /** True when this project has an image of its own to build and keep
@@ -150,11 +181,22 @@ export function machineImageFor(config: FabricaConfig, projectPath: string): Mac
   const termsDir = workModeFor(config, project).terms;
   const candidate = join(termsDir ?? project, INSPECTOR_DOCKERFILE);
   const layered = existsSync(candidate);
+  // Issue #355: declared beside the Dockerfile the build is built from
+  // (the terms folder for a work-mode project, the repository root for
+  // every other), and valued out of the build context - which is the
+  // same tree that build's own COPY lines read the manifest and the
+  // lockfile from. See src/buildargs/README.md's "Two builds, two
+  // trees" for why not origin's tip.
+  const resolved = layered
+    ? resolveBuildArgs(declaredBuildArgs(dirname(candidate)), readFileIn(project))
+    : { values: {}, unresolved: [] };
   return {
     project,
     image: layered ? machineImageTag(project) : DEFAULT_MACHINE_IMAGE,
     inspectorDockerfile: layered ? candidate : null,
     context: project,
+    buildArgs: resolved.values,
+    unresolvedBuildArgs: resolved.unresolved,
   };
 }
 
@@ -212,15 +254,34 @@ export function machineDockerfileFor(machine: MachineImage, baseUser?: BaseUserP
   if (source === null) {
     throw new Error(`${machine.project} has no ${INSPECTOR_DOCKERFILE}, so it has no machine image of its own to build.`);
   }
-  return machineDockerfile({ inspectorDockerfile: readFileSync(source, "utf8"), source, baseUser });
+  return machineDockerfile({
+    inspectorDockerfile: readFileSync(source, "utf8"),
+    source,
+    baseUser,
+    // Issue #355: the text is unchanged by these - the project's file
+    // goes in verbatim - but a `FROM ruby:${RUBY_VERSION}` has to be
+    // resolvable to a real image for the layer to know which user to
+    // switch back to.
+    buildArgs: machine.buildArgs,
+  });
 }
 
 /** The stamp an image built from `text` carries: the hash of the whole
  * generated Dockerfile, which holds the project's own file and Fabrica's
- * layer (both version pins included). So it moves when either input
- * moves, and only then. */
-export function machineImageStamp(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
+ * layer (both version pins included), plus the build arguments that
+ * build passes.
+ *
+ * The arguments are in it because of what they are (issue #355): the
+ * version a project's image is built on now lives in a file in the
+ * repository rather than in the Dockerfile's own text, so hashing the
+ * text alone would leave a bumped `.ruby-version` looking current
+ * forever - the check box would follow the bump and the worker's box
+ * would not, which is the divergence the whole issue is about. */
+export function machineImageStamp(text: string, buildArgs: Record<string, string> = {}): string {
+  const fingerprint = buildArgsFingerprint(buildArgs);
+  return createHash("sha256")
+    .update(fingerprint.length === 0 ? text : `${text}\n--build-args--\n${fingerprint}\n`)
+    .digest("hex");
 }
 
 /** Where a project's generated Dockerfile is written before it is built.
@@ -256,7 +317,13 @@ export function machineImageBuild(recordHome: string, machine: MachineImage, bas
   const args = [
     "build",
     "--build-arg",
-    `${MACHINE_STAMP_ARG}=${machineImageStamp(text)}`,
+    `${MACHINE_STAMP_ARG}=${machineImageStamp(text, machine.buildArgs)}`,
+    // Issue #355: one per declared build argument, valued out of the
+    // repository's own version files - so the box this worker writes in
+    // is built on the version the repository declares, not on a number
+    // typed into its Dockerfile. Passed before the stamp is compared
+    // anywhere, and hashed into that stamp, so a bump rebuilds this.
+    ...buildArgFlags(machine.buildArgs),
     // Issue #344: the repository, under the one fixed name a
     // `Dockerfile.inspector` reaches it by (`COPY --from=repo ...`),
     // which is the only way a work-mode project's file - sitting in a
@@ -367,7 +434,7 @@ export function machineImageCurrency(
   if (found === "") return { state: "unstamped" };
   let wanted: string;
   try {
-    wanted = machineImageStamp(machineDockerfileFor(machine, baseUser));
+    wanted = machineImageStamp(machineDockerfileFor(machine, baseUser), machine.buildArgs);
   } catch (err) {
     return { state: "unreadable", message: err instanceof Error ? err.message : String(err) };
   }

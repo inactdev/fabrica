@@ -101,8 +101,9 @@ test("fabrica doctor: everything healthy - every line OK, exit 0, and nothing is
   const probes = okProbes();
   const { code, lines } = await doctor(healthyHome(), probes);
   assert.equal(code, 0, lines.join("\n"));
-  // 11 machine checks, 1 project plus its own machine-image line, caps, spend.
-  assert.equal(lines.length, 15, lines.join("\n"));
+  // 11 machine checks, 1 project plus its own machine-image and
+  // versions lines (issue #355), caps, spend.
+  assert.equal(lines.length, 16, lines.join("\n"));
   assert.ok(lines.every((l) => l.startsWith("OK ")), lines.join("\n"));
   assert.equal(probes.liveCalls, 0, "the live call ran without --live - doctor must spend nothing by default");
 });

@@ -140,8 +140,12 @@ jobs:
           # (the worker image and the adapter that runs in it),
           # src/register (the three files a check box is built and run
           # from, handed to the real Inspector by
-          # src/register/inspector-e2e.test.ts), and Docker's own build
-          # inputs anywhere in the repository.
+          # src/register/inspector-e2e.test.ts), src/buildargs (whether
+          # a FROM carrying a build argument really builds on the
+          # version that argument passes - issue #355's one fact about
+          # Docker itself, proved by a real build in
+          # src/buildargs/arg-form-build.test.ts), and Docker's own
+          # build inputs anywhere in the repository.
           #
           # One pattern per line, read with `read -r` rather than
           # word-split, exactly as rule9-gate.yml's own pattern lists
@@ -158,6 +162,7 @@ jobs:
             src/line/*
             src/brain/adapters/*
             src/register/*
+            src/buildargs/*
             Dockerfile
             */Dockerfile
             Dockerfile.*
@@ -326,6 +331,18 @@ jobs:
       # src/register/build-secret-e2e.test.ts's Inspector tests are
       # expected green against this pin, not merely expected to fail
       # loudly.
+      #
+      # ONE TEST IS EXPECTED RED AGAINST THIS PIN, on purpose:
+      # src/register/build-arg-e2e.test.ts (issue #355) needs an
+      # Inspector that knows `.inspector.json`'s `buildArgs` key - it
+      # reads the version out of the repository's own `.ruby-version` at
+      # the commit under check and passes it to the check-image build as
+      # `--build-arg`. The commit that teaches it that is the other half
+      # of issue #355's pair and is not merged yet, so this pin reads
+      # past the key, passes nothing, and the build falls back to the
+      # `ARG` default - which that test reports, naming this pin. Move
+      # the SHA below to that merge commit and it goes green; nothing in
+      # the test is to be worked around in the meantime.
       - name: Install the pinned Inspector
         if: steps.gate.outputs.run_full == 'true'
         run: |

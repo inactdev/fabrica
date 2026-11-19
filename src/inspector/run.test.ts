@@ -12,6 +12,9 @@ import {
   reportForRecord,
   MAX_INSPECTION_REPORT_BYTES,
 } from "./run.ts";
+// The key's own spelling, from the module that owns it, so the contract
+// file and the code can never name it differently (issue #355).
+import { BUILD_ARGS_KEY } from "../buildargs/index.ts";
 
 /** A stand-in for the GitHub App (issue #187), so no test here needs a
  * registered App, a private key, or the network. `check()` passes and
@@ -50,6 +53,19 @@ interface ConsumerContract {
    * from the project's own `.inspector.json`, so what is ratified is
    * where Inspector reads them and what it does with them. */
   buildSecrets?: { configKey: string; source: string; passedToBuildAs: string; note: string };
+  /** Issue #355: not a flag either - the names, the files and the
+   * patterns all come from the project's own `.inspector.json`, so what
+   * is ratified is the entry's shape, where Inspector reads the values,
+   * and what it does with them. */
+  buildArgs?: {
+    configKey: string;
+    entry: string;
+    source: string;
+    passedToBuildAs: string;
+    patternSemantics: string;
+    unresolved: string;
+    note: string;
+  };
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -474,4 +490,23 @@ test("the consumer contract declares how a build secret reaches Inspector", () =
   assert.equal(declared.configKey, "buildSecrets");
   assert.match(declared.source, /environment/);
   assert.equal(declared.passedToBuildAs, "--secret id=NAME,env=NAME");
+});
+
+// Issue #355's other half of the same pair. The two sides have to agree
+// on more than the key's name here: which tree the values are read out
+// of, and how a pattern is matched - Fabrica matches with JavaScript's
+// engine and Inspector with Go's RE2, so "one trimmed line at a time"
+// is the part that keeps one `buildArgs` entry meaning one thing.
+test("the consumer contract declares how a build argument reaches Inspector", () => {
+  const declared = CONTRACT.buildArgs;
+  assert.ok(declared, "consumer-contract.json must declare the buildArgs half of the call");
+  assert.equal(declared.configKey, BUILD_ARGS_KEY);
+  assert.equal(declared.passedToBuildAs, "--build-arg NAME=value");
+  assert.match(declared.entry, /\{file\}.*\{file, pattern\}/);
+  // Inspector's own half reads them at the commit under check - not the
+  // working tree, which a Worker has had its hands on.
+  assert.match(declared.source, /commit being checked/);
+  assert.match(declared.patternSemantics, /one trimmed line at a time/);
+  assert.match(declared.patternSemantics, /\(\?m\)/);
+  assert.match(declared.unresolved, /not passed/);
 });
