@@ -13,6 +13,7 @@ import {
   cloneCommandArgs,
   clonePackInstallProcedure,
   GLOBAL_PACKAGE_NAME,
+  globalBinPath,
   globalPackagePath,
   installTarballCommandArgs,
   isPackedTarball,
@@ -72,6 +73,13 @@ test("globalPackagePath: npm's documented global package location, and the exact
   assert.equal(globalPackagePath("/usr/local"), "/usr/local/lib/node_modules/fabrica");
   for (const prefix of ["/usr/local", "/home/me/.npm-global", "/opt/npm"]) {
     assert.equal(prefixOfGlobalInstall(globalPackagePath(prefix)), prefix);
+  }
+});
+
+test("globalBinPath: npm's documented global bin location, and the exact reverse of prefixOfGlobalBin", () => {
+  assert.equal(globalBinPath("/usr/local"), "/usr/local/bin/fabrica");
+  for (const prefix of ["/usr/local", "/home/me/.npm-global", "/opt/npm"]) {
+    assert.equal(prefixOfGlobalBin(globalBinPath(prefix)), prefix);
   }
 });
 

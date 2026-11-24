@@ -151,6 +151,15 @@ src/cli/await-args.test.ts: src/cli/await-args.test.ts
 src/cli/await-args.ts: src/cli/await-args.test.ts
 src/cli/await-command.test.ts: src/cli/await-command.test.ts
 src/cli/await-command.ts: src/cli/await-command.test.ts
+src/cli/bin-launcher.test.ts: src/cli/bin-launcher.test.ts
+# Hand-added: keeping a hand-written `<prefix>/bin/fabrica` launcher
+# across the npm install `fabrica update` runs. Its own suite drives
+# every outcome against a real directory; global-reinstall.test.ts covers
+# the wiring into the install step, installed-commit.test.ts proves the
+# byte-for-byte survival against a real `npm install -g`, and
+# update-command.test.ts covers what the Client is told and the exit
+# code.
+src/cli/bin-launcher.ts: src/cli/bin-launcher.test.ts, src/cli/global-reinstall.test.ts, src/cli/installed-commit.test.ts, src/cli/update-command.test.ts
 src/cli/bin.test.ts: src/cli/bin.test.ts
 src/cli/check-mode-render.test.ts: src/cli/check-mode-render.test.ts
 src/cli/ci-checks-render.test.ts: src/cli/ci-checks-render.test.ts
@@ -171,7 +180,11 @@ src/cli/doctor-command.ts: src/cli/doctor-command.test.ts
 src/cli/global-reinstall.test.ts: src/cli/global-reinstall.test.ts
 src/cli/image-repair.test.ts: src/cli/image-repair.test.ts
 src/cli/image-repair.ts: src/cli/image-repair.test.ts, src/cli/doctor-command.test.ts, src/cli/up-command.test.ts
-src/cli/global-reinstall.ts: src/cli/global-reinstall.test.ts
+# Hand-added: installed-commit.test.ts is what runs this module's three
+# commands for real - a real clone, a real `npm pack`, a real `npm
+# install -g` into a scratch prefix - so a flag or an order that is
+# wrong in a way a fake cannot notice fails there.
+src/cli/global-reinstall.ts: src/cli/global-reinstall.test.ts, src/cli/installed-commit.test.ts
 src/cli/installed-commit.test.ts: src/cli/installed-commit.test.ts
 src/cli/live-view-process.test.ts: src/cli/live-view-process.test.ts
 src/cli/live-view-process.ts: src/cli/live-view-process.test.ts

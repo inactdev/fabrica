@@ -999,6 +999,79 @@ are the install a *person* runs (README.md, and `fabrica doctor`'s fix
 for a copy whose commit is unknown), so what is advised and what is run
 cannot drift.
 
+### Keeping a launcher of the Client's own
+
+On both of the Client's Macs the dotfiles bootstrap writes its **own
+launcher** at `<prefix>/bin/fabrica` - a script that runs Fabrica on one
+pinned Node through fnm - and the install above goes into that same
+prefix, where npm wants to own that exact path. Both halves of the
+collision were reproduced on npm 11.16.0 / Node 24.18.0 against a
+scratch prefix:
+
+- With the launcher in place, the install **refuses**: `npm error code
+  EEXIST`, "File exists: `<prefix>/bin/fabrica`", "Remove the existing
+  file and try again, or run npm with `--force` to overwrite files
+  recklessly" - and `<prefix>/lib/node_modules/` is left **empty**.
+  Writing the bin link is not a last cosmetic step; it aborts the whole
+  install, so nothing is updated at all.
+- With the launcher gone, npm writes **its own link** there instead -
+  `<prefix>/bin/fabrica` -> `../lib/node_modules/fabrica/src/cli/bin.mjs`,
+  a relative symlink - which runs on whatever node the terminal happens
+  to have. That is how the work Mac ended up on Node 24.16.0 inside the
+  work repo on 2026-11-11.
+
+So `bin-launcher.ts` does what the dotfiles' own `install_fabrica`
+does: anything at that path which is **not npm's own link into this
+prefix's copy of the package** is moved aside before the install and
+moved back after - after a failed install too. The deciding test is the
+resolved target of a symlink landing inside
+`<prefix>/lib/node_modules/fabrica`; a script, or a link anywhere else
+(including into a *different* prefix's copy, which this install is not
+replacing), is someone's launcher. Both moves are a same-directory
+`rename` to `<prefix>/bin/.fabrica-launcher-saved`, so the launcher
+comes back with identical bytes, mode and inode and there is never a
+copy to truncate; the restore is a `finally` inside
+`installKeepingLauncher` rather than a line each caller has to remember;
+and npm's own link is **captured** with `readlink` before the launcher
+goes back over it, never reconstructed from an assumed layout, because
+it is the fallback below.
+
+Once the launcher is back, the paths it names **inside
+`<prefix>/lib/node_modules/fabrica`** must all exist - for a symlink its
+resolved target, for a script every absolute path in its text that falls
+inside that directory. Only package-internal paths, deliberately: those
+are the ones an install can invalidate, and checking every absolute
+token a shell script happens to contain (`/dev/null`, a path in a
+comment, something a variable would have expanded) would condemn working
+launchers. On a miss, per the Client's ruling, **the broken launcher is
+discarded and npm's own captured link goes back in its place** - so
+`fabrica` still starts, on whatever node the shell has - and `fabrica
+update` names the path that no longer exists, says that re-running the
+dotfiles bootstrap writes a new launcher, and exits **non-zero**. It
+exits non-zero *at the end*, after Inspector, every project's machine
+image and the live view have come forward: the code really was replaced,
+and a live view left serving what was just replaced is what the ruling
+below forbids outright.
+
+Two edges that ruling does not reach, decided here and named in the
+summary line rather than hidden. **Nothing to fall back to:** a failed
+install left no npm link, so discarding the launcher would leave *no*
+`fabrica` at all and destroy the Client's own file on top - it is kept,
+and stderr says there is nothing under that prefix that can start
+Fabrica. **A launcher naming no package-internal path:** unknown is not
+missing, so this does not fail the update - it is put back untouched,
+stderr says plainly that it could not be checked from here, and the
+summary reads `launcher kept, unchecked`. A silent pass would have been
+the bug.
+
+If the process is killed between the move-aside and the restore, the
+launcher is at `<prefix>/bin/.fabrica-launcher-saved` and the bin path
+holds npm's link; the next `fabrica update` reads that as npm's own and
+preserves nothing, so the saved file is never picked back up. Adopting a
+leftover saved file would resurrect a launcher the Client may have
+removed on purpose - `fabrica` still runs in that state, just on the
+wrong Node, and the dotfiles bootstrap writes a new launcher.
+
 Then **Inspector comes forward too** - unconditionally, with no flag to
 skip it (Client ruling: "update means everything comes forward"). The
 two sides keep a ratified, hand-synced agreement about the exact shape
@@ -1138,8 +1211,10 @@ fixed, which is the next section.
 Unlike `fabrica up`, which prints a line per step, `fabrica update`
 prints exactly one summary line: the commit before and after, the
 installed Inspector before and after, how many project machine images
-were built and how many failed, whether the live view was restarted,
-started or left as is, and the next step, `fabrica up --continue`.
+were built and how many failed, what became of a launcher of the
+Client's own if there was one at all, whether the live view was
+restarted, started or left as is, and the next step, `fabrica up
+--continue`.
 
 `fabrica update` is denied to the chat agent itself the same way
 `fabrica up` is (`skill-settings.test.ts`'s `NEVER_FROM_CHAT_COMMANDS`):
@@ -1682,11 +1757,12 @@ already recorded, and the response says `signaled: false`.
 | `spawn-detached.ts` | The backgrounding mechanism: `spawnDetachedTask` (the id handshake `fabrica do` needs) and `spawnDetachedResume` (issue #123 - hands an already-recorded answer/fix round, identified by `recordHome`/`taskId` alone, to a detached process for `fabrica answer`/`fabrica verdict fix`; there is nothing to watch for, so unlike `spawnDetachedTask` it doesn't wait on anything). |
 | `task-process.ts` | Finding and signaling the detached process running one task's round, for the live view's `stop` (issue #203): `writeTaskPidFile` (called by all three entry scripts below, each about itself), `findTaskProcess` (the task's own `worker.pid`, trusted only once it is alive AND still running one of those entry scripts - see below), and `stopTaskProcess` (SIGTERM now, SIGKILL after a 10-second grace, to the process *group*, since each runner leads its own and its real work is in children). Issue #99 adds the reporting side on top of that same verification, for `status`/`watch`: `probeTaskWorker` (`alive`/`not-found`/`unknown`), `cachedProcessTable`, and `WORKER_PROBE_INTERVAL_MS`. |
 | `live-view-process.ts` | `fabrica up`'s own stale-live-view check: `findLiveViewProcess` (pid file, verified against a real command line via `ps`, falling back to a command-line scan) and `stopLiveViewProcess` (the only place that signals it) - never kills whatever merely holds the port. `writeLiveViewPidFile` is called by `integrations/live-view/start.ts` on its own startup. |
-| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); reinstalling an installed copy is `global-reinstall.ts`'s clone, pack and install steps, whose own failure message names the step that failed, printed through verbatim rather than reconstructed here; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update) and reading the inspector `PATH` resolves back afterwards, so an install that landed in a directory nothing runs from reads as a failure naming both directories rather than as an unchanged version (issue #339); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. `UPDATE_HELP` is `update --help`'s text. |
+| `update-command.ts` | `fabrica update`: injectable `UpdateProbes` for dev-checkout-vs-installed detection and the real `git pull`/`npm install` calls (tests never touch this checkout's own git state); reinstalling an installed copy is `global-reinstall.ts`'s clone, pack and install steps, whose own failure message names the step that failed, printed through verbatim rather than reconstructed here; `updateInspector` then brings the installed Inspector to its own main's tip through `src/inspector/version.ts`'s probes, branching on the same `inspectorVersionCheck` answer doctor's inspector line prints rather than deciding "behind" a second time (install only when absent or genuinely behind; every failure warns and leaves it alone, never failing the update) and reading the inspector `PATH` resolves back afterwards, so an install that landed in a directory nothing runs from reads as a failure naming both directories rather than as an unchanged version (issue #339); then calls `up-command.ts`'s `refreshStaleLiveView` rather than a second stale-live-view check - with `force` and `startIfStopped` both set exactly when `before.commit !== after.commit`, so a changed commit always ends with a live view running the new code. What became of a launcher of the Client's own is `bin-launcher.ts`'s answer, carried out on the reinstall's own `launcher` field: this file only reports it (`reportLauncher` on stderr, `describeLauncherOutcome` on the summary line) and decides the exit code from it (`launcherFailsUpdate`, returned at the end of the run so everything else still comes forward). `UPDATE_HELP` is `update --help`'s text. |
 | `tests-map-args.ts` | Parses `fabrica tests-map`'s arguments (one optional path, `--force`). |
 | `tests-map-command.ts` | `fabrica tests-map`: generates `<project>/tests.map` from the colocated `foo.ts`/`foo.test.ts` convention (`src/testmap/`). Refuses rather than writing in two cases, both for the same reason - a map that says less than the truth is worse than none, since every brief and delivery then reports from it as if it were complete: an existing file is never replaced without `--force` (the file is meant to be hand-edited afterwards), and a project where the convention finds nothing gets no file at all. Denied to the chat agent (`skill-settings.test.ts`'s `NEVER_FROM_CHAT_COMMANDS`): it writes into the Client's own checkout, which is the off-the-books edit the shipped `settings.json` templates exist to prevent. `TESTS_MAP_HELP` is `tests-map --help`'s text. |
-| `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath` (the reverse), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus every command those prefixes are for, each spelled exactly once: `UPSTREAM_GIT_URL`/`UPSTREAM_BRANCH`, the three steps that install a copy which knows its own commit (`cloneCommandArgs`, `packInCloneCommandArgs`, `installTarballCommandArgs`, with `isPackedTarball` for the tarball name between them), and `clonePackInstallProcedure`, those same three built into one pasteable line for every message that prints them - so the procedure advised and the procedure run cannot drift. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
-| `global-reinstall.ts` | Replacing an installed copy with the current code on master, as a `git clone` into a throwaway staging directory, an `npm pack` run inside that clone, and an `npm install -g` of the tarball - because installing the git spec directly symlinks the package at a clone npm then deletes, and packing that spec packs a tree with no `.git`, leaving the installed copy unable to name its commit (both reproduced; see the `fabrica update` section above). One injected `GlobalReinstallIo` covers every step that touches the machine, so its tests assert the exact argv git and npm are handed, and the directory each runs in, without running either, making a directory, or reaching the network - with `installed-commit.test.ts` running the whole chain for real against a local remote. Also home to `commandFailureMessage` (stderr if the command said anything, node's own message otherwise), which `update-command.ts`'s `git` calls share. |
+| `npm-prefix.ts` | npm's global layout, derived both ways and nothing else: `prefixOfGlobalInstall` (`<prefix>/lib/node_modules/fabrica` -> `<prefix>`, `null` for an npx cache or a local `node_modules`), `prefixOfGlobalBin` (`<prefix>/bin/fabrica` -> `<prefix>`), `globalPackagePath`/`globalBinPath` (the reverse of each), `normalizedPrefix`, and `GLOBAL_PACKAGE_NAME` (held to `package.json`'s own `name` by its test) - plus every command those prefixes are for, each spelled exactly once: `UPSTREAM_GIT_URL`/`UPSTREAM_BRANCH`, the three steps that install a copy which knows its own commit (`cloneCommandArgs`, `packInCloneCommandArgs`, `installTarballCommandArgs`, with `isPackedTarball` for the tarball name between them), and `clonePackInstallProcedure`, those same three built into one pasteable line for every message that prints them - so the procedure advised and the procedure run cannot drift. Taken from npm's own documentation and verified against real installs; Unix layout only, like the rest of this module. |
+| `global-reinstall.ts` | Replacing an installed copy with the current code on master, as a `git clone` into a throwaway staging directory, an `npm pack` run inside that clone, and an `npm install -g` of the tarball - because installing the git spec directly symlinks the package at a clone npm then deletes, and packing that spec packs a tree with no `.git`, leaving the installed copy unable to name its commit (both reproduced; see the `fabrica update` section above). One injected `GlobalReinstallIo` covers every step that touches the machine, so its tests assert the exact argv git and npm are handed, and the directory each runs in, without running either, making a directory, or reaching the network - with `installed-commit.test.ts` running the whole chain for real against a local remote. Also home to `commandFailureMessage` (stderr if the command said anything, node's own message otherwise), which `update-command.ts`'s `git` calls share. The install step alone - never the clone or the pack, which go nowhere near `<prefix>/bin` - is wrapped in `bin-launcher.ts`'s `installKeepingLauncher`, and the `ReinstallOutcome` it returns carries what became of the launcher alongside whether the install worked. |
+| `bin-launcher.ts` | Keeping a hand-written `<prefix>/bin/fabrica` launcher across that install (see "Keeping a launcher of the Client's own" above): `classifyBinEntry` tells npm's own link into this prefix's copy from someone else's launcher, `installKeepingLauncher` moves a launcher aside, runs the install, and puts it back by `rename` whatever the install did (a `finally`, so a failed or throwing install cannot strand it), and `checkLauncherTargets`/`launcherTargets` then check the paths it names inside the package still exist - discarding it in favour of npm's own captured link if not. One injected `LauncherIo` covers every filesystem step, and its own tests drive the real one against a scratch prefix, since the launcher's exact bytes, mode and inode are the point. |
 | `watch-for-task-id.ts` | The filesystem watch that learns a new task's id without `doTask` reporting it. |
 | `wait-for-ask-outcome.ts` | Polls a task's own record (issue #8) for `"cap-refused"` (issue #11), `"questions-asked"` (carrying the question with its options, issue #176), `"ask-failed"`, or `"work-started"`, bounded, so `fabrica do` knows whether a cap refused the task, it asked, failed before it started, or is proceeding. |
 | `run-task.ts` | The one call the detached child makes - pure, brain passed in, unit-tested directly. |

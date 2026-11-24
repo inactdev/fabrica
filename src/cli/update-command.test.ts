@@ -11,6 +11,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { CommitAncestry, InspectorBuild } from "../index.ts";
+import type { LauncherOutcome } from "./bin-launcher.ts";
 import type { CopyInfo } from "./doctor-command.ts";
 import { runUpdateCommand, type InspectorUpdateProbes, type UpdateProbes } from "./update-command.ts";
 
@@ -119,8 +120,17 @@ function devCheckoutProbes(overrides: Partial<UpdateProbes> = {}): UpdateProbes 
  * from wherever it lives"). */
 const INSTALL_PREFIX = "/fake/prefix";
 const INSTALL_ROOT = `${INSTALL_PREFIX}/lib/node_modules/fabrica`;
+const LAUNCHER_PATH = `${INSTALL_PREFIX}/bin/fabrica`;
+const NPM_LINK_TARGET = "../lib/node_modules/fabrica/src/cli/bin.mjs";
 
-function installedProbes(overrides: Partial<UpdateProbes> = {}): UpdateProbes {
+/** The common case on the Client's own Macs: there was a launcher at
+ * `<prefix>/bin/fabrica`, it was moved out of npm's way and put back. A
+ * fixture says this explicitly rather than defaulting to "there wasn't
+ * one", so a test about the launcher can never pass because the field
+ * quietly went missing. */
+const LAUNCHER_KEPT: LauncherOutcome = { kind: "kept", path: LAUNCHER_PATH };
+
+function installedProbes(overrides: Partial<UpdateProbes> = {}, launcher: LauncherOutcome = LAUNCHER_KEPT): UpdateProbes {
   let commit = OLD_BUILD_COMMIT;
   const base: UpdateProbes = {
     copy: (): CopyInfo => ({ kind: "installed", root: INSTALL_ROOT, branch: null, commit, version: "1.2.3" }),
@@ -128,7 +138,7 @@ function installedProbes(overrides: Partial<UpdateProbes> = {}): UpdateProbes {
     pull: neverCalled("pull on an installed copy"),
     reinstall: () => {
       commit = NEW_BUILD_COMMIT;
-      return { ok: true, message: "" };
+      return { ok: true, message: "", launcher };
     },
     inspector: inspectorProbes(),
   };
@@ -281,6 +291,7 @@ test("runUpdateCommand: a failed install is reported verbatim, command and all, 
     reinstall: (prefix) => ({
       ok: false,
       message: `npm install -g --prefix ${prefix} /tmp/fabrica-update-x1y2/fabrica-0.0.0.tgz failed: npm error EACCES`,
+      launcher: LAUNCHER_KEPT,
     }),
   });
 
@@ -849,6 +860,148 @@ test("runUpdateCommand: a stale live view is stopped and restarted, and the summ
   assert.equal(startCalls, 1);
   assert.match(io.out.join("\n"), /live view restarted/);
   assert.match(io.out.join("\n"), /fabrica up --continue/);
+});
+
+// The launcher half (task: "make fabrica update keep the dotfiles
+// launcher"). What happens to `<prefix>/bin/fabrica` is bin-launcher.ts's
+// business and is proven there, against a real directory; what is proven
+// here is the half this command owns - what the Client is told, and the
+// exit code.
+test("runUpdateCommand: a launcher that was kept across the install is said so on the summary line", async () => {
+  const io = captureIo();
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes: installedProbes(), ...live.opts, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.match(io.out.join("\n"), /launcher kept/);
+  // Nothing to act on, so nothing on stderr about it.
+  assert.doesNotMatch(io.err.join("\n"), /launcher/);
+});
+
+// The ordinary case for a copy npm alone installed: there is no launcher,
+// and a summary line that said "launcher none" would be noise.
+test("runUpdateCommand: with no launcher to keep, the summary says nothing about one", async () => {
+  const io = captureIo();
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: installedProbes({}, { kind: "none" }),
+    ...live.opts,
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.doesNotMatch(io.out.join("\n"), /launcher/);
+});
+
+test("runUpdateCommand: a dev checkout never says anything about a launcher - a pull cannot touch one", async () => {
+  const io = captureIo();
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes: devCheckoutProbes(), ...live.opts, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.doesNotMatch(io.out.join("\n"), /launcher/);
+});
+
+// Client ruling: discard the broken launcher, keep npm's own link so
+// fabrica still runs, exit non-zero, name the path that is gone and the
+// one command that writes a new launcher.
+test("runUpdateCommand: a launcher the install left pointing at nothing fails the update, loudly", async () => {
+  const io = captureIo();
+  const missing = `${INSTALL_ROOT}/src/cli/old-entry.mjs`;
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: installedProbes({}, { kind: "discarded", path: LAUNCHER_PATH, missing, npmLink: NPM_LINK_TARGET }),
+    ...live.opts,
+    ...io,
+  });
+
+  assert.equal(code, 1, "a fabrica that no longer starts the way it did is the Client's to fix");
+  const err = io.err.join("\n");
+  assert.ok(err.includes(missing), "names the exact path that no longer exists");
+  assert.ok(err.includes(LAUNCHER_PATH), "and the launcher it was named by");
+  assert.match(err, /no longer exists/);
+  assert.match(err, /npm's own link .* put back in its place, so fabrica still starts/);
+  assert.match(err, /re-run your dotfiles bootstrap to write a new one/);
+  assert.match(io.out.join("\n"), /launcher DISCARDED, it pointed at/);
+});
+
+// Everything else still comes forward. The code really was replaced, so
+// stopping early would leave the live view serving what was just
+// replaced - which an earlier ruling on this command forbids outright.
+test("runUpdateCommand: a broken launcher fails the update at the end, after everything else came forward", async () => {
+  const io = captureIo();
+  const inspector = behindInspectorProbes();
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: installedProbes(
+      { inspector },
+      { kind: "discarded", path: LAUNCHER_PATH, missing: `${INSTALL_ROOT}/gone.mjs`, npmLink: NPM_LINK_TARGET }
+    ),
+    ...live.opts,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.deepEqual(inspector.installs, [INSPECTOR_MAIN_TIP], "Inspector still came forward");
+  assert.equal(live.state.startCalls, 1, "and the live view is serving the new code, not the replaced code");
+  assert.match(io.out.join("\n"), new RegExp(`${OLD_BUILD_COMMIT} -> ${NEW_BUILD_COMMIT}`));
+});
+
+// The edge the ruling does not reach: with the install failed there is no
+// npm link to fall back to, so discarding the launcher would leave no
+// fabrica at all.
+test("runUpdateCommand: a broken launcher with nothing to fall back to says there is no fabrica to run", async () => {
+  const io = captureIo();
+  const missing = `${INSTALL_ROOT}/src/cli/bin.mjs`;
+  const probes = installedProbes({
+    reinstall: () => ({
+      ok: false,
+      message: "npm install -g failed: npm error EACCES",
+      launcher: { kind: "broken-kept", path: LAUNCHER_PATH, missing },
+    }),
+  });
+
+  const code = await runUpdateCommand([], { recordHome: "/fake/home", probes, ...liveViewNotListening, ...io });
+
+  assert.equal(code, 1);
+  const err = io.err.join("\n");
+  // Both failures, not just the install: which path is gone matters more
+  // to the Client than the install that didn't happen.
+  assert.match(err, /npm error EACCES/);
+  assert.ok(err.includes(missing));
+  assert.ok(err.includes(INSTALL_PREFIX), "names the prefix with nothing on it that can start fabrica");
+  assert.match(err, /put back exactly as it was/);
+  assert.match(err, /re-run your dotfiles bootstrap to write a new one/);
+});
+
+// Unknown is not missing: a launcher that works out where Fabrica lives
+// at run time cannot be judged, so this does not fail - but it is never
+// passed over in silence either.
+test("runUpdateCommand: a launcher that could not be checked warns and still exits 0", async () => {
+  const io = captureIo();
+  const live = startableLiveView();
+
+  const code = await runUpdateCommand([], {
+    recordHome: "/fake/home",
+    probes: installedProbes({}, { kind: "unverifiable", path: LAUNCHER_PATH }),
+    ...live.opts,
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  const err = io.err.join("\n");
+  assert.match(err, /names no path inside/);
+  assert.ok(err.includes(INSTALL_ROOT), "names where it looked");
+  assert.match(err, /could not be checked here/);
+  assert.match(io.out.join("\n"), /launcher kept, unchecked/);
 });
 
 test("runUpdateCommand: nothing here can open a browser tab - every route to one is absent from the source", () => {

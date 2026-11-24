@@ -14,6 +14,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { commandFailureMessage, reinstallGlobalCopy, type CommandOutcome, type GlobalReinstallIo } from "./global-reinstall.ts";
+import type { LauncherIo } from "./bin-launcher.ts";
+import { globalBinPath, globalPackagePath } from "./npm-prefix.ts";
 
 const STAGING = "/tmp/fabrica-update-x1y2";
 const CLONE = `${STAGING}/fabrica`;
@@ -32,17 +34,63 @@ interface Call {
   cwd: string;
 }
 
+/** A filesystem that is just a map of path -> what is there, enough to
+ * drive the launcher's move-aside and put-back without touching a real
+ * disk. `null` entries are absent; `files` carries the bytes of a
+ * regular file, `links` a symlink's recorded target. The real seam
+ * against a real directory is bin-launcher.test.ts's business.
+ *
+ * `installWritesNpmLink` is what npm does on a successful install -
+ * writing its own relative link at `<prefix>/bin/fabrica` - played back
+ * when the install command runs. */
+function fakeLauncherIo(initial: { files?: Record<string, string>; links?: Record<string, string> } = {}) {
+  const files = new Map(Object.entries(initial.files ?? {}));
+  const links = new Map(Object.entries(initial.links ?? {}));
+  const moves: string[] = [];
+  const io: LauncherIo = {
+    entryAt: (path) => (links.has(path) ? "symlink" : files.has(path) ? "file" : null),
+    readLink: (path) => links.get(path) as string,
+    readText: (path) => files.get(path) ?? null,
+    exists: (path) => files.has(path) || links.has(path),
+    move: (from, to) => {
+      moves.push(`${from} -> ${to}`);
+      if (!files.has(from) && !links.has(from)) throw new Error(`nothing at ${from} to move`);
+      // A rename replaces whatever is at the destination - which is how
+      // the launcher goes back over the link npm just wrote.
+      files.delete(to);
+      links.delete(to);
+      if (links.has(from)) {
+        links.set(to, links.get(from) as string);
+        links.delete(from);
+      } else {
+        files.set(to, files.get(from) as string);
+        files.delete(from);
+      }
+    },
+    remove: (path) => {
+      files.delete(path);
+      links.delete(path);
+    },
+    writeLink: (path, target) => {
+      files.delete(path);
+      links.set(path, target);
+    },
+  };
+  return { io, files, links, moves };
+}
+
 /** Records every git/npm call in order, answers each from `answers` by
  * position (success otherwise), and tracks the staging directory's
  * lifetime. `files` is what the directory holds once `pack` has run. */
 function fakeIo(
-  options: { answers?: CommandOutcome[]; files?: string[] } = {}
+  options: { answers?: CommandOutcome[]; files?: string[]; launcher?: LauncherIo } = {}
 ): GlobalReinstallIo & { calls: Call[]; made: number; removed: string[] } {
   const calls: Call[] = [];
   const removed: string[] = [];
   const state = { made: 0 };
   const answer = () => options.answers?.[calls.length - 1] ?? { ok: true, message: "added 1 package" };
   const io: GlobalReinstallIo = {
+    launcher: options.launcher ?? fakeLauncherIo().io,
     git: (args, cwd) => {
       calls.push({ command: "git", args, cwd });
       return answer();
@@ -193,6 +241,89 @@ test("reinstallGlobalCopy: files in the staging dir that are not this package's 
 
   assert.equal(result.ok, true, result.message);
   assert.deepEqual(io.calls.at(-1), { command: "npm", args: INSTALL_ARGS, cwd: CLONE });
+});
+
+// The launcher's move-aside wraps the install step and nothing else -
+// the clone and the pack never go near `<prefix>/bin`, and the launcher
+// should be absent for as little time as possible. What it is wrapped
+// around being the install, rather than the whole run, is what this
+// asserts: the move happens after the pack, and the put-back before the
+// function returns.
+test("reinstallGlobalCopy: a launcher is moved aside around the install step alone, and put back", () => {
+  const bin = globalBinPath(PREFIX);
+  const saved = `${PREFIX}/bin/.fabrica-launcher-saved`;
+  const script = `#!/bin/sh\nexec node "${globalPackagePath(PREFIX)}/src/cli/bin.mjs" "$@"\n`;
+  const launcher = fakeLauncherIo({
+    files: { [bin]: script, [`${globalPackagePath(PREFIX)}/src/cli/bin.mjs`]: "entry" },
+  });
+  const io = fakeIo({ launcher: launcher.io });
+
+  const result = reinstallGlobalCopy(PREFIX, io);
+
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.launcher, { kind: "kept", path: bin });
+  assert.deepEqual(launcher.moves, [`${bin} -> ${saved}`, `${saved} -> ${bin}`]);
+  assert.equal(launcher.files.get(bin), script, "the same bytes, back where they were");
+  assert.equal(launcher.files.has(saved), false);
+});
+
+test("reinstallGlobalCopy: npm's own link is left alone - there is no launcher to keep", () => {
+  const io = fakeIo({
+    launcher: fakeLauncherIo({ links: { [globalBinPath(PREFIX)]: "../lib/node_modules/fabrica/src/cli/bin.mjs" } }).io,
+  });
+
+  const result = reinstallGlobalCopy(PREFIX, io);
+
+  assert.deepEqual(result.launcher, { kind: "none" });
+});
+
+// A failure before the install never touched `<prefix>/bin`, so there is
+// nothing to report about the launcher - and nothing was moved.
+test("reinstallGlobalCopy: a clone or pack that failed reports no launcher move at all", () => {
+  const bin = globalBinPath(PREFIX);
+  for (const answers of [
+    [{ ok: false, message: "fatal: could not read from remote repository" }],
+    [{ ok: true, message: "" }, { ok: false, message: "npm error code ENOENT" }],
+  ]) {
+    const launcher = fakeLauncherIo({ files: { [bin]: "#!/bin/sh\n" } });
+    const result = reinstallGlobalCopy(PREFIX, fakeIo({ answers, launcher: launcher.io }));
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.launcher, { kind: "none" });
+    assert.deepEqual(launcher.moves, []);
+  }
+});
+
+// `fabrica update` reads this field to decide its own exit code, so a
+// launcher the install broke has to survive the trip out of here even
+// when the install itself succeeded.
+test("reinstallGlobalCopy: a launcher left pointing at nothing is reported on a successful install", () => {
+  const bin = globalBinPath(PREFIX);
+  const gone = `${globalPackagePath(PREFIX)}/src/cli/old-entry.mjs`;
+  const launcher = fakeLauncherIo({ files: { [bin]: `#!/bin/sh\nexec node "${gone}"\n` } });
+  const io = fakeIo({ launcher: launcher.io });
+  // What npm does on success, replayed when the install command runs.
+  const npm = io.npm;
+  io.npm = (args, cwd) => {
+    const outcome = npm(args, cwd);
+    if (args[0] === "install") launcher.io.writeLink(bin, "../lib/node_modules/fabrica/src/cli/bin.mjs");
+    return outcome;
+  };
+
+  const result = reinstallGlobalCopy(PREFIX, io);
+
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.launcher, {
+    kind: "discarded",
+    path: bin,
+    missing: gone,
+    npmLink: "../lib/node_modules/fabrica/src/cli/bin.mjs",
+  });
+  assert.equal(launcher.links.get(bin), "../lib/node_modules/fabrica/src/cli/bin.mjs");
+});
+
+test("reinstallGlobalCopy: with no prefix to name, there is no bin path to look at", () => {
+  assert.deepEqual(reinstallGlobalCopy(null, fakeIo()).launcher, { kind: "prefix-unknown" });
 });
 
 test("commandFailureMessage: what the command said on stderr, or node's own message when it said nothing", () => {
