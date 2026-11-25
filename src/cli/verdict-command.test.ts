@@ -46,10 +46,23 @@ function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-verdict-command-"));
 }
 
+/** Captures both streams, and pins the environment to an empty one.
+ * The empty env matters as much as the capture (issue #359): this
+ * command reads `FABRICA_ASSISTANT_SESSION` to decide whether to record
+ * - and print - that the assistant ran the ruling, so a `npm test`
+ * invoked from inside a `fabrica up` session would otherwise add a line
+ * to every exact-output assertion below. Tests that want the assistant
+ * path override `env` explicitly after spreading this. */
 function captureIo() {
   const out: string[] = [];
   const err: string[] = [];
-  return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
+  return {
+    out,
+    err,
+    env: {} as NodeJS.ProcessEnv,
+    stdout: (l: string) => out.push(l),
+    stderr: (l: string) => err.push(l),
+  };
 }
 
 async function waitForSecondDelivery(recordHome: string, taskId: string): Promise<void> {
@@ -432,4 +445,111 @@ test("runVerdictCommand: an unknown task id is printed, never invented as a task
 
   assert.equal(code, 1);
   assert.deepEqual(readEventsForTask(recordHome, "no-such-task"), [], "no phantom task (issue #81's shape)");
+});
+
+// Issue #359: the assistant may run a ruling the Client agreed to in
+// his own message, so the record has to keep saying which of the two
+// typed it. Both halves are checked - the event's own field, which is
+// what `fabrica log` later reads, and the line the Client sees in the
+// conversation right away.
+test("runVerdictCommand: a ruling run inside an assistant session is marked on the record and said out loud", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "accept", "-m", "he said accept"], {
+    recordHome,
+    ...io,
+    env: { FABRICA_ASSISTANT_SESSION: "1" },
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.deepEqual(io.err, []);
+  // The outcome line first, unchanged - that is what a script reads -
+  // and the attribution after it.
+  assert.match(io.out[0], new RegExp(`^accept recorded: ${task.id} is closed\\.$`));
+  assert.equal(io.out[1], "Recorded as run by the assistant on the Client's instruction.");
+
+  const recorded = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-recorded").at(-1);
+  assert.equal((recorded?.details as { ruling?: string }).ruling, "accept");
+  assert.equal((recorded?.details as { viaAssistant?: boolean }).viaAssistant, true);
+  // The Client's own words still go through untouched: the mark says
+  // who typed it, not what was said.
+  assert.equal((recorded?.details as { note?: string }).note, "he said accept");
+});
+
+test("runVerdictCommand: the Client's own ruling records no mark at all", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "accept"], { recordHome, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(io.out.length, 1, `expected no attribution line, got ${JSON.stringify(io.out)}`);
+  const recorded = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-recorded").at(-1);
+  // Absent, not false - that is what every verdict recorded before this
+  // field existed means, so a reader has no third state to learn.
+  assert.ok(!("viaAssistant" in (recorded?.details as object)));
+});
+
+test("runVerdictCommand: --by-client overrides an assistant session's environment", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "accept", "--by-client"], {
+    recordHome,
+    ...io,
+    env: { FABRICA_ASSISTANT_SESSION: "1" },
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(io.out.length, 1, `expected no attribution line, got ${JSON.stringify(io.out)}`);
+  const recorded = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-recorded").at(-1);
+  assert.ok(!("viaAssistant" in (recorded?.details as object)));
+});
+
+test("runVerdictCommand: --via-assistant marks a session fabrica up did not start", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "wrong", "--via-assistant"], { recordHome, ...io });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(io.out[1], "Recorded as run by the assistant on the Client's instruction.");
+  const recorded = readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-recorded").at(-1);
+  assert.equal((recorded?.details as { viaAssistant?: boolean }).viaAssistant, true);
+});
+
+test("runVerdictCommand: both attribution flags at once refuses and records no ruling", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("small change", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain(),
+  });
+  const io = captureIo();
+
+  const code = await runVerdictCommand([task.id, "accept", "--via-assistant", "--by-client"], { recordHome, ...io });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /opposite things/);
+  assert.equal(
+    readEventsForTask(recordHome, task.id).filter((e) => e.name === "verdict-recorded").length,
+    0,
+    "a ruling nobody could be credited with must not be recorded"
+  );
 });

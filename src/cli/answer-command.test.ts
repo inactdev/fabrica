@@ -26,10 +26,21 @@ function tempRecordHome(): string {
   return mkdtempSync(join(tmpdir(), "fabrica-cli-answer-command-"));
 }
 
+/** Captures both streams, and pins the environment to an empty one -
+ * same reasoning as verdict-command.test.ts's own copy (issue #359):
+ * this command reads `FABRICA_ASSISTANT_SESSION`, so a `npm test` run
+ * from inside a `fabrica up` session would otherwise add a line to
+ * every exact-output assertion below. */
 function captureIo() {
   const out: string[] = [];
   const err: string[] = [];
-  return { out, err, stdout: (l: string) => out.push(l), stderr: (l: string) => err.push(l) };
+  return {
+    out,
+    err,
+    env: {} as NodeJS.ProcessEnv,
+    stdout: (l: string) => out.push(l),
+    stderr: (l: string) => err.push(l),
+  };
 }
 
 // Issue #123's own definition of done for this command: it returns
@@ -208,4 +219,98 @@ test("runAnswerCommand: an option the question does not have refuses, and record
   assert.equal(code, 1);
   assert.match(io.err.join("\n"), /there is no option 7 on this question/);
   assert.ok(!readEventsForTask(recordHome, task.id).some((e) => e.name === "answers-given"));
+});
+
+// Issue #359: the assistant may run an answer the Client picked in his
+// own message, so the record has to keep saying which of the two typed
+// it - the same mark, and the same reasoning, as a verdict's.
+test("runAnswerCommand: an answer run inside an assistant session is marked on the record and said out loud", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } }),
+  });
+  const io = captureIo();
+
+  const code = await runAnswerCommand([task.id, "--option", "1"], {
+    recordHome,
+    entryScript: FAKE_ANSWER_ENTRY,
+    ...io,
+    env: { FABRICA_ASSISTANT_SESSION: "1" },
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.deepEqual(io.err, []);
+  assert.match(io.out[0], new RegExp(`^${task.id} resumed with your answer`));
+  assert.equal(io.out[1], "Recorded as run by the assistant on the Client's instruction.");
+
+  const given = readEventsForTask(recordHome, task.id).filter((e) => e.name === "answers-given").at(-1);
+  assert.equal((given?.details as { viaAssistant?: boolean }).viaAssistant, true);
+  // The answer the worker is handed is identical either way - the mark
+  // says who typed it, nothing more.
+  assert.equal((given?.details as { answer?: string }).answer, "Postgres");
+});
+
+test("runAnswerCommand: the Client's own answer records no mark at all", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } }),
+  });
+  const io = captureIo();
+
+  const code = await runAnswerCommand([task.id, "--option", "2"], {
+    recordHome,
+    entryScript: FAKE_ANSWER_ENTRY,
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(io.out.length, 1, `expected no attribution line, got ${JSON.stringify(io.out)}`);
+  const given = readEventsForTask(recordHome, task.id).filter((e) => e.name === "answers-given").at(-1);
+  assert.ok(!("viaAssistant" in (given?.details as object)));
+});
+
+test("runAnswerCommand: --by-client overrides an assistant session's environment", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } }),
+  });
+  const io = captureIo();
+
+  const code = await runAnswerCommand([task.id, "--option", "1", "--by-client"], {
+    recordHome,
+    entryScript: FAKE_ANSWER_ENTRY,
+    ...io,
+    env: { FABRICA_ASSISTANT_SESSION: "1" },
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(io.out.length, 1, `expected no attribution line, got ${JSON.stringify(io.out)}`);
+  const given = readEventsForTask(recordHome, task.id).filter((e) => e.name === "answers-given").at(-1);
+  assert.ok(!("viaAssistant" in (given?.details as object)));
+});
+
+test("runAnswerCommand: both attribution flags at once refuses and records no answer", async () => {
+  const recordHome = tempRecordHome();
+  const task = await createForeman({ recordHome, inspector: fixtureInspector() }).do("build me an app", {
+    project: makeFixtureRepo("exit 0"),
+    brain: fakeBrain({ askQuestion: { question: "What database should this use?", options: ["Postgres", "SQLite"] } }),
+  });
+  const io = captureIo();
+
+  const code = await runAnswerCommand([task.id, "--option", "1", "--via-assistant", "--by-client"], {
+    recordHome,
+    entryScript: FAKE_ANSWER_ENTRY,
+    ...io,
+  });
+
+  assert.equal(code, 1);
+  assert.match(io.err.join("\n"), /opposite things/);
+  assert.equal(
+    readEventsForTask(recordHome, task.id).filter((e) => e.name === "answers-given").length,
+    0,
+    "an answer nobody could be credited with must not be recorded"
+  );
 });

@@ -6,11 +6,16 @@
 // `fabrica verdict` already uses for the other place the Client types
 // free prose, and unlike a bare positional it takes an answer starting
 // with a dash (`-1 means unlimited`) without mistaking it for a flag.
+//
+// Issue #359 added `--via-assistant`/`--by-client`: who the record should
+// say typed this answer, overriding what the environment says on its own
+// (assistant-session.ts).
 
 import { CliError } from "./errors.ts";
 import { QUESTION_ID_PATTERN } from "../index.ts";
 
-export const ANSWER_USAGE = 'fabrica answer <taskId> [--option <n>] [--question <id>] [-m "<text>"]';
+export const ANSWER_USAGE =
+  'fabrica answer <taskId> [--option <n>] [--question <id>] [-m "<text>"] [--via-assistant|--by-client]';
 
 export interface AnswerArgs {
   taskId: string;
@@ -24,12 +29,17 @@ export interface AnswerArgs {
    * one the task is stopped on; naming one the task already answered is
    * a correction. */
   questionId?: string;
+  /** Who the record should say typed this (issue #359). Omitted means
+   * "work it out from the environment" - see `assistant-session.ts`'s
+   * `ranViaAssistant`. */
+  viaAssistant?: boolean;
 }
 
 export function parseAnswerArgs(argv: string[]): AnswerArgs {
   let text: string | undefined;
   let option: number | undefined;
   let questionId: string | undefined;
+  let viaAssistant: boolean | undefined;
   const positionals: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -67,6 +77,18 @@ export function parseAnswerArgs(argv: string[]): AnswerArgs {
         );
       }
       questionId = value;
+    } else if (arg === "--via-assistant" || arg === "--by-client") {
+      // Same shape, same reasoning as verdict-args.ts's own pair: both
+      // override the auto-detection, and passing both contradictory
+      // spellings is a usage error rather than a precedence rule.
+      const wanted = arg === "--via-assistant";
+      if (viaAssistant !== undefined && viaAssistant !== wanted) {
+        throw new CliError(
+          "bad-usage",
+          `fabrica answer: --via-assistant and --by-client say opposite things about who ran this - pass one.`
+        );
+      }
+      viaAssistant = wanted;
     } else if (arg.startsWith("-")) {
       throw new CliError("bad-usage", `fabrica answer: unknown flag "${arg}". Usage: ${ANSWER_USAGE}`);
     } else {
@@ -97,5 +119,11 @@ export function parseAnswerArgs(argv: string[]): AnswerArgs {
     );
   }
 
-  return { taskId, text: text ?? "", ...(option !== undefined ? { option } : {}), ...(questionId ? { questionId } : {}) };
+  return {
+    taskId,
+    text: text ?? "",
+    ...(option !== undefined ? { option } : {}),
+    ...(questionId ? { questionId } : {}),
+    ...(viaAssistant !== undefined ? { viaAssistant } : {}),
+  };
 }

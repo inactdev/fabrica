@@ -19,6 +19,7 @@ import { parseVerdictArgs, VERDICT_USAGE } from "./verdict-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { spawnDetachedResume } from "./spawn-detached.ts";
+import { ranViaAssistant, VIA_ASSISTANT_NOTE } from "./assistant-session.ts";
 
 /** The three ruling names, for reading what was attempted off the raw
  * arguments when the parse itself fails (issue #353 - see
@@ -46,9 +47,22 @@ Options:
   -m "<note>"   Your note on the work, in the shape \`git commit -m\` uses.
                 Optional for accept and wrong, required for fix - it is
                 the correction the worker is handed.
+  --via-assistant
+                Record this as run by the chat assistant on your own
+                instruction (issue #359). Only legitimate once you have
+                agreed to the ruling in your own message; the record
+                keeps the two apart and \`fabrica log\` says which.
+                Usually unnecessary - a session started by \`fabrica up\`
+                is detected on its own.
+  --by-client   The opposite override: record this as yours, even in a
+                shell that inherited an assistant session's environment.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
+  FABRICA_ASSISTANT_SESSION
+                Set to 1 by \`fabrica up\` in the chat session it
+                launches. Makes \`--via-assistant\` the default there;
+                either flag above overrides it.
 `;
 
 export interface RunVerdictCommandOptions {
@@ -61,6 +75,10 @@ export interface RunVerdictCommandOptions {
   /** Test-only, "accept" only: the same override for the quiz re-check
    * round an accept can start (see `quizNoticeAfterAccept`). */
   quizRecheckEntryScript?: string;
+  /** The environment the assistant-session sentinel is read from
+   * (issue #359). Defaults to this process's own; a test passes its
+   * own rather than mutating `process.env`. */
+  env?: NodeJS.ProcessEnv;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -127,15 +145,29 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
   const recordHome = opts.recordHome ?? resolveRecordHome();
 
   try {
-    const { taskId, ruling, note } = parseVerdictArgs(argv);
+    const { taskId, ruling, note, viaAssistant } = parseVerdictArgs(argv);
     attempted = { taskId, ruling, ...(note === undefined ? {} : { note }) };
     const caps = loadConfigOrDefault(recordHome).caps;
+    // Who the record should say typed this: the flag if one was passed,
+    // otherwise whatever the environment says (issue #359). Resolved
+    // here, in the one layer that can see both.
+    const byAssistant = ranViaAssistant(opts.env ?? process.env, viaAssistant);
 
     // Validates and records the ruling right here, synchronously - a bad
     // ruling (an unknown task, an already-closed one, a missing note, a
     // cap refusal) fails on the spot, before anything is handed off to
     // the background.
-    recordVerdictDecision(recordHome, taskId, ruling, note, { caps });
+    recordVerdictDecision(recordHome, taskId, ruling, note, { caps, viaAssistant: byAssistant });
+
+    // Said out loud, on its own line after the outcome, rather than
+    // folded into the lines below: those are what scripts and tests
+    // read, and this is the one thing the Client wants to see in the
+    // conversation when his assistant ran the command for him - the
+    // same words `fabrica log` will show him later, from the same
+    // constant.
+    const sayWhoRanIt = () => {
+      if (byAssistant) stdout(`Recorded as ${VIA_ASSISTANT_NOTE}.`);
+    };
 
     if (ruling === "fix") {
       const round = fixRoundOf(recordHome, taskId);
@@ -144,6 +176,7 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
         `fix round ${round} recorded: ${taskId} is running again with your note in the background. ` +
           `Follow progress with \`fabrica log ${taskId}\` or \`fabrica watch ${taskId}\`.`
       );
+      sayWhoRanIt();
       return 0;
     }
 
@@ -157,6 +190,7 @@ export async function runVerdictCommand(argv: string[], opts: RunVerdictCommandO
     } else {
       stdout(`${ruling} recorded: ${taskId} is closed.`);
     }
+    sayWhoRanIt();
     return 0;
   } catch (err) {
     // Anything at all, by its message - never a class list. A "fix"

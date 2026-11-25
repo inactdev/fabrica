@@ -26,6 +26,13 @@ export interface LaunchOptions {
    * directory") so `fabrica up --continue` resumes the session that was
    * running in this folder rather than starting a new one. */
   continueSession?: boolean;
+  /** The environment to run the session in (issue #359). `fabrica up`
+   * passes its own plus the sentinel that marks this process tree as the
+   * assistant's, which is what lets a `fabrica verdict`/`fabrica answer`
+   * the assistant runs from inside here be recorded as run on the
+   * Client's instruction rather than typed by him. Omitted, this
+   * process's own environment is inherited, exactly as before. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface LaunchResult {
@@ -40,6 +47,7 @@ export function launch(opts: LaunchOptions): LaunchResult {
   const result = spawnSync("claude", args, {
     cwd: opts.cwd,
     stdio: "inherit",
+    ...(opts.env ? { env: opts.env } : {}),
   });
   return { exitCode: result.status ?? 0 };
 }

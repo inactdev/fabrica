@@ -1,8 +1,6 @@
 {
   "permissions": {
     "deny": [
-      "Bash(fabrica verdict *)",
-      "Bash(fabrica answer *)",
       "Bash(fabrica cost *)",
       "Bash(fabrica up *)",
       "Bash(fabrica update *)",
@@ -27,6 +25,8 @@
     "allow": [
       "Bash(fabrica register *)",
       "Bash(fabrica do *)",
+      "Bash(fabrica verdict *)",
+      "Bash(fabrica answer *)",
       "Bash(fabrica status *)",
       "Bash(fabrica log *)",
       "Bash(fabrica watch *)",

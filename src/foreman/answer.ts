@@ -57,6 +57,15 @@ export interface AnswerDecisionOptions {
    * record lists them - `OTHER_OPTION` last. Omitted means "other": the
    * Client's own words, which is what `-m` alone has always meant. */
   option?: number;
+  /** True when the chat assistant ran this answer on the Client's own
+   * instruction, after he agreed to it in his own message (issue #359;
+   * HANDBOOK.md case 3). It lands on the `"answers-given"` event as
+   * `viaAssistant: true` and `fabrica log` says so. Omitted or false
+   * records nothing, which is what every answer already on the record
+   * means; the worker is handed the same answer either way. Who ran it
+   * is resolved by the caller that knows -
+   * `src/cli/assistant-session.ts` for the CLI. */
+  viaAssistant?: boolean;
 }
 
 export interface AnswerDecision {
@@ -256,6 +265,11 @@ export function recordAnswerDecision(
   const givenDetails: AnswersGivenDetails = {
     answer,
     ...(question ? { questionId: question.id, option } : {}),
+    // Issue #359: who typed it. Written only when it was the assistant -
+    // the field's absence is what every answer already on the record
+    // means. Bookkeeping only; the brief the worker gets is identical
+    // either way.
+    ...(opts.viaAssistant ? { viaAssistant: true as const } : {}),
   };
   appendEvent(recordHome, { taskId, name: "answers-given", details: givenDetails });
 

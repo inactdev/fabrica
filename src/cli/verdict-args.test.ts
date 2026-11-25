@@ -102,3 +102,42 @@ test("parseVerdictArgs: an unknown flag refuses", () => {
     (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("--force")
   );
 });
+
+// Issue #359: who the record should say ran this ruling. The parser's
+// whole job here is to turn the two flags into a tri-state - true,
+// false, or "nothing was said, work it out from the environment" - so
+// the absence of the key is as much a result as either value.
+test("parseVerdictArgs: --via-assistant asks for the assistant's mark", () => {
+  assert.equal(parseVerdictArgs(["some-task", "accept", "--via-assistant"]).viaAssistant, true);
+});
+
+test("parseVerdictArgs: --by-client asks for the opposite, explicitly", () => {
+  assert.equal(parseVerdictArgs(["some-task", "accept", "--by-client"]).viaAssistant, false);
+});
+
+test("parseVerdictArgs: with neither flag, the parser says nothing either way", () => {
+  // Not `false` - the environment still gets to decide (see
+  // assistant-session.ts's ranViaAssistant), and a parser that
+  // defaulted to false here would silently override it.
+  assert.ok(!("viaAssistant" in parseVerdictArgs(["some-task", "accept"])));
+});
+
+test("parseVerdictArgs: the flags combine with a note and keep their order free", () => {
+  assert.deepEqual(parseVerdictArgs(["some-task", "fix", "--via-assistant", "-m", "rename the flag"]), {
+    taskId: "some-task",
+    ruling: "fix",
+    note: "rename the flag",
+    viaAssistant: true,
+  });
+});
+
+test("parseVerdictArgs: the same flag twice is harmless", () => {
+  assert.equal(parseVerdictArgs(["some-task", "accept", "--via-assistant", "--via-assistant"]).viaAssistant, true);
+});
+
+test("parseVerdictArgs: both flags at once refuses rather than picking a winner", () => {
+  assert.throws(
+    () => parseVerdictArgs(["some-task", "accept", "--via-assistant", "--by-client"]),
+    (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("opposite things")
+  );
+});

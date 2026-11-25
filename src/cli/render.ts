@@ -26,6 +26,7 @@ import type {
   TranscriptEntry,
 } from "../index.ts";
 import type { WorkerPresence } from "./task-process.ts";
+import { VIA_ASSISTANT_NOTE } from "./assistant-session.ts";
 
 /** Longer than this since the last recorded event on a still-working task,
  * and silence stops meaning "progress" and starts meaning "quiet too long"
@@ -1102,8 +1103,16 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     }
 
     case "verdict-recorded": {
-      const d = details as { ruling?: string; note?: string };
-      return d.note ? `verdict: ${d.ruling} - ${d.note}` : `verdict: ${d.ruling}`;
+      // `viaAssistant` (issue #359) is present and true exactly when the
+      // chat assistant ran the command on the Client's own instruction,
+      // and absent for one he typed himself - which is what every
+      // verdict recorded before the field existed means. Said on the
+      // line either way would be noise; said only when it was the
+      // assistant is the whole point, since that is the case the record
+      // has to be able to tell apart.
+      const d = details as { ruling?: string; note?: string; viaAssistant?: boolean };
+      const who = d.viaAssistant ? ` (${VIA_ASSISTANT_NOTE})` : "";
+      return d.note ? `verdict: ${d.ruling} - ${d.note}${who}` : `verdict: ${d.ruling}${who}`;
     }
 
     case "heartbeat": {
@@ -1160,13 +1169,16 @@ function describeEventDetails(event: FabricaEvent): string | undefined {
     }
 
     case "answers-given": {
-      const d = details as { answer?: string; questionId?: string; option?: string };
+      const d = details as { answer?: string; questionId?: string; option?: string; viaAssistant?: boolean };
       if (!d.answer) return fallbackDetail(details);
       // The option picked is shown when it isn't simply the answer
       // itself - which is the case exactly when the Client wrote his own
       // words ("other").
       const picked = d.option && d.option !== d.answer ? ` (${d.option})` : "";
-      return `answer${d.questionId ? ` to ${d.questionId}` : ""}: ${d.answer}${picked}`;
+      // Same field, same reasoning as "verdict-recorded" above (issue
+      // #359): shown only when the assistant ran it.
+      const who = d.viaAssistant ? ` (${VIA_ASSISTANT_NOTE})` : "";
+      return `answer${d.questionId ? ` to ${d.questionId}` : ""}: ${d.answer}${picked}${who}`;
     }
 
     case "line-cut": {

@@ -3,9 +3,17 @@
 // against a hand-written matcher. This file proves the same boundary
 // against a real, non-interactive session of the harness itself -
 // documentation can be stale or misread, so "the pipeline denies
-// fabrica verdict/answer and runs fabrica do/status/log/watch" is
+// fabrica cost and runs fabrica do/status/log/watch/verdict/answer" is
 // checked against the real permission_denials the harness reports,
 // not just against the rules on paper.
+//
+// Issue #359 moved `verdict`/`answer` from the denied side to the free
+// side here: the assistant may now run a ruling the Client agreed to in
+// his own message (HANDBOOK.md cases 3 and 5), and what keeps the two
+// apart is the record's own `viaAssistant` mark, not a permission deny.
+// `cost` is what this file now proves is genuinely denied, including
+// through a chained bypass attempt - the same assertion shape, pointed
+// at the one command that is still owner-only.
 //
 // A pass here only means something if it's actually caused by the
 // shipped template - a session that inherited a permissive setting
@@ -54,8 +62,27 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const skillDir = join(repoRoot, "skill");
 
-const FREE_ATTEMPTS = ["fabrica status", 'fabrica do "a task"', "fabrica log task-1", "fabrica watch task-1"];
-const FREE_ARGS = ["status", "do a task", "log task-1", "watch task-1"];
+const FREE_ATTEMPTS = [
+  "fabrica status",
+  'fabrica do "a task"',
+  "fabrica log task-1",
+  "fabrica watch task-1",
+  // Issue #359: free now, on the Client's own ruling. Kept in the same
+  // list the negative controls below run against, so the "with no
+  // settings.json, nothing runs" proof covers these two as well - the
+  // allow entries that let them through have to be the shipped
+  // template's, not something the tester's machine happened to have.
+  "fabrica verdict task-1 accept -m note",
+  "fabrica answer task-1 -m answer-text",
+];
+const FREE_ARGS = [
+  "status",
+  "do a task",
+  "log task-1",
+  "watch task-1",
+  "verdict task-1 accept -m note",
+  "answer task-1 -m answer-text",
+];
 
 interface CheckResult {
   available: boolean;
@@ -128,9 +155,9 @@ function includesCommand(commands: string[], target: string): boolean {
   return commands.some((c) => normalizeCommand(c) === normalizedTarget);
 }
 
-test("normalizing command strings still distinguishes the standalone verdict attempt from the chained one", () => {
-  const standalone = "fabrica verdict task-1 accept -m note";
-  const chained = "fabrica status && fabrica verdict task-1 accept -m note";
+test("normalizing command strings still distinguishes the standalone cost attempt from the chained one", () => {
+  const standalone = "fabrica cost task-1 0.42";
+  const chained = "fabrica status && fabrica cost task-1 0.42";
   assert.notEqual(
     normalizeCommand(standalone),
     normalizeCommand(chained),
@@ -204,14 +231,12 @@ async function forEachLiveHarness(
   }
 }
 
-test("real session: the shipped settings.json actually runs do/status/log/watch and actually denies verdict/answer/cost, including a chained bypass attempt", async (t) => {
+test("real session: the shipped settings.json actually runs do/status/log/watch/verdict/answer and actually denies cost, including a chained bypass attempt", async (t) => {
   await forEachLiveHarness(t, "fabrica-live-permissions-", async (checkPermissionBoundary, harness, scratch) => {
     const attempts = [
       ...FREE_ATTEMPTS,
-      "fabrica verdict task-1 accept -m note",
-      "fabrica answer task-1 -m answer-text",
       "fabrica cost task-1 0.42",
-      "fabrica status && fabrica verdict task-1 accept -m note",
+      "fabrica status && fabrica cost task-1 0.42",
     ];
 
     const result = await checkPermissionBoundary(scratch, join(skillDir, harness, "settings.json"), attempts);
@@ -228,32 +253,24 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
       );
     }
 
-    // Deciding commands, denial-genuineness checked first: matched
-    // (after quote/whitespace normalization) against the specific
-    // attempt strings, not a substring check - "verdict" appears in
-    // both the standalone and the chained attempt, so a substring
+    // The one owner-only command left, denial-genuineness checked
+    // first: matched (after quote/whitespace normalization) against the
+    // specific attempt strings, not a substring check - "cost" appears
+    // in both the standalone and the chained attempt, so a substring
     // match could be satisfied by the chained denial alone and pass
     // vacuously for the standalone case even if the model never
     // attempted it. Normalizing does not blur that distinction - see
     // "normalizing command strings still distinguishes..." above.
-    assert.ok(
-      includesCommand(result.deniedCommands, "fabrica verdict task-1 accept -m note"),
-      `${harness}: no real permission_denials entry named the standalone verdict attempt - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
-    );
-    assert.ok(
-      includesCommand(result.deniedCommands, "fabrica answer task-1 -m answer-text"),
-      `${harness}: no real permission_denials entry named the standalone answer attempt - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
-    );
     assert.ok(
       includesCommand(result.deniedCommands, "fabrica cost task-1 0.42"),
       `${harness}: no real permission_denials entry named the cost attempt - the AI driver may be able to ` +
         `record a cost and clear its own SPEND UNKNOWN block - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
     );
     assert.ok(
-      includesCommand(result.deniedCommands, "fabrica status && fabrica verdict task-1 accept -m note"),
-      `${harness}: the chained "fabrica status && fabrica verdict ..." attempt was not denied as a whole - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
+      includesCommand(result.deniedCommands, "fabrica status && fabrica cost task-1 0.42"),
+      `${harness}: the chained "fabrica status && fabrica cost ..." attempt was not denied as a whole - deniedCommands was ${JSON.stringify(result.deniedCommands)}`
     );
-    // Only meaningful now that the three checks above already prove
+    // Only meaningful now that the checks above already prove
     // each attempt was genuinely made and denied by the engine - an
     // executedArgs check run on its own would also pass if the
     // model had simply never tried these, which is exactly the
@@ -261,7 +278,7 @@ test("real session: the shipped settings.json actually runs do/status/log/watch 
     // controls called out. Here it adds real information: does the
     // side effect (nothing ran) agree with the engine's own report,
     // or did something slip through despite the reported denial.
-    for (const deniedArgs of ["verdict task-1 accept -m note", "answer task-1 -m answer-text", "cost task-1 0.42"]) {
+    for (const deniedArgs of ["cost task-1 0.42"]) {
       assert.equal(
         includesCommand(result.executedArgs, deniedArgs),
         false,

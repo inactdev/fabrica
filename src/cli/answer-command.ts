@@ -15,6 +15,7 @@ import { parseAnswerArgs, ANSWER_USAGE } from "./answer-args.ts";
 import { resolveRecordHome } from "./record-home.ts";
 import { loadConfigOrDefault } from "./load-config.ts";
 import { spawnDetachedResume } from "./spawn-detached.ts";
+import { ranViaAssistant, VIA_ASSISTANT_NOTE } from "./assistant-session.ts";
 
 export const ANSWER_HELP = `Usage: ${ANSWER_USAGE}
 
@@ -49,9 +50,23 @@ which is what picking "other" means.
   -m <text>       Your answer, in plain words. Quote it. Same shape as
                   \`fabrica verdict -m\`, so an answer starting with a
                   dash ("-1 means unlimited") goes through as written.
+  --via-assistant Record this as run by the chat assistant on your own
+                  instruction (issue #359). Only legitimate once you
+                  have picked the option, or given the words, in your
+                  own message; the record keeps the two apart and
+                  \`fabrica log\` says which. Usually unnecessary - a
+                  session started by \`fabrica up\` is detected on its
+                  own.
+  --by-client     The opposite override: record this as yours, even in a
+                  shell that inherited an assistant session's
+                  environment.
 
 Environment:
   FABRICA_HOME  Overrides the record home (default: ~/.fabrica).
+  FABRICA_ASSISTANT_SESSION
+                Set to 1 by \`fabrica up\` in the chat session it
+                launches. Makes \`--via-assistant\` the default there;
+                either flag above overrides it.
 `;
 
 export interface RunAnswerCommandOptions {
@@ -61,6 +76,10 @@ export interface RunAnswerCommandOptions {
    * uses entryScript. Omitted, the real default entry script runs,
    * which is what every real invocation does. */
   entryScript?: string;
+  /** The environment the assistant-session sentinel is read from
+   * (issue #359). Defaults to this process's own; a test passes its own
+   * rather than mutating `process.env`. */
+  env?: NodeJS.ProcessEnv;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -71,15 +90,23 @@ export async function runAnswerCommand(argv: string[], opts: RunAnswerCommandOpt
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
 
   try {
-    const { taskId, text, option, questionId } = parseAnswerArgs(argv);
+    const { taskId, text, option, questionId, viaAssistant } = parseAnswerArgs(argv);
     const recordHome = opts.recordHome ?? resolveRecordHome();
     const caps = loadConfigOrDefault(recordHome).caps;
+    // Who the record should say typed this: the flag if one was passed,
+    // otherwise whatever the environment says (issue #359).
+    const byAssistant = ranViaAssistant(opts.env ?? process.env, viaAssistant);
 
     // Validates and records the answer right here, synchronously - a bad
     // answer (an unknown task, no question pending, an already-spent
     // round, an option the question doesn't have, a cap refusal) fails on
     // the spot, before anything is handed off to the background.
-    const decision = recordAnswerDecision(recordHome, taskId, text, { caps, option, questionId });
+    const decision = recordAnswerDecision(recordHome, taskId, text, {
+      caps,
+      option,
+      questionId,
+      viaAssistant: byAssistant,
+    });
 
     // Issue #175: the question already had an answer and this call did
     // not name it, so the first answer stands. Said out loud rather than
@@ -96,11 +123,23 @@ export async function runAnswerCommand(argv: string[], opts: RunAnswerCommandOpt
     // what a later round is told and nothing else: there is no round
     // here to resume, and starting one would be a second clarification
     // round, which v1 does not have.
+    // Said out loud on its own line after the outcome, rather than
+    // folded into the lines below: those are what scripts and tests
+    // read, and this is the one thing the Client wants to see in the
+    // conversation when his assistant ran the command for him - the
+    // same words `fabrica log` will show him later, from the same
+    // constant. Skipped for a duplicate, where nothing was appended and
+    // so nothing was attributed to anyone.
+    const sayWhoRanIt = () => {
+      if (byAssistant && !decision.duplicate) stdout(`Recorded as ${VIA_ASSISTANT_NOTE}.`);
+    };
+
     if (!decision.resume) {
       stdout(
         `${taskId}: answer to ${decision.questionId} recorded - it applies to this task's later rounds. ` +
           `Nothing was resumed; the round that asked has already finished.`
       );
+      sayWhoRanIt();
       return 0;
     }
 
@@ -110,6 +149,7 @@ export async function runAnswerCommand(argv: string[], opts: RunAnswerCommandOpt
       `${taskId} resumed with your answer - running in the background. ` +
         `Follow progress with \`fabrica log ${taskId}\` or \`fabrica watch ${taskId}\`.`
     );
+    sayWhoRanIt();
     return 0;
   } catch (err) {
     // Anything at all, by its message - never a class list, matching
