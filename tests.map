@@ -37,6 +37,12 @@ tests.map: src/testmap/load.test.ts
 .github/workflows/pin-freshness.yml: src/cli/pin-freshness-workflow.test.ts
 .github/scripts/check-pin-freshness.sh: src/cli/pin-freshness-workflow.test.ts
 
+# Hand-added: a shipped harness's permissions template has no colocated
+# test of its own to be generated from, but two tests read it directly -
+# one modelling the documented Bash-pattern rules against main.ts's real
+# command list, one (opt-in) driving a real session of the harness.
+skill/*/settings.json: src/cli/skill-settings.test.ts, src/cli/skill-settings-live.test.ts
+
 contract/rule1.isolation.test.ts: contract/rule1.isolation.test.ts
 contract/rule10.spend-caps.test.ts: contract/rule10.spend-caps.test.ts
 contract/rule11.standing-question.test.ts: contract/rule11.standing-question.test.ts
@@ -147,6 +153,8 @@ src/cli/answer-args.test.ts: src/cli/answer-args.test.ts
 src/cli/answer-args.ts: src/cli/answer-args.test.ts
 src/cli/answer-command.test.ts: src/cli/answer-command.test.ts
 src/cli/answer-command.ts: src/cli/answer-command.test.ts
+src/cli/assistant-session.test.ts: src/cli/assistant-session.test.ts
+src/cli/assistant-session.ts: src/cli/assistant-session.test.ts
 src/cli/await-args.test.ts: src/cli/await-args.test.ts
 src/cli/await-args.ts: src/cli/await-args.test.ts
 src/cli/await-command.test.ts: src/cli/await-command.test.ts
@@ -361,6 +369,12 @@ src/foreman/publish-permissions.test.ts: src/foreman/publish-permissions.test.ts
 src/foreman/publish-permissions.ts: src/foreman/publish-permissions.test.ts
 src/foreman/queries.test.ts: src/foreman/queries.test.ts
 src/foreman/queries.ts: src/foreman/queries.test.ts
+# Hand-added: questions.ts has a colocated questions.test.ts (it imports
+# askedQuestionsOf/answeredQuestionsOf/renderAnswerRound from it
+# directly) but was left out of the generated map, so touching it read
+# as unmapped.
+src/foreman/questions.test.ts: src/foreman/questions.test.ts
+src/foreman/questions.ts: src/foreman/questions.test.ts
 src/foreman/rebase-only.test.ts: src/foreman/rebase-only.test.ts
 src/foreman/rebase-only.ts: src/foreman/rebase-only.test.ts
 src/foreman/reviewer.test.ts: src/foreman/reviewer.test.ts

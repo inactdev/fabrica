@@ -930,6 +930,54 @@ test("formatEventLine: verdict-recorded reads as prose, note included", () => {
   assert.equal(withoutNote, "t1  verdict-recorded  verdict: wrong");
 });
 
+// Issue #359: the assistant may run a ruling the Client agreed to in
+// his own message, so `fabrica log` is where the record tells him which
+// of the two typed it. Said only when it was the assistant - every
+// ruling recorded before the field existed, and every one he types
+// himself, reads exactly as it did above.
+test("formatEventLine: a verdict the assistant ran on the Client's instruction says so", () => {
+  const withNote = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "verdict-recorded",
+    details: { ruling: "accept", note: "looks right", viaAssistant: true },
+  });
+  assert.equal(
+    withNote,
+    "t0  verdict-recorded  verdict: accept - looks right (run by the assistant on the Client's instruction)"
+  );
+
+  const withoutNote = formatEventLine({
+    occurredAt: "t1",
+    taskId: "x",
+    name: "verdict-recorded",
+    details: { ruling: "wrong", note: "", viaAssistant: true },
+  });
+  assert.equal(withoutNote, "t1  verdict-recorded  verdict: wrong (run by the assistant on the Client's instruction)");
+});
+
+test("formatEventLine: an answer the assistant ran on the Client's instruction says so", () => {
+  const picked = formatEventLine({
+    occurredAt: "t0",
+    taskId: "x",
+    name: "answers-given",
+    details: { answer: "Postgres", questionId: "q-0123456789ab", option: "Postgres", viaAssistant: true },
+  });
+  assert.equal(
+    picked,
+    "t0  answers-given  answer to q-0123456789ab: Postgres (run by the assistant on the Client's instruction)"
+  );
+
+  // And the Client's own answer reads exactly as it always did.
+  const his = formatEventLine({
+    occurredAt: "t1",
+    taskId: "x",
+    name: "answers-given",
+    details: { answer: "Postgres", questionId: "q-0123456789ab", option: "Postgres" },
+  });
+  assert.equal(his, "t1  answers-given  answer to q-0123456789ab: Postgres");
+});
+
 test("formatEventLine: heartbeat reads as prose, attempt included", () => {
   const line = formatEventLine({ occurredAt: "t0", taskId: "x", name: "heartbeat", details: { attempt: 1 } });
   assert.equal(line, "t0  heartbeat  heartbeat (attempt 1)");

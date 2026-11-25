@@ -40,6 +40,13 @@ export interface AnswersGivenDetails {
   questionId?: string;
   /** The option picked, verbatim, or omitted for the same reason. */
   option?: string;
+  /** Present, and always `true`, exactly when the chat assistant ran
+   * `fabrica answer` on the Client's own instruction rather than the
+   * Client typing it himself (issue #359). Omitted means his own -
+   * which is what every answer recorded before this field existed
+   * means, so nothing is backfilled and no reader has a third state to
+   * learn. `fabrica log` renders it; nothing branches on it. */
+  viaAssistant?: true;
 }
 
 /** Every question this task has been asked, by id, in the order they

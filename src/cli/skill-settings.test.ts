@@ -1,7 +1,8 @@
 // Every fabrica subcommand main.ts actually dispatches on is either free
-// to run unprompted (it only reads or starts work) or requires the
-// Client (it records his own judgment - CONTRACT rule 6; issue #8's
-// ask/answer). This proves each shipped skill/<harness>/settings.json
+// to run unprompted (it only reads, starts work, or records a decision
+// the Client has already agreed to in his own message) or must never
+// come from the chat agent at all. This proves each shipped
+// skill/<harness>/settings.json
 // draws that line exactly, against main.ts's real dispatch rather than
 // a name copied by hand, and using the word-boundary and
 // compound-command semantics the permission engine documents - so a
@@ -26,6 +27,17 @@
 // and the one thing it does NOT prove: that guard belongs to the
 // harness, not to anything in this repo, and a harness change could
 // remove it with nothing here to notice.
+//
+// Issue #359 moved `verdict` and `answer` off the deny list and onto
+// the allow list: the Client and the assistant review a delivery
+// together, and he had to retype a ruling he had already decided out
+// loud. What keeps CONTRACT rule 6 true is no longer "the assistant
+// cannot run them" but HANDBOOK.md cases 3 and 5 - he must have agreed
+// in his own message, naming the task and the ruling or option - plus
+// the record saying which of the two typed it (`viaAssistant`, see
+// src/cli/assistant-session.ts). `cost` stays deciding and denied, and
+// `up`/`update`/`tests-map` stay never-from-chat, all for their own
+// unchanged reasons below.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -36,14 +48,25 @@ import { fileURLToPath } from "node:url";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const skillDir = join(repoRoot, "skill");
 
-// The commands that record the Client's own judgment rather than
-// reading or starting work. A command added to main.ts that ends up in
-// neither this list nor an allow pattern fails the coverage test below
-// instead of silently falling through either way. `cost` (issue #11) is
-// owner-only too: it records a dollar figure only the owner can look
-// up, and it is the one thing that clears a SPEND UNKNOWN block - an AI
-// driver that could run it could unblock its own spending.
-const DECIDING_COMMANDS = ["verdict", "answer", "cost"];
+// The commands that must never be auto-approved for the chat agent. A
+// command added to main.ts that ends up in neither this list nor an
+// allow pattern fails the coverage test below instead of silently
+// falling through either way.
+//
+// `cost` (issue #11) is the only one left: it records a dollar figure
+// only the owner can look up, and it is the one thing that clears a
+// SPEND UNKNOWN block - an AI driver that could run it could unblock
+// its own spending.
+//
+// `verdict` and `answer` used to be here. Issue #359 took them out by
+// Client ruling: they still record his judgment, but the thing that
+// makes an assistant-run one legitimately his is his own agreement in
+// the conversation (HANDBOOK.md cases 3 and 5), and the record now says
+// which of the two typed it, so the two are still told apart. Do not
+// re-add them here as a "missing" deny without a fresh ruling - see
+// this file's header, HANDBOOK.md, and skill/<harness>/README.md's
+// "verdict and answer: agreed by the Client, run by either".
+const DECIDING_COMMANDS = ["cost"];
 
 // Commands whose only legitimate caller is a harness's own hook
 // runner, never the chat agent's Bash tool - deliberately absent from
@@ -249,25 +272,17 @@ test("main.ts's real dispatch is fully covered: deciding and hook-only commands 
   }
 });
 
-test("fabrica verdict, answer, and cost are never auto-approved, including through a chained command", () => {
+test("fabrica cost is never auto-approved, including through a chained command", () => {
   const templates = harnessSettings();
   assert.ok(templates.length > 0, "no harness ships a settings.json to check");
 
   const attempts = [
-    "fabrica verdict",
-    "fabrica verdict task-1 accept",
-    'fabrica verdict task-1 fix -m "note"',
-    "fabrica answer",
-    'fabrica answer task-1 -m "answer text"',
-    "fabrica status && fabrica verdict task-1 accept",
-    "fabrica status; fabrica verdict task-1 accept",
-    "fabrica do 'x' | fabrica verdict task-1 accept",
-    "fabrica log task-1 && fabrica answer task-1 -m 'x'",
-    "fabrica status --json\nfabrica verdict task-1 accept",
     "fabrica cost",
     "fabrica cost task-1 0.42",
     "fabrica status && fabrica cost task-1 0",
     "fabrica log task-1; fabrica cost task-1 0",
+    "fabrica do 'x' | fabrica cost task-1 0",
+    "fabrica status --json\nfabrica cost task-1 0",
   ];
 
   for (const settings of templates) {
@@ -275,7 +290,59 @@ test("fabrica verdict, answer, and cost are never auto-approved, including throu
       assert.notEqual(
         evaluate(settings, attempt),
         "allow",
-        `${settings.harness}: "${attempt}" auto-approves - a verdict/answer/cost command must never run unprompted`
+        `${settings.harness}: "${attempt}" auto-approves - cost records a figure only the owner can look up, ` +
+          `and it is the one thing that clears a SPEND UNKNOWN block`
+      );
+    }
+  }
+});
+
+test("fabrica verdict and answer run unprompted now, in every shape the assistant would actually type", () => {
+  const templates = harnessSettings();
+  assert.ok(templates.length > 0, "no harness ships a settings.json to check");
+
+  // Issue #359. These are the real invocations HANDBOOK.md cases 3 and
+  // 5 now let the assistant run once the Client has agreed in his own
+  // message - including the `--via-assistant` form, which is how a
+  // harness that was not started by `fabrica up` says so explicitly.
+  // Chained with a free command too: an allow entry per subcommand has
+  // to cover both halves, or the `fabrica status && fabrica verdict ...`
+  // shape an assistant naturally writes would still prompt.
+  const attempts = [
+    "fabrica verdict task-1 accept",
+    'fabrica verdict task-1 accept -m "looks right"',
+    'fabrica verdict task-1 fix -m "rename the flag"',
+    "fabrica verdict task-1 wrong",
+    "fabrica verdict task-1 accept --via-assistant",
+    "fabrica answer task-1 --option 2",
+    'fabrica answer task-1 -m "answer text"',
+    "fabrica answer task-1 --option 4 -m 'use DuckDB' --via-assistant",
+    "fabrica status && fabrica verdict task-1 accept",
+    "fabrica log task-1 && fabrica answer task-1 --option 1",
+  ];
+
+  for (const settings of templates) {
+    for (const attempt of attempts) {
+      assert.equal(
+        evaluate(settings, attempt),
+        "allow",
+        `${settings.harness}: "${attempt}" is not auto-approved - issue #359 moved verdict/answer onto the ` +
+          `allow list, so an agreed ruling must not make the Client re-approve it in a prompt`
+      );
+    }
+  }
+
+  // Deny beats allow and would silently undo the ruling above, so pin
+  // the absence directly rather than only its effect: a reinstated deny
+  // entry that happened to coexist with these allow entries would still
+  // read as "allowed" nowhere and fail this.
+  for (const settings of templates) {
+    for (const command of ["fabrica verdict", "fabrica answer"]) {
+      assert.equal(
+        settings.deny.some((p) => bashPatternMatches(p, `${command} task-1 accept`)),
+        false,
+        `${settings.harness}: a permissions.deny pattern still matches "${command}" - issue #359 removed it, ` +
+          `and deny is checked before allow, so it would make the allow entries inert`
       );
     }
   }

@@ -11,10 +11,13 @@ out case by case.
 
 ## The two rules behind everything else
 
-1. **The assistant drives the tool; it does not make the decisions.**
+1. **The assistant drives the tool; the Client makes the decisions.**
    Running commands, reading the record, relaying faithfully: yes.
-   Choosing what the product does, answering a worker's question, closing
-   a task: no.
+   Reviewing a delivery and saying which verdict you would pick, clearly
+   labelled as your recommendation: yes. Choosing what the product does,
+   answering a worker's question, or closing a task *on your own*: no.
+   Every decision is his, in his own message, first — what you may then
+   do is type it for him.
 2. **Never substitute a summary for the record.** Show what the record
    says. When it is silent, say it is silent. A plausible guess is not an
    answer.
@@ -24,11 +27,17 @@ by those two rules rather than improvising a workaround — and if it still
 doesn't resolve cleanly, say so to the Client rather than guess.
 
 A separate, per-tool settings file (`skill/<harness>/`, e.g.
-`skill/claude-code/settings.json`) enforces part of this mechanically —
-it denies the two commands below that record the Client's own judgment,
-so even an assistant that ignored this file can't run them. That
-enforcement is a backstop, not a substitute: not every tool has one
-installed, and this file is what makes the right call either way.
+`skill/claude-code/settings.json`) enforces part of this mechanically. It
+denies `fabrica cost` (owner-only — see the end of this file), and
+`fabrica up`/`fabrica update`/`fabrica tests-map`, so even an assistant
+that ignored this file can't run them. `fabrica verdict` and `fabrica
+answer` are **not** denied any more: the Client ruled that an assistant
+may run a ruling he has already agreed to (issue #359), so what keeps
+them his is cases 3 and 5 below plus the record's own mark, not a
+permission that refuses them outright. Every verdict or answer you run is
+recorded as run by you on his instruction, and `fabrica log` says so, so
+the record still tells the two apart — never try to make one of yours
+look like one of his.
 
 ## The eight things the Client asks for
 
@@ -88,8 +97,9 @@ to find out and don't block the conversation waiting on it in the
 foreground. When that outcome lands, tell the Client, in plain English,
 that the task needs him now and exactly what to do about it — relay
 `fabrica await`'s own line rather than restating it. That is reporting,
-not deciding: never run `fabrica answer` or `fabrica verdict` yourself
-just because `fabrica await` said one is now needed (cases 3 and 5 still
+not deciding: `fabrica await` saying a verdict or an answer is now needed
+is never on its own permission to run one. Go to case 3 or case 4, and
+run nothing until he has agreed in his own message (cases 3 and 5 still
 apply in full).
 
 If one sentence contains several asks ("add a health endpoint and fix the
@@ -204,35 +214,81 @@ His answer goes back with whichever of these he means:
     fabrica answer <taskId> --option <n>
     fabrica answer <taskId> --option <other's number> -m "<his words, verbatim>"
 
-Tell him the exact command, with the option he picked or his own words
-dropped into `-m`, so he can run it himself. **Do not run `fabrica answer` on his behalf**, even
-quoting him exactly — `fabrica answer` records the Client's own judgment
-the same way `fabrica verdict` does (see case 5), and a tool without the
-per-tool deny rulebook installed has nothing else standing between a
-helpful assistant and running it for him. Relay faithfully; let him
+**You may run it — but only after he has picked, in his own message in
+this conversation.** His message has to name the task (or plainly refer
+to the one just discussed) and name the option, or give the words he
+wants sent for "other". "Option 2" or "go with SQLite" after you relayed
+the question is enough; anything less is not. Then run the command above,
+with the option he picked or his own words dropped into `-m` verbatim —
+never your tidied-up version of them.
+
+**Until he has answered, run nothing.** Do not pick the obvious-looking
+option and run it, do not run one because `fabrica await` said an answer
+is needed, and do not treat an earlier "do whatever you think" as
+standing permission for a question he has not seen. If what he said is
+ambiguous about which option he means, ask him which rather than
+guessing — the whole reason the worker stopped is that a guess here is
+expensive.
+
+The command records that you ran it on his instruction, and `fabrica log`
+shows that, so the record keeps his own answers and yours apart. If he
+would rather type it himself, tell him the exact command and let him
 press enter.
 
 ### 4. A delivery arrives
 
-**Show the note and the diff, then stop.** Stop means stop: do not
-recommend accepting, do not summarize whether it looks right, do not run
-anything else. Don't soften or drop anything the delivery flags — a
-declared change to the project's own checks most of all; that's exactly
-the kind of thing that must reach him front and center, not smoothed
-over. He reads it and decides.
+**Show the note and the diff first, then review it and say what you
+would do.** Two parts, in that order, and the first one is not optional.
+
+The showing: the delivery's own write-up and the diff, as they are.
+**Don't soften or drop anything the delivery flags** — a declared change
+to the project's own checks most of all; that's exactly the kind of thing
+that must reach him front and center, not smoothed over. A low
+confidence figure, a named assumption, a deviation, something the worker
+says it could not verify: all of it reaches him, whatever you go on to
+recommend. Your opinion never replaces the record, and it never edits it.
+
+Then the review, as your own clearly labelled recommendation: read the
+diff, the write-up, the CI checks and Inspector's stamp, and the reader's
+flags if there are any, and say which verdict you would pick and why —
+`accept`, `fix` with the note you would send drafted out in full, or
+`wrong`. Label it as a recommendation, in those words, and say plainly
+where you are unsure. **A recommendation is not a decision**: do not run
+anything here, however obvious it looks. That is case 5, and it needs his
+agreement first.
 
 ### 5. "Accept it" / "fix it" / "that's wrong" — a verdict
 
-**Never run `fabrica verdict` yourself.** Not with his approval relayed
-through you, not when he's said the exact word, not ever. Tell him the
-command instead:
-
     fabrica verdict <taskId> <accept|fix|wrong> [-m "<note>"]
 
-with his own words in `-m` if he gave one (required for `fix`). He types
-it; you don't. This is contract rule 6 — the Client gets the last word —
-and it exists precisely so that no assistant can close a task on his
-behalf, even an obedient one just doing what it was told.
+**You may run it — but only after he has agreed in his own message in
+this conversation.** His message has to name the task (or plainly refer
+to the one just discussed) and name the ruling. "Accept it", "yes, fix it
+with that note", "that's wrong" are all enough once he has seen case 4's
+output. Then run the command, with his own words in `-m` if he gave one
+(required for `fix`) — or, if he agreed to the note you drafted, that
+note as he agreed to it, unchanged.
+
+**What you may never do:**
+
+- Run a recommendation of your own that he has not agreed to. A verdict
+  you recommended and he said nothing about is not an agreed verdict, and
+  silence is never agreement.
+- Treat "do whatever you think is best", said earlier or in general, as
+  standing permission for a delivery he has not seen. Each ruling needs
+  its own agreement.
+- Reword, expand or improve the note he agreed to. It goes through as
+  agreed.
+- Rule on a task he hasn't been shown. Case 4 comes first, every time.
+
+If what he said is ambiguous about which ruling he means, ask him rather
+than picking the reading that moves the task along.
+
+This is contract rule 6 — the Client gets the last word. The last word is
+still his: he ruled (issue #359) that a verdict he agreed to and you ran
+is his own, and the record says which of the two typed it, so his own
+rulings and yours are never confused for each other. If he would rather
+type it himself, tell him the exact command and let him press enter.
 
 ### 6. Something seems stuck
 
@@ -341,7 +397,14 @@ retry the `fabrica do`.
 ## What this file deliberately does not cover
 
 `fabrica cost` is owner-only — it's how the Client records a task's real
-spend, not something asked of the assistant, and it's deny-listed
-wherever the per-tool rulebook exists for the same reason `verdict` and
-`answer` are. If a worker's spend is ever unknown and the Client wants to
-clear it, tell him the command; don't run it.
+spend, from a figure only he can look up, and it's the one thing that
+clears a SPEND UNKNOWN block, so an assistant that could run it could
+unblock its own spending. It stays deny-listed wherever the per-tool
+rulebook exists, unlike `verdict` and `answer` (see case 5). If a
+worker's spend is ever unknown and the Client wants to clear it, tell him
+the command; don't run it.
+
+`fabrica up` and `fabrica update` are denied for a different reason
+again: `up` would spawn a second copy of the very session you are running
+in, and `update` pulls new code and runs a real `git`/`npm` command
+against his machine. Both are his call to make at his own keyboard.

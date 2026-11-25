@@ -33,6 +33,7 @@ import type { BaseUserProbe } from "../index.ts";
 import { ensureDockerDaemon, type DockerDaemonOutcome, type EnsureDockerDaemonOptions } from "./docker-daemon.ts";
 import { spawnDetachedLiveView } from "./spawn-detached.ts";
 import { findLiveViewProcess as locateLiveViewProcess, stopLiveViewProcess as terminateLiveViewProcess } from "./live-view-process.ts";
+import { assistantSessionEnv } from "./assistant-session.ts";
 
 export const UP_USAGE = "fabrica up [-c|--continue]";
 
@@ -127,6 +128,14 @@ export interface HarnessLauncher {
     /** Passes the harness's own flag for continuing the most recent
      * conversation in cwd (`fabrica up --continue`). */
     continueSession?: boolean;
+    /** The environment to run the session in (issue #359). It carries
+     * `assistant-session.ts`'s sentinel, which is how a `fabrica
+     * verdict`/`fabrica answer` the assistant runs from inside this
+     * session is recorded as the assistant's rather than the Client's -
+     * the Client's own terminal never has it. A launcher that ignores
+     * this still works; the two commands' own `--via-assistant` flag is
+     * then the only way to say so. */
+    env?: NodeJS.ProcessEnv;
   }): { exitCode: number } | Promise<{ exitCode: number }>;
   harnessAvailable(): boolean;
 }
@@ -743,7 +752,17 @@ export async function runUpCommand(argv: string[], opts: RunUpCommandOptions = {
   }
 
   const appendSystemPrompt = readFileSync(opts.handbookPath ?? HANDBOOK_PATH, "utf8");
-  const { exitCode } = await launcher.launch({ cwd, settingsPath, appendSystemPrompt, continueSession });
+  // Issue #359: the session is marked as the assistant's, in its own
+  // environment and nowhere else, so a `fabrica verdict`/`fabrica
+  // answer` it runs on the Client's instruction is recorded as such
+  // while the same command in his own terminal stays his.
+  const { exitCode } = await launcher.launch({
+    cwd,
+    settingsPath,
+    appendSystemPrompt,
+    continueSession,
+    env: assistantSessionEnv(hookEnv),
+  });
 
   stdout(`Live view is still running at ${liveViewUrl(port)} - stop it with: pkill -f "live-view/start.ts"`);
   return exitCode;

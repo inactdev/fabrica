@@ -126,3 +126,31 @@ test("parseAnswerArgs: with neither an option nor text, the refusal names both w
     (err: unknown) => err instanceof CliError && err.message.includes("--option <n>") && err.message.includes('-m "<text>"')
   );
 });
+
+// Issue #359: the same tri-state as verdict-args.ts's own pair, for the
+// same reason - the environment decides when the flags are silent.
+test("parseAnswerArgs: --via-assistant asks for the assistant's mark", () => {
+  assert.equal(parseAnswerArgs(["some-task", "--option", "2", "--via-assistant"]).viaAssistant, true);
+});
+
+test("parseAnswerArgs: --by-client asks for the opposite, explicitly", () => {
+  assert.equal(parseAnswerArgs(["some-task", "--option", "2", "--by-client"]).viaAssistant, false);
+});
+
+test("parseAnswerArgs: with neither flag, the parser says nothing either way", () => {
+  assert.ok(!("viaAssistant" in parseAnswerArgs(["some-task", "-m", "no, SQLite"])));
+});
+
+test("parseAnswerArgs: the flag combines with an option, a question and text", () => {
+  assert.deepEqual(
+    parseAnswerArgs(["some-task", "--question", "q-0123456789ab", "--option", "4", "-m", "DuckDB", "--via-assistant"]),
+    { taskId: "some-task", text: "DuckDB", option: 4, questionId: "q-0123456789ab", viaAssistant: true }
+  );
+});
+
+test("parseAnswerArgs: both flags at once refuses rather than picking a winner", () => {
+  assert.throws(
+    () => parseAnswerArgs(["some-task", "--option", "2", "--via-assistant", "--by-client"]),
+    (err: unknown) => err instanceof CliError && err.code === "bad-usage" && err.message.includes("opposite things")
+  );
+});

@@ -5,10 +5,14 @@
 // way to pass a note (Client ruling): it is `git commit -m`'s shape,
 // already muscle memory, and a bare positional note would be a second
 // spelling of the same thing.
+//
+// Issue #359 added `--via-assistant`/`--by-client`: who the record should
+// say typed this ruling, overriding what the environment says on its own
+// (assistant-session.ts).
 
 import { CliError } from "./errors.ts";
 
-export const VERDICT_USAGE = 'fabrica verdict <taskId> <accept|fix|wrong> [-m "<note>"]';
+export const VERDICT_USAGE = 'fabrica verdict <taskId> <accept|fix|wrong> [-m "<note>"] [--via-assistant|--by-client]';
 
 const RULINGS = ["accept", "fix", "wrong"] as const;
 export type Ruling = (typeof RULINGS)[number];
@@ -17,10 +21,15 @@ export interface VerdictArgs {
   taskId: string;
   ruling: Ruling;
   note?: string;
+  /** Who the record should say typed this (issue #359). Omitted means
+   * "work it out from the environment" - see
+   * `assistant-session.ts`'s `ranViaAssistant`. */
+  viaAssistant?: boolean;
 }
 
 export function parseVerdictArgs(argv: string[]): VerdictArgs {
   let note: string | undefined;
+  let viaAssistant: boolean | undefined;
   const positionals: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -31,6 +40,19 @@ export function parseVerdictArgs(argv: string[]): VerdictArgs {
         throw new CliError("bad-usage", `fabrica verdict: -m needs a note. Usage: ${VERDICT_USAGE}`);
       }
       note = value;
+    } else if (arg === "--via-assistant" || arg === "--by-client") {
+      // Both spellings, both overriding the auto-detection, and passing
+      // both is a usage error rather than a precedence rule: there is no
+      // sensible winner between them, and picking one would write an
+      // attribution down that nobody asked for.
+      const wanted = arg === "--via-assistant";
+      if (viaAssistant !== undefined && viaAssistant !== wanted) {
+        throw new CliError(
+          "bad-usage",
+          `fabrica verdict: --via-assistant and --by-client say opposite things about who ran this - pass one.`
+        );
+      }
+      viaAssistant = wanted;
     } else if (arg.startsWith("-")) {
       throw new CliError("bad-usage", `fabrica verdict: unknown flag "${arg}". Usage: ${VERDICT_USAGE}`);
     } else {
@@ -69,5 +91,5 @@ export function parseVerdictArgs(argv: string[]): VerdictArgs {
     );
   }
 
-  return { taskId, ruling, note };
+  return { taskId, ruling, note, ...(viaAssistant !== undefined ? { viaAssistant } : {}) };
 }

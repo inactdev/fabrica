@@ -132,6 +132,24 @@ export function recordVerdictFailure(
   appendEvent(recordHome, { taskId, name: "verdict-failed", details });
 }
 
+export interface VerdictDecisionOptions {
+  caps?: Caps;
+  /** True when the chat assistant ran this ruling on the Client's own
+   * instruction, after he agreed to it in his own message (issue #359;
+   * HANDBOOK.md case 5). It lands on the `"verdict-recorded"` event as
+   * `viaAssistant: true` and `fabrica log` says so, so the record keeps
+   * telling a ruling the Client typed apart from one he approved out
+   * loud - CONTRACT rule 6 still holds either way, by his own ruling on
+   * issue #359, and nothing in Fabrica branches on this.
+   *
+   * Omitted or false records nothing at all, which is what every event
+   * already on the record means. Who ran it is resolved by the caller
+   * that knows - `src/cli/assistant-session.ts` for the CLI; a library
+   * caller (and the live view's own review page, which is the Client
+   * clicking) passes nothing and is recorded as his. */
+  viaAssistant?: boolean;
+}
+
 /**
  * The fast, synchronous half of a verdict: validates the ruling against
  * the record and writes `verdict`/`"verdict-recorded"` - everything a
@@ -156,7 +174,7 @@ export function recordVerdictDecision(
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { caps?: Caps }
+  opts: VerdictDecisionOptions
 ): void {
   if (!RULINGS.has(ruling)) {
     throw new ForemanError(
@@ -191,7 +209,7 @@ function decideVerdict(
   taskId: string,
   ruling: "accept" | "fix" | "wrong",
   note: string | undefined,
-  opts: { caps?: Caps },
+  opts: VerdictDecisionOptions,
   events: FabricaEvent[]
 ): void {
   const lastVerdict = events.filter((e) => e.name === "verdict-recorded").at(-1);
@@ -318,6 +336,14 @@ function decideVerdict(
       // re-derives the refusal from the record the same way it
       // re-derives everything else.
       ...(refusalToFix !== null && ruling === "fix" ? { answersRefusal: true } : {}),
+      // Issue #359: who typed it. Written only when it was the
+      // assistant, the same way the two flags above are - the field's
+      // absence is what every verdict already on the record means, so
+      // nothing needs backfilling and no reader needs to learn a third
+      // state. Bookkeeping only: nothing here or downstream branches on
+      // it, since an agreed verdict the assistant ran is the Client's
+      // (his own ruling on issue #359, CONTRACT rule 6).
+      ...(opts.viaAssistant ? { viaAssistant: true } : {}),
     },
   });
 }

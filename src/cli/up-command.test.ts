@@ -1259,3 +1259,39 @@ test("openAtMostOnce forwards the first url and drops every one after it", () =>
 
   assert.deepEqual(opened, ["http://localhost:7777"]);
 });
+
+// Issue #359: the chat session is marked as the assistant's in its own
+// environment, which is what lets a `fabrica verdict`/`fabrica answer`
+// run from inside it be recorded as run on the Client's instruction
+// while the same command typed in his own terminal stays his.
+test("runUpCommand: the harness session is launched with the assistant-session sentinel in its environment", async () => {
+  const io = captureIo();
+  let captured: { env?: NodeJS.ProcessEnv } | undefined;
+
+  const code = await runUpCommand([], {
+    recordHome: healthyRecordHome(),
+    cwd: tempCwd(),
+    doctorProbes: okProbes(),
+    isLiveViewListening: async () => true,
+    ...sameCommitSeams(),
+    skillDir: fixtureSkillDir(),
+    handbookPath: fixtureHandbookPath(),
+    env: { PATH: "/usr/bin", FABRICA_HOME: "/tmp/somewhere" },
+    launcher: {
+      harnessAvailable: () => true,
+      launch: async (opts) => {
+        captured = opts;
+        return { exitCode: 0 };
+      },
+    },
+    ...io,
+  });
+
+  assert.equal(code, 0, io.err.join("\n"));
+  assert.equal(captured?.env?.FABRICA_ASSISTANT_SESSION, "1");
+  // The rest of the environment comes through untouched - the record
+  // home above most of all, or the session's own fabrica commands would
+  // read a different record than the one this session is about.
+  assert.equal(captured?.env?.FABRICA_HOME, "/tmp/somewhere");
+  assert.equal(captured?.env?.PATH, "/usr/bin");
+});
